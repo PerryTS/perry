@@ -1,0 +1,134 @@
+[settings]
+node_args = ["--experimental-strip-types"]
+
+[[probe]]
+category = "closures"
+name = "captured-mutation"
+path = "probes/closures/captured-mutation.ts"
+description = "Closures preserve mutable captured bindings across calls."
+
+[[probe]]
+category = "closures"
+name = "basic"
+path = "probes/closures/basic.ts"
+description = "A returned closure reads and updates its captured lexical state."
+
+[[probe]]
+category = "async"
+name = "await-order"
+path = "probes/async/await-order.ts"
+description = "Async functions resume after awaited promises in source order."
+
+[[probe]]
+category = "async"
+name = "await-microtask"
+path = "probes/async/await_order.ts"
+description = "Awaited microtasks resume and settle the outer promise."
+
+[[probe]]
+category = "generators"
+name = "yield-delegation"
+path = "probes/generators/yield-delegation.ts"
+description = "yield* forwards yielded values and receives the delegate return."
+
+[[probe]]
+category = "generators"
+name = "yield-star"
+path = "probes/generators/yield_star.ts"
+description = "yield* emits delegate values and then observes the delegate return value."
+
+[[probe]]
+category = "classes"
+name = "private-static-fields"
+path = "probes/classes/private-static-fields.ts"
+description = "Private instance fields and private static fields retain brand state."
+
+[[probe]]
+category = "classes"
+name = "inheritance"
+path = "probes/classes/inheritance.ts"
+description = "Subclass overrides and super calls preserve method dispatch."
+
+[[probe]]
+category = "classes"
+name = "mixin-expression"
+path = "probes/classes/mixin-expression.ts"
+description = "Class expressions returned from mixin helpers preserve inheritance."
+
+[[probe]]
+category = "mixins"
+name = "generic-helper"
+path = "probes/mixins/basic.ts"
+description = "Generic TypeScript mixin helpers erase types and keep runtime members."
+
+[[probe]]
+category = "modules"
+name = "type-only-imports"
+path = "probes/modules/type-only-imports.ts"
+description = "Type-only imports erase without shadowing value imports."
+
+[[probe]]
+category = "modules"
+name = "type-only-model"
+path = "probes/type_only_imports/basic.ts"
+description = "A type-only import and value import from the same module remain distinct."
+
+[[probe]]
+category = "syntax"
+name = "optional-nullish"
+path = "probes/syntax/optional-nullish.ts"
+description = "Optional chaining and nullish coalescing preserve short-circuit values."
+
+[[probe]]
+category = "syntax"
+name = "optional-call"
+path = "probes/optional_chaining/nullish.ts"
+description = "Optional property, nullish, and optional call forms short-circuit."
+
+[[probe]]
+category = "syntax"
+name = "destructuring-defaults"
+path = "probes/syntax/destructuring-defaults.ts"
+description = "Destructuring defaults and rest values match Node output."
+
+[[probe]]
+category = "json"
+name = "nested-destructure"
+path = "probes/json/destructure.ts"
+description = "JSON.parse output participates in nested object destructuring."
+
+[[probe]]
+category = "collections"
+name = "map-set"
+path = "probes/map_set/basic.ts"
+description = "Map and Set construction, iteration, and spreading produce stable output."
+
+[[probe]]
+category = "typed-arrays"
+name = "uint8array-basic"
+path = "probes/typed_arrays/basic.ts"
+description = "TypedArray element writes, length, join, and BYTES_PER_ELEMENT match Node."
+
+[[probe]]
+category = "primitives"
+name = "bigint-symbol"
+path = "probes/bigint_symbols/basic.ts"
+description = "BigInt arithmetic and global Symbol registry reads are stable."
+
+[[probe]]
+category = "errors"
+name = "try-catch-finally"
+path = "probes/error_handling/basic.ts"
+description = "try/catch/finally preserves thrown Error values."
+
+[[probe]]
+category = "proxy-reflect"
+name = "construct-trap"
+path = "probes/proxy_reflect/construct.ts"
+description = "Proxy construct traps can delegate through Reflect.construct."
+
+[[probe]]
+category = "dynamic-import"
+name = "relative-module"
+path = "probes/dynamic_import/basic.ts"
+description = "Dynamic import resolves a relative TypeScript module."

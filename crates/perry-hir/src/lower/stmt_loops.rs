@@ -105,14 +105,39 @@ fn is_node_readable_static_factory(expr: &ast::Expr) -> bool {
     matches!(prop.sym.as_ref(), "from" | "of") && is_node_readable_class_ref(&member.obj)
 }
 
-fn is_node_readable_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
-    if is_node_readable_static_factory(expr) {
-        return true;
+fn is_node_readable_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    is_node_readable_static_factory(expr)
+        || is_node_readable_helper_chain(ctx, expr)
+        || matches!(
+            crate::lower_types::infer_type_from_expr(strip_for_of_expr_wrappers(expr), ctx),
+            Type::Named(name) if name == "Readable"
+        )
+}
+
+fn is_node_readable_helper_chain(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Call(call) = strip_for_of_expr_wrappers(expr) else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = strip_for_of_expr_wrappers(callee.as_ref()) else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    match prop.sym.as_ref() {
+        "from" | "of" => is_node_readable_class_ref(&member.obj),
+        "map" | "filter" | "flatMap" | "take" | "drop" | "compose" => {
+            is_node_readable_expr(ctx, &member.obj)
+        }
+        _ => false,
     }
-    matches!(
-        crate::lower_types::infer_type_from_expr(strip_for_of_expr_wrappers(expr), ctx),
-        Type::Named(name) if name == "Readable"
-    )
+}
+
+fn is_node_readable_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    is_node_readable_expr(ctx, expr)
 }
 
 fn is_filehandle_readlines_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
@@ -120,6 +145,34 @@ fn is_filehandle_readlines_for_await_target(ctx: &LoweringContext, expr: &ast::E
         crate::lower_types::infer_type_from_expr(strip_for_of_expr_wrappers(expr), ctx),
         Type::Named(name) if name == crate::lower_types::FILEHANDLE_READLINES_ITERATOR_TYPE
     )
+}
+
+fn is_fs_dir_type(ty: Type) -> bool {
+    matches!(ty, Type::Named(name) if name == "Dir" || name == "fs.Dir")
+}
+
+fn is_fs_dir_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let expr = strip_for_of_expr_wrappers(expr);
+    if is_fs_dir_type(crate::lower_types::infer_type_from_expr(expr, ctx)) {
+        return true;
+    }
+
+    let ast::Expr::Call(call) = expr else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = strip_for_of_expr_wrappers(callee.as_ref()) else {
+        return false;
+    };
+    if !matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "entries") {
+        return false;
+    }
+    is_fs_dir_type(crate::lower_types::infer_type_from_expr(
+        strip_for_of_expr_wrappers(&member.obj),
+        ctx,
+    ))
 }
 
 fn is_fs_promises_glob_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
@@ -165,6 +218,21 @@ fn is_fs_promises_glob_for_await_target(ctx: &LoweringContext, expr: &ast::Expr)
     }
 }
 
+/// `for await (const line of rl)` where `rl = readline.createInterface(...)`.
+/// The interface is registered as a `("readline", "Interface")` native
+/// instance, so its method calls (`.on`, `.close`, and now `.iterator`)
+/// dispatch to the readline runtime. Mirrors the node:stream Readable arm.
+fn is_readline_interface_for_await_target(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    matches!(
+        strip_for_of_expr_wrappers(expr),
+        ast::Expr::Ident(ident)
+            if matches!(
+                ctx.lookup_native_instance(ident.sym.as_ref()),
+                Some(("readline", "Interface"))
+            )
+    )
+}
+
 fn async_iterator_method_call(iterable: Expr) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::IndexGet {
@@ -175,6 +243,7 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -186,6 +255,7 @@ fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     if needs_await {
         Expr::Await(Box::new(call))
@@ -237,6 +307,439 @@ fn insert_iterator_return_before_abrupts(
         }
     }
     *stmts = rewritten;
+}
+
+/// Element source for a `for...of` binding: `__result.value` on the lazy
+/// iterator path, `__arr[__idx]` on the materialized-array path.
+pub(crate) fn lazy_or_index_elem(
+    use_lazy_iter: bool,
+    arr_id: LocalId,
+    idx_id: LocalId,
+    result_id: LocalId,
+) -> Expr {
+    if use_lazy_iter {
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(result_id)),
+            property: "value".to_string(),
+        }
+    } else {
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(arr_id)),
+            index: Box::new(Expr::LocalGet(idx_id)),
+        }
+    }
+}
+
+/// Wrap an iterator-protocol call result in the spec "If innerResult is not
+/// an Object, throw a TypeError" check (IteratorNext / IteratorClose).
+fn iterator_result_validated(call: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_iterator_result_validate".to_string(),
+            param_types: vec![Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![call],
+        type_args: vec![],
+        byte_offset: 0,
+    }
+}
+
+/// `__iter.next()` (validated: a non-object result is a TypeError).
+pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
+    iterator_result_validated(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(iter_id)),
+            property: "next".to_string(),
+        }),
+        args: vec![],
+        type_args: vec![],
+        byte_offset: 0,
+    })
+}
+
+/// The lazy `for...of` driver loop, modeled as a `for` so `continue` re-pulls
+/// the iterator via the update clause (a `while` with the advance at the body
+/// tail would skip it on `continue` and spin):
+///   for (let __result = __iter.next();
+///        !__result.done;
+///        __result = __iter.next()) { <loop_body> }
+/// `iter_id` holds the iterator, `result_id` the latest `{ value, done }`.
+pub(crate) fn lazy_iter_for_stmt(
+    iter_id: LocalId,
+    result_id: LocalId,
+    loop_body: Vec<Stmt>,
+) -> Stmt {
+    Stmt::For {
+        init: Some(Box::new(Stmt::Let {
+            id: result_id,
+            name: format!("__result_{}", result_id),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(iterator_next_call(iter_id)),
+        })),
+        condition: Some(Expr::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(result_id)),
+                property: "done".to_string(),
+            }),
+        }),
+        update: Some(Expr::LocalSet(
+            result_id,
+            Box::new(iterator_next_call(iter_id)),
+        )),
+        body: loop_body,
+    }
+}
+
+/// Spec IteratorClose, guarded: `if (__iter.return != null) __iter.return();`.
+/// Array iterators have no `return` method, so the guard makes close a no-op
+/// for them (closing an array iterator is a spec no-op); generators / custom
+/// iterators run their `return` (which executes pending `finally` blocks).
+pub(crate) fn iterator_close_guarded_stmt(iter_id: LocalId) -> Stmt {
+    Stmt::If {
+        condition: Expr::Compare {
+            op: CompareOp::LooseNe,
+            left: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(iter_id)),
+                property: "return".to_string(),
+            }),
+            right: Box::new(Expr::Null),
+        },
+        then_branch: vec![Stmt::Expr(iterator_result_validated(iterator_return_call(
+            iter_id, false,
+        )))],
+        else_branch: None,
+    }
+}
+
+/// Wrap a lazy `for...of` body (binding + user statements) in a `try/catch`
+/// that runs IteratorClose when the body completes abruptly with a *throw* —
+/// either an explicit `throw` statement or a runtime exception (a throwing
+/// setter in the LHS `PutValue`, a destructuring error, an assertion failure,
+/// a generator `.throw()` propagation). The `break`/`return`/labeled cases are
+/// handled separately by `insert_iterator_close_on_abrupt` (they are control
+/// flow, not exceptions, so this `catch` never sees them — no double-close).
+///
+/// Per spec, for a throw completion IteratorClose invokes `return` but does
+/// NOT validate its result and SWALLOWS any exception it raises — the original
+/// throw is the one that propagates. So the close here is unvalidated and
+/// itself wrapped in a result-swallowing `try/catch`, then the caught error is
+/// re-thrown.
+pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
+    ctx: &mut LoweringContext,
+    iter_id: LocalId,
+    body: Vec<Stmt>,
+) -> Stmt {
+    let err_id = ctx.fresh_local();
+    let err_name = format!("__forof_err_{}", err_id);
+    ctx.locals.push((err_name.clone(), err_id, Type::Any));
+    let ret_err_id = ctx.fresh_local();
+    let ret_err_name = format!("__forof_ret_err_{}", ret_err_id);
+    ctx.locals
+        .push((ret_err_name.clone(), ret_err_id, Type::Any));
+
+    // try { if (__iter.return != null) __iter.return(); } catch (_) {}
+    //
+    // The whole close — including the `__iter.return` *read* (which may be an
+    // accessor that throws) and the call's result — is inside the swallowing
+    // `try`: for a throw completion the close's own abrupt completion is
+    // discarded and the ORIGINAL throw propagates (spec IteratorClose, throw
+    // case). Keeping the `.return` read outside would let a throwing getter
+    // (`iterator-close-throw-get-method-abrupt`) replace the original error.
+    let guarded_close = Stmt::Try {
+        body: vec![Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::LooseNe,
+                left: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(iter_id)),
+                    property: "return".to_string(),
+                }),
+                right: Box::new(Expr::Null),
+            },
+            then_branch: vec![Stmt::Expr(iterator_return_call(iter_id, false))],
+            else_branch: None,
+        }],
+        catch: Some(CatchClause {
+            param: Some((ret_err_id, ret_err_name)),
+            body: Vec::new(),
+        }),
+        finally: None,
+    };
+
+    Stmt::Try {
+        body,
+        catch: Some(CatchClause {
+            param: Some((err_id, err_name)),
+            body: vec![guarded_close, Stmt::Throw(Expr::LocalGet(err_id))],
+        }),
+        finally: None,
+    }
+}
+
+/// Rewrite a synchronous `for...of` body so every abrupt completion that
+/// escapes the loop runs IteratorClose first. Per spec ForIn/OfBodyEvaluation:
+/// an unlabeled `break` that targets this loop, a labeled `break`/`continue`
+/// that targets an enclosing construct, and a `return` all close the iterator.
+/// Unlabeled `continue` (next iteration) and `break`/`continue` captured by a
+/// loop/switch nested *within* the body do not. `throw` is intentionally not
+/// rewritten here: a `throw` caught by an in-body `try/catch` must not close,
+/// and the uncaught case is handled separately.
+///
+/// `break_capture_depth` counts enclosing loops/switches inside the body (which
+/// capture an unlabeled `break`); `inner_labels` are labels declared within the
+/// body (which capture a matching labeled `break`/`continue`).
+pub(crate) fn insert_iterator_close_on_abrupt(
+    stmts: &mut Vec<Stmt>,
+    iter_id: LocalId,
+    break_capture_depth: usize,
+    inner_labels: &[String],
+) {
+    let mut rewritten = Vec::with_capacity(stmts.len());
+    for stmt in stmts.drain(..) {
+        match stmt {
+            Stmt::Break if break_capture_depth == 0 => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::Break);
+            }
+            Stmt::LabeledBreak(label) if !inner_labels.contains(&label) => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::LabeledBreak(label));
+            }
+            Stmt::LabeledContinue(label) if !inner_labels.contains(&label) => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::LabeledContinue(label));
+            }
+            Stmt::Return(value) => {
+                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                rewritten.push(Stmt::Return(value));
+            }
+            Stmt::If {
+                condition,
+                mut then_branch,
+                mut else_branch,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut then_branch,
+                    iter_id,
+                    break_capture_depth,
+                    inner_labels,
+                );
+                if let Some(else_stmts) = else_branch.as_mut() {
+                    insert_iterator_close_on_abrupt(
+                        else_stmts,
+                        iter_id,
+                        break_capture_depth,
+                        inner_labels,
+                    );
+                }
+                rewritten.push(Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                });
+            }
+            Stmt::Try {
+                mut body,
+                mut catch,
+                mut finally,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth,
+                    inner_labels,
+                );
+                if let Some(c) = catch.as_mut() {
+                    insert_iterator_close_on_abrupt(
+                        &mut c.body,
+                        iter_id,
+                        break_capture_depth,
+                        inner_labels,
+                    );
+                }
+                if let Some(f) = finally.as_mut() {
+                    insert_iterator_close_on_abrupt(f, iter_id, break_capture_depth, inner_labels);
+                }
+                rewritten.push(Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                });
+            }
+            Stmt::While {
+                condition,
+                mut body,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth + 1,
+                    inner_labels,
+                );
+                rewritten.push(Stmt::While { condition, body });
+            }
+            Stmt::DoWhile {
+                mut body,
+                condition,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth + 1,
+                    inner_labels,
+                );
+                rewritten.push(Stmt::DoWhile { body, condition });
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                mut body,
+            } => {
+                insert_iterator_close_on_abrupt(
+                    &mut body,
+                    iter_id,
+                    break_capture_depth + 1,
+                    inner_labels,
+                );
+                rewritten.push(Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                });
+            }
+            Stmt::Switch {
+                discriminant,
+                mut cases,
+            } => {
+                for case in cases.iter_mut() {
+                    insert_iterator_close_on_abrupt(
+                        &mut case.body,
+                        iter_id,
+                        break_capture_depth + 1,
+                        inner_labels,
+                    );
+                }
+                rewritten.push(Stmt::Switch {
+                    discriminant,
+                    cases,
+                });
+            }
+            Stmt::Labeled { label, mut body } => {
+                let mut labels = inner_labels.to_vec();
+                labels.push(label.clone());
+                let mut body_vec = vec![*body];
+                insert_iterator_close_on_abrupt(
+                    &mut body_vec,
+                    iter_id,
+                    break_capture_depth,
+                    &labels,
+                );
+                body = Box::new(body_vec.into_iter().next().unwrap());
+                rewritten.push(Stmt::Labeled { label, body });
+            }
+            other => rewritten.push(other),
+        }
+    }
+    *stmts = rewritten;
+}
+
+fn lower_runtime_for_await_iterator(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    for_of_stmt: &ast::ForOfStmt,
+    source_expr: Expr,
+) -> Result<()> {
+    let for_scope_mark = ctx.push_block_scope();
+    let iter_id = ctx.fresh_local();
+    ctx.locals
+        .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
+    module.init.push(Stmt::Let {
+        id: iter_id,
+        name: format!("__iter_{}", iter_id),
+        ty: Type::Any,
+        mutable: false,
+        init: Some(Expr::GetAsyncIterator(Box::new(source_expr))),
+    });
+
+    let result_id = ctx.fresh_local();
+    ctx.locals
+        .push((format!("__result_{}", result_id), result_id, Type::Any));
+    let raw_next_call = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(iter_id)),
+            property: "next".to_string(),
+        }),
+        args: vec![],
+        type_args: vec![],
+        byte_offset: 0,
+    };
+    let next_call = Expr::Await(Box::new(raw_next_call));
+    module.init.push(Stmt::Let {
+        id: result_id,
+        name: format!("__result_{}", result_id),
+        ty: Type::Any,
+        mutable: true,
+        init: Some(next_call.clone()),
+    });
+
+    let binding_pat = match &for_of_stmt.left {
+        ast::ForHead::VarDecl(var_decl) => var_decl
+            .decls
+            .first()
+            .map(|decl| &decl.name)
+            .ok_or_else(|| anyhow!("for-await-of requires a variable declaration"))?,
+        ast::ForHead::Pat(pat) => pat,
+        _ => return Err(anyhow!("Unsupported for-await-of left-hand side")),
+    };
+    let mut var_ids = Vec::new();
+    collect_for_of_pattern_leaves(ctx, binding_pat, &mut var_ids);
+    if var_ids.is_empty() {
+        return Err(anyhow!("Unsupported for-await-of binding pattern"));
+    }
+
+    let mut body_stmts = Vec::new();
+    let mut var_idx = 0;
+    emit_for_of_pattern_binding(
+        ctx,
+        binding_pat,
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(result_id)),
+            property: "value".to_string(),
+        },
+        &var_ids,
+        &mut var_idx,
+        &mut body_stmts,
+    )?;
+    let init_before = module.init.len();
+    if let ast::Stmt::Block(block) = &*for_of_stmt.body {
+        for s in &block.stmts {
+            lower_stmt(ctx, module, s)?;
+        }
+    } else {
+        lower_stmt(ctx, module, &for_of_stmt.body)?;
+    }
+    let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
+    insert_iterator_return_before_abrupts(&mut user_body, iter_id, true);
+    body_stmts.append(&mut user_body);
+    body_stmts.push(Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))));
+
+    module.init.push(Stmt::While {
+        condition: Expr::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(result_id)),
+                property: "done".to_string(),
+            }),
+        },
+        body: body_stmts,
+    });
+
+    ctx.pop_block_scope(for_scope_mark);
+    Ok(())
 }
 
 pub(crate) fn lower_stmt_for_of(
@@ -335,15 +838,21 @@ pub(crate) fn lower_stmt_for_of(
         for_of_stmt.is_await && is_node_readable_for_await_target(ctx, &for_of_stmt.right);
     let is_filehandle_readlines_for_await =
         for_of_stmt.is_await && is_filehandle_readlines_for_await_target(ctx, &for_of_stmt.right);
+    let is_fs_dir_for_await =
+        for_of_stmt.is_await && is_fs_dir_for_await_target(ctx, &for_of_stmt.right);
     let is_fs_promises_glob_for_await =
         for_of_stmt.is_await && is_fs_promises_glob_for_await_target(ctx, &for_of_stmt.right);
+    let is_readline_interface_for_await =
+        for_of_stmt.is_await && is_readline_interface_for_await_target(ctx, &for_of_stmt.right);
 
     if is_generator_call
         || iter_from_class.is_some()
         || is_timer_promises_interval_call
         || is_node_readable_for_await
         || is_filehandle_readlines_for_await
+        || is_fs_dir_for_await
         || is_fs_promises_glob_for_await
+        || is_readline_interface_for_await
     {
         // Lower to iterator protocol:
         //   let __iter = genFunc(...);                     // generator-fn path
@@ -361,8 +870,9 @@ pub(crate) fn lower_stmt_for_of(
                 callee: Box::new(Expr::FuncRef(iter_fn_id)),
                 args: vec![iter_expr],
                 type_args: vec![],
+                byte_offset: 0,
             }
-        } else if is_filehandle_readlines_for_await {
+        } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
             async_iterator_method_call(iter_expr)
         } else if is_node_readable_for_await {
             Expr::Call {
@@ -372,6 +882,17 @@ pub(crate) fn lower_stmt_for_of(
                 }),
                 args: vec![],
                 type_args: vec![],
+                byte_offset: 0,
+            }
+        } else if is_readline_interface_for_await {
+            // rl.iterator() -> readline async-iterator object; .next() then
+            // awaits each line. Dispatched explicitly to js_readline_iterator.
+            Expr::NativeMethodCall {
+                module: "readline".to_string(),
+                class_name: Some("Interface".to_string()),
+                object: Some(Box::new(iter_expr)),
+                method: "iterator".to_string(),
+                args: vec![],
             }
         } else {
             iter_expr
@@ -401,6 +922,7 @@ pub(crate) fn lower_stmt_for_of(
             }),
             args: vec![],
             type_args: vec![],
+            byte_offset: 0,
         };
         let next_call = if needs_await {
             Expr::Await(Box::new(raw_next_call))
@@ -459,7 +981,11 @@ pub(crate) fn lower_stmt_for_of(
             lower_stmt(ctx, module, &for_of_stmt.body)?;
         }
         let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-        if is_node_readable_for_await || is_filehandle_readlines_for_await {
+        if is_node_readable_for_await
+            || is_filehandle_readlines_for_await
+            || is_fs_dir_for_await
+            || is_readline_interface_for_await
+        {
             insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
         }
         body_stmts.append(&mut user_body);
@@ -873,6 +1399,19 @@ pub(crate) fn lower_stmt_for_of(
         && !is_iterable_set
         && !is_iterable_typed_array
         && !proven_array;
+    if for_of_stmt.is_await && needs_runtime_iterator {
+        return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr);
+    }
+    // #for-of lazy iterator protocol: a generic/untyped iterable (custom
+    // iterator, generator object, any-typed value) must be driven lazily —
+    // pull one element via `__iter.next()` per iteration and run IteratorClose
+    // (`__iter.return()`) on an abrupt completion (break / labeled break /
+    // labeled continue escaping the loop / return). The previous
+    // `ForOfToArray` materialization eagerly drained the iterator up front,
+    // which (a) runs a generator past the point a `break` should have closed
+    // it and (b) made IteratorClose impossible. `is_await` is already handled
+    // by the early return above, so this is always the synchronous path.
+    let use_lazy_iter = needs_runtime_iterator;
     let arr_expr = if is_iterable_map {
         if let Some(args) = map_type_args.as_ref() {
             if args.len() >= 2 {
@@ -892,9 +1431,15 @@ pub(crate) fn lower_stmt_for_of(
             Expr::SetValues(Box::new(arr_expr))
         }
     } else if is_iterable_typed_array {
-        Expr::ArrayFrom(Box::new(arr_expr))
-    } else if needs_runtime_iterator {
-        Expr::ForOfToArray(Box::new(arr_expr))
+        // Iterate the typed array LIVE: the holder keeps the TA's static
+        // type so IndexGet/`.length` route through the typed-array
+        // accessors, and element writes made by the loop body are
+        // observed (test262 *-mutate.js). The previous `Expr::ArrayFrom`
+        // materialization snapshotted the elements up front.
+        arr_expr
+    } else if use_lazy_iter {
+        // GetIterator(obj): obj[Symbol.iterator](). Drives the lazy loop below.
+        Expr::GetIterator(Box::new(arr_expr))
     } else {
         arr_expr
     };
@@ -944,6 +1489,13 @@ pub(crate) fn lower_stmt_for_of(
             base: "Set".to_string(),
             type_args: vec![elem_type.clone()],
         }
+    } else if use_lazy_iter {
+        // Holds the iterator object, not an array.
+        Type::Any
+    } else if is_iterable_typed_array {
+        // Keep the TA's own type so IndexGet/length go through the
+        // typed-array accessors (live reads), not raw Array element loads.
+        iterable_type.clone().unwrap_or(Type::Any)
     } else {
         Type::Array(Box::new(elem_type.clone()))
     };
@@ -957,7 +1509,15 @@ pub(crate) fn lower_stmt_for_of(
     ctx.locals
         .push((format!("__idx_{}", idx_id), idx_id, Type::Number));
 
-    // Store array reference: let __arr = arr
+    // For the lazy iterator path `arr_id` holds the iterator and `result_id`
+    // holds the most recent `__iter.next()` result `{ value, done }`.
+    let result_id = ctx.fresh_local();
+    if use_lazy_iter {
+        ctx.locals
+            .push((format!("__result_{}", result_id), result_id, Type::Any));
+    }
+
+    // Store array reference: let __arr = arr (or `let __iter = GetIterator(..)`).
     module.init.push(Stmt::Let {
         id: arr_id,
         name: format!("__arr_{}", arr_id),
@@ -980,15 +1540,23 @@ pub(crate) fn lower_stmt_for_of(
                     ast::Pat::Ident(ident) => {
                         let name = ident.id.sym.to_string();
                         let id = ctx.define_local(name.clone(), elem_type.clone());
+                        if var_decl.kind == ast::VarDeclKind::Const {
+                            // `for (const x of …) { x = 1; }` → TypeError.
+                            ctx.mark_local_immutable(id);
+                        }
                         vec![(name, id)]
                     }
                     ast::Pat::Array(arr_pat) => {
+                        // Collect ALL leaves — incl. defaults (`[a, b = f()]`),
+                        // rest (`[h, ...t]`), and nested patterns — so the body
+                        // sees every binding. The Tuple [k, v] typing for the
+                        // Map fast path only applies to all-Ident patterns,
+                        // which collect in the same positional order.
                         let mut ids = Vec::new();
-                        for (idx, elem) in arr_pat.elems.iter().enumerate() {
-                            if let Some(elem_pat) = elem {
-                                if let ast::Pat::Ident(ident) = elem_pat {
+                        if map_kv_fastpath {
+                            for (idx, elem) in arr_pat.elems.iter().enumerate() {
+                                if let Some(ast::Pat::Ident(ident)) = elem {
                                     let name = ident.id.sym.to_string();
-                                    // For Map destructuring [k, v], use key type for idx 0, value type for idx 1
                                     let var_type = if let Type::Tuple(ref types) = elem_type {
                                         types.get(idx).cloned().unwrap_or(Type::Any)
                                     } else {
@@ -998,33 +1566,14 @@ pub(crate) fn lower_stmt_for_of(
                                     ids.push((name, id));
                                 }
                             }
+                        } else {
+                            collect_for_of_pattern_leaves(ctx, &decl.name, &mut ids);
                         }
                         ids
                     }
-                    ast::Pat::Object(obj_pat) => {
+                    ast::Pat::Object(_) => {
                         let mut ids = Vec::new();
-                        for prop in &obj_pat.props {
-                            match prop {
-                                ast::ObjectPatProp::Assign(assign) => {
-                                    let name = assign.key.sym.to_string();
-                                    let id = ctx.define_local(name.clone(), Type::Any);
-                                    ids.push((name, id));
-                                }
-                                ast::ObjectPatProp::KeyValue(kv) => {
-                                    if let ast::Pat::Ident(ident) = &*kv.value {
-                                        let name = ident.id.sym.to_string();
-                                        let id = ctx.define_local(name.clone(), Type::Any);
-                                        ids.push((name, id));
-                                    } else {
-                                        // Nested pattern (e.g. `key: [a, b]`).
-                                        // Recurse so leaves get pre-defined and
-                                        // the body can reference them. Issue #554.
-                                        collect_for_of_pattern_leaves(ctx, &kv.value, &mut ids);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
+                        collect_for_of_pattern_leaves(ctx, &decl.name, &mut ids);
                         ids
                     }
                     _ => {
@@ -1037,12 +1586,21 @@ pub(crate) fn lower_stmt_for_of(
                 return Err(anyhow!("for-of requires a variable declaration"));
             }
         }
-        ast::ForHead::Pat(pat) => {
-            let name = get_pat_name(pat)?;
-            let id = ctx.define_local(name.clone(), Type::Any);
-            vec![(name, id)]
-        }
+        ast::ForHead::Pat(_) => Vec::new(),
         _ => return Err(anyhow!("Unsupported for-of left-hand side")),
+    };
+
+    // `for (<expr-or-pattern> of …)` heads (bare ident, member expr,
+    // destructuring assignment): resolve the target before the body so any
+    // sloppy implicit global it creates is in scope.
+    let pat_head_binding = if matches!(&for_of_stmt.left, ast::ForHead::Pat(_)) {
+        Some(predefine_for_head(
+            ctx,
+            &for_of_stmt.left,
+            elem_type.clone(),
+        )?)
+    } else {
+        None
     };
 
     // NOW lower the body - variables are defined so body can reference them
@@ -1063,14 +1621,22 @@ pub(crate) fn lower_stmt_for_of(
                 // wraps the `__iter.next()` call in `Expr::Await` for
                 // async generators; this brings the array-iteration
                 // path to parity.
-                let raw_item_expr = Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(arr_id)),
-                    index: Box::new(Expr::LocalGet(idx_id)),
-                };
-                let item_expr = if for_of_stmt.is_await {
-                    Expr::Await(Box::new(raw_item_expr))
+                let item_expr = if use_lazy_iter {
+                    // Lazy path: the element is `__result.value`.
+                    Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(result_id)),
+                        property: "value".to_string(),
+                    }
                 } else {
-                    raw_item_expr
+                    let raw_item_expr = Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(arr_id)),
+                        index: Box::new(Expr::LocalGet(idx_id)),
+                    };
+                    if for_of_stmt.is_await {
+                        Expr::Await(Box::new(raw_item_expr))
+                    } else {
+                        raw_item_expr
+                    }
                 };
 
                 match &decl.name {
@@ -1137,130 +1703,39 @@ pub(crate) fn lower_stmt_for_of(
                             }
                             stmts
                         } else {
-                            // Array destructuring: for (const [a, b] of arr)
-                            let mut stmts = vec![Stmt::Let {
-                                id: item_id,
-                                name: format!("__item_{}", item_id),
-                                ty: elem_type.clone(),
-                                mutable: false,
-                                init: Some(item_expr),
-                            }];
-
-                            // Extract each element using pre-defined IDs
-                            let mut var_idx = 0;
-                            for (idx, elem) in arr_pat.elems.iter().enumerate() {
-                                if let Some(elem_pat) = elem {
-                                    if let ast::Pat::Ident(_) = elem_pat {
-                                        let (name, id) = var_ids[var_idx].clone();
-                                        var_idx += 1;
-                                        // For Map destructuring, use the Tuple element type
-                                        let var_type = if let Type::Tuple(ref types) = elem_type {
-                                            types.get(idx).cloned().unwrap_or(Type::Any)
-                                        } else {
-                                            Type::Any
-                                        };
-                                        stmts.push(Stmt::Let {
-                                            id,
-                                            name,
-                                            ty: var_type,
-                                            mutable: false,
-                                            init: Some(Expr::IndexGet {
-                                                object: Box::new(Expr::LocalGet(item_id)),
-                                                index: Box::new(Expr::Number(idx as f64)),
-                                            }),
-                                        });
-                                    }
-                                }
-                            }
+                            // Array destructuring: for (const [a, b] of arr).
+                            // Route through the shared pattern-binding emitter
+                            // so defaults (`[a, b = f()]`), rest elements, and
+                            // nested patterns all bind (the previous inline
+                            // walk silently skipped non-Ident elements —
+                            // test262 for-of scope-* probes).
+                            let mut stmts = Vec::new();
+                            let mut var_idx = 0usize;
+                            emit_for_of_pattern_binding(
+                                ctx,
+                                &decl.name,
+                                item_expr,
+                                &var_ids,
+                                &mut var_idx,
+                                &mut stmts,
+                            )?;
                             stmts
                         }
                     }
-                    ast::Pat::Object(obj_pat) => {
-                        // Object destructuring: for (const { a, b } of arr)
-                        let mut stmts = vec![Stmt::Let {
-                            id: item_id,
-                            name: format!("__item_{}", item_id),
-                            ty: Type::Any,
-                            mutable: false,
-                            init: Some(item_expr),
-                        }];
-
-                        // Extract each property using pre-defined IDs
-                        let mut var_idx = 0;
-                        for prop in &obj_pat.props {
-                            match prop {
-                                ast::ObjectPatProp::Assign(assign) => {
-                                    let prop_name = assign.key.sym.to_string();
-                                    let (name, id) = var_ids[var_idx].clone();
-                                    var_idx += 1;
-                                    let init_value = if let Some(default_expr) = &assign.value {
-                                        let prop_access = Expr::PropertyGet {
-                                            object: Box::new(Expr::LocalGet(item_id)),
-                                            property: prop_name,
-                                        };
-                                        let default_val = lower_expr(ctx, default_expr)?;
-                                        let condition = Expr::Compare {
-                                            op: CompareOp::Ne,
-                                            left: Box::new(prop_access.clone()),
-                                            right: Box::new(Expr::Undefined),
-                                        };
-                                        Expr::Conditional {
-                                            condition: Box::new(condition),
-                                            then_expr: Box::new(prop_access),
-                                            else_expr: Box::new(default_val),
-                                        }
-                                    } else {
-                                        Expr::PropertyGet {
-                                            object: Box::new(Expr::LocalGet(item_id)),
-                                            property: prop_name,
-                                        }
-                                    };
-                                    stmts.push(Stmt::Let {
-                                        id,
-                                        name,
-                                        ty: Type::Any,
-                                        mutable: false,
-                                        init: Some(init_value),
-                                    });
-                                }
-                                ast::ObjectPatProp::KeyValue(kv) => {
-                                    let key = match &kv.key {
-                                        ast::PropName::Ident(ident) => ident.sym.to_string(),
-                                        ast::PropName::Str(s) => {
-                                            s.value.as_str().unwrap_or("").to_string()
-                                        }
-                                        _ => continue,
-                                    };
-                                    let key_source = Expr::PropertyGet {
-                                        object: Box::new(Expr::LocalGet(item_id)),
-                                        property: key,
-                                    };
-                                    if let ast::Pat::Ident(_) = &*kv.value {
-                                        let (name, id) = var_ids[var_idx].clone();
-                                        var_idx += 1;
-                                        stmts.push(Stmt::Let {
-                                            id,
-                                            name,
-                                            ty: Type::Any,
-                                            mutable: false,
-                                            init: Some(key_source),
-                                        });
-                                    } else {
-                                        // Nested pattern (e.g. `key: [a, b]`).
-                                        // Issue #554.
-                                        emit_for_of_pattern_binding(
-                                            ctx,
-                                            &kv.value,
-                                            key_source,
-                                            &var_ids,
-                                            &mut var_idx,
-                                            &mut stmts,
-                                        )?;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
+                    ast::Pat::Object(_) => {
+                        // Object destructuring: for (const { a, b } of arr).
+                        // Shared emitter — handles defaults, rest props, and
+                        // nested patterns uniformly.
+                        let mut stmts = Vec::new();
+                        let mut var_idx = 0usize;
+                        emit_for_of_pattern_binding(
+                            ctx,
+                            &decl.name,
+                            item_expr,
+                            &var_ids,
+                            &mut var_idx,
+                            &mut stmts,
+                        )?;
                         stmts
                     }
                     _ => {
@@ -1270,10 +1745,12 @@ pub(crate) fn lower_stmt_for_of(
                             name,
                             ty: Type::Any,
                             mutable: false,
-                            init: Some(Expr::IndexGet {
-                                object: Box::new(Expr::LocalGet(arr_id)),
-                                index: Box::new(Expr::LocalGet(idx_id)),
-                            }),
+                            init: Some(lazy_or_index_elem(
+                                use_lazy_iter,
+                                arr_id,
+                                idx_id,
+                                result_id,
+                            )),
                         }]
                     }
                 }
@@ -1282,20 +1759,38 @@ pub(crate) fn lower_stmt_for_of(
             }
         }
         ast::ForHead::Pat(_) => {
-            let (name, id) = var_ids[0].clone();
-            vec![Stmt::Let {
-                id,
-                name,
-                ty: Type::Any,
-                mutable: false,
-                init: Some(Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(arr_id)),
-                    index: Box::new(Expr::LocalGet(idx_id)),
-                }),
-            }]
+            let binding = pat_head_binding
+                .as_ref()
+                .ok_or_else(|| anyhow!("for-of pattern head not pre-resolved"))?;
+            let mut source = lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id);
+            if for_of_stmt.is_await && !use_lazy_iter {
+                source = Expr::Await(Box::new(source));
+            }
+            for_head_binding_stmts(ctx, binding, source, elem_type.clone())?
         }
         _ => return Err(anyhow!("Unsupported for-of left-hand side")),
     };
+
+    // Lazy iterator path: rewrite the user body so every abrupt completion
+    // escaping the loop runs IteratorClose (`__iter.return()`) first.
+    if use_lazy_iter {
+        insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
+        // Wrap ONLY the user body so a throw escaping it runs IteratorClose.
+        // break/return/labeled abrupts were already handled above; this covers
+        // the throw-completion case those intentionally leave alone. The
+        // element-`.value` read and binding statements stay OUTSIDE the wrapper:
+        // per spec, IteratorValue throwing sets the iterator done and does NOT
+        // close it (`iterator-next-result-value-attr-error`) — only an abrupt
+        // body completion does.
+        let guarded_body = wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, loop_body);
+        let mut full_body = binding_stmts;
+        full_body.push(guarded_body);
+        module
+            .init
+            .push(lazy_iter_for_stmt(arr_id, result_id, full_body));
+        ctx.pop_block_scope(for_scope_mark);
+        return Ok(());
+    }
 
     // Prepend the binding statements to the loop body
     for (i, stmt) in binding_stmts.into_iter().enumerate() {
@@ -1354,29 +1849,23 @@ pub(crate) fn lower_stmt_for_in(
     // Push a block scope so the loop key and internal temporaries don't leak.
     let for_scope_mark = ctx.push_block_scope();
 
-    // Get the iteration variable name
-    let key_name = match &for_in_stmt.left {
-        ast::ForHead::VarDecl(var_decl) => {
-            if let Some(decl) = var_decl.decls.first() {
-                get_binding_name(&decl.name)?
-            } else {
-                return Err(anyhow!("for-in requires a variable declaration"));
-            }
-        }
-        ast::ForHead::Pat(pat) => get_pat_name(pat)?,
-        _ => return Err(anyhow!("Unsupported for-in left-hand side")),
-    };
+    // Resolve the head target (defines fresh decl bindings so the body
+    // lowered below can reference them).
+    let head_binding = predefine_for_head(ctx, &for_in_stmt.left, Type::String)?;
 
     // Lower the object expression
     let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
 
-    // Create Object.keys(obj) expression to get the array of keys
-    let keys_expr = Expr::ObjectKeys(Box::new(obj_expr));
+    // for-in enumerates the receiver's own AND inherited enumerable string
+    // keys (deduplicated), and is a no-op — not a throw — on null/undefined.
+    // `ForInKeys` carries those semantics; `ObjectKeys` (Object.keys) would
+    // throw on nullish and miss inherited keys. Refs language/statements/for-in
+    // S12.6.4_A1/A2 (nullish) and A6/A6.1 (prototype chain).
+    let keys_expr = Expr::ForInKeys(Box::new(obj_expr));
 
     // Create internal variables for the keys array and index
     let keys_id = ctx.fresh_local();
     let idx_id = ctx.fresh_local();
-    let key_id = ctx.define_local(key_name.clone(), Type::String);
 
     // Store keys array reference: let __keys = Object.keys(obj)
     module.init.push(Stmt::Let {
@@ -1390,20 +1879,15 @@ pub(crate) fn lower_stmt_for_in(
     // Lower the body
     let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
 
-    // Prepend: const key = __keys[__i]
-    loop_body.insert(
-        0,
-        Stmt::Let {
-            id: key_id,
-            name: key_name,
-            ty: Type::String,
-            mutable: false,
-            init: Some(Expr::IndexGet {
-                object: Box::new(Expr::LocalGet(keys_id)),
-                index: Box::new(Expr::LocalGet(idx_id)),
-            }),
-        },
-    );
+    // Prepend the key binding/assignment: <head> = __keys[__i]
+    let key_source = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(keys_id)),
+        index: Box::new(Expr::LocalGet(idx_id)),
+    };
+    let binding_stmts = for_head_binding_stmts(ctx, &head_binding, key_source, Type::String)?;
+    for (i, stmt) in binding_stmts.into_iter().enumerate() {
+        loop_body.insert(i, stmt);
+    }
 
     // Create the for loop:
     // for (let __i = 0; __i < __keys.length; __i++) { ... }

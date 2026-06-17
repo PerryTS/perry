@@ -3,6 +3,17 @@ use super::*;
 /// Type ID constant for Buffer/Uint8Array - matches class_id 0xFFFF0004
 pub const BUFFER_TYPE_ID: u32 = 0xFFFF0004;
 
+/// #5067 — throw a catchable `RangeError: Array buffer allocation failed`
+/// (Node/V8's message) when a buffer backing block cannot be allocated,
+/// rather than aborting the process.
+#[cold]
+fn throw_buffer_alloc_failed() -> ! {
+    let msg = b"Array buffer allocation failed";
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_rangeerror_new(s);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 /// Buffer header - similar to StringHeader but specifically for binary data
 /// NOTE: Layout must match ArrayHeader (length at offset 0, capacity at offset 4)
 /// because the codegen treats Uint8Array like arrays with hardcoded offsets.
@@ -41,7 +52,7 @@ use std::sync::{Mutex, OnceLock};
 
 static EXTERNAL_BUFFER_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 static EXTERNAL_UINT8ARRAY_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, (u8, u8, u8)>>> =
+static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, CryptoKeyMeta>>> =
     OnceLock::new();
 
 fn external_buffers() -> &'static Mutex<HashSet<usize>> {
@@ -52,9 +63,11 @@ fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
     EXTERNAL_UINT8ARRAY_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn external_crypto_keys() -> &'static Mutex<HashMap<usize, (u8, u8, u8)>> {
+fn external_crypto_keys() -> &'static Mutex<HashMap<usize, CryptoKeyMeta>> {
     EXTERNAL_CRYPTO_KEY_META_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
+
+pub type CryptoKeyMeta = (u8, u8, u8, bool, u32);
 
 thread_local! {
     static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -96,10 +109,19 @@ thread_local! {
     static SECRET_KEY_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
     /// Buffers that should behave as WebCrypto CryptoKey values. Metadata is
     /// numeric to keep perry-runtime independent from perry-stdlib enums:
-    /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF, 7 PBKDF2
+    /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF,
+    ///       7 PBKDF2, 8 ECDSA, 9 ECDH, 10 Ed25519, 11 X25519,
+    ///       12 RSASSA-PKCS1-v1_5, 13 RSA-OAEP, 14 RSA-PSS,
+    ///       15 ECDSA P-384, 16 ECDH P-384, 17 ECDSA P-521,
+    ///       18 ECDH P-521, 19 Argon2d, 20 Argon2i, 21 Argon2id,
+    ///       22 ChaCha20-Poly1305, 23 KMAC128, 24 KMAC256, 25 AES-OCB,
+    ///       26 X448, 27 Ed448, 30 ML-KEM-512, 31 ML-KEM-768,
+    ///       32 ML-KEM-1024
     /// hash: 1 SHA-1, 2 SHA-256, 3 SHA-384, 4 SHA-512
     /// kind: 1 secret, 2 private, 3 public
-    static CRYPTO_KEY_META_REGISTRY: RefCell<PtrHashMap<usize, (u8, u8, u8)>> =
+    /// extractable: WebCrypto CryptoKey.extractable
+    /// usages: bitset matching WebCrypto usage names
+    static CRYPTO_KEY_META_REGISTRY: RefCell<PtrHashMap<usize, CryptoKeyMeta>> =
         RefCell::new(new_ptr_hash_map());
     /// String-backed asymmetric KeyObject surrogates returned by crypto
     /// helpers. They intentionally keep PEM/internal-string storage so the
@@ -126,7 +148,14 @@ pub fn mark_as_shared_array_buffer(addr: usize) {
 }
 
 pub fn is_shared_array_buffer(addr: usize) -> bool {
-    SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+    if SHARED_ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+        return true;
+    }
+    // #4913: a SAB backing is process-global. If this thread received it as a
+    // module-level value (not a serialized `perry/thread` capture, which would
+    // have re-registered it locally) the thread-local set misses, so fall back
+    // to the process-global registry. Slow path only — thread-local hits first.
+    crate::shared_sab::is_shared_sab(addr)
 }
 
 pub fn is_any_array_buffer(addr: usize) -> bool {
@@ -199,11 +228,20 @@ fn buffer_alloc_small(capacity: u32) -> *mut BufferHeader {
     let needed = std::mem::size_of::<BufferHeader>() + capacity as usize;
     // Round up to 8-byte boundary so every header is naturally aligned.
     let aligned = (needed + 7) & !7;
+    // #5226: reserve an extra `GC_HEADER_SIZE` per buffer for a zeroed sentinel
+    // that precedes the returned pointer (see the `write_bytes` below). Buffers
+    // are off-GC-heap with no real `GcHeader`, but the runtime is littered with
+    // `*(ptr - GC_HEADER_SIZE)` obj_type probes (Promise / Date / Array / class
+    // dispatch). Without the sentinel the back-read crosses outside the slab —
+    // into the unmapped page before a freshly mapped block for the first buffer
+    // — and segfaults. A `0` sentinel matches no `GC_TYPE_*`, so every probe
+    // cleanly classifies the buffer as "not my type".
+    let slot = crate::gc::GC_HEADER_SIZE + aligned;
 
     SMALL_BUF_SLAB.with(|slab_ref| {
         let mut slab = slab_ref.borrow_mut();
 
-        if slab.current + aligned > slab.end {
+        if slab.current + slot > slab.end {
             // Current block exhausted (or first call): allocate a fresh slab.
             let layout = Layout::from_size_align(SLAB_CAPACITY, 8).unwrap();
             let block = unsafe { alloc(layout) };
@@ -220,8 +258,15 @@ fn buffer_alloc_small(capacity: u32) -> *mut BufferHeader {
             slab.end = block_end;
         }
 
-        let ptr = slab.current as *mut BufferHeader;
-        slab.current += aligned;
+        // Zero the 8-byte sentinel, then hand out the pointer just past it. The
+        // sentinel always lands inside the slab block, so `ptr - GC_HEADER_SIZE`
+        // is a mapped read; `is_registered_buffer`'s slab-range check still
+        // covers `ptr` (it stays within `[block_start, block_end)`).
+        let ptr = unsafe {
+            std::ptr::write_bytes(slab.current as *mut u8, 0, crate::gc::GC_HEADER_SIZE);
+            (slab.current + crate::gc::GC_HEADER_SIZE) as *mut BufferHeader
+        };
+        slab.current += slot;
 
         unsafe {
             (*ptr).length = 0;
@@ -232,28 +277,45 @@ fn buffer_alloc_small(capacity: u32) -> *mut BufferHeader {
     })
 }
 
+/// True when `addr` lies inside a small-buffer slab block. Slab allocations
+/// carry NO GcHeader, so reading `addr - GC_HEADER_SIZE` there yields the
+/// previous allocation's trailing data bytes — a content-dependent fake
+/// header. `addr_class::try_read_gc_header` consults this before any deref so
+/// brand probes (Temporal/Date/Map/Set) can't misroute a small Buffer whose
+/// payload happens to spell a matching `obj_type`.
+pub(crate) fn is_small_buf_slab_addr(addr: usize) -> bool {
+    SMALL_BUF_SLAB.with(|slab_ref| {
+        slab_ref
+            .borrow()
+            .ranges
+            .iter()
+            .any(|&(start, end)| addr >= start && addr < end)
+    })
+}
+
 /// Check if a pointer is a registered buffer (for instanceof Uint8Array)
 pub fn is_registered_buffer(addr: usize) -> bool {
     // Fast path: address falls within a small-buffer slab block.  All bytes in
     // a slab block belong exclusively to BufferHeader allocations, so any match
     // is definitively a buffer pointer.
-    let in_slab = SMALL_BUF_SLAB.with(|slab_ref| {
-        let slab = slab_ref.borrow();
-        slab.ranges
-            .iter()
-            .any(|&(start, end)| addr >= start && addr < end)
-    });
-    if in_slab {
+    if is_small_buf_slab_addr(addr) {
         return true;
     }
     // Slow path: large buffers tracked in the HashSet registry.
     if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
         return true;
     }
-    external_buffers()
+    if external_buffers()
         .lock()
         .map(|r| r.contains(&addr))
         .unwrap_or(false)
+    {
+        return true;
+    }
+    // #4913: recognise a process-global SAB backing reached as a module-level
+    // value on a thread that never locally registered it (see
+    // `is_shared_array_buffer`).
+    crate::shared_sab::is_shared_sab(addr)
 }
 
 /// Mark this buffer as one that came from `new Uint8Array(...)` so it
@@ -291,16 +353,42 @@ pub fn is_secret_key(addr: usize) -> bool {
 }
 
 pub fn mark_as_crypto_key(addr: usize, algo: u8, hash: u8, kind: u8) {
+    mark_as_crypto_key_with_flags(
+        addr,
+        algo,
+        hash,
+        kind,
+        true,
+        default_crypto_key_usages(algo, kind),
+    );
+}
+
+pub fn mark_as_crypto_key_with_flags(
+    addr: usize,
+    algo: u8,
+    hash: u8,
+    kind: u8,
+    extractable: bool,
+    usages: u32,
+) {
     CRYPTO_KEY_META_REGISTRY.with(|r| {
-        r.borrow_mut().insert(addr, (algo, hash, kind));
+        r.borrow_mut()
+            .insert(addr, (algo, hash, kind, extractable, usages));
     });
 }
 
 #[no_mangle]
-pub extern "C" fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, hash: u8, kind: u8) {
+pub extern "C" fn js_buffer_mark_as_crypto_key_external(
+    addr: usize,
+    algo: u8,
+    hash: u8,
+    kind: u8,
+    extractable: u8,
+    usages: u32,
+) {
     register_buffer(addr as *const BufferHeader);
     mark_as_uint8array(addr);
-    mark_as_crypto_key(addr, algo, hash, kind);
+    mark_as_crypto_key_with_flags(addr, algo, hash, kind, extractable != 0, usages);
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
     }
@@ -308,11 +396,11 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(addr: usize, algo: u8, h
         r.insert(addr);
     }
     if let Ok(mut r) = external_crypto_keys().lock() {
-        r.insert(addr, (algo, hash, kind));
+        r.insert(addr, (algo, hash, kind, extractable != 0, usages));
     }
 }
 
-pub fn crypto_key_meta(addr: usize) -> Option<(u8, u8, u8)> {
+pub fn crypto_key_meta(addr: usize) -> Option<CryptoKeyMeta> {
     CRYPTO_KEY_META_REGISTRY
         .with(|r| r.borrow().get(&addr).copied())
         .or_else(|| {
@@ -321,6 +409,37 @@ pub fn crypto_key_meta(addr: usize) -> Option<(u8, u8, u8)> {
                 .ok()
                 .and_then(|r| r.get(&addr).copied())
         })
+}
+
+fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
+    const ENCRYPT: u32 = 1 << 0;
+    const DECRYPT: u32 = 1 << 1;
+    const SIGN: u32 = 1 << 2;
+    const VERIFY: u32 = 1 << 3;
+    const DERIVE_KEY: u32 = 1 << 4;
+    const DERIVE_BITS: u32 = 1 << 5;
+    const WRAP_KEY: u32 = 1 << 6;
+    const UNWRAP_KEY: u32 = 1 << 7;
+    const ENCAPSULATE_BITS: u32 = 1 << 8;
+    const DECAPSULATE_BITS: u32 = 1 << 9;
+    const ENCAPSULATE_KEY: u32 = 1 << 10;
+    const DECAPSULATE_KEY: u32 = 1 << 11;
+
+    match (algo, kind) {
+        (1, 1) => SIGN | VERIFY,
+        (23 | 24, 1) => SIGN | VERIFY,
+        (2 | 4 | 5 | 22 | 25, 1) => ENCRYPT | DECRYPT | WRAP_KEY | UNWRAP_KEY,
+        (3, 1) => WRAP_KEY | UNWRAP_KEY,
+        (6 | 7 | 19 | 20 | 21, 1) => DERIVE_KEY | DERIVE_BITS,
+        (8 | 10 | 12 | 14 | 15 | 17 | 27, 2) => SIGN,
+        (8 | 10 | 12 | 14 | 15 | 17 | 27, 3) => VERIFY,
+        (9 | 11 | 16 | 18 | 26, 2) => DERIVE_KEY | DERIVE_BITS,
+        (13, 2) => DECRYPT | UNWRAP_KEY,
+        (13, 3) => ENCRYPT | WRAP_KEY,
+        (30 | 31 | 32, 2) => DECAPSULATE_BITS | DECAPSULATE_KEY,
+        (30 | 31 | 32, 3) => ENCAPSULATE_BITS | ENCAPSULATE_KEY,
+        _ => 0,
+    }
 }
 
 /// `kind`: 1 public, 2 private. `asym_type`: 1 rsa, 2 ec, 3 ed25519, 4 x25519.
@@ -435,12 +554,20 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
         register_buffer(ptr);
         return ptr;
     }
-    let layout = buffer_layout(capacity as usize);
+    // #5226: mid-size buffers are raw-`alloc`'d off the GC heap. Reserve a
+    // zeroed `GC_HEADER_SIZE` sentinel before the returned pointer so the
+    // runtime's `*(ptr - GC_HEADER_SIZE)` obj_type probes read a mapped `0`
+    // (matching no `GC_TYPE_*`) instead of faulting at a region boundary.
+    let inner = buffer_layout(capacity as usize);
+    let layout = Layout::from_size_align(crate::gc::GC_HEADER_SIZE + inner.size(), 8).unwrap();
     unsafe {
-        let ptr = alloc(layout) as *mut BufferHeader;
-        if ptr.is_null() {
-            panic!("Failed to allocate buffer");
+        let raw = alloc(layout);
+        if raw.is_null() {
+            // #5067 — surface a catchable `RangeError` instead of aborting.
+            throw_buffer_alloc_failed();
         }
+        std::ptr::write_bytes(raw, 0, crate::gc::GC_HEADER_SIZE);
+        let ptr = raw.add(crate::gc::GC_HEADER_SIZE) as *mut BufferHeader;
         (*ptr).length = 0;
         (*ptr).capacity = capacity;
         register_buffer(ptr);

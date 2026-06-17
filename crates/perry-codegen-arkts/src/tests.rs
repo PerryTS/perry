@@ -29,6 +29,9 @@ fn empty_module() -> Module {
         init_kind: perry_hir::ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
 
@@ -61,7 +64,9 @@ fn closure_stub() -> Expr {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -614,6 +619,7 @@ fn for_each_lowers_array_map_in_vstack() {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(42)]);
     let map_expr = Expr::ArrayMap {
@@ -630,7 +636,9 @@ fn for_each_lowers_array_map_in_vstack() {
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,
+            captures_new_target: false,
             enclosing_class: None,
+            is_arrow: false,
             is_async: false,
             is_generator: false,
             is_strict: false,
@@ -888,7 +896,9 @@ fn navstack_set_in_closure_rewrites_to_settext() {
                 captures: vec![],
                 mutable_captures: vec![],
                 captures_this: false,
+                captures_new_target: false,
                 enclosing_class: None,
+                is_arrow: false,
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -950,6 +960,7 @@ fn state_method_call(state_id: u32, method: &str, args: Vec<Expr>) -> Expr {
         }),
         args,
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -998,7 +1009,9 @@ fn state_set_in_closure_rewrites_to_settext() {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1154,6 +1167,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     };
     let inner_text = nmc("Text", vec![Expr::LocalGet(99)]);
     let map_expr = Expr::ArrayMap {
@@ -1169,7 +1183,9 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,
+            captures_new_target: false,
             enclosing_class: None,
+            is_arrow: false,
             is_async: false,
             is_generator: false,
             is_strict: false,
@@ -1320,6 +1336,47 @@ fn calendar_without_literal_args_falls_back_to_today() {
     )));
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(r.ets_source.contains("CalendarPicker("));
+    assert!(r.ets_source.contains("selected: new Date()"));
+}
+
+#[test]
+fn date_picker_emits_arkui_date_picker() {
+    // Issue #4772 — DatePicker(2026, 5, onChange) → DatePicker
+    // with selected = new Date(2026, 4, 1) (month is 0-indexed in
+    // JS Date) and an onDateChange that converts the Date payload to
+    // an ISO yyyy-MM-dd string before invoking the TS callback.
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "DatePicker",
+        vec![Expr::Number(2026.0), Expr::Number(5.0), closure_stub()],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r.ets_source.contains("DatePicker("));
+    // 1-based month 5 (May) → 0-based monthIndex 4
+    assert!(r.ets_source.contains("new Date(2026, 4, 1)"));
+    assert!(r.ets_source.contains(".onDateChange((value: Date) => {"));
+    assert!(r.ets_source.contains("value.toISOString().split('T')[0]"));
+    assert!(r
+        .ets_source
+        .contains("perryEntry.invokeCallback1(0, __iso)"));
+    assert_eq!(r.callbacks.len(), 1);
+}
+
+#[test]
+fn date_picker_without_literal_args_falls_back_to_today() {
+    // DatePicker(yearLocal, monthLocal, _) — args don't resolve to
+    // numeric literals, so the selected date defaults to `new Date()`.
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "DatePicker",
+        vec![
+            Expr::String("not-a-number".into()),
+            Expr::String("nope".into()),
+            Expr::Number(0.0),
+        ],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r.ets_source.contains("DatePicker("));
     assert!(r.ets_source.contains("selected: new Date()"));
 }
 
@@ -1476,7 +1533,9 @@ fn media_call_inside_button_closure_also_triggers_glue() {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1964,7 +2023,9 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -2471,6 +2532,7 @@ fn issue_410_serialize_condition_fallback_has_no_block_comment_close() {
         callee: Box::new(Expr::LocalGet(99)),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     let s = serialize_condition(&unrecognized, &bindings, &consts);
     assert!(
@@ -2702,6 +2764,7 @@ fn issue_410_conditional_modifier_chain_has_no_nested_block_comments() {
             callee: Box::new(Expr::LocalGet(999)),
             args: vec![],
             type_args: vec![],
+            byte_offset: 0,
         },
     ));
     m.init.push(let_widget(

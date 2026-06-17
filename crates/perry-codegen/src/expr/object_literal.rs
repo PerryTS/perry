@@ -256,6 +256,33 @@ fn emit_unboxed_object_layout_init(ctx: &mut FnCtx<'_>, obj_handle: &str) {
     );
 }
 
+fn is_generator_iterator_object_literal(props: &[(String, Expr)]) -> bool {
+    if props.len() != 3 {
+        return false;
+    }
+    let expected = [
+        ("next", "__val"),
+        ("return", "__ret_val"),
+        ("throw", "__throw_val"),
+    ];
+    props
+        .iter()
+        .zip(expected)
+        .all(|((key, value), (expected_key, expected_param))| {
+            if key != expected_key {
+                return false;
+            }
+            matches!(
+                value,
+                Expr::Closure {
+                    params,
+                    captures_this: true,
+                    ..
+                } if params.len() == 1 && params[0].name == expected_param
+            )
+        })
+}
+
 /// Lower an object literal `{ k1: v1, k2: v2, … }`.
 ///
 /// Pattern:
@@ -285,6 +312,7 @@ pub(crate) fn lower_object_literal(
     let zero_str = "0".to_string();
     let n_str = field_count.to_string();
     let typed_layout = typed_object_literal_layout(ctx, props, expected_ty);
+    let generator_iterator_object = is_generator_iterator_object_literal(props);
 
     // Fast path: no closure-with-`this` props. Use the shape-cache allocator
     // and write fields by INDEX — this skips the per-field linear key-search
@@ -294,15 +322,16 @@ pub(crate) fn lower_object_literal(
     // need the by-name path because `this_patches` populates them post-build
     // via `js_closure_set_capture_f64`, which assumes the key is already in
     // keys_array — fine here since the shape allocator pre-populates it.
-    let any_method_closure = props.iter().any(|(_, v)| {
-        matches!(
-            v,
-            Expr::Closure {
-                captures_this: true,
-                ..
-            }
-        )
-    });
+    let any_method_closure = !generator_iterator_object
+        && props.iter().any(|(_, v)| {
+            matches!(
+                v,
+                Expr::Closure {
+                    captures_this: true,
+                    ..
+                }
+            )
+        });
 
     if !any_method_closure && unboxed_xy_object_literal(ctx, props, expected_ty) {
         let mut packed_keys = String::new();

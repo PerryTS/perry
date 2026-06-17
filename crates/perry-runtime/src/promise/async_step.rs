@@ -17,6 +17,12 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // await). The probes still run on real pointers below.
     if is_definitely_primitive(value) {
         let promise = js_promise_new();
+        // When lifecycle hooks are active, go through the real resolve path so
+        // `settled`/`before`/`after` fire (instead of poking the state field).
+        if crate::v8::promise_hooks_active() || crate::async_hooks::hooks_active() {
+            js_promise_resolve(promise, value);
+            return promise;
+        }
         unsafe {
             (*promise).state = PromiseState::Fulfilled;
             (*promise).value = value;
@@ -42,22 +48,17 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // Issue #586: ECMAScript thenable assimilation. The async-to-generator
     // transform rewrites every `await x` into `Promise.resolve(x).then(...)`
     // — which means thenable assimilation has to happen here, not in the
-    // codegen-side `Expr::Await` lowering. `js_assimilate_thenable` returns
-    // a fresh Promise wrapper that follows the thenable's `.then(resolve,
-    // reject)` callbacks; chain its eventual state into our outer promise
-    // via the same `js_promise_resolve_with_promise` pattern as the real-
-    // Promise arm above. Drizzle's `QueryPromise` (`then` triggers the SQL
-    // round-trip) is the load-bearing motivating case (#488).
-    let assim = js_assimilate_thenable(value);
-    if assim.to_bits() != value.to_bits() && js_value_is_promise(assim) != 0 {
-        let inner = crate::value::js_nanbox_get_pointer(assim) as *mut Promise;
-        if !inner.is_null() && inner != promise {
-            js_promise_resolve_with_promise(promise, inner);
-            return promise;
-        }
-    }
-
-    js_promise_resolve(promise, value);
+    // codegen-side `Expr::Await` lowering. `promise_resolve_assimilating`
+    // implements the spec PromiseResolveThenableJob: a thenable's `.then` is
+    // invoked from a SCHEDULED microtask, never synchronously during resolve.
+    // This matters for `Promise.race`/`Promise.any` over a thenable, where Node
+    // does not call the thenable's `then` until the job runs (so the count of
+    // synchronous `then` invocations stays 0). Primitives (fast path above) and
+    // native Promises (short-circuit above) never reach here, so the per-await
+    // steady state is untouched; only real thenables (drizzle's `QueryPromise`,
+    // object literals with `then`) defer by one microtask — which the await
+    // loop drains, leaving the resolved value identical.
+    super::combinators::promise_resolve_assimilating(promise, value);
     promise
 }
 
@@ -90,6 +91,15 @@ pub extern "C" fn js_promise_resolved_then(
     on_fulfilled: ClosurePtr,
     on_rejected: ClosurePtr,
 ) -> *mut Promise {
+    // The primitive fast path below bypasses `js_promise_new`/`then`, so it
+    // would never fire `v8.promiseHooks` (#3139). When hooks are active, route
+    // through the real resolve+then path instead.
+    if crate::v8::promise_hooks_active() {
+        bump(&MT_FAST_PATH_MISS);
+        let p1 = js_promise_resolved(value);
+        return js_promise_then(p1, on_fulfilled, on_rejected);
+    }
+
     if is_definitely_primitive(value) {
         bump(&MT_FAST_PATH_HIT);
         // FAST PATH (primitive) — skip Promise.resolve()'s allocation
@@ -219,6 +229,17 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     )
                 }
                 PromiseState::Rejected => {
+                    // `await`ing an already-rejected promise delivers its
+                    // reason to this async step (which re-throws it into the
+                    // suspended function body, where a surrounding try/catch
+                    // can catch it) — so the rejection IS handled. The
+                    // Pending arm below routes through `js_promise_then`, which
+                    // marks the rejection handled; this fast path reads the
+                    // reason field directly, so it must mark it explicitly or
+                    // the program-end detector reports a spurious
+                    // "Uncaught (in promise)" for a rejection that `await`
+                    // already consumed (and exits non-zero).
+                    crate::promise::mark_rejection_handled(inner);
                     let reason = unsafe { (*inner).reason };
                     (
                         if can_reuse {
@@ -300,12 +321,58 @@ pub extern "C" fn js_async_step_done(value: f64, step_closure: ClosurePtr) -> *m
     let trap = INLINE_TRAP.with(|c| c.get());
     if !trap.trap_next.is_null() && trap.current_step == step_closure as usize {
         bump(&MT_STEP_DONE_REUSE_HIT);
-        js_promise_resolve(trap.trap_next, value);
+        // Issue #4828: an async fn whose tail is `return <promise>` must
+        // ADOPT the returned promise/thenable's eventual state into its
+        // own result promise (`trap_next`), not store the promise object
+        // as the literal resolution value. The slow path below already
+        // does this via `js_promise_resolved`; the in-place reuse fast
+        // path bypassed it with a raw `js_promise_resolve`, so awaiting
+        // the outer fn yielded the inner Promise object itself (typeof
+        // "object", JSON.stringify === "", every property undefined).
+        // Mirror `js_promise_resolved`'s adoption probes here, but settle
+        // the existing `trap_next` instead of allocating a fresh promise
+        // so the runner's self-chain fast path still fires.
+        resolve_trap_next_with_adoption(trap.trap_next, value);
         trap.trap_next
     } else {
         bump(&MT_STEP_DONE_REUSE_MISS);
         js_promise_resolved(value)
     }
+}
+
+/// Settle `target` with `value`, adopting `value`'s state when it is a
+/// native Promise or an assimilable thenable (ECMAScript "Promise
+/// Resolve Functions" thenable-adoption). Used by the `js_async_step_done`
+/// reuse fast path so `return <promise>` from an async fn unwraps the
+/// inner promise into the outer result promise (Issue #4828). Mirrors the
+/// adoption arms of `js_promise_resolved`, but resolves an existing
+/// `target` rather than constructing a new one.
+fn resolve_trap_next_with_adoption(target: *mut Promise, value: f64) {
+    // Primitives can never be a promise/thenable — settle directly.
+    if is_definitely_primitive(value) {
+        js_promise_resolve(target, value);
+        return;
+    }
+    // Native Promise: chain `target` to follow its eventual state.
+    if js_value_is_promise(value) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+        if !inner.is_null() && inner != target {
+            js_promise_resolve_with_promise(target, inner);
+            return;
+        }
+    }
+    // User thenable (e.g. Drizzle QueryPromise, #586): assimilate, then
+    // chain the wrapper promise into `target`.
+    let assim = js_assimilate_thenable(value);
+    if assim.to_bits() != value.to_bits() && js_value_is_promise(assim) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(assim) as *mut Promise;
+        if !inner.is_null() && inner != target {
+            js_promise_resolve_with_promise(target, inner);
+            return;
+        }
+    }
+    // Plain object / non-thenable value: store as-is.
+    js_promise_resolve(target, value);
 }
 
 /// #691 Phase 2 helper. Returns the currently-dispatching step
@@ -483,110 +550,211 @@ extern "C" fn async_step_reject_thunk(
     result
 }
 
-/// `Array.fromAsync(input)` — Node 22+ static method.
-///
-/// Returns a Promise that resolves to an Array. Two input shapes:
-///   1. **Array**: each element is awaited (if it's a Promise) and the
-///      results are collected. Equivalent to `Promise.all(input)`.
-///   2. **Async iterator** (object with a `.next()` method): we call
-///      `.next()` repeatedly via the closure-chained .then() pattern,
-///      pushing each `value` until `done` is true, then resolve the
-///      output Promise with the collected array.
-///
-/// `input` is the NaN-boxed input value. Returns a NaN-boxed Promise
-/// pointer (POINTER_TAG) so the caller's `await` can unwrap it.
-#[no_mangle]
-pub extern "C" fn js_array_from_async(input: f64) -> f64 {
-    use crate::array::{js_array_alloc, ArrayHeader};
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
-    use crate::value::js_nanbox_get_pointer;
+const AFA_RESULT_PROMISE: u32 = 0;
+const AFA_RESULT_ARRAY: u32 = 1;
+const AFA_SOURCE_ARRAY: u32 = 2;
+const AFA_ITERATOR_VALUE: u32 = 3;
+const AFA_REJECT_CLOSURE: u32 = 4;
+const AFA_MAP_FN: u32 = 5;
+const AFA_THIS_ARG: u32 = 6;
+const AFA_INDEX: u32 = 7;
+const AFA_VALUE_CLOSURE: u32 = 8;
+const AFA_MAPPED_CLOSURE: u32 = 9;
+const AFA_STATE_CAPTURES: u32 = 10;
 
-    // Strip NaN-box to get the raw pointer.
-    let raw_ptr = js_nanbox_get_pointer(input) as usize;
-    if raw_ptr == 0 {
-        // null/undefined input — resolve to empty array
-        let empty = js_array_alloc(0);
-        unsafe {
-            (*empty).length = 0;
-        }
-        let arr_f64 = crate::value::js_nanbox_pointer(empty as i64);
-        let p = js_promise_resolved(arr_f64);
-        return crate::value::js_nanbox_pointer(p as i64);
+#[inline]
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[inline]
+fn boxed_promise(promise: *mut Promise) -> f64 {
+    crate::value::js_nanbox_pointer(promise as i64)
+}
+
+fn string_header_to_owned(sp: *const crate::string::StringHeader) -> String {
+    if sp.is_null() {
+        return String::new();
     }
-
-    // Path 1: input is an Array. Reuse Promise.all behavior — js_promise_all
-    // handles a mix of promise and non-promise elements correctly.
     unsafe {
-        let gc_header =
-            (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-            let arr_ptr = raw_ptr as *const ArrayHeader;
-            let p = js_promise_all(arr_ptr);
-            return crate::value::js_nanbox_pointer(p as i64);
-        }
+        let len = (*sp).byte_len as usize;
+        let bytes = (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(bytes, len)).into_owned()
     }
+}
 
-    // Path 2: async iterator (or any other object). Allocate a result
-    // Promise and an empty result Array, then kick off the .next() chain.
+fn type_error_value(message: &str) -> f64 {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    f64::from_bits(crate::value::JSValue::pointer(err as *const u8).bits())
+}
+
+fn rejected_type_error_promise(message: &str) -> f64 {
+    boxed_promise(js_promise_rejected(type_error_value(message)))
+}
+
+fn array_from_async_nullish_error(input: f64) -> Option<f64> {
+    match input.to_bits() {
+        crate::value::TAG_NULL => Some(rejected_type_error_promise(
+            "Cannot read properties of null (reading 'Symbol(Symbol.asyncIterator)')",
+        )),
+        crate::value::TAG_UNDEFINED => Some(rejected_type_error_promise(
+            "Cannot read properties of undefined (reading 'Symbol(Symbol.asyncIterator)')",
+        )),
+        _ => None,
+    }
+}
+
+fn render_from_async_callback(value: f64) -> String {
+    string_header_to_owned(crate::value::js_jsvalue_to_string(value))
+}
+
+fn resolve_from_async_map_fn(map_fn: f64) -> Result<Option<*const crate::ClosureHeader>, f64> {
+    if map_fn.to_bits() == crate::value::TAG_UNDEFINED {
+        return Ok(None);
+    }
+    let raw = crate::value::js_nanbox_get_pointer(map_fn) as usize;
+    if raw >= 0x10000 && crate::closure::is_closure_ptr(raw) {
+        return Ok(Some(raw as *const crate::ClosureHeader));
+    }
+    Err(type_error_value(&format!(
+        "{} is not a function",
+        render_from_async_callback(map_fn)
+    )))
+}
+
+fn array_value_ptr(input: f64) -> Option<*const crate::array::ArrayHeader> {
+    let raw = crate::value::js_nanbox_get_pointer(input) as usize;
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    unsafe {
+        let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        ((*gc).obj_type == crate::gc::GC_TYPE_ARRAY)
+            .then_some(raw as *const crate::array::ArrayHeader)
+    }
+}
+
+fn iterator_value_for_from_async(input: f64) -> Option<f64> {
+    if let Some(iter) = crate::array::call_symbol_async_iterator_for_flat_map(input) {
+        return Some(iter);
+    }
+    if crate::object::is_async_generator_instance_value(input) {
+        return Some(input);
+    }
+    let iter = crate::symbol::js_get_iterator(input);
+    let raw = crate::value::js_nanbox_get_pointer(iter) as usize;
+    if iter.to_bits() != input.to_bits()
+        || crate::array::is_builtin_iterator_class_id(raw)
+        || crate::array::has_iterator_next(iter)
+    {
+        return Some(crate::array::async_from_sync_wrap_iterator(iter));
+    }
+    None
+}
+
+/// `Array.fromAsync(input, mapFn?, thisArg?)` — Node 22+ static method.
+///
+/// Returns a Promise that resolves to an Array. Source values are awaited
+/// before optional mapping, and mapped results are awaited before appending.
+/// Direct async-iterator objects keep the existing chained `.next()` path;
+/// sync iterables and array-like inputs are first materialized with the same
+/// conversion stack as `Array.from`.
+#[no_mangle]
+pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) -> f64 {
+    use crate::array::{js_array_alloc, ArrayHeader};
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
+
+    if let Some(rejected) = array_from_async_nullish_error(input) {
+        return rejected;
+    }
+    let map_fn = match resolve_from_async_map_fn(map_fn) {
+        Ok(Some(_)) => map_fn,
+        Ok(None) => undefined_value(),
+        Err(reason) => return boxed_promise(js_promise_rejected(reason)),
+    };
+
+    let iter_value = iterator_value_for_from_async(input);
+    let source_arr = if iter_value.is_some() {
+        std::ptr::null_mut()
+    } else if let Some(arr) = array_value_ptr(input) {
+        arr as *mut ArrayHeader
+    } else {
+        crate::array::js_array_clone(
+            crate::value::js_nanbox_get_pointer(input) as *const ArrayHeader
+        )
+    };
+    let iter_value = iter_value.unwrap_or_else(undefined_value);
+
     let result_promise = js_promise_new();
     let result_arr = js_array_alloc(0);
     unsafe {
         (*result_arr).length = 0;
     }
 
-    // Build the recursive .next() handler closure. Captures:
-    //   [0] result_promise (Promise to resolve at the end)
-    //   [1] result_arr (Array to push each value into)
-    //   [2] iter object (raw pointer; we re-NaN-box on .next() call)
-    //   [3] reject handler (used for each chained .next() rejection)
-    let chain_closure = js_closure_alloc(array_from_async_step as *const u8, 4);
-    js_closure_set_capture_ptr(chain_closure, 0, result_promise as i64);
-    js_closure_set_capture_ptr(chain_closure, 1, result_arr as i64);
-    js_closure_set_capture_ptr(chain_closure, 2, raw_ptr as i64);
+    let state = js_closure_alloc(array_from_async_step as *const u8, AFA_STATE_CAPTURES);
     let reject_closure = js_closure_alloc(array_from_async_reject as *const u8, 1);
-    js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
-    js_closure_set_capture_ptr(chain_closure, 3, reject_closure as i64);
+    let value_closure = js_closure_alloc(array_from_async_value_step as *const u8, 1);
+    let mapped_closure = js_closure_alloc(array_from_async_mapped_step as *const u8, 1);
 
-    // Kick off the first .next() call. The handler returns the iter result
-    // (or undefined for done) — we wire it through `.then(chain_closure)`
-    // which will recurse.
-    unsafe {
-        array_from_async_call_next(raw_ptr, chain_closure, reject_closure);
+    js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
+    js_closure_set_capture_ptr(value_closure, 0, state as i64);
+    js_closure_set_capture_ptr(mapped_closure, 0, state as i64);
+
+    js_closure_set_capture_ptr(state, AFA_RESULT_PROMISE, result_promise as i64);
+    js_closure_set_capture_ptr(state, AFA_RESULT_ARRAY, result_arr as i64);
+    js_closure_set_capture_ptr(state, AFA_SOURCE_ARRAY, source_arr as i64);
+    js_closure_set_capture_f64(state, AFA_ITERATOR_VALUE, iter_value);
+    js_closure_set_capture_ptr(state, AFA_REJECT_CLOSURE, reject_closure as i64);
+    js_closure_set_capture_f64(state, AFA_MAP_FN, map_fn);
+    js_closure_set_capture_f64(state, AFA_THIS_ARG, this_arg);
+    js_closure_set_capture_f64(state, AFA_INDEX, 0.0);
+    js_closure_set_capture_ptr(state, AFA_VALUE_CLOSURE, value_closure as i64);
+    js_closure_set_capture_ptr(state, AFA_MAPPED_CLOSURE, mapped_closure as i64);
+
+    if source_arr.is_null() {
+        array_from_async_call_next(iter_value, state, reject_closure);
+    } else {
+        array_from_async_array_next(state);
     }
 
-    crate::value::js_nanbox_pointer(result_promise as i64)
+    boxed_promise(result_promise)
 }
 
 /// Helper that calls `iter.next()` (returning a Promise) and attaches
 /// `chain_closure` as both fulfill and reject handlers. Used by the async
 /// iterator path of `js_array_from_async`.
-unsafe fn array_from_async_call_next(
-    iter_ptr: usize,
+fn array_from_async_call_next(
+    iter_value: f64,
     chain_closure: *const crate::closure::ClosureHeader,
     reject_closure: *const crate::closure::ClosureHeader,
 ) {
-    // Re-NaN-box the iter pointer for js_native_call_method.
-    let iter_f64 = crate::value::js_nanbox_pointer(iter_ptr as i64);
     let method_name = b"next";
     // Call iter.next() — returns a Promise<{value, done}> for async generators
     // or `{value, done}` directly for sync iterators.
-    let next_result = crate::object::js_native_call_method(
-        iter_f64,
-        method_name.as_ptr() as *const i8,
-        method_name.len(),
-        std::ptr::null(),
-        0,
-    );
+    let next_result = unsafe {
+        crate::object::js_native_call_method(
+            iter_value,
+            method_name.as_ptr() as *const i8,
+            method_name.len(),
+            std::ptr::null(),
+            0,
+        )
+    };
 
     // If the result is a Promise pointer, attach the handler via .then.
     let next_ptr = crate::value::js_nanbox_get_pointer(next_result) as usize;
     if next_ptr != 0 {
-        let gc_header =
-            (next_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
-            let next_promise = next_ptr as *mut Promise;
-            js_promise_then(next_promise, chain_closure, reject_closure);
-            return;
+        unsafe {
+            let gc_header = (next_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE {
+                let next_promise = next_ptr as *mut Promise;
+                js_promise_then(next_promise, chain_closure, reject_closure);
+                return;
+            }
         }
     }
     // Synchronous iterator path: invoke the handler directly with the
@@ -613,16 +781,14 @@ extern "C" fn array_from_async_step(
     closure: *const crate::closure::ClosureHeader,
     iter_result: f64,
 ) -> f64 {
-    use crate::array::{js_array_push_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_ptr, js_closure_set_capture_ptr};
+    use crate::closure::js_closure_get_capture_ptr;
 
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let mut result_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
-    let iter_ptr = js_closure_get_capture_ptr(closure, 2) as usize;
-    let reject_closure =
-        js_closure_get_capture_ptr(closure, 3) as *const crate::closure::ClosureHeader;
+    let result_promise = js_closure_get_capture_ptr(closure, AFA_RESULT_PROMISE) as *mut Promise;
+    let result_arr =
+        js_closure_get_capture_ptr(closure, AFA_RESULT_ARRAY) as *mut crate::array::ArrayHeader;
+    let iter_value = crate::closure::js_closure_get_capture_f64(closure, AFA_ITERATOR_VALUE);
 
-    if result_promise.is_null() || result_arr.is_null() || iter_ptr == 0 {
+    if result_promise.is_null() || result_arr.is_null() {
         return 0.0;
     }
 
@@ -660,19 +826,117 @@ extern "C" fn array_from_async_step(
         return 0.0;
     }
 
-    // Push the value (push_f64 may grow & return a new pointer).
-    result_arr = js_array_push_f64(result_arr, value_f64);
-    // Update the closure capture so subsequent steps see the (possibly
-    // moved) array.
-    js_closure_set_capture_ptr(closure as *mut _, 1, result_arr as i64);
+    array_from_async_await_value(closure, value_f64);
 
-    // Recurse: call iter.next() again. The same closure will be invoked
-    // when the next promise resolves.
-    unsafe {
-        array_from_async_call_next(iter_ptr, closure, reject_closure);
-    }
+    let _ = iter_value;
 
     0.0
+}
+
+fn array_from_async_array_next(closure: *const crate::closure::ClosureHeader) {
+    let source_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_SOURCE_ARRAY)
+        as *const crate::array::ArrayHeader;
+    let result_promise =
+        crate::closure::js_closure_get_capture_ptr(closure, AFA_RESULT_PROMISE) as *mut Promise;
+    let result_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_RESULT_ARRAY)
+        as *mut crate::array::ArrayHeader;
+    if source_arr.is_null() || result_promise.is_null() || result_arr.is_null() {
+        return;
+    }
+    let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) as usize;
+    let length = unsafe { (*source_arr).length as usize };
+    if index >= length {
+        js_promise_resolve(
+            result_promise,
+            crate::value::js_nanbox_pointer(result_arr as i64),
+        );
+        return;
+    }
+    let value = crate::array::js_array_get_f64(source_arr, index as u32);
+    array_from_async_await_value(closure, value);
+}
+
+fn array_from_async_await_value(closure: *const crate::closure::ClosureHeader, value: f64) {
+    let value_closure = crate::closure::js_closure_get_capture_ptr(closure, AFA_VALUE_CLOSURE)
+        as *const crate::closure::ClosureHeader;
+    let reject = crate::closure::js_closure_get_capture_ptr(closure, AFA_REJECT_CLOSURE)
+        as *const crate::closure::ClosureHeader;
+    let promise = js_promise_resolved(value);
+    js_promise_then(promise, value_closure, reject);
+}
+
+extern "C" fn array_from_async_value_step(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let state = crate::closure::js_closure_get_capture_ptr(closure, 0)
+        as *const crate::closure::ClosureHeader;
+    if !state.is_null() {
+        array_from_async_map_or_push(state, value);
+    }
+    0.0
+}
+
+fn array_from_async_map_or_push(closure: *const crate::closure::ClosureHeader, value: f64) {
+    let map_fn = crate::closure::js_closure_get_capture_f64(closure, AFA_MAP_FN);
+    if map_fn.to_bits() == crate::value::TAG_UNDEFINED {
+        array_from_async_push_and_continue(closure, value);
+        return;
+    }
+
+    let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX);
+    let this_arg = crate::closure::js_closure_get_capture_f64(closure, AFA_THIS_ARG);
+    let args = [value, index];
+    let args_arr = crate::array::js_array_from_f64(args.as_ptr(), args.len() as u32);
+    let prev_this = crate::object::js_implicit_this_set(this_arg);
+    let mapped_promise = js_promise_try(map_fn, args_arr);
+    crate::object::js_implicit_this_set(prev_this);
+
+    let mapped_closure = crate::closure::js_closure_get_capture_ptr(closure, AFA_MAPPED_CLOSURE)
+        as *const crate::closure::ClosureHeader;
+    let reject = crate::closure::js_closure_get_capture_ptr(closure, AFA_REJECT_CLOSURE)
+        as *const crate::closure::ClosureHeader;
+    js_promise_then(mapped_promise, mapped_closure, reject);
+}
+
+extern "C" fn array_from_async_mapped_step(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let state = crate::closure::js_closure_get_capture_ptr(closure, 0)
+        as *const crate::closure::ClosureHeader;
+    if !state.is_null() {
+        array_from_async_push_and_continue(state, value);
+    }
+    0.0
+}
+
+fn array_from_async_push_and_continue(closure: *const crate::closure::ClosureHeader, value: f64) {
+    let mut result_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_RESULT_ARRAY)
+        as *mut crate::array::ArrayHeader;
+    if result_arr.is_null() {
+        return;
+    }
+    result_arr = crate::array::js_array_push_f64(result_arr, value);
+    crate::closure::js_closure_set_capture_ptr(
+        closure as *mut _,
+        AFA_RESULT_ARRAY,
+        result_arr as i64,
+    );
+
+    let next_index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) + 1.0;
+    crate::closure::js_closure_set_capture_f64(closure as *mut _, AFA_INDEX, next_index);
+
+    let source_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_SOURCE_ARRAY)
+        as *const crate::array::ArrayHeader;
+    if source_arr.is_null() {
+        let iter_value = crate::closure::js_closure_get_capture_f64(closure, AFA_ITERATOR_VALUE);
+        let reject = crate::closure::js_closure_get_capture_ptr(closure, AFA_REJECT_CLOSURE)
+            as *const crate::closure::ClosureHeader;
+        array_from_async_call_next(iter_value, closure, reject);
+    } else {
+        array_from_async_array_next(closure);
+    }
 }
 
 /// Helper to allocate a static StringHeader for property-name lookups.

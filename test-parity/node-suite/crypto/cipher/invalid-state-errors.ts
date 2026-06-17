@@ -18,6 +18,10 @@ report("cipher-final-1", () => cipher.final());
 report("cipher-final-2", () => cipher.final());
 report("cipher-update-after-final", () => cipher.update("x"));
 report("cipher-set-auto-padding-after-final", () => cipher.setAutoPadding(false));
+report("cipher-get-auth-tag-cbc", () => cipher.getAuthTag());
+
+const cbcDecipher = crypto.createDecipheriv("aes-128-cbc", cbcKey, cbcIv);
+report("decipher-set-auth-tag-cbc", () => cbcDecipher.setAuthTag(Buffer.alloc(16)));
 
 const gcmCipher = crypto.createCipheriv("aes-128-gcm", cbcKey, Buffer.alloc(12));
 console.log("gcm-cipher-methods:", typeof (gcmCipher as any).getAuthTag, typeof (gcmCipher as any).setAuthTag);

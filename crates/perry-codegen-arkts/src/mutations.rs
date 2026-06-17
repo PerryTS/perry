@@ -597,6 +597,26 @@ pub(crate) fn collect_mutations_in_expr(
             };
             push_mut(Mutation::Modifier(modifier), out, cond);
         }
+        "textSetTextAlignment" => {
+            // Issue #3621. Canonical Perry/AppKit alignment values map to
+            // ArkUI's direction-relative `TextAlign` enum: 0=left→Start,
+            // 1=right→End, 2=center→Center, 3=justified→JUSTIFY,
+            // 4=natural→Start (follows the locale's writing direction).
+            let Some(n) = numeric_arg_resolved(&args[1..], 0, bindings) else {
+                return;
+            };
+            let variant = match n as i64 {
+                1 => "End",
+                2 => "Center",
+                3 => "JUSTIFY",
+                _ => "Start",
+            };
+            push_mut(
+                Mutation::Modifier(format!(".textAlign(TextAlign.{})", variant)),
+                out,
+                cond,
+            );
+        }
         "widgetMatchParentWidth" => {
             push_mut(Mutation::Modifier(".width('100%')".to_string()), out, cond);
         }

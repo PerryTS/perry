@@ -35,20 +35,28 @@
 // - `expr_member.rs` / `expr_assign.rs` / `expr_new.rs` (v0.5.339):
 //   property access, assignment, and `new C()` constructor calls.
 mod context;
-mod expr_assign;
+pub(crate) mod expr_assign;
 mod expr_call;
 mod expr_function;
-pub(crate) use expr_function::lower_fn_expr;
+pub(crate) use expr_function::{capture_function_source, lower_fn_expr};
 mod expr_member;
+pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE};
 mod expr_misc;
 mod expr_new;
+mod expr_new_builtins;
 mod expr_object;
 mod unimpl_hints;
 pub(crate) use context::*;
 mod stmt;
 pub(crate) use stmt::*;
+mod for_head;
+pub(crate) use for_head::{for_head_binding_stmts, predefine_for_head, ForHeadBinding};
 mod stmt_loops;
-pub(crate) use stmt_loops::{lower_stmt_for_in, lower_stmt_for_of};
+pub(crate) use stmt_loops::{
+    insert_iterator_close_on_abrupt, iterator_close_guarded_stmt, iterator_next_call,
+    lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in, lower_stmt_for_of,
+    wrap_lazy_for_of_body_close_on_throw,
+};
 mod module_decl;
 pub(crate) use module_decl::*;
 mod misc;
@@ -57,6 +65,9 @@ mod pre_scan;
 pub(crate) use pre_scan::*;
 mod closure_analysis;
 mod const_fold_fn;
+mod eval_super_scan;
+mod fn_ctor_env;
+pub(crate) mod type_widening;
 pub(crate) use closure_analysis::*;
 mod decorators;
 pub(crate) use decorators::*;
@@ -71,7 +82,12 @@ pub(crate) use widget_decl::*;
 // transitively when downstream files reach into `crate::lower::Name`,
 // so spelling them out keeps the public-and-internal API stable.
 mod lowering_context;
-pub(crate) use lowering_context::LoweringContext;
+pub(crate) use lowering_context::{
+    LoweringContext, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
+};
+
+mod locals;
+pub(crate) use locals::Locals;
 
 mod typed_parse;
 pub(crate) use typed_parse::{extract_typed_parse_source_order, resolve_typed_parse_ty};
@@ -95,6 +111,7 @@ pub use lower_module_fn::{
 mod lower_expr;
 pub(crate) use lower_expr::{
     lower_expr, lower_expr_assignment, throw_reference_error_expr, try_desugar_reactive_text,
+    with_implicit_unset_let, with_set_fallback_for_ident,
 };
 
 // Re-export extracted module functions

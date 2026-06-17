@@ -55,12 +55,22 @@ pub(super) fn native_manifest_target_key(target: Option<&str>) -> &'static str {
     match target {
         Some("ios-simulator") | Some("ios") => "ios",
         Some("visionos-simulator") | Some("visionos") => "visionos",
-        Some("android") => "android",
+        // Wear OS resolves native-addon config from the [android] target.
+        Some("android") | Some("wearos") => "android",
         Some("tvos-simulator") | Some("tvos") => "tvos",
         Some("watchos-simulator") | Some("watchos") => "watchos",
         Some("harmonyos-simulator") | Some("harmonyos") => "harmonyos",
-        Some("linux") => "linux",
-        Some("windows") => "windows",
+        // musl resolves the same native-library platform as glibc Linux
+        // (#4826). Prebuilt native addons are typically glibc; static-musl
+        // apps using them is an inherent limitation, but the platform key
+        // stays "linux" so resolution behaves consistently.
+        Some("linux")
+        | Some("linux-musl")
+        | Some("linux-x86_64-musl")
+        | Some("linux-aarch64-musl") => "linux",
+        // WinUI (#4680) is the same OS/arch as the Win32 target for native
+        // library resolution (D3d12/Vulkan backends, x64 prebuilts).
+        Some("windows") | Some("windows-winui") => "windows",
         Some("web") => "web",
         Some("macos") => "macos",
         None if cfg!(target_os = "linux") => "linux",
@@ -1304,8 +1314,8 @@ fn arch_for_target_key(target: Option<&str>) -> Option<&'static str> {
         // prebuilts.
         Some("macos") => Some("arm64"),
         Some("linux") => Some("x64"),
-        Some("windows") => Some("x64"),
-        Some("android") => Some("arm64"),
+        Some("windows") | Some("windows-winui") => Some("x64"),
+        Some("android") | Some("wearos") => Some("arm64"),
         Some("harmonyos") => Some("arm64"),
         Some("harmonyos-simulator") => Some("x64"),
         // ios/tvos/watchos/visionos: device builds are always arm64 (or

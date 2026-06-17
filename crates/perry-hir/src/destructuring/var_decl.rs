@@ -2,15 +2,7 @@
 
 use super::*;
 
-fn is_global_this_value(expr: &Expr) -> bool {
-    matches!(expr, Expr::GlobalGet(_))
-        || matches!(
-            expr,
-            Expr::PropertyGet { object, property }
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && property == "globalThis"
-        )
-}
+use super::var_decl_sources::*;
 
 /// Lower a variable declaration, handling array destructuring patterns.
 /// Returns a vector of statements (multiple for destructuring, single for simple bindings).
@@ -26,6 +18,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
         ast::Pat::Ident(ident) => {
             // Simple binding: let x = expr
             let name = ident.id.sym.to_string();
+
+            // Strict-mode early error: `var eval` / `var arguments` (and the
+            // let/const forms) are a SyntaxError (ECMA-262 BindingIdentifier
+            // static semantics). Surfaced as a compile error so the test262
+            // negative cases agree with Node (12.2.1-22-s).
+            if ctx.current_strict && matches!(name.as_str(), "eval" | "arguments") {
+                anyhow::bail!(
+                    "SyntaxError: unexpected `{}` as a strict-mode binding identifier",
+                    name
+                );
+            }
 
             // #809: tag locals provably bound to a plain object (an object
             // literal or `Object.create(...)`). `static_receiver_class`
@@ -179,6 +182,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         obj_inner = match obj_inner {
                                             ast::Expr::TsAs(x) => &x.expr,
                                             ast::Expr::TsNonNull(x) => &x.expr,
+                                            ast::Expr::TsSatisfies(x) => &x.expr,
+                                            ast::Expr::TsTypeAssertion(x) => &x.expr,
                                             ast::Expr::TsConstAssertion(x) => &x.expr,
                                             ast::Expr::Paren(x) => &x.expr,
                                             _ => break,
@@ -277,11 +282,15 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     _ => None,
                                 }
                             };
-                        // Issue #848: StringDecoder dispatches entirely through
-                        // HANDLE_*_DISPATCH; don't register as a typed native
-                        // instance (see the mirroring gate in lower.rs).
+                        // Handle-backed constructors dispatch through
+                        // HANDLE_*_DISPATCH; don't register as typed native
+                        // instances (see the mirroring gates in lower.rs).
                         let module_name = match (class_name, module_name.as_deref()) {
                             ("StringDecoder", Some("string_decoder")) => None,
+                            (
+                                "DiffieHellman" | "DiffieHellmanGroup",
+                                Some("crypto" | "node:crypto"),
+                            ) => None,
                             _ => module_name,
                         };
                         if let Some(module) = module_name {
@@ -304,23 +313,23 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     (module_name, class_name),
                                     ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
                                         // #2129: `new http.Agent()` /
-                                        // `new https.Agent()` — both share
-                                        // the same Agent method surface;
-                                        // we normalize https → http so the
+                                        // `new https.Agent()` share the
                                         // class-filtered ("http", "Agent")
-                                        // rows in native_table/http.rs
-                                        // dispatch correctly.
-                                        | ("http", "Agent")
-                                        | ("https", "Agent")
+                                        // native table rows.
+                                        | ("http" | "https", "Agent")
+                                        | ("net" | "node:net", "BlockList" | "SocketAddress")
                                         | ("dns" | "dns/promises", "Resolver")
+                                        | ("vm", "SourceTextModule" | "SyntheticModule")
                                         | ("sqlite", "DatabaseSync")
-                                );
+                                ) || (module_name == "stream"
+                                    && STREAM_CTOR_NAMES.contains(&class_name));
                                 if is_known_native_class {
-                                    let (mod_for_class, cls_for_class) = if class_name == "Agent" {
-                                        ("http", "Agent")
-                                    } else {
-                                        (module_name, class_name)
-                                    };
+                                    let (mod_for_class, cls_for_class) =
+                                        match (module_name, class_name) {
+                                            ("http" | "https", "Agent") => ("http", "Agent"),
+                                            ("net" | "node:net", _) => ("net", class_name),
+                                            _ => (module_name, class_name),
+                                        };
                                     ctx.register_native_instance(
                                         name.clone(),
                                         mod_for_class.to_string(),
@@ -351,6 +360,8 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         obj_inner = match obj_inner {
                                             ast::Expr::TsAs(x) => &x.expr,
                                             ast::Expr::TsNonNull(x) => &x.expr,
+                                            ast::Expr::TsSatisfies(x) => &x.expr,
+                                            ast::Expr::TsTypeAssertion(x) => &x.expr,
                                             ast::Expr::TsConstAssertion(x) => &x.expr,
                                             ast::Expr::Paren(x) => &x.expr,
                                             _ => break,
@@ -413,6 +424,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         _ => None,
                                     }
                                 };
+                            let module_name = match (class_name, module_name.as_deref()) {
+                                ("StringDecoder", Some("string_decoder")) => None,
+                                (
+                                    "DiffieHellman" | "DiffieHellmanGroup",
+                                    Some("crypto" | "node:crypto"),
+                                ) => None,
+                                _ => module_name,
+                            };
                             if let Some(module) = module_name {
                                 ctx.register_native_instance(
                                     name.clone(),
@@ -469,6 +488,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             // HttpServer arm → returns NaN.
                                             ("http", "createServer") => Some("HttpServer"),
                                             ("https", "createServer") => Some("HttpsServer"),
+                                            ("tls", "createServer" | "Server") => Some("Server"),
                                             ("http2", "createSecureServer") => {
                                                 Some("Http2SecureServer")
                                             }
@@ -511,9 +531,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                             _ => None,
                                         };
                                         if let Some(class_name) = class_name {
+                                            let class_module = if class_name == "ClientRequest" {
+                                                "http"
+                                            } else {
+                                                module_name
+                                            };
                                             ctx.register_native_instance(
                                                 name.clone(),
-                                                module_name.to_string(),
+                                                class_module.to_string(),
                                                 class_name.to_string(),
                                             );
                                         }
@@ -729,12 +754,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }
             }
 
-            // Check if this is a require() call for a built-in module
+            // #5216: `const <name> = require("<spec>")` of a statically
+            // resolvable native/Node-builtin module lowers to the same
+            // module-namespace binding `import * as <name> from "<spec>"`
+            // produces (native module + builtin alias, NO runtime `let` — a
+            // namespace import binds nothing observable). Subsumes the old
+            // fs/path/crypto-only `is_require_builtin_module` path. Non-literal
+            // / unresolvable specifiers fall through to the legacy compile-time
+            // refusal in `expr_call::intrinsics::try_require_literal`.
             if let Some(init_expr) = &decl.init {
-                if let Some(module_name) = is_require_builtin_module(init_expr) {
-                    // Register this variable as an alias to the built-in module
-                    ctx.register_builtin_module_alias(name.clone(), module_name);
-                    // Don't emit a variable declaration - the module is handled specially
+                if let Some(module_name) = require_resolvable_native_specifier(init_expr) {
+                    register_require_namespace_binding(ctx, &name, &module_name);
                     return Ok(result);
                 }
             }
@@ -878,6 +908,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     None
                 }
 
+                if crate::lower_types::is_node_readable_static_factory_call(ctx, init_expr) {
+                    let readable = "Readable".to_string();
+                    ty = Type::Named(readable.clone());
+                    ctx.register_native_instance(name.clone(), "stream".to_string(), readable);
+                }
+
                 // Check for: const response = fetch(url) / fetchWithAuth(url, auth) / fetchPostWithAuth(url, auth, body)
                 if let Some(module) = get_fetch_module(init_expr) {
                     ctx.register_native_instance(
@@ -976,6 +1012,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     name.clone(),
                                     "readable_stream".to_string(),
                                     "ReadableStream".to_string(),
+                                );
+                                ctx.uses_fetch = true;
+                            }
+                            // #4915: `new ReadableStreamBYOBReader(stream)` —
+                            // the handle is a reader, same module tag as
+                            // `stream.getReader({ mode: "byob" })`.
+                            "ReadableStreamBYOBReader" => {
+                                ctx.register_native_instance(
+                                    name.clone(),
+                                    "readable_stream_reader".to_string(),
+                                    "ReadableStreamBYOBReader".to_string(),
                                 );
                                 ctx.uses_fetch = true;
                             }
@@ -1396,12 +1443,27 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 None
             };
 
+            if let Some(init_ast) = decl.init.as_ref() {
+                result.extend(predeclare_implicit_assignment_targets(ctx, init_ast));
+            }
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             if matches!(ty, Type::Any) {
-                if let Some(Expr::NativeMethodCall { module, method, .. }) = &init {
-                    if module == "stream" && method == "from" {
-                        ty = Type::Named("Readable".to_string());
+                match &init {
+                    Some(Expr::NativeMethodCall { module, method, .. }) => {
+                        if module == "stream" && method == "from" {
+                            ty = Type::Named("Readable".to_string());
+                        }
                     }
+                    Some(Expr::NewDynamic { callee, .. }) => {
+                        if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                            if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "net" || module == "node:net")
+                                && matches!(property.as_str(), "BlockList" | "SocketAddress")
+                            {
+                                ty = Type::Named(property.clone());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             // #321: a generator function EXPRESSION bound to a name (`const g =
@@ -1427,6 +1489,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 && ctx.inside_block_scope == 0
                 && ctx.pre_registered_module_vars.remove(&name)
             {
+                ctx.pre_registered_module_var_decls.remove(&name);
                 // Reuse pre-registered LocalId from module-level forward-declaration pass.
                 // #1758: gated on MODULE scope — a nested local of the same name
                 // (`function helper() { const zipWith = ... }` where the module also
@@ -1439,13 +1502,26 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 // broke this way because a local `zipWith` (L1180) precedes it.
                 let id = ctx.lookup_local(&name).unwrap();
                 // Update the type now that we have full inference
-                if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
-                {
+                if let Some(existing_ty) = ctx.locals.lookup_type_mut(&name) {
                     *existing_ty = ty.clone();
                 }
                 id
-            } else if let Some(id) = is_var_decl
+            } else if let Some(fid) = match &decl.name {
+                // #4973: the function-body hoist pass pre-registered this
+                // exact `let`/`const` declarator (span-keyed) so hoisted
+                // sibling functions could forward-reference it. Reuse the
+                // pre-registered id here so the init lands in the slot/box
+                // those references captured.
+                ast::Pat::Ident(ident) => ctx.lexical_forward_decls.remove(&ident.id.span.lo.0),
+                _ => None,
+            } {
+                if let Some((_, _, existing_ty)) =
+                    ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == fid)
+                {
+                    *existing_ty = ty.clone();
+                }
+                fid
+            } else if let Some((reuse_pos, id)) = is_var_decl
                 .then(|| {
                     // Issue #838 followup (b): when the closure-body hoist
                     // in `lower_fn_expr` / `lower_arrow` pre-registered this
@@ -1464,18 +1540,15 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     // lexical binding, and using `lookup_local(name)` here
                     // would accidentally grab a shadowing catch parameter.
                     ctx.locals
-                        .iter()
-                        .rev()
-                        .find(|(n, lid, _)| n == &name && ctx.var_hoisted_ids.contains(lid))
-                        .map(|(_, lid, _)| *lid)
+                        .iter_named(&name)
+                        .find(|(_, (_, lid, _))| ctx.var_hoisted_ids.contains(lid))
+                        .map(|(pos, (_, lid, _))| (pos, *lid))
                 })
                 .flatten()
             {
-                if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
-                {
-                    *existing_ty = ty.clone();
-                }
+                // Patch the reused binding's type in place (O(1) by position)
+                // rather than re-finding it with an O(n) scan (#5267).
+                *ctx.locals.type_mut_at(reuse_pos) = ty.clone();
                 id
             } else {
                 ctx.define_local(name.clone(), ty.clone())
@@ -1542,6 +1615,50 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                 None
                             }
                         }
+                        (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident))
+                            if obj_ident.sym.as_ref() == "Array"
+                                && method_ident.sym.as_ref() == "isArray" =>
+                        {
+                            Some("Array.isArray".to_string())
+                        }
+                        (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident))
+                            if matches!(
+                                method_ident.sym.as_ref(),
+                                "json" | "redirect" | "error"
+                            ) && {
+                                let obj_name = obj_ident.sym.as_ref();
+                                (obj_name == "Response" && ctx.lookup_local("Response").is_none())
+                                    || ctx
+                                        .resolve_class_alias(obj_name)
+                                        .as_deref()
+                                        .is_some_and(|resolved| resolved == "Response")
+                            } =>
+                        {
+                            let method = match method_ident.sym.as_ref() {
+                                "json" => "Response.static_json",
+                                "redirect" => "Response.static_redirect",
+                                "error" => "Response.static_error",
+                                _ => unreachable!(),
+                            };
+                            Some(method.to_string())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                });
+            let array_method_alias: Option<String> =
+                decl.init.as_deref().and_then(|init_ast| match init_ast {
+                    ast::Expr::Member(member) => match (member.obj.as_ref(), &member.prop) {
+                        (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(method_ident))
+                            if obj_ident.sym.as_ref() == "Array" =>
+                        {
+                            let method_name = method_ident.sym.as_ref();
+                            if method_name == "isArray" {
+                                Some(method_name.to_string())
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     },
                     _ => None,
@@ -1553,6 +1670,24 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // `Object.<method>(args)` shape already uses.
             if let Some(method_name) = object_method_alias {
                 ctx.object_static_method_aliases.insert(id, method_name);
+            }
+            if let Some(method_name) = array_method_alias {
+                ctx.array_static_method_aliases.insert(id, method_name);
+            }
+            if let Some(Expr::NativeMethodCall { module, method, .. }) = &init {
+                if module == "fetch"
+                    && matches!(
+                        method.as_str(),
+                        "static_json" | "static_redirect" | "static_error"
+                    )
+                {
+                    ctx.register_native_instance(
+                        name.clone(),
+                        "fetch".to_string(),
+                        "Response".to_string(),
+                    );
+                    ctx.uses_fetch = true;
+                }
             }
 
             // Issue #740: track `let/const/var <name> = ClassRef(...)` so
@@ -1571,6 +1706,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 // expression assigned to a local).
                 if matches!(init_expr, Expr::Closure { .. } | Expr::FuncRef(_)) {
                     ctx.function_valued_locals.insert(id);
+                }
+                if is_global_this_value(ctx, init_expr) {
+                    ctx.global_this_aliases.insert(id);
                 }
                 match init_expr {
                     Expr::ClassRef(class_name) => {
@@ -1615,9 +1753,14 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         {
                             ctx.object_static_method_aliases.insert(id, method_name);
                         }
+                        if let Some(method_name) =
+                            ctx.array_static_method_aliases.get(src_id).cloned()
+                        {
+                            ctx.array_static_method_aliases.insert(id, method_name);
+                        }
                     }
                     Expr::PropertyGet { object, property }
-                        if is_global_this_value(object.as_ref())
+                        if is_global_this_value(ctx, object.as_ref())
                             && matches!(
                                 property.as_str(),
                                 "URL"
@@ -1626,11 +1769,18 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                     | "TextDecoder"
                                     | "Blob"
                                     | "File"
+                                    | "FormData"
+                                    | "Headers"
+                                    | "Request"
+                                    | "Response"
                                     | "WebSocket"
                             ) =>
                     {
                         ctx.register_let_class_alias(name.clone(), property.clone());
-                        if matches!(property.as_str(), "Blob" | "File") {
+                        if matches!(
+                            property.as_str(),
+                            "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+                        ) {
                             ctx.uses_fetch = true;
                         }
                     }
@@ -1689,6 +1839,32 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     _ => {}
                 }
             }
+            // `with (o) { var foo = v; }` — the binding `foo` is hoisted to
+            // the enclosing var scope, but the *initialisation* is a normal
+            // PutValue under the with environment: when `o` has a `foo`
+            // property, the write goes to `o.foo`, not the hoisted local
+            // (test262 with/12.10-0-8). Emit the hoisted Let (no init) plus
+            // a WithSet for the assignment.
+            if is_var_decl && init.is_some() {
+                if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
+                    result.push(Stmt::Let {
+                        id,
+                        name: name.clone(),
+                        ty,
+                        mutable,
+                        init: None,
+                    });
+                    let fallback = crate::lower::with_set_fallback_for_ident(ctx, &name);
+                    result.push(Stmt::Expr(Expr::WithSet {
+                        object: Box::new(Expr::LocalGet(env_id)),
+                        property: name,
+                        value: Box::new(init.unwrap()),
+                        fallback,
+                        strict: ctx.current_strict,
+                    }));
+                    return Ok(result);
+                }
+            }
             result.push(Stmt::Let {
                 id,
                 name,
@@ -1698,6 +1874,41 @@ pub(crate) fn lower_var_decl_with_destructuring(
             });
         }
         ast::Pat::Array(_) | ast::Pat::Object(_) => {
+            // #3663 / #4905: tag destructured builtin-module members
+            // (stream ctors, net factories) as native-module aliases so
+            // call sites route through the static native table. Bindings
+            // returned in `skip_local_bindings` must not also bind a
+            // runtime local — the local (undefined for `net.connect`)
+            // would shadow the alias at call sites; ESM named imports
+            // never create one (exact parity).
+            let skip_local_bindings = register_destructured_stream_ctors(ctx, decl);
+            let filtered_pat;
+            let pattern: &ast::Pat = if skip_local_bindings.is_empty() {
+                &decl.name
+            } else if let ast::Pat::Object(obj) = &decl.name {
+                let mut obj = obj.clone();
+                obj.props.retain(|prop| match prop {
+                    ast::ObjectPatProp::Assign(a) => {
+                        !skip_local_bindings.contains(&a.key.sym.to_string())
+                    }
+                    ast::ObjectPatProp::KeyValue(kv) => match kv.value.as_ref() {
+                        ast::Pat::Ident(b) => !skip_local_bindings.contains(&b.id.sym.to_string()),
+                        _ => true,
+                    },
+                    _ => true,
+                });
+                if obj.props.is_empty() {
+                    // Every binding became a native alias; nothing left to
+                    // bind at runtime (require of a builtin module has no
+                    // observable side effects).
+                    return Ok(result);
+                }
+                filtered_pat = ast::Pat::Object(obj);
+                &filtered_pat
+            } else {
+                &decl.name
+            };
+
             // Delegate to the recursive pattern binding helper so that all
             // destructuring features (nested patterns, defaults, rest, computed
             // keys) work consistently across all call sites.
@@ -1721,13 +1932,16 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         .transpose()?
                         .ok_or_else(|| anyhow!("Destructuring requires an initializer"))?
                 };
-            let stmts = lower_pattern_binding(ctx, &decl.name, init_expr, mutable)?;
+            let stmts = lower_pattern_binding(ctx, pattern, init_expr, mutable)?;
             result.extend(stmts);
         }
         _ => {
             // For other patterns, fall back to existing behavior
             let name = get_binding_name(&decl.name)?;
             let ty = extract_binding_type(&decl.name);
+            if let Some(init_ast) = decl.init.as_ref() {
+                result.extend(predeclare_implicit_assignment_targets(ctx, init_ast));
+            }
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             // #321: a generator function EXPRESSION bound to a name (`const g =
             // function*(){}`) — register the name so `for (x of g())` / `[...g()]`
@@ -1750,11 +1964,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 && ctx.inside_block_scope == 0
                 && ctx.pre_registered_module_vars.remove(&name)
             {
+                ctx.pre_registered_module_var_decls.remove(&name);
                 // #1758: module-scope only — see the sibling guard above.
                 let id = ctx.lookup_local(&name).unwrap();
-                if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
-                {
+                if let Some(existing_ty) = ctx.locals.lookup_type_mut(&name) {
                     *existing_ty = ty.clone();
                 }
                 id

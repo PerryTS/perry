@@ -47,6 +47,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -76,6 +78,9 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
         static_fields: Vec::new(),
         static_methods: Vec::new(),
         decorators: Vec::new(),
@@ -105,6 +110,7 @@ fn module_with_new(class: Class) -> Module {
                 class_name,
                 args: Vec::new(),
                 type_args: Vec::new(),
+                byte_offset: 0,
             }))],
             is_async: false,
             is_generator: false,
@@ -129,6 +135,9 @@ fn module_with_new(class: Class) -> Module {
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
 

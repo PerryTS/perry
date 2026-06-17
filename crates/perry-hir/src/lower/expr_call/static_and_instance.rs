@@ -4,6 +4,7 @@
 
 use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::stream::is_stream_api_method;
@@ -16,18 +17,97 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
+fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
+    let mut cur = e;
+    loop {
+        cur = match cur {
+            ast::Expr::TsAs(x) => x.expr.as_ref(),
+            ast::Expr::TsNonNull(x) => x.expr.as_ref(),
+            ast::Expr::TsSatisfies(x) => x.expr.as_ref(),
+            ast::Expr::TsTypeAssertion(x) => x.expr.as_ref(),
+            ast::Expr::TsConstAssertion(x) => x.expr.as_ref(),
+            ast::Expr::Paren(x) => x.expr.as_ref(),
+            _ => return cur,
+        };
+    }
+}
+
+fn is_node_stream_iterator_helper_instance_method(
+    module_name: &str,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    matches!(module_name, "stream" | "node:stream")
+        && matches!(
+            class_name,
+            "Readable" | "Duplex" | "Transform" | "PassThrough"
+        )
+        && matches!(
+            method_name,
+            "toArray"
+                | "map"
+                | "filter"
+                | "reduce"
+                | "forEach"
+                | "find"
+                | "some"
+                | "every"
+                | "flatMap"
+                | "take"
+                | "drop"
+                | "iterator"
+        )
+}
+
 pub(super) fn try_static_method_and_instance(
     ctx: &mut LoweringContext,
     // #854: kept for the uniform `try_*` dispatch-helper signature; this arm
-    // works off `expr`, not the raw `CallExpr`.
-    _call: &ast::CallExpr,
+    // works off `expr`, not the raw `CallExpr` — except for the spread check.
+    call: &ast::CallExpr,
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
+    // `StaticMethodCall` carries plain positional `args: Vec<Expr>` with no way
+    // to express argument spreads, so routing a spread call (`C.method(...xs)`)
+    // here would silently drop the spread markers — the spread sources land as
+    // single positional args and `arguments.length` undercounts. When the call
+    // spreads, skip the static-method production below and let the generic
+    // `CallSpread` path (which expands spreads into the runtime args array)
+    // handle it. Refs test262 language/arguments-object
+    // cls-*-static-*-spread-operator.
+    let static_call_has_spread = call.args.iter().any(|a| a.spread.is_some());
     // Check for static method calls (e.g., Counter.increment())
     if let ast::Expr::Member(member) = expr {
-        if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
             let obj_name = obj_ident.sym.to_string();
+            if let Some((module_name, Some(class_name))) = ctx.lookup_native_module(&obj_name) {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let method_name = method_ident.sym.to_string();
+                    let normalized_module =
+                        module_name.strip_prefix("node:").unwrap_or(module_name);
+                    let is_supported_native_class_static =
+                        perry_api_manifest::iter_entries().any(|entry| {
+                            entry.module == normalized_module
+                                && entry.name == method_name
+                                && matches!(
+                                    entry.kind,
+                                    perry_api_manifest::ApiKind::Method {
+                                        has_receiver: false,
+                                        class_filter: Some(filter),
+                                    } if filter == class_name
+                                )
+                        });
+                    if is_supported_native_class_static {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: module_name.to_string(),
+                            class_name: Some(class_name.to_string()),
+                            object: None,
+                            method: method_name,
+                            args,
+                        }));
+                    }
+                }
+            }
             // Treat uppercase imported identifiers as candidate classes —
             // we don't have cross-module class metadata at HIR-lower
             // time, so without this `import { MongoClient } from
@@ -56,7 +136,24 @@ pub(super) fn try_static_method_and_instance(
                 match &member.prop {
                     ast::MemberProp::Ident(method_ident) => {
                         let method_name = method_ident.sym.to_string();
-                        if ctx.has_static_method(&obj_name, &method_name) || is_imported_upper {
+                        let is_readable_stream_from = method_name == "from"
+                            && (matches!(
+                                ctx.lookup_native_module(&obj_name),
+                                Some(("stream/web", Some("ReadableStream")))
+                                    | Some(("node:stream/web", Some("ReadableStream")))
+                            ) || (obj_name == "ReadableStream" && is_imported_upper));
+                        if is_readable_stream_from {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "readable_stream".to_string(),
+                                class_name: Some("ReadableStream".to_string()),
+                                object: None,
+                                method: "from".to_string(),
+                                args,
+                            }));
+                        }
+                        if (ctx.has_static_method(&obj_name, &method_name) || is_imported_upper)
+                            && !static_call_has_spread
+                        {
                             return Ok(Ok(Expr::StaticMethodCall {
                                 class_name: obj_name,
                                 method_name,
@@ -67,7 +164,8 @@ pub(super) fn try_static_method_and_instance(
                     // Private static method: WithPrivateStatic.#helper()
                     ast::MemberProp::PrivateName(priv_ident) => {
                         let method_name = format!("#{}", priv_ident.name);
-                        if ctx.has_static_method(&obj_name, &method_name) {
+                        if ctx.has_static_method(&obj_name, &method_name) && !static_call_has_spread
+                        {
                             return Ok(Ok(Expr::StaticMethodCall {
                                 class_name: obj_name,
                                 method_name,
@@ -126,11 +224,21 @@ pub(super) fn try_static_method_and_instance(
                                 | "addEventListener"
                                 | "removeEventListener"
                         );
-                    if is_util_mime_instance || is_worker_messaging_instance {
+                    let is_node_stream_iterator_helper =
+                        is_node_stream_iterator_helper_instance_method(
+                            &module_name,
+                            &class_name,
+                            &method_name,
+                        );
+                    if is_util_mime_instance
+                        || is_worker_messaging_instance
+                        || is_node_stream_iterator_helper
+                    {
                         // MIMEType/MIMEParams methods are ordinary object
                         // prototype methods registered in the runtime class
-                        // vtable; let the generic property-call path bind
-                        // `this` dynamically.
+                        // vtable; node:stream iterator helpers are also only
+                        // installed on the runtime object method table. Let the
+                        // generic property-call path bind `this` dynamically.
                     } else if is_stream_module && !is_stream_api_method(&module_name, &method_name)
                     {
                         // Fall through — let the regular method-call
@@ -235,7 +343,30 @@ pub(super) fn try_static_method_and_instance(
         // The inner call might lower to a NativeMethodCall, and we need to chain properly
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.to_string();
-            // Lower the object expression first
+            if !may_lower_to_native_method_call(ctx, &member.obj) {
+                return Ok(Err(args));
+            }
+            // Lower the object expression once.
+            //
+            // Perf (O(n²)/exponential → O(n) on long native-fluent chains): this
+            // is a FULL recursive lowering of the entire receiver prefix, done
+            // speculatively to inspect whether the inner call lowered to a
+            // `NativeMethodCall` of a recognized fluent module. On a chain like
+            // `K.name(..).description(..).option(..)…` (commander / minified CLI
+            // builders) where `may_lower_to_native_method_call` over-approximates
+            // to `true` but the inner call actually lowers to a *generic* `Call`,
+            // every arm below misses, `object_expr` is discarded, and we return
+            // `Err(args)` — whereupon the `lower_call_inner` fall-through tail
+            // re-lowers the same member callee (and thus this whole prefix)
+            // again. Repeated per chain level that is exponential blowup.
+            //
+            // To make the tail reuse this lowering instead of redoing it, stash
+            // it keyed by the receiver's source span. `lower_member_inner` (the
+            // tail's receiver-lowering site) consumes it for the matching span.
+            // Reuse is sound: lowering a receiver is idempotent in the value it
+            // produces, and the fluent-success arms below already reuse this very
+            // `object_expr`.
+            let obj_span = member.obj.as_ref().span();
             let object_expr = lower_expr(ctx, &member.obj)?;
             // Check if it's a NativeMethodCall for a fluent-API native module
             if let Expr::NativeMethodCall {
@@ -282,6 +413,7 @@ pub(super) fn try_static_method_and_instance(
                         | "command"
                         | "parse"
                         | "opts"
+                        | "argument"
                 );
                 // #1048 — fastify Reply chainable methods. `reply.code(201)
                 // .type("application/json").send(payload)` ships every method
@@ -324,6 +456,7 @@ pub(super) fn try_static_method_and_instance(
                         | "setHeader"
                         | "setTimeout"
                         | "write"
+                        | "destroy"
                         | "end"
                 );
                 if (is_math_lib && is_math_method)
@@ -376,10 +509,58 @@ pub(super) fn try_static_method_and_instance(
                     }));
                 }
             }
+            // No fluent arm matched: we are about to return `Err(args)` and the
+            // `lower_call_inner` fall-through tail will re-lower this same member
+            // callee. Hand it the receiver we just lowered so it doesn't repeat
+            // the (potentially whole-prefix) work. Keyed by span so the tail only
+            // reuses it for the exact receiver subtree.
+            ctx.prelowered_member_receiver = Some(((obj_span.lo.0, obj_span.hi.0), object_expr));
         }
     }
 
     Ok(Err(args))
+}
+
+fn may_lower_to_native_method_call(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Ident(ident) => ident_may_start_native_method_call(ctx, ident.sym.as_ref()),
+        ast::Expr::New(_) => detect_native_instance_expr(ctx, expr).is_some(),
+        ast::Expr::Paren(paren) => may_lower_to_native_method_call(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => may_lower_to_native_method_call(ctx, &ts_as.expr),
+        ast::Expr::TsNonNull(ts_nn) => may_lower_to_native_method_call(ctx, &ts_nn.expr),
+        ast::Expr::TsSatisfies(ts_sat) => may_lower_to_native_method_call(ctx, &ts_sat.expr),
+        ast::Expr::TsTypeAssertion(ts_ta) => may_lower_to_native_method_call(ctx, &ts_ta.expr),
+        ast::Expr::TsConstAssertion(ts_const) => {
+            may_lower_to_native_method_call(ctx, &ts_const.expr)
+        }
+        ast::Expr::Call(call) => {
+            if native_class_from_factory_call(ctx, call).is_some() {
+                return true;
+            }
+
+            let ast::Callee::Expr(callee_expr) = &call.callee else {
+                return false;
+            };
+            let ast::Expr::Member(member) = callee_expr.as_ref() else {
+                return false;
+            };
+
+            match member.obj.as_ref() {
+                ast::Expr::Ident(ident) => {
+                    ident_may_start_native_method_call(ctx, ident.sym.as_ref())
+                }
+                object => {
+                    detect_native_instance_expr(ctx, object).is_some()
+                        || may_lower_to_native_method_call(ctx, object)
+                }
+            }
+        }
+        _ => false,
+    }
+}
+
+fn ident_may_start_native_method_call(ctx: &LoweringContext, name: &str) -> bool {
+    ctx.lookup_native_instance(name).is_some() || ctx.lookup_native_module(name).is_some()
 }
 
 /// Resolve the native `(module, class)` produced by an inline factory call
@@ -423,6 +604,7 @@ fn native_class_from_factory_call(
         ("http", "createServer") => Some(("http", "HttpServer")),
         ("https", "createServer") => Some(("https", "HttpsServer")),
         ("http2", "createSecureServer") => Some(("http2", "Http2SecureServer")),
+        ("tls", "createServer") | ("tls", "Server") => Some(("tls", "Server")),
         // Issue #2208: `http.request(...).on(...)` / `https.get(...).on(...)`
         // chains — the inline factory call returns a `ClientRequest` whose
         // instance methods (`on`/`end`/`write`/`setHeader`/`setTimeout`) are

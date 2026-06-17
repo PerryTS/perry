@@ -17,6 +17,10 @@ impl SH for Type {
             Type::Int32 => tag(hh, 4),
             Type::BigInt => tag(hh, 5),
             Type::String => tag(hh, 6),
+            Type::StringLiteral(s) => {
+                tag(hh, 20);
+                s.hash(hh);
+            }
             Type::Symbol => tag(hh, 7),
             Type::Array(t) => {
                 tag(hh, 8);

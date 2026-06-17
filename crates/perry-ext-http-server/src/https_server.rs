@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -15,8 +16,8 @@ use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, RawClosureHeader,
-    StringHeader,
+    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
+    RawClosureHeader, StringHeader,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -27,11 +28,14 @@ use crate::request::{
     alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
     IncomingMessage,
 };
-use crate::response::{alloc_server_response, HyperResponseShape, ResponseBody};
-use crate::server::{HttpPendingRequest, HttpServer};
+use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
+use crate::server::{
+    signal_connections_close, HttpPendingRequest, HttpServer, ReadActivity, TrackedConnection,
+    CONNECTIONS, NEXT_CONNECTION_ID, PENDING_CONNECTION_EVENTS,
+};
 use crate::tls::{
-    build_server_config, has_pem_material, json_value_to_pem_bytes, parse_cert_chain,
-    parse_private_key,
+    build_certless_server_config, build_server_config, has_pem_material, json_value_to_pem_bytes,
+    parse_cert_chain, parse_private_key,
 };
 
 /// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
@@ -93,12 +97,22 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
 
     let cert_chain = parse_cert_chain(&cert_pem);
     let has_tls_material = has_pem_material(&key_pem, &cert_pem);
+    if !has_tls_material {
+        // `https.createServer()` with no key/cert — Node constructs and
+        // listens fine; the handshake fails per-connection instead. A
+        // `None` config here used to make `listen()` refuse outright
+        // ("tls config unavailable"), so the 'listening' callback never
+        // fired (#4974).
+        return register_handle(HttpsServer {
+            handler,
+            tls_config: Some(build_certless_server_config(enable_http2_alpn)),
+            base,
+        });
+    }
     let private_key = match parse_private_key(&key_pem) {
         Some(k) => k,
         None => {
-            if has_tls_material {
-                eprintln!("[node:https] no recognized PEM private key");
-            }
+            eprintln!("[node:https] no recognized PEM private key");
             // Still register the handle so the user gets a `.listen`
             // call that fails with a clear bind error rather than a
             // silent zero-handle.
@@ -159,7 +173,8 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         Ok(a) => a,
         Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
     };
-    let std_listener = match std::net::TcpListener::bind(addr) {
+    // #4914 — SO_REUSEPORT in cluster workers; plain bind otherwise.
+    let std_listener = match crate::cluster_bind::bind_listener(addr) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("[node:https] bind {}:{} failed: {}", host, port, e);
@@ -171,6 +186,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         eprintln!("[node:https] set_nonblocking failed: {}", e);
         return server_handle;
     }
+    crate::cluster_bind::notify_listening(&host, actual_port);
 
     let tls_config = if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
         s.base.bound_port = actual_port;
@@ -214,28 +230,74 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                             Ok((stream, peer)) => {
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
+                                // #4905/#4971 — register the connection so
+                                // close()/closeAllConnections/
+                                // closeIdleConnections can reach this task
+                                // from the main thread, and queue the
+                                // 'connection' emit (Node fires it on the raw
+                                // TCP connection, before the TLS handshake).
+                                let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
+                                let busy = Arc::new(AtomicUsize::new(0));
+                                let read_active = Arc::new(AtomicBool::new(false));
+                                let close = Arc::new(tokio::sync::Notify::new());
+                                CONNECTIONS.lock().unwrap().insert(
+                                    conn_id,
+                                    TrackedConnection {
+                                        server_handle,
+                                        close: close.clone(),
+                                        busy: busy.clone(),
+                                        read_active: read_active.clone(),
+                                    },
+                                );
+                                if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
+                                    q.push(server_handle);
+                                }
                                 tokio::spawn(async move {
                                     let tls_stream = match acceptor.accept(stream).await {
                                         Ok(s) => s,
                                         Err(e) => {
                                             eprintln!("[node:https] tls handshake: {}", e);
+                                            CONNECTIONS.lock().unwrap().remove(&conn_id);
                                             return;
                                         }
                                     };
-                                    let io = TokioIo::new(tls_stream);
+                                    // Track read activity on the DECRYPTED
+                                    // stream — handshake bytes must not mark
+                                    // a request-less socket non-idle (#4971).
+                                    let io = TokioIo::new(ReadActivity::new(
+                                        tls_stream,
+                                        read_active.clone(),
+                                    ));
                                     let service = service_fn(move |req: Request<Incoming>| {
                                         let request_tx = request_tx.clone();
+                                        let busy = busy.clone();
+                                        let read_active = read_active.clone();
                                         async move {
-                                            handle_https_request(server_handle, peer, req, request_tx).await
+                                            busy.fetch_add(1, Ordering::SeqCst);
+                                            read_active.store(false, Ordering::SeqCst);
+                                            let res = handle_https_request(server_handle, peer, req, request_tx).await;
+                                            busy.fetch_sub(1, Ordering::SeqCst);
+                                            res
                                         }
                                     });
-                                    if let Err(e) = http1::Builder::new()
+                                    let conn = http1::Builder::new()
                                         .serve_connection(io, service)
-                                        .with_upgrades()
-                                        .await
-                                    {
-                                        let _ = e;
+                                        .with_upgrades();
+                                    tokio::pin!(conn);
+                                    tokio::select! {
+                                        result = &mut conn => {
+                                            // Common when the client closes
+                                            // mid-request — silenced.
+                                            let _ = result;
+                                        }
+                                        _ = close.notified() => {
+                                            // close()/closeAllConnections/
+                                            // closeIdleConnections: dropping
+                                            // the pinned connection closes the
+                                            // socket immediately.
+                                        }
                                     }
+                                    CONNECTIONS.lock().unwrap().remove(&conn_id);
                                 });
                             }
                             Err(e) => eprintln!("[node:https] accept error: {}", e),
@@ -247,22 +309,13 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
         });
     });
 
-    // Bind `this` to the server for the `'listening'` listeners + the
-    // optional `cb`, mirroring Node so `this.address().port` resolves
-    // inside the listen callback (#2132).
-    let this_val = handle_to_pointer_f64(server_handle);
-    let listening_listeners = get_handle::<HttpsServer>(server_handle)
-        .and_then(|s| s.base.listeners.get("listening").cloned())
-        .unwrap_or_default();
-    with_implicit_this(this_val, || emit_no_arg_to_listeners(&listening_listeners));
-    if callback != 0 {
-        let raw = callback as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            with_implicit_this(this_val, || {
-                let _ = closure.call0();
-            });
-        }
+    // #4903 — queue the `'listening'` emit + the optional `cb` for the
+    // main-thread pump instead of firing synchronously; Node emits
+    // `'listening'` on a later tick, after `const server = ...` has been
+    // assigned. The pump binds `this` to the server when it fires them
+    // (#2132). See `server::drain_deferred_listen_for`.
+    if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+        crate::server::queue_deferred_listening_emit(&mut s.base, callback);
     }
 
     // Closes #604 — `listen()` is now non-blocking. Pending requests
@@ -295,6 +348,12 @@ async fn handle_https_request(
     // #2132 — capture before `req` / `headers_lower` are consumed below.
     let http_version = req.version();
     let req_connection = headers_lower.get("connection").cloned();
+    // #5080 — `Expect: 100-continue` routes to `'checkContinue'` (hyper
+    // auto-sends the interim `100 Continue` once the body is polled below).
+    let expects_continue = headers_lower
+        .get("expect")
+        .map(|v| v.to_ascii_lowercase().contains("100-continue"))
+        .unwrap_or(false);
     let body = match req.collect().await {
         Ok(c) => c.to_bytes().to_vec(),
         Err(_) => Vec::new(),
@@ -309,22 +368,33 @@ async fn handle_https_request(
         peer.port(),
     ));
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let sr_handle = alloc_server_response(response_tx);
-    let (request_listeners, handler, keep_alive_timeout) =
+    let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
+    let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
         match get_handle::<HttpsServer>(server_handle) {
             Some(s) => (
                 s.base.listeners.get("request").cloned().unwrap_or_default(),
                 s.handler,
                 s.base.keep_alive_timeout,
+                s.base
+                    .listeners
+                    .get("checkContinue")
+                    .cloned()
+                    .unwrap_or_default(),
             ),
-            None => (Vec::new(), 0, 5_000.0),
+            None => (Vec::new(), 0, 5_000.0, Vec::new()),
         };
+    let is_check_continue = expects_continue && !check_continue_listeners.is_empty();
     let pending = HttpPendingRequest {
         server_handle,
         request_handle: im_handle,
         response_handle: sr_handle,
+        skip_default_response: false,
+        h2_stream_handle: 0,
+        h2_stream_headers: Vec::new(),
         request_listeners,
         handler,
+        check_continue_listeners,
+        is_check_continue,
     };
     if request_tx.send(pending).await.is_err() {
         return Ok(Response::builder()
@@ -368,6 +438,30 @@ pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<H
 pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
     let res_f64 = handle_to_pointer_f64(pending.response_handle);
+    // #4903 — Node invokes `'request'` listeners (and the `createServer`
+    // handler, which is one) with `this` bound to the server.
+    let server_this = handle_to_pointer_f64(pending.server_handle);
+    // #5080 — an `Expect: 100-continue` request with a `'checkContinue'`
+    // listener fires that listener instead of the `'request'` path.
+    if pending.is_check_continue {
+        for cb in &pending.check_continue_listeners {
+            if *cb == 0 {
+                continue;
+            }
+            unsafe {
+                let raw = *cb as *const RawClosureHeader;
+                let closure = JsClosure::from_raw(raw);
+                if !closure.is_null() {
+                    with_implicit_this(server_this, || {
+                        let _ = closure.call2(req_f64, res_f64);
+                    });
+                }
+                js_promise_run_microtasks();
+            }
+        }
+        crate::server::finalize_or_park_request(&pending);
+        return;
+    }
     for cb in &pending.request_listeners {
         if *cb == 0 {
             continue;
@@ -376,7 +470,9 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = *cb as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(req_f64, res_f64);
+                with_implicit_this(server_this, || {
+                    let _ = closure.call2(req_f64, res_f64);
+                });
             }
             js_promise_run_microtasks();
         }
@@ -386,14 +482,19 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             let raw = pending.handler as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(req_f64, res_f64);
+                with_implicit_this(server_this, || {
+                    let _ = closure.call2(req_f64, res_f64);
+                });
             }
             js_promise_run_microtasks();
         }
     }
-    crate::server::synthesize_default_response_if_needed(pending.response_handle);
-    perry_ffi::drop_handle(pending.request_handle);
-    perry_ffi::drop_handle(pending.response_handle);
+    // #4728 — an async handler (outbound `fetch()`, `setTimeout`, `await`
+    // chain) returns before `res.end()` runs. Finalize now if the response
+    // is already flushed, otherwise park it for the reaper instead of
+    // synthesizing a premature empty response and freeing the handles out
+    // from under the pending work.
+    crate::server::finalize_or_park_request(&pending);
 }
 
 /// `httpsServer.address()` mirroring `http.Server.address()`.
@@ -427,11 +528,15 @@ pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) 
     let close_listeners;
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
         s.base.listening = false;
+        s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();
         close_listeners = s.base.listeners.get("close").cloned().unwrap_or_default();
     } else {
         close_listeners = Vec::new();
     }
+    // Node 19+: `server.close()` destroys idle keep-alive connections
+    // (active requests are allowed to finish) (#4905/#4971).
+    signal_connections_close(handle, true);
     emit_no_arg_to_listeners(&close_listeners);
     if callback != 0 {
         let raw = callback as *const RawClosureHeader;
@@ -456,11 +561,46 @@ pub unsafe extern "C" fn js_node_https_server_on(
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
 }
 
+/// `httpsServer.closeAllConnections()` — destroy every tracked
+/// connection of this server, including ones with an in-flight request.
+/// Was a no-op stub pre-#4971; the HTTPS accept loop now registers each
+/// connection in the shared `CONNECTIONS` registry (#4905 machinery).
 #[no_mangle]
-pub extern "C" fn js_node_https_server_close_all_connections(_handle: i64) {}
+pub extern "C" fn js_node_https_server_close_all_connections(handle: i64) {
+    // Delegate to the HTTP variant: the CONNECTIONS and IN_FLIGHT
+    // registries are shared and keyed by server handle, and the HTTP
+    // path also finalizes parked async requests whose connection task
+    // just died.
+    crate::server::js_node_http_server_close_all_connections(handle);
+}
 
+/// `httpsServer.closeIdleConnections()` — destroy connections with no
+/// in-flight request and no half-received one (#4971).
 #[no_mangle]
-pub extern "C" fn js_node_https_server_close_idle_connections(_handle: i64) {}
+pub extern "C" fn js_node_https_server_close_idle_connections(handle: i64) {
+    signal_connections_close(handle, true);
+}
+
+/// `httpsServer.ref()` — keep the loop alive (default) and return the
+/// receiver handle so chains work. Sets the flag on the wrapped base
+/// `HttpServer`, which `server_is_active` reads for HTTPS too. #5011.
+#[no_mangle]
+pub extern "C" fn js_node_https_server_ref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.refed = true;
+    }
+    handle
+}
+
+/// `httpsServer.unref()` — stop keeping the process alive and return the
+/// receiver handle (Node returns `this`). #5011.
+#[no_mangle]
+pub extern "C" fn js_node_https_server_unref(handle: i64) -> i64 {
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.refed = false;
+    }
+    handle
+}
 
 macro_rules! https_server_getter {
     ($name:ident, $field:ident) => {
@@ -492,6 +632,14 @@ https_server_setter!(
     js_node_https_server_set_keep_alive_timeout,
     keep_alive_timeout
 );
+https_server_getter!(
+    js_node_https_server_keep_alive_timeout_buffer,
+    keep_alive_timeout_buffer
+);
+https_server_setter!(
+    js_node_https_server_set_keep_alive_timeout_buffer,
+    keep_alive_timeout_buffer
+);
 https_server_getter!(js_node_https_server_request_timeout, request_timeout);
 https_server_setter!(js_node_https_server_set_request_timeout, request_timeout);
 https_server_getter!(js_node_https_server_idle_timeout, idle_timeout);
@@ -509,6 +657,18 @@ https_server_setter!(
     js_node_https_server_set_max_requests_per_socket,
     max_requests_per_socket
 );
+
+#[no_mangle]
+pub extern "C" fn js_node_https_server_listening_value(handle: i64) -> f64 {
+    f64::from_bits(
+        JsValue::from_bool(
+            get_handle::<HttpsServer>(handle)
+                .map(|s| s.base.listening)
+                .unwrap_or(false),
+        )
+        .bits(),
+    )
+}
 
 #[no_mangle]
 pub extern "C" fn js_node_https_server_set_timeout_method(

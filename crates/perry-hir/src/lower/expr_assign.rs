@@ -14,7 +14,58 @@ use crate::destructuring::lower_destructuring_assignment;
 use crate::ir::{BinaryOp, Expr, LogicalOp};
 use crate::lower_patterns::lower_assign_target_to_expr;
 
-use super::{lower_expr, lower_expr_assignment, LoweringContext};
+use super::{lower_expr, lower_expr_assignment, with_set_fallback_for_ident, LoweringContext};
+
+fn assignment_target_inferred_name(target: &ast::AssignTarget) -> Option<String> {
+    match target {
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
+            let name = ident.id.sym.to_string();
+            (!name.is_empty()).then_some(name)
+        }
+        _ => None,
+    }
+}
+
+fn anonymous_class_without_own_static_name(class: &ast::ClassExpr) -> bool {
+    if class.ident.is_some() {
+        return false;
+    }
+    !class.class.body.iter().any(|member| match member {
+        ast::ClassMember::Method(method) if method.is_static => {
+            matches!(&method.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&method.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            matches!(&prop.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&prop.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        _ => false,
+    })
+}
+
+pub(crate) fn rhs_accepts_assignment_name(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Arrow(_) => true,
+        ast::Expr::Fn(fn_expr) => fn_expr.ident.is_none(),
+        ast::Expr::Class(class_expr) => anonymous_class_without_own_static_name(class_expr),
+        ast::Expr::Paren(paren) => rhs_accepts_assignment_name(&paren.expr),
+        _ => false,
+    }
+}
+
+fn lower_rhs_with_assignment_name(
+    ctx: &mut LoweringContext,
+    rhs: &ast::Expr,
+    name: Option<String>,
+) -> Result<Expr> {
+    let Some(name) = name.filter(|_| rhs_accepts_assignment_name(rhs)) else {
+        return lower_expr(ctx, rhs);
+    };
+    let old_name = ctx.assignment_inferred_name.replace(name);
+    let result = lower_expr(ctx, rhs);
+    ctx.assignment_inferred_name = old_name;
+    result
+}
 
 fn throw_type_error_const_assignment(name: &str) -> Expr {
     Expr::Call {
@@ -25,6 +76,20 @@ fn throw_type_error_const_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
+        byte_offset: 0,
+    }
+}
+
+fn throw_restricted_function_property_assignment() -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_throw_restricted_function_property_assignment".to_string(),
+            param_types: vec![],
+            return_type: Type::Any,
+        }),
+        args: vec![],
+        type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -37,7 +102,64 @@ fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
+        byte_offset: 0,
     }
+}
+
+fn simple_ident_target_name(target: &ast::AssignTarget) -> Option<&str> {
+    match target {
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
+            Some(ident.id.sym.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
+            expr_ident_name(paren.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsAs(ts_as)) => {
+            expr_ident_name(ts_as.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsNonNull(ts_nn)) => {
+            expr_ident_name(ts_nn.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsTypeAssertion(ts_ta)) => {
+            expr_ident_name(ts_ta.expr.as_ref())
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsSatisfies(ts_sat)) => {
+            expr_ident_name(ts_sat.expr.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn expr_ident_name(expr: &ast::Expr) -> Option<&str> {
+    match expr {
+        ast::Expr::Ident(ident) => Some(ident.sym.as_ref()),
+        ast::Expr::Paren(paren) => expr_ident_name(paren.expr.as_ref()),
+        ast::Expr::TsAs(ts_as) => expr_ident_name(ts_as.expr.as_ref()),
+        ast::Expr::TsNonNull(ts_nn) => expr_ident_name(ts_nn.expr.as_ref()),
+        ast::Expr::TsTypeAssertion(ts_ta) => expr_ident_name(ts_ta.expr.as_ref()),
+        ast::Expr::TsSatisfies(ts_sat) => expr_ident_name(ts_sat.expr.as_ref()),
+        _ => None,
+    }
+}
+
+fn logical_assignment_op(op: ast::AssignOp) -> Option<LogicalOp> {
+    match op {
+        ast::AssignOp::AndAssign => Some(LogicalOp::And),
+        ast::AssignOp::OrAssign => Some(LogicalOp::Or),
+        ast::AssignOp::NullishAssign => Some(LogicalOp::Coalesce),
+        _ => None,
+    }
+}
+
+fn lower_logical_assignment(
+    ctx: &mut LoweringContext,
+    assign: &ast::AssignExpr,
+    rhs: Expr,
+    op: LogicalOp,
+) -> Result<Expr> {
+    let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
+    let right = Box::new(lower_assignment_target(ctx, &assign.left, Box::new(rhs))?);
+    Ok(Expr::Logical { op, left, right })
 }
 
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
@@ -70,7 +192,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                         _ => Some("Instance"),
                                     };
                                     if let Some(class_name) = class_name {
-                                        ctx.module_native_instances.push((
+                                        ctx.push_module_native_instance((
                                             var_name.clone(),
                                             module_name.to_string(),
                                             class_name.to_string(),
@@ -95,7 +217,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             module_name.clone(),
                             class_name_str.to_string(),
                         );
-                        ctx.module_native_instances.push((
+                        ctx.push_module_native_instance((
                             var_name.clone(),
                             module_name,
                             class_name_str.to_string(),
@@ -108,7 +230,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             if let ast::Expr::Ident(rhs_ident) = inner_rhs {
                 let rhs_name = rhs_ident.sym.as_ref();
                 if let Some((module, class)) = ctx.lookup_native_instance(rhs_name) {
-                    ctx.module_native_instances.push((
+                    ctx.push_module_native_instance((
                         var_name,
                         module.to_string(),
                         class.to_string(),
@@ -118,7 +240,64 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
     }
 
-    let rhs = lower_expr(ctx, &assign.right)?;
+    if let Some(name) = simple_ident_target_name(&assign.left)
+        .zip(expr_ident_name(assign.right.as_ref()))
+        .and_then(|(left, right)| (left == right).then_some(left))
+    {
+        // `x = x` with no binding anywhere → ReferenceError (the RHS read of
+        // an unresolvable reference throws before the sloppy-global create).
+        // A pre-registered module `var` declared *later* in the source is
+        // still a declared binding (var hoisting) — self-assignment before
+        // the declaration statement is fine and yields undefined.
+        if ctx.lookup_local(name).is_none() {
+            return Ok(throw_reference_error_unresolvable_assignment(name));
+        }
+    }
+
+    // NamedEvaluation also applies to logical assignment (`x ||= function(){}`,
+    // `x &&= () => {}`, `x ??= class {}`): when the LHS is a plain identifier and
+    // the RHS is an anonymous function/class, the function's `.name` becomes the
+    // identifier (ES2024 §13.15.2). Plain compound assignments (`+=`, `*=`, …)
+    // are NOT NamedEvaluation contexts, so they stay name-less.
+    let inferred_name_op = matches!(
+        assign.op,
+        ast::AssignOp::Assign
+            | ast::AssignOp::AndAssign
+            | ast::AssignOp::OrAssign
+            | ast::AssignOp::NullishAssign
+    );
+    let rhs = lower_rhs_with_assignment_name(
+        ctx,
+        &assign.right,
+        inferred_name_op
+            .then(|| assignment_target_inferred_name(&assign.left))
+            .flatten(),
+    )?;
+
+    // #4586 / #4594: logical assignments (`&&=`, `||=`, `??=`) must not store
+    // unconditionally. Desugaring to `a = (a OP rhs)` (the generic
+    // compound-assign shape below) always runs PutValue, which for a property
+    // target fires setters spuriously and throws `TypeError: Cannot assign to
+    // read only property` on non-writable `Object.defineProperty` data props —
+    // e.g. Zod v4's `inst._zod ??= {}` where `_zod` is already non-nullish and
+    // read-only, breaking every check/refinement-based schema under
+    // `perry.compilePackages`.
+    //
+    // Per ECMAScript LogicalAssignment, the store (PutValue) must be skipped
+    // entirely when the short-circuit holds. `lower_logical_assignment`
+    // desugars to `read(target) OP (target = rhs)` so the assignment lives on
+    // the RHS of the logical operator and is therefore only evaluated on the
+    // branch that actually needs to write. `rhs` is consumed exactly once.
+    //
+    // This covers both `Ident` and `Member` targets via the shared
+    // `lower_assignment_target` helper: while plain `Ident` locals have no
+    // setters, routing them through the short-circuit keeps the const-reassign
+    // path spec-correct (the RHS is still evaluated before the
+    // `TypeError: Assignment to constant variable` is thrown) and avoids a
+    // dead, Member-only special case.
+    if let Some(op) = logical_assignment_op(assign.op) {
+        return lower_logical_assignment(ctx, assign, rhs, op);
+    }
 
     // Handle compound assignment operators (+=, -=, *=, /=, etc.)
     let value = match assign.op {
@@ -221,43 +400,40 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 right: Box::new(rhs),
             })
         }
-        ast::AssignOp::AndAssign => {
-            // a &&= b becomes a = a && b (short-circuit: only evaluates b if a is truthy)
-            let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Logical {
-                op: LogicalOp::And,
-                left,
-                right: Box::new(rhs),
-            })
-        }
-        ast::AssignOp::OrAssign => {
-            // a ||= b becomes a = a || b (short-circuit: only evaluates b if a is falsy)
-            let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Logical {
-                op: LogicalOp::Or,
-                left,
-                right: Box::new(rhs),
-            })
-        }
-        ast::AssignOp::NullishAssign => {
-            // a ??= b becomes a = a ?? b (short-circuit: only evaluates b if a is null/undefined)
-            let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Logical {
-                op: LogicalOp::Coalesce,
-                left,
-                right: Box::new(rhs),
-            })
+        ast::AssignOp::AndAssign | ast::AssignOp::OrAssign | ast::AssignOp::NullishAssign => {
+            unreachable!("logical assignment is lowered before compound assignment")
         } // #853: the match above exhausts every `ast::AssignOp` variant
           // SWC ships today. If SWC adds a new operator, the build breaks
           // here — preferable to a silent runtime error path. No catch-all.
     };
 
-    match &assign.left {
+    lower_assignment_target(ctx, &assign.left, value)
+}
+
+fn lower_assignment_target(
+    ctx: &mut LoweringContext,
+    target: &ast::AssignTarget,
+    value: Box<Expr>,
+) -> Result<Expr> {
+    match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
             let name = ident.id.sym.to_string();
+            if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
+                let fallback = with_set_fallback_for_ident(ctx, &name);
+                return Ok(Expr::WithSet {
+                    object: Box::new(Expr::LocalGet(env_id)),
+                    property: name,
+                    value,
+                    fallback,
+                    strict: ctx.current_strict,
+                });
+            }
             if let Some(id) = ctx.lookup_local(&name) {
                 if ctx.is_local_immutable(id) {
-                    return Ok(throw_type_error_const_assignment(&name));
+                    return Ok(Expr::Sequence(vec![
+                        *value,
+                        throw_type_error_const_assignment(&name),
+                    ]));
                 }
                 Ok(Expr::LocalSet(id, value))
             } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
@@ -277,14 +453,24 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         throw_reference_error_unresolvable_assignment(&name),
                     ]));
                 }
-                // Variable not found in scope — likely a closure capture that wasn't
-                // properly tracked. Create an implicit local to avoid hard failure.
                 eprintln!(
-                    "  Warning: Assignment to undeclared variable '{}', creating implicit local",
+                    "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
                     name
                 );
-                let id = ctx.define_local(name, Type::Any);
-                Ok(Expr::LocalSet(id, value))
+                // Sloppy implicit global — a real globalThis property, not
+                // a module local (see the sibling arm in lower_expr.rs).
+                // NOTE: `GlobalGet(0)` alone is a by-name routing SENTINEL in
+                // codegen (bare reads lower to 0.0) — the write must target
+                // the VALUE globalThis, which the `PropertyGet { GlobalGet(0),
+                // "globalThis" }` shape resolves to the real global object.
+                Ok(Expr::PropertySet {
+                    object: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: "globalThis".to_string(),
+                    }),
+                    property: name,
+                    value,
+                })
             }
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {
@@ -304,12 +490,34 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             Expr::String(format!("#{}", p.name.as_str()))
                         }
                     });
-                    return Ok(Expr::ProxySet { proxy, key, value });
+                    return Ok(Expr::PutValueSet {
+                        target: proxy.clone(),
+                        key,
+                        value,
+                        receiver: proxy,
+                        strict: ctx.current_strict,
+                    });
                 }
             }
             // Check if this is a static field assignment (e.g., Counter.count = 5)
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 let obj_name = obj_ident.sym.to_string();
+                // `f.caller = v` / `f.arguments = v` on a declared function —
+                // the poisoned setter-less accessor on Function.prototype
+                // throws (strict semantics; Perry-compiled code is strict).
+                // The runtime closure-receiver path covers function VALUES;
+                // this covers `function f(){}` declarations whose property
+                // writes lower before reaching it. Refs test262 13.2-*-s.
+                if ctx.lookup_local(&obj_name).is_none() && ctx.lookup_func(&obj_name).is_some() {
+                    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                        if matches!(prop_ident.sym.as_ref(), "caller" | "arguments") {
+                            return Ok(Expr::Sequence(vec![
+                                *value,
+                                throw_restricted_function_property_assignment(),
+                            ]));
+                        }
+                    }
+                }
                 if ctx.lookup_class(&obj_name).is_some() {
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
@@ -342,6 +550,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 }),
                                 args: vec![*value],
                                 type_args: vec![],
+                                byte_offset: 0,
                             });
                         }
                     }
@@ -418,6 +627,14 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                     Class(String),
                     Func(Expr),
                 }
+                fn class_has_accessor(
+                    ctx: &LoweringContext,
+                    class_name: &str,
+                    method_name: &str,
+                ) -> bool {
+                    ctx.lookup_class_accessor_names(class_name)
+                        .is_some_and(|names| names.contains_any(method_name))
+                }
                 let resolved: Option<ProtoOwner> = match obj_unwrapped {
                     // (a) <ClassName>.prototype.<method>
                     //     <funcName>.prototype.<method>
@@ -436,6 +653,17 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                     && ctx.lookup_local(&cls_name).is_none()
                                     && ctx.lookup_func(&cls_name).is_none()
                                 {
+                                    None
+                                } else if ctx.lookup_class(&cls_name).is_some()
+                                    && class_has_accessor(ctx, &cls_name, &method_name)
+                                {
+                                    // `C.prototype.<accessor> = v` where `<accessor>`
+                                    // is a `set`/`get` declared on the class is an
+                                    // ordinary write that must INVOKE the setter — not
+                                    // a prototype-method monkey-patch. Fall through to
+                                    // the generic PropertySet path (which reaches the
+                                    // runtime prototype-ref setter dispatch). Test262
+                                    // accessor-name-inst setters.
                                     None
                                 } else if ctx.lookup_class(&cls_name).is_some() {
                                     Some(ProtoOwner::Class(cls_name))
@@ -487,7 +715,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         let local_id = ctx.lookup_local(obj_ident.sym.as_ref());
                         if let Some(id) = local_id {
                             if let Some(class_name) = ctx.prototype_aliases.get(&id).cloned() {
-                                Some(ProtoOwner::Class(class_name))
+                                if class_has_accessor(ctx, &class_name, &method_name) {
+                                    None
+                                } else {
+                                    Some(ProtoOwner::Class(class_name))
+                                }
                             } else if let Some(func_id) =
                                 ctx.prototype_function_aliases.get(&id).copied()
                             {
@@ -540,12 +772,19 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             let setter_method = match (class_name.as_str(), prop.as_str()) {
                                 ("ServerResponse", "statusCode") => Some("__set_statusCode"),
                                 ("ServerResponse", "statusMessage") => Some("__set_statusMessage"),
+                                ("ServerResponse", "sendDate") => Some("__set_sendDate"),
+                                ("ServerResponse", "strictContentLength") => {
+                                    Some("__set_strictContentLength")
+                                }
                                 // Issue #2210 — `server.headersTimeout = N` etc.
                                 // route to the `__set_<name>` FFI variants. Phase
                                 // 1 just stores; Phase 2 wires hyper deadlines.
                                 ("HttpServer", "headersTimeout") => Some("__set_headersTimeout"),
                                 ("HttpServer", "keepAliveTimeout") => {
                                     Some("__set_keepAliveTimeout")
+                                }
+                                ("HttpServer", "keepAliveTimeoutBuffer") => {
+                                    Some("__set_keepAliveTimeoutBuffer")
                                 }
                                 ("HttpServer", "requestTimeout") => Some("__set_requestTimeout"),
                                 ("HttpServer", "timeout") => Some("__set_timeout"),
@@ -556,6 +795,9 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 ("HttpsServer", "headersTimeout") => Some("__set_headersTimeout"),
                                 ("HttpsServer", "keepAliveTimeout") => {
                                     Some("__set_keepAliveTimeout")
+                                }
+                                ("HttpsServer", "keepAliveTimeoutBuffer") => {
+                                    Some("__set_keepAliveTimeoutBuffer")
                                 }
                                 ("HttpsServer", "requestTimeout") => Some("__set_requestTimeout"),
                                 ("HttpsServer", "timeout") => Some("__set_timeout"),
@@ -697,7 +939,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                 }
             }
 
-            let object = Box::new(lower_expr(ctx, &member.obj)?);
+            let object_expr = lower_expr(ctx, &member.obj)?;
+            let object = Box::new(object_expr.clone());
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
@@ -730,10 +973,12 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             }
                         }
                     }
-                    Ok(Expr::PropertySet {
-                        object,
-                        property,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: Box::new(Expr::String(property)),
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::Computed(computed) => {
@@ -762,28 +1007,75 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                             && key.chars().all(|c| c.is_ascii_digit())
                             && !(key.len() > 1 && key.starts_with('0'));
                         if !is_numeric_string {
-                            return Ok(Expr::PropertySet {
-                                object,
-                                property: key.clone(),
+                            return Ok(Expr::PutValueSet {
+                                target: object.clone(),
+                                key: Box::new(Expr::String(key.clone())),
                                 value,
+                                receiver: object,
+                                strict: ctx.current_strict,
                             });
                         }
                     }
-                    Ok(Expr::IndexSet {
-                        object,
-                        index,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: index,
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::PrivateName(private) => {
-                    // Private field assignment: this.#field = value
+                    // Private field assignment: this.#field = value. Guard the
+                    // receiver so a write to a wrong receiver — or to a
+                    // getter-only accessor / a private method — throws.
                     let property = format!("#{}", private.name);
+                    let object = super::expr_member::wrap_private_guard(
+                        ctx,
+                        object,
+                        &property,
+                        super::expr_member::PRIV_OP_WRITE,
+                    );
                     Ok(Expr::PropertySet {
                         object,
                         property,
                         value,
                     })
                 }
+            }
+        }
+        ast::AssignTarget::Simple(ast::SimpleAssignTarget::SuperProp(super_prop)) => {
+            if ctx.current_class_member_is_static {
+                let mut exprs = Vec::new();
+                if let ast::SuperProp::Computed(computed) = &super_prop.prop {
+                    exprs.push(lower_expr(ctx, &computed.expr)?);
+                }
+                exprs.push(*value);
+                exprs.push(throw_type_error_const_assignment(""));
+                return Ok(Expr::Sequence(exprs));
+            }
+            let key = match &super_prop.prop {
+                ast::SuperProp::Ident(ident) => Box::new(Expr::String(ident.sym.to_string())),
+                ast::SuperProp::Computed(computed) => Box::new(lower_expr(ctx, &computed.expr)?),
+            };
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                Ok(Expr::ObjectSuperPropertySet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key,
+                    value,
+                    receiver: Box::new(Expr::This),
+                })
+            } else {
+                let parent_class_name = ctx.current_class_super_ident.clone();
+                let parent_class_id = parent_class_name
+                    .as_deref()
+                    .and_then(|parent| ctx.lookup_class(parent))
+                    .unwrap_or(0);
+                Ok(Expr::SuperPropertySet {
+                    parent_class_id,
+                    parent_class_name,
+                    key,
+                    value,
+                })
             }
         }
         ast::AssignTarget::Pat(pat) => {

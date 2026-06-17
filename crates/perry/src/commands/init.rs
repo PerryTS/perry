@@ -56,7 +56,7 @@ node_modules/
 
 const DEFAULT_TSCONFIG: &str = r#"{
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2023",
     "module": "preserve",
     "moduleResolution": "bundler",
     "strict": true,

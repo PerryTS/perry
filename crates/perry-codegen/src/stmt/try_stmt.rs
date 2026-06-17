@@ -16,14 +16,50 @@ use super::*;
 ///      js_throw so the throw propagates instead of being swallowed.
 ///   6. finally runs (if present), then falls through to merge (only the
 ///      normal-completion path reaches this merge finally)
+/// Emit `js_try_push()` + setjmp in the CURRENT block, branching to
+/// `exc_label` on a longjmp (exception) and `normal_label` otherwise.
+///
+/// CRITICAL: setjmp must carry `returns_twice` on the call site too (not
+/// just the declaration). Without it, LLVM -O2 promotes alloca-backed
+/// locals to SSA registers and the longjmp return path sees stale
+/// pre-setjmp values. The standard `blk.call()` doesn't support call
+/// attributes, so the instruction is emitted manually.
+///
+/// setjmp variant selection — must match the declaration in
+/// `runtime_decls.rs`:
+///   - Apple: `_setjmp` (LLVM-IR name) → linker `__setjmp` = fast variant
+///     (skips the sigprocmask / sigaltstack syscalls, ~500 ns each on
+///     macOS arm64).
+///   - Linux: `setjmp` is already fast — no swap needed.
+///   - Windows: `_setjmp(buf, frame_ptr)` (different ABI).
+fn emit_setjmp_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_label: &str) {
+    use crate::types::{I32, PTR};
+    let blk = ctx.block();
+    let jmpbuf = blk.call(PTR, "js_try_push", &[]);
+    let sjr_reg = blk.next_reg();
+    if cfg!(target_os = "windows") {
+        blk.emit_raw(format!(
+            "{} = call i32 @_setjmp(ptr {}, ptr null) #0",
+            sjr_reg, jmpbuf
+        ));
+    } else if cfg!(target_vendor = "apple") {
+        blk.emit_raw(format!(
+            "{} = call i32 @_setjmp(ptr {}) #0",
+            sjr_reg, jmpbuf
+        ));
+    } else {
+        blk.emit_raw(format!("{} = call i32 @setjmp(ptr {}) #0", sjr_reg, jmpbuf));
+    }
+    let is_exc = blk.icmp_ne(I32, &sjr_reg, "0");
+    blk.cond_br(&is_exc, exc_label, normal_label);
+}
+
 pub(crate) fn lower_try(
     ctx: &mut FnCtx<'_>,
     body: &[perry_hir::Stmt],
     catch: Option<&perry_hir::CatchClause>,
     finally: Option<&[perry_hir::Stmt]>,
 ) -> Result<()> {
-    use crate::types::{I32, PTR};
-
     // Mark the enclosing function so IR emission adds `#1`
     // (noinline optnone). At -O2 on aarch64, LLVM's mem2reg/SROA will
     // otherwise promote allocas to SSA registers across the setjmp
@@ -42,39 +78,7 @@ pub(crate) fn lower_try(
     let finally_label = ctx.block_label(finally_idx);
 
     // --- current block: setjmp dispatch ---
-    let blk = ctx.block();
-    let jmpbuf = blk.call(PTR, "js_try_push", &[]);
-    // CRITICAL: setjmp must carry `returns_twice` on the call site
-    // too (not just the declaration). Without it, LLVM -O2 promotes
-    // alloca-backed locals to SSA registers and the longjmp return
-    // path sees stale pre-setjmp values instead of the try-body's
-    // assignments. The standard `blk.call()` doesn't support call
-    // attributes, so we emit the instruction manually.
-    let sjr_reg = blk.next_reg();
-    // setjmp variant selection — must match the declaration in
-    // `runtime_decls.rs`. See that file for the rationale; the short
-    // version:
-    //   - Apple: `_setjmp` (LLVM-IR name) → linker `__setjmp` = fast
-    //     variant (skips the sigprocmask / sigaltstack syscalls that
-    //     normally cost ~500 ns each on macOS arm64).
-    //   - Linux: `setjmp` is already fast — no swap needed.
-    //   - Windows: `_setjmp(buf, frame_ptr)` (different ABI).
-    if cfg!(target_os = "windows") {
-        blk.emit_raw(format!(
-            "{} = call i32 @_setjmp(ptr {}, ptr null) #0",
-            sjr_reg, jmpbuf
-        ));
-    } else if cfg!(target_vendor = "apple") {
-        blk.emit_raw(format!(
-            "{} = call i32 @_setjmp(ptr {}) #0",
-            sjr_reg, jmpbuf
-        ));
-    } else {
-        blk.emit_raw(format!("{} = call i32 @setjmp(ptr {}) #0", sjr_reg, jmpbuf));
-    }
-    let sjr = sjr_reg;
-    let is_exc = blk.icmp_ne(I32, &sjr, "0");
-    blk.cond_br(&is_exc, &catch_label, &try_body_label);
+    emit_setjmp_dispatch(ctx, &catch_label, &try_body_label);
 
     // --- try body ---
     ctx.current_block = try_body_idx;
@@ -105,9 +109,43 @@ pub(crate) fn lower_try(
             ctx.locals.insert(*id, slot.clone());
             ctx.block().store(DOUBLE, &exc, &slot);
         }
-        lower_stmts(ctx, &clause.body)?;
-        if !ctx.block().is_terminated() {
-            ctx.block().br(&finally_label);
+        if let Some(f) = finally {
+            // Per spec TryStatement : try Block Catch Finally — a throw
+            // escaping the CATCH body must still run the finally, whose
+            // own abrupt completion (throw) replaces the pending one.
+            // Protect the catch body with its own frame: on a longjmp out
+            // of it, run a dedicated copy of the finally body, then
+            // re-raise the catch's exception (unless the finally itself
+            // terminated abruptly — its terminator stands).
+            // Refs test262 S12.14_A7_T2/T3, S12.14_A13_T3.
+            let cbody_idx = ctx.new_block("try.catch.body");
+            let cfail_idx = ctx.new_block("try.catch.fail");
+            let cbody_label = ctx.block_label(cbody_idx);
+            let cfail_label = ctx.block_label(cfail_idx);
+            emit_setjmp_dispatch(ctx, &cfail_label, &cbody_label);
+
+            ctx.current_block = cbody_idx;
+            ctx.try_depth += 1;
+            lower_stmts(ctx, &clause.body)?;
+            ctx.try_depth -= 1;
+            if !ctx.block().is_terminated() {
+                ctx.block().call_void("js_try_end", &[]);
+                ctx.block().br(&finally_label);
+            }
+
+            ctx.current_block = cfail_idx;
+            ctx.block().call_void("js_try_end", &[]);
+            let exc2 = ctx.block().call(DOUBLE, "js_get_exception", &[]);
+            lower_stmts(ctx, f)?;
+            if !ctx.block().is_terminated() {
+                ctx.block().call_void("js_throw", &[(DOUBLE, &exc2)]);
+                ctx.block().unreachable();
+            }
+        } else {
+            lower_stmts(ctx, &clause.body)?;
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&finally_label);
+            }
         }
     } else {
         // No catch clause: this is a `try { ... } finally { ... }`

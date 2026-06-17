@@ -51,7 +51,22 @@ pub struct ApiEntry {
     /// Intentional no-op stubs (platform-gated UI symbols, etc.) are
     /// flagged so the unimplemented-API check (#463) does NOT error on
     /// them — the runtime first-call warning from #464 surfaces those.
+    ///
+    /// As of the stub-elimination epic (#4919) this is also set for the
+    /// known "registered but fake/no-op/partial" clusters — BYOB streams
+    /// (#4915), v8 heap snapshots (#4916), and the stdlib-adapter no-ops
+    /// (#4917) — so the manifest is the single source of truth for "this
+    /// API lies". (dns/dgram #4911, spawn #4912, and cluster port
+    /// sharing #4914 have since been implemented for real.) CI
+    /// drift-guards the exact set (`tests/stub_inventory.rs`).
     pub stub: bool,
+    /// Short human-readable reason this entry is a stub/partial, with an
+    /// issue tag — surfaced verbatim in the generated `.d.ts` and
+    /// `reference.md` so the docs say *how* it's limited, not just that
+    /// it is. `None` falls back to the generic "no-op at runtime" text.
+    /// Used to distinguish a pure no-op (dns loopback fake) from a
+    /// real-but-partial API (`http.Agent` doesn't pool). (#4918)
+    pub stub_note: Option<&'static str>,
     /// True when this row is a real top-level export of the module.
     ///
     /// Some rows exist only so the runtime dispatch table and strict
@@ -78,6 +93,31 @@ pub struct ApiEntry {
     /// loose `any` rendering"; concrete values let the .d.ts emitter
     /// produce a typed signature. (#512)
     pub returns: TypeSpec,
+}
+
+impl ApiEntry {
+    /// Mark this entry as a stub: registered and callable, but a no-op,
+    /// fake, or silently-wrong/partial implementation. Chains in the
+    /// `const` manifest table: `method("dns", "resolve4", false, None).stub()`.
+    /// Surfaced in `.d.ts`, `reference.md`, and `--print-api-manifest`;
+    /// the runtime dispatch path is expected to emit a first-call
+    /// `perry_stub_warn` and throw `ERR_PERRY_UNIMPLEMENTED` under
+    /// `PERRY_STRICT_STUBS=1`. (#4918)
+    pub const fn stub(mut self) -> Self {
+        self.stub = true;
+        self
+    }
+
+    /// Like [`ApiEntry::stub`], but attaches a short human-readable
+    /// reason (with an issue tag) rendered verbatim in the generated
+    /// docs — e.g. `"loopback-only fake, no real DNS (#4911)"` for a
+    /// pure no-op or `"real, but does not pool sockets (#4917)"` for a
+    /// partial implementation. (#4918)
+    pub const fn stub_note(mut self, note: &'static str) -> Self {
+        self.stub = true;
+        self.stub_note = Some(note);
+        self
+    }
 }
 
 /// One parameter slot on a method entry. Mirrors the param-type
@@ -140,6 +180,11 @@ pub enum TypeSpec {
     /// returns a NaN-boxed JSValue whose user-side type isn't fixed
     /// (`F64` returns can be `Promise<T>`, mixed strings/numbers, etc.).
     Any,
+    /// `Promise<any>`. The call returns a runtime Promise whose resolved
+    /// value isn't statically known (e.g. `perry/thread`'s `spawn`, whose
+    /// resolution is the background closure's return value). Distinguishes
+    /// "this is awaitable" from the opaque [`TypeSpec::Any`] fallback.
+    Promise,
 }
 
 /// What shape of symbol this entry describes.
@@ -662,6 +707,19 @@ mod tests {
     }
 
     #[test]
+    fn ws_ready_state_constants_are_manifest_properties() {
+        for name in ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] {
+            let entry = module_has_symbol("ws", name)
+                .unwrap_or_else(|| panic!("ws.{name} should be in the manifest"));
+            assert!(matches!(entry.kind, ApiKind::Property));
+            assert!(
+                module_has_public_named_export("ws", name),
+                "ws.{name} should be available to named imports"
+            );
+        }
+    }
+
+    #[test]
     fn fs_promises_manifest_matches_runtime_backed_exports() {
         assert!(is_known_module("fs/promises"));
         assert!(is_known_module("node:fs/promises"));
@@ -691,7 +749,27 @@ mod tests {
             "node:fs/promises::constants should be an object-valued property"
         );
 
-        for not_implemented in ["FileHandle", "Dir", "Dirent"] {
+        for name in ["pull", "pullSync", "writer"] {
+            let entry = module_has_symbol("node:fs/promises", name).unwrap_or_else(|| {
+                panic!("node:fs/promises missing FileHandle receiver method: {name}")
+            });
+            assert!(
+                matches!(
+                    entry.kind,
+                    ApiKind::Method {
+                        has_receiver: true,
+                        class_filter: Some("FileHandle")
+                    }
+                ),
+                "node:fs/promises::{name} should be a FileHandle receiver method"
+            );
+            assert!(
+                !module_has_public_named_export("node:fs/promises", name),
+                "node:fs/promises::{name} should stay out of named exports"
+            );
+        }
+
+        for not_implemented in ["Dir", "Dirent"] {
             assert!(
                 module_has_symbol("node:fs/promises", not_implemented).is_none(),
                 "node:fs/promises::{not_implemented} should stay out of the manifest until runtime-backed"
@@ -1155,6 +1233,8 @@ mod tests {
                     ("CountQueuingStrategy", ApiKind::Class),
                     ("TextEncoderStream", ApiKind::Class),
                     ("TextDecoderStream", ApiKind::Class),
+                    ("CompressionStream", ApiKind::Class),
+                    ("DecompressionStream", ApiKind::Class),
                 ],
             ),
             (

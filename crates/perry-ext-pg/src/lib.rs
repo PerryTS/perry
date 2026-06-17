@@ -162,17 +162,40 @@ fn row_to_js_object(row: &PgRow) -> *mut ObjectHeader {
     obj
 }
 
-/// Build a `FieldDef`-shaped object: `{ name, dataTypeID, tableID }`.
+/// Build a `FieldDef`-shaped object matching node-pg's `result.fields[i]`
+/// (#4917): `dataTypeID` is the numeric type OID, `tableID`/`columnID` come
+/// from the RowDescription (0 for expression columns, like Node).
+/// `dataTypeSize`/`dataTypeModifier` are not exposed by sqlx 0.8 and report
+/// the "unknown/variable" sentinel -1. Twin of
+/// `perry_stdlib::pg::types::column_to_field_def` — keep in sync.
 fn column_to_field_def(col: &PgColumn) -> *mut ObjectHeader {
-    let (packed, shape_id) = build_object_shape(&["name", "dataTypeID", "tableID"]);
+    let (packed, shape_id) = build_object_shape(&[
+        "name",
+        "tableID",
+        "columnID",
+        "dataTypeID",
+        "dataTypeSize",
+        "dataTypeModifier",
+        "format",
+    ]);
     let obj =
-        unsafe { js_object_alloc_with_shape(shape_id, 3, packed.as_ptr(), packed.len() as u32) };
+        unsafe { js_object_alloc_with_shape(shape_id, 7, packed.as_ptr(), packed.len() as u32) };
     let name_str = alloc_string(col.name());
-    let type_str = alloc_string(col.type_info().name());
+    let table_id = col.relation_id().map(|oid| oid.0 as f64).unwrap_or(0.0);
+    let column_id = col
+        .relation_attribute_no()
+        .map(|attno| attno as f64)
+        .unwrap_or(0.0);
+    let data_type_id = col.type_info().oid().map(|oid| oid.0 as f64).unwrap_or(0.0);
+    let format_str = alloc_string("text");
     unsafe {
         js_object_set_field(obj, 0, JsValue::from_string_ptr(name_str.as_raw()));
-        js_object_set_field(obj, 1, JsValue::from_string_ptr(type_str.as_raw()));
-        js_object_set_field(obj, 2, JsValue::from_number(0.0));
+        js_object_set_field(obj, 1, JsValue::from_number(table_id));
+        js_object_set_field(obj, 2, JsValue::from_number(column_id));
+        js_object_set_field(obj, 3, JsValue::from_number(data_type_id));
+        js_object_set_field(obj, 4, JsValue::from_number(-1.0));
+        js_object_set_field(obj, 5, JsValue::from_number(-1.0));
+        js_object_set_field(obj, 6, JsValue::from_string_ptr(format_str.as_raw()));
     }
     obj
 }

@@ -83,6 +83,33 @@ pub struct Module {
     /// Keyed by the closure/function's HIR FuncId; consumed by codegen
     /// when emitting `js_register_function_name` calls.
     pub closure_display_names: std::collections::HashMap<perry_types::FuncId, String>,
+    /// #4101: original source text for each user function, keyed by HIR
+    /// FuncId. Populated at lowering by slicing the module source against the
+    /// AST span of every function declaration / expression / arrow. Consumed
+    /// by codegen to emit `js_register_function_source` so `fn.toString()`
+    /// (and `Function.prototype.toString.call(fn)`) reconstruct the source
+    /// instead of returning the generic `"[object Object]"`.
+    pub closure_source_text: std::collections::HashMap<perry_types::FuncId, String>,
+    /// #3664: func_ids of `async function*` declarations and `async function*(){}`
+    /// expressions. The generator transform clears `is_async`/`is_generator`
+    /// before codegen, erasing the async-vs-sync distinction (both lower to a
+    /// `{next,return,throw}` wrapper). This set preserves it so codegen can
+    /// register async-generator closures in the runtime's dedicated async-
+    /// generator registry, which drives `%AsyncGeneratorFunction%` / `%Async
+    /// Generator%` intrinsic resolution. Populated by `transform_generators`.
+    pub async_generator_funcs: std::collections::HashSet<perry_types::FuncId>,
+    /// Number of leading parameter-prologue statements (default-param guards +
+    /// destructuring binding stmts) in each generator / async-generator
+    /// function body, keyed by func_id. Per spec, generator parameter binding
+    /// (FunctionDeclarationInstantiation) runs *synchronously* when the
+    /// generator function is called — before the generator object is created —
+    /// so an iterator/RequireObjectCoercible/TDZ error during param binding
+    /// throws at call time. Lowering prepends the prologue to the body; the
+    /// generator transform reads this count to lift the prologue back into the
+    /// outer wrapper (run-at-call) instead of state 0 of `.next()`. Absent /
+    /// zero means no prologue (the common case — fully inert). Populated by
+    /// lowering (`lower_fn_decl` / `lower_fn_expr`).
+    pub gen_param_prologue_len: std::collections::HashMap<perry_types::FuncId, usize>,
 }
 
 impl Module {
@@ -111,6 +138,9 @@ impl Module {
             init_kind: ModuleInitKind::Eager,
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),
+            closure_source_text: std::collections::HashMap::new(),
+            async_generator_funcs: std::collections::HashSet::new(),
+            gen_param_prologue_len: std::collections::HashMap::new(),
         }
     }
 }

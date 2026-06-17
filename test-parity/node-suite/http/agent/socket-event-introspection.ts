@@ -1,3 +1,5 @@
+// parity-env: PERRY_FORCE_WELL_KNOWN=http,net,ws
+//
 // Issue #2211 — EventEmitter introspection on a net.Socket. Tests in
 // the `test-http-agent-*` and `test-http-server-*` families call
 // `socket.listeners('timeout')`, `socket.eventNames()`,

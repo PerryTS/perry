@@ -232,6 +232,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_date_to_time_string", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
+        Expr::DateToUTCString(o) => {
+            let v = lower_expr(ctx, o)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_date_to_utc_string", &[(DOUBLE, &v)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
         Expr::DateToLocaleDateString(o) => {
             let v = lower_expr(ctx, o)?;
             let blk = ctx.block();
@@ -271,6 +277,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
+        Expr::ArrayReverseValue { receiver } => {
+            let receiver_d = lower_expr(ctx, receiver)?;
+            let blk = ctx.block();
+            let result = blk.call(DOUBLE, "js_array_reverse_value", &[(DOUBLE, &receiver_d)]);
+            Ok(result)
+        }
         Expr::ArrayCopyWithin {
             array_id,
             target,
@@ -300,6 +312,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ],
             );
             Ok(nanbox_pointer_inline(blk, &result))
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            let receiver_box = lower_expr(ctx, receiver)?;
+            let target_d = lower_expr(ctx, target)?;
+            let start_d = lower_expr(ctx, start)?;
+            let (has_end_str, end_d) = if let Some(e) = end {
+                let v = lower_expr(ctx, e)?;
+                ("1".to_string(), v)
+            } else {
+                ("0".to_string(), "0.0".to_string())
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_array_copy_within_value",
+                &[
+                    (DOUBLE, &receiver_box),
+                    (DOUBLE, &target_d),
+                    (DOUBLE, &start_d),
+                    (I32, &has_end_str),
+                    (DOUBLE, &end_d),
+                ],
+            ))
         }
         Expr::ArrayToReversed { array } => {
             let arr_box = lower_expr(ctx, array)?;
@@ -413,29 +452,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::TypeErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_typeerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "1"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::RangeErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_rangeerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "2"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::SyntaxErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_syntaxerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "4"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::ReferenceErrorNew(msg) => {
             let m = lower_expr(ctx, msg)?;
             let blk = ctx.block();
-            let msg_handle = unbox_to_i64(blk, &m);
-            let err_handle = blk.call(I64, "js_referenceerror_new", &[(I64, &msg_handle)]);
+            let err_handle = blk.call(
+                I64,
+                "js_error_new_kind_from_value",
+                &[(I32, "3"), (DOUBLE, &m)],
+            );
             Ok(nanbox_pointer_inline(blk, &err_handle))
         }
         Expr::NumberIsSafeInteger(operand) => {

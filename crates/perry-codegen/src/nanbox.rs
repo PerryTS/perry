@@ -25,6 +25,11 @@ pub const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 pub const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 pub const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 pub const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
+/// Low end of the Perry-owned qNaN tag band. A NaN-boxed value is a primitive
+/// number iff its `TAG_MASK` bits are NOT in `[SHORT_STRING_TAG, STRING_TAG]`.
+/// Must match `perry-runtime::value::tags::SHORT_STRING_TAG` (used by the
+/// inline `is-number` guard in `stmt::loops`).
+pub const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
 pub const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 
 pub const TAG_UNDEFINED_I64: &str = "9222246136947933185";

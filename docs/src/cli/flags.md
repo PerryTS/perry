@@ -33,7 +33,8 @@ Use `--target` to cross-compile:
 | `wearos-tile` | Wear OS Tile | Wear OS Tile (TileService) |
 | `wasm` | WebAssembly | Self-contained HTML with WASM or raw `.wasm` binary |
 | `web` | Web | Outputs HTML file with JS |
-| `windows` | Windows | Win32 executable |
+| `windows` | Windows | Win32/GDI executable (default Windows backend) |
+| `windows-winui` | Windows (Fluent) | Opt-in WinUI 3 / Fluent backend (#4680). **Scaffold:** currently renders via Win32 while the XAML widget mapping lands incrementally; selects the `perry-ui-windows-winui` static library. Build that lib first: `cargo build --release -p perry-ui-windows-winui`. |
 | `linux` | Linux | GTK4 executable |
 
 ## Output Types
@@ -85,6 +86,8 @@ Minification strips comments, collapses whitespace, and mangles local variable/p
 | `--enable-js-runtime` | Enable V8 JavaScript runtime for unsupported npm packages |
 | `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected when `WebAssembly.*` is referenced; needed only when loading via dlopen / FFI without a static reference) |
 | `--type-check` | Enable type checking via tsgo IPC |
+| `--strict-eval` | Fail the build if any runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site is reachable. By default such a site is compiled to a deferred runtime error (throws only if reached) and a compile-time notice is printed. Also settable via `perry.eval = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
+| `--strict-dynamic-import` | Fail the build if a dynamic `import(...)` has a runtime-computed (non-resolvable) specifier. By default such a site is compiled to a rejected `Promise` that throws a descriptive `Error` only if reached, and is listed in the same end-of-build notice as deferred eval sites. Also settable via `perry.dynamicImport = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. Resolvable forms (string literals, ternaries of resolvable arms, template literals over const locals, finite union-typed params, glob) are unaffected. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
 
 ## Environment Variables
 

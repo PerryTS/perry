@@ -184,6 +184,7 @@ pub(super) fn try_desugar_reactive_animate(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         };
 
         let mut fresh_args: Vec<Expr> = Vec::with_capacity(expected_arity + 1);
@@ -222,7 +223,9 @@ pub(super) fn try_desugar_reactive_animate(
             captures: inner_captures,
             mutable_captures: Vec::new(),
             captures_this: false,
+            captures_new_target: false,
             enclosing_class: None,
+            is_arrow: false,
             is_async: false,
             is_generator: false,
             is_strict: ctx.current_strict,
@@ -261,7 +264,9 @@ pub(super) fn try_desugar_reactive_animate(
         captures: outer_captures,
         mutable_captures: Vec::new(),
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: ctx.current_strict,
@@ -271,6 +276,7 @@ pub(super) fn try_desugar_reactive_animate(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }))
 }
 

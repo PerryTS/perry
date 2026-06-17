@@ -1652,6 +1652,7 @@ const __memDispatch = {
   math_hypot: (a, b) => Math.hypot(a, b),
   math_fround: (x) => Math.fround(x),
   math_clz32: (x) => Math.clz32(x),
+  math_imul: (a, b) => Math.imul(a, b),
   date_now: () => Date.now(),
   js_typeof: (val) => typeof val,
   parse_int: (val) => parseInt(String(val), 10),
@@ -2979,6 +2980,19 @@ function perry_ui_text_set_decoration(h, decoration) {
     : "none";
   el.style.textDecoration = css;
 }
+// Issue #3621 — horizontal text alignment. Canonical Perry/AppKit values:
+// 0=left, 1=right, 2=center, 3=justified, 4=natural. Maps to CSS
+// `text-align` (natural → `start`, which follows the element's direction).
+function perry_ui_text_set_text_alignment(h, alignment) {
+  const el = uiGet(h);
+  if (!el) return;
+  const css = alignment === 1 ? "right"
+    : alignment === 2 ? "center"
+    : alignment === 3 ? "justify"
+    : alignment === 4 ? "start"
+    : "left";
+  el.style.textAlign = css;
+}
 // Issue #185 Phase B closure 11 — TextField borderless. Drops the
 // rendered border so the input visually matches a non-bordered
 // borderless setter on the Apple side.
@@ -3122,6 +3136,13 @@ function perry_ui_state_bind_toggle(stateH, widgetH) {
     const inp = wrap._inp || wrap.querySelector("input");
     if (inp) { inp.checked = !!s._value; s.subscribers.push(v => { inp.checked = !!v; }); }
   }
+}
+// Issue #5076: programmatically set a Toggle's on/off state (0 = off, non-zero = on).
+function perry_ui_toggle_set_state(widgetH, on) {
+  const wrap = uiGet(widgetH);
+  if (!wrap) return;
+  const inp = wrap._inp || wrap.querySelector("input");
+  if (inp) inp.checked = !!on;
 }
 function perry_ui_state_bind_visibility(stateH, widgetH) {
   const el = uiGet(widgetH), s = uiStates.get(stateH);
@@ -4608,7 +4629,7 @@ const __perryUiDispatch = {
   // Widget creation
   perry_ui_app_create, perry_ui_vstack_create, perry_ui_hstack_create, perry_ui_zstack_create,
   perry_ui_text_create, perry_ui_button_create, perry_ui_textfield_create, perry_ui_securefield_create,
-  perry_ui_toggle_create, perry_ui_slider_create, perry_ui_scrollview_create, perry_ui_spacer_create,
+  perry_ui_toggle_create, perry_ui_toggle_set_state, perry_ui_slider_create, perry_ui_scrollview_create, perry_ui_spacer_create,
   perry_ui_divider_create, perry_ui_progressview_create, perry_ui_image_create, perry_ui_picker_create,
   perry_ui_form_create, perry_ui_section_create, perry_ui_navigationstack_create, perry_ui_canvas_create,
   perry_ui_lazyvstack_create, perry_ui_lazyvstack_update, perry_ui_table_create,
@@ -4651,6 +4672,7 @@ const __perryUiDispatch = {
   perry_ui_foreach_register, perry_ui_navstack_register_route,
   // Text/Button/TextField ops
   perry_ui_text_set_string, perry_ui_text_set_selectable, perry_ui_text_set_wraps, perry_ui_text_set_color,
+  perry_ui_text_set_text_alignment,
   perry_ui_button_set_bordered, perry_ui_button_set_title, perry_ui_button_set_text_color,
   perry_ui_button_set_image, perry_ui_button_set_content_tint_color, perry_ui_button_set_image_position,
   perry_ui_textfield_focus, perry_ui_textfield_set_string, perry_ui_textfield_get_string,

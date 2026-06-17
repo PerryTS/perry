@@ -7,7 +7,7 @@ use perry_hir::Expr;
 
 use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
 use crate::lower_array_method::lower_array_method;
-use crate::lower_string_method::lower_string_method;
+use crate::lower_string_method::{is_known_string_method_name, lower_string_method};
 use crate::nanbox::double_literal;
 use crate::type_analysis::{
     is_array_expr, is_global_constructor_expr, is_map_expr, is_native_module_dynamic_index,
@@ -41,9 +41,85 @@ fn is_array_only_method_name(name: &str) -> bool {
     )
 }
 
+/// For the Any-typed-receiver string-method fallback only: is `argc` a
+/// plausible argument count for the String.prototype builtin named
+/// `name`? When a builtin-named method is invoked on a receiver that is
+/// NOT provably a string (object literal, `any`, unknown) AND the arg
+/// count can't match the String builtin's signature, the call is almost
+/// certainly a user method that merely shares a name with a String
+/// builtin — e.g. joi's `internals.trim(value, schema)` (#5271). Forcing
+/// the String path there used to abort codegen with
+/// "String.trim takes no args, got 2"; gating on arity here lets such
+/// calls fall through to the runtime method dispatcher instead.
+///
+/// The accepted ranges mirror `lower_string_method`'s per-arm arity
+/// guards. Char-access methods (`charAt`/`charCodeAt`/`codePointAt`)
+/// ignore surplus args per spec, so any count is fine for them.
+fn string_only_method_arity_ok(name: &str, argc: usize) -> bool {
+    match name {
+        // No-arg string transforms.
+        "trim" | "trimStart" | "trimEnd" | "toLowerCase" | "toUpperCase" => argc == 0,
+        // Locale-aware case folding: optional `locales`.
+        "toLocaleLowerCase" | "toLocaleUpperCase" => argc <= 1,
+        // split(separator?, limit?).
+        "split" => argc <= 2,
+        // substring(start?, end?).
+        "substring" => argc <= 2,
+        // substr(start, length?) — start is required.
+        "substr" => argc == 1 || argc == 2,
+        // replaceAll(search, replace).
+        "replaceAll" => argc == 2,
+        // padStart/padEnd(targetLength, padString?).
+        "padStart" | "padEnd" => argc == 1 || argc == 2,
+        // repeat(count).
+        "repeat" => argc == 1,
+        // localeCompare(that, locales?, options?).
+        "localeCompare" => argc <= 3,
+        // Char-access ignores extra args (still evaluated for side effects).
+        "charAt" | "charCodeAt" | "codePointAt" => true,
+        // Conservative default: methods reaching this gate but not listed
+        // here keep their prior (already arity-checked) routing.
+        _ => true,
+    }
+}
+
 fn is_date_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(object, Expr::DateNew(_))
         || receiver_class_name(ctx, object).as_deref() == Some("Date")
+}
+
+fn is_inherited_object_prototype_method(name: &str) -> bool {
+    matches!(
+        name,
+        "hasOwnProperty"
+            | "propertyIsEnumerable"
+            | "isPrototypeOf"
+            | "valueOf"
+            // Annex B §B.2.2 legacy accessor helpers — inherited from
+            // Object.prototype by every instance (incl. class instances).
+            | "__defineGetter__"
+            | "__defineSetter__"
+            | "__lookupGetter__"
+            | "__lookupSetter__"
+    )
+}
+
+fn class_chain_has_field_named(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        let Some(class) = ctx.classes.get(&name) else {
+            return true;
+        };
+        if class
+            .fields
+            .iter()
+            .any(|field| field.key_expr.is_some() || (!field.is_private && field.name == property))
+        {
+            return true;
+        }
+        current = class.extends_name.clone();
+    }
+    false
 }
 
 /// Try to lower a `Call { callee: PropertyGet { .. } }` via the
@@ -59,6 +135,12 @@ pub fn try_lower_property_get_method_call(
     let Expr::PropertyGet { object, property } = callee else {
         return Ok(None);
     };
+    // #5247: capture this call's source byte offset now, before any argument
+    // (which may be a nested call that overwrites the pending offset) is
+    // lowered. The dynamic `js_native_call_method` fallback below emits the
+    // `js_set_call_location` from this captured value, immediately before the
+    // throwing dispatch. `0` (and the default build) → no emission.
+    let call_byte_offset = ctx.strings.pending_call_offset();
     if let Some(value) =
         super::web_storage::try_lower_web_storage_method_call(ctx, object, property, args)?
     {
@@ -262,11 +344,19 @@ pub fn try_lower_property_get_method_call(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_jsvalue_to_string", &[(DOUBLE, &v)]);
+            // #3146: an explicit `.toString()` member call must throw a
+            // TypeError on a nullish receiver, unlike abstract ToString
+            // (`String(x)` / templates). `js_jsvalue_to_string_method`
+            // adds only that nullish guard and otherwise matches
+            // `js_jsvalue_to_string`.
+            let handle = blk.call(I64, "js_jsvalue_to_string_method", &[(DOUBLE, &v)]);
             return Ok(Some(nanbox_string_inline(blk, &handle)));
         }
     }
-    if is_string_expr(ctx, object) && !is_array_only_method_name(property) {
+    if is_string_expr(ctx, object)
+        && !is_array_only_method_name(property)
+        && is_known_string_method_name(property)
+    {
         return Ok(Some(lower_string_method(ctx, object, property, args)?));
     }
     // String method fallback for Any-typed receivers: when the method
@@ -287,7 +377,17 @@ pub fn try_lower_property_get_method_call(
             "split" | "charCodeAt" | "charAt" | "trim" | "trimStart" | "trimEnd" | "substring"
             | "substr" | "toLowerCase" | "toUpperCase" | "toLocaleLowerCase"
             | "toLocaleUpperCase" | "replaceAll" | "padStart" | "padEnd" | "repeat"
-            | "normalize" | "codePointAt" | "localeCompare" => true,
+            | "codePointAt" | "localeCompare" => true,
+            // Annex B §B.2.2 HTML wrappers (`bold`, `link`, `anchor`, …) are
+            // string-only in the spec but collide with common user method
+            // names — chalk's `chalk.bold(s)` is a styled-string builder
+            // (#5039). Forcing the string path here coerced the chalk closure
+            // to its source text and wrapped it in `<b>…</b>`. An Any-typed
+            // receiver that really is a string still gets them via the
+            // `jsval.is_string()` arm of `js_native_call_method`.
+            // (`normalize` is intentionally NOT in this unconditional list — the
+            // arg-gated `"normalize" if args.len() <= 1` arm below handles it so
+            // user 2-arg `normalize(pathname, matched)` methods fall through.)
             // Issue #638: `replace` is also string-exclusive, but routing
             // it here unconditionally caused regressions in async dispatch
             // pathways. Only fire when args[1] is statically detectable as
@@ -314,6 +414,11 @@ pub fn try_lower_property_get_method_call(
             // startsWith / endsWith only exist on String — both 1-arg
             // and 2-arg (searchString, position) forms route here.
             "startsWith" | "endsWith" if args.len() == 1 || args.len() == 2 => true,
+            // `normalize` is string-exclusive only at 0/1 args. User classes
+            // commonly define 2-arg `normalize(pathname, matched)` methods
+            // (Next.js route normalizers) — those must fall through to the
+            // runtime dispatcher instead of erroring on String arity.
+            "normalize" if args.len() <= 1 => true,
             "lastIndexOf" if args.len() == 1 => true,
             _ => false,
         };
@@ -330,7 +435,34 @@ pub fn try_lower_property_get_method_call(
         // Falling through here routes it to the generic `js_native_call_method`
         // dispatch (→ `dispatch_native_module_method`); forcing the string path
         // hands the namespace pointer to a string FFI and SIGSEGVs.
+        // #5271: a builtin-named method on a receiver that is NOT provably a
+        // string (object literal, `any`, unknown) may be a USER method that
+        // merely shares the name — joi's `internals.trim(value, schema)`, or
+        // any `{ trim() {…} }.trim()`. Forcing the static String path there
+        // hands the object pointer to a string FFI: it either aborts codegen
+        // on the String arity guard (`String.trim takes no args, got 2`) or
+        // bit-casts the object as a string and returns "[object Object]".
+        //
+        // Take the static String fast path only when:
+        //   * the receiver is NOT a known object-literal local — `o.trim()`
+        //     on `const o = { trim() {…} }` is the object's OWN method, never
+        //     `String.prototype.trim`, even when the arity matches; AND
+        //   * the arg count is plausible for the String builtin — when it is
+        //     NOT (joi's `internals.trim(value, schema)`: 2 args to a 0-arg
+        //     builtin), the call is a user method sharing the name.
+        // Otherwise fall through to `js_native_call_method`, which resolves
+        // the receiver's own member at runtime and still services a genuine
+        // (Any-typed) string receiver via its `jsval.is_string()` arm — so
+        // the earlier "[object Object]" hazard the comment above warns about
+        // no longer applies (the runtime grew full string-method arms in
+        // #421/#514). See #5271.
+        let receiver_is_object_literal = matches!(
+            &**object,
+            Expr::LocalGet(id) if ctx.object_literal_locals.contains(id)
+        ) || matches!(&**object, Expr::Object(_));
         if is_string_only_method
+            && string_only_method_arity_ok(property, args.len())
+            && !receiver_is_object_literal
             && !is_array_expr(ctx, object)
             && !is_buffer
             && !is_native_module_dynamic_index(object)
@@ -338,7 +470,7 @@ pub fn try_lower_property_get_method_call(
             return Ok(Some(lower_string_method(ctx, object, property, args)?));
         }
     }
-    if is_array_expr(ctx, object) {
+    if is_array_expr(ctx, object) && !is_inherited_object_prototype_method(property) {
         return Ok(Some(lower_array_method(ctx, object, property, args)?));
     }
 
@@ -856,8 +988,8 @@ pub fn try_lower_property_get_method_call(
     // Resolution: when the static receiver is `Expr::ClassRef`, walk
     // the class's own static methods plus its `extends_name` chain
     // looking for `property`. If found, emit a direct call to the
-    // `perry_static_<modprefix>__<class>__<method>` symbol with
-    // IMPLICIT_THIS bound to the ClassRef so `pipe`'s body's
+    // ID-qualified static method symbol with IMPLICIT_THIS bound to
+    // the ClassRef so `pipe`'s body's
     // `this` references the class. If nothing matches (Effect's
     // BigIntFromSelf case — its parent is an unnamed CallExpr so
     // perry's `extends_name` chain is empty), fall back to
@@ -962,6 +1094,13 @@ pub fn try_lower_property_get_method_call(
         &ctx.class_ids,
     );
     if let Some(cls_name) = static_dispatch_cls {
+        // `C.prop(args)` where `prop` is a static ACCESSOR reads the accessor and
+        // calls its result — handle before the by-name tower (which would miss).
+        if let Some(v) = super::console_promise::try_lower_class_static_accessor_call(
+            ctx, &cls_name, property, callee, args,
+        )? {
+            return Ok(Some(v));
+        }
         // (fn_name, is_static, declared_param_count, has_rest, is_synthetic_arguments)
         let mut resolved: Option<(String, bool, usize, bool, bool)> = None;
         let mut cur = Some(cls_name.clone());
@@ -972,13 +1111,17 @@ pub fn try_lower_property_get_method_call(
                     .iter()
                     .find(|m| m.name == *property);
                 if let Some(sm) = sm {
-                    if let Some(fname) = ctx.methods.get(&(c.clone(), property.clone())).cloned() {
+                    let key = (
+                        c.clone(),
+                        crate::codegen::static_method_registry_key(property),
+                    );
+                    if let Some(fname) = ctx.methods.get(&key).cloned() {
                         let declared = sm.params.len();
                         let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
                         let is_synth_args = sm
                             .params
                             .last()
-                            .map(|p| p.is_rest && p.name == "arguments")
+                            .map(|p| p.arguments_object.is_some())
                             .unwrap_or(false);
                         resolved = Some((fname, true, declared, has_rest, is_synth_args));
                         break;
@@ -1089,6 +1232,21 @@ pub fn try_lower_property_get_method_call(
             let prev_this =
                 ctx.block()
                     .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &recv_box)]);
+            // Receiver-sensitive static `this` for plain class-ref receivers:
+            // `D.f()` resolving to a parent's body at compile time must run
+            // with `this === D` (the prologue's `js_static_this_resolve`
+            // consumes this one-shot arm). Dynamic-value receiver shapes
+            // (ClassExprFresh / factory Call / LocalGet) keep their prior
+            // implicit-this-only behavior to avoid disturbing effect's
+            // per-evaluation class-object statics.
+            let plain_class_receiver = matches!(
+                object.as_ref(),
+                Expr::ClassRef(_) | Expr::ExternFuncRef { .. }
+            );
+            if plain_class_receiver {
+                ctx.block()
+                    .call_void("js_static_this_arm_value", &[(DOUBLE, &recv_box)]);
+            }
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
             let result = ctx.block().call(DOUBLE, &fn_name, &arg_slices);
@@ -1670,6 +1828,12 @@ pub fn try_lower_property_get_method_call(
                 ));
                 (ptr_reg, n.to_string())
             };
+            // #5247: record the source location of this call right before the
+            // dynamic dispatch, so the runtime "X is not a function" /
+            // "(kind).method is not a function" TypeError this fallback may
+            // throw carries `at <file>:<line>`. Args are already lowered, so a
+            // nested-call argument's location no longer shadows this one.
+            crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
             let v_def = ctx.block().call(
                 DOUBLE,
                 "js_native_call_method",
@@ -1868,6 +2032,8 @@ pub fn try_lower_property_get_method_call(
                 lowered_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             if !method_has_rest {
+                let shape_only_guard =
+                    !class_chain_has_field_named(ctx, &class_name, property.as_str());
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
@@ -1876,6 +2042,7 @@ pub fn try_lower_property_get_method_call(
                     &fallback_fn,
                     &arg_slices,
                     &fallback_user_args,
+                    shape_only_guard,
                 ) {
                     return Ok(Some(guarded));
                 }

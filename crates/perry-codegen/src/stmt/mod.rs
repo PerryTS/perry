@@ -203,6 +203,27 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         }
 
         Stmt::Return(Some(e)) => {
+            // Inside an inlined constructor body, an explicit `return <value>`
+            // applies spec return-override semantics and yields the `new`
+            // expression's value — it must NOT emit a function-level `ret`
+            // (that would terminate the ENCLOSING function, e.g. `main`).
+            if let Some(target) = ctx.inline_ctor_return.last().cloned() {
+                // Store the RAW returned value and branch to the construction
+                // completion block. The spec return-override check (object? /
+                // derived-primitive TypeError) is applied THERE, not here —
+                // it must run as part of [[Construct]] completion, OUTSIDE any
+                // `try` in the body, so `try { return 0; } catch {}` in a
+                // derived ctor throws uncaught (the catch can't see it).
+                let ret_val = lower_expr(ctx, e)?;
+                ctx.block().store(DOUBLE, &ret_val, &target.result_slot);
+                // Pop any open try frames before leaving the body (mirrors the
+                // ordinary `return` path below).
+                for _ in 0..ctx.try_depth {
+                    ctx.block().call_void("js_try_end", &[]);
+                }
+                ctx.block().br(&target.after_label);
+                return Ok(());
+            }
             let v = lower_expr(ctx, e)?;
             // Phase E: async functions wrap their return value in
             // js_promise_resolved so callers can await the result.
@@ -228,6 +249,16 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
         Stmt::Return(None) => {
+            // Inside an inlined constructor body, a bare `return;` keeps the
+            // implicit `this` (the result slot already holds it) and jumps to
+            // the shared after-block — never a function-level `ret`.
+            if let Some(target) = ctx.inline_ctor_return.last().cloned() {
+                for _ in 0..ctx.try_depth {
+                    ctx.block().call_void("js_try_end", &[]);
+                }
+                ctx.block().br(&target.after_label);
+                return Ok(());
+            }
             // Bare `return;` returns the NaN-boxed `undefined` value
             // (TAG_UNDEFINED). For async functions, wrap it in a
             // resolved promise.
@@ -293,11 +324,18 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // current block becomes terminated; subsequent statements in
         // the same scope are dead code and `lower_stmts` skips them.
         Stmt::Break => {
-            let break_label = ctx
+            let (break_label, target_depth) = ctx
                 .loop_targets
                 .last()
-                .map(|(_c, b)| b.clone())
+                .map(|(_c, b, d)| (b.clone(), *d))
                 .ok_or_else(|| anyhow!("break statement outside any loop"))?;
+            // Pop any `try` frames this break jumps OUT of so the runtime's
+            // TRY_DEPTH stays balanced. The loop recorded the try_depth at
+            // its entry; any frames opened since (the difference) are escaped
+            // by the branch and must be closed first (mirrors Stmt::Return).
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
+            }
             ctx.block().br(&break_label);
             Ok(())
         }
@@ -306,11 +344,16 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // (which is the update block for `for`, the cond block for
         // `while`/`do-while`).
         Stmt::Continue => {
-            let cont_label = ctx
+            let (cont_label, target_depth) = ctx
                 .loop_targets
                 .last()
-                .map(|(c, _b)| c.clone())
+                .map(|(c, _b, d)| (c.clone(), *d))
                 .ok_or_else(|| anyhow!("continue statement outside any loop"))?;
+            // Pop try frames escaped by jumping back to the loop header
+            // (see Stmt::Break / Stmt::Return for the balancing rationale).
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
+            }
             ctx.block().br(&cont_label);
             Ok(())
         }
@@ -367,31 +410,41 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
         Stmt::LabeledBreak(label) => {
-            if let Some((_cont, brk)) = ctx.label_targets.get(label).cloned() {
-                ctx.block().br(&brk);
-            } else {
-                // Fallback: use innermost loop (for unresolved labels).
-                let target = ctx
-                    .loop_targets
-                    .last()
-                    .map(|(_c, b)| b.clone())
-                    .ok_or_else(|| anyhow!("labeled break '{}' outside any loop", label))?;
-                ctx.block().br(&target);
+            let (target, target_depth) =
+                if let Some((_cont, brk, depth)) = ctx.label_targets.get(label).cloned() {
+                    (brk, depth)
+                } else {
+                    // Fallback: use innermost loop (for unresolved labels).
+                    ctx.loop_targets
+                        .last()
+                        .map(|(_c, b, d)| (b.clone(), *d))
+                        .ok_or_else(|| anyhow!("labeled break '{}' outside any loop", label))?
+                };
+            // Pop any try frames escaped by this labeled break (the target
+            // loop/label may sit outside one or more open `try` frames —
+            // e.g. a state-machine suspend `break`s out of the dispatch
+            // loop's real try). See Stmt::Break for the rationale.
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
             }
+            ctx.block().br(&target);
             Ok(())
         }
         Stmt::LabeledContinue(label) => {
-            if let Some((cont, _brk)) = ctx.label_targets.get(label).cloned() {
-                ctx.block().br(&cont);
-            } else {
-                // Fallback: use innermost loop.
-                let target = ctx
-                    .loop_targets
-                    .last()
-                    .map(|(c, _b)| c.clone())
-                    .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?;
-                ctx.block().br(&target);
+            let (target, target_depth) =
+                if let Some((cont, _brk, depth)) = ctx.label_targets.get(label).cloned() {
+                    (cont, depth)
+                } else {
+                    // Fallback: use innermost loop.
+                    ctx.loop_targets
+                        .last()
+                        .map(|(c, _b, d)| (c.clone(), *d))
+                        .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?
+                };
+            for _ in target_depth..ctx.try_depth {
+                ctx.block().call_void("js_try_end", &[]);
             }
+            ctx.block().br(&target);
             Ok(())
         }
 
@@ -481,6 +534,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 let blk = ctx.block();
                 let box_ptr = blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]);
                 let slot = ctx.func.alloca_entry(DOUBLE);
+                // perry#4926: PreallocateBoxes can sit nested inside an
+                // If/Try/Labeled body (e.g. the async state-machine
+                // wrapper), so this block's box-pointer store doesn't
+                // necessarily dominate every load of the slot. Entry-init
+                // the slot to TAG_UNDEFINED so paths that bypass this
+                // statement read a defined sentinel instead of `undef`
+                // (see the boxed `Stmt::Let` arm in let_stmt.rs).
+                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
                 let box_as_double = ctx.block().bitcast_i64_to_double(&box_ptr);
                 ctx.block().store(DOUBLE, &box_as_double, &slot);
                 ctx.locals.insert(*id, slot);

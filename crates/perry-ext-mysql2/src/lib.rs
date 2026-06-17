@@ -308,27 +308,85 @@ fn raw_row_to_js_object(row: &RawRowData) -> *mut ObjectHeader {
     obj
 }
 
+/// Build a row as a positional ARRAY `[v0, v1, …]` in column order. mysql2's
+/// `{ rowsAsArray: true }` option (which Drizzle sets for its relational-query
+/// and `select()` paths) returns rows this way; Drizzle's `mapResultRow` then
+/// maps positions to columns via the selected-fields list.
+fn raw_row_to_js_array(row: &RawRowData) -> *mut ArrayHeader {
+    let mut arr = unsafe { js_array_alloc(row.values.len() as u32) };
+    for (_, val) in &row.values {
+        arr = unsafe { js_array_push(arr, raw_value_to_jsvalue(val)) };
+    }
+    arr
+}
+
+/// Map sqlx's MySQL type *name* back to the wire-protocol numeric type ID
+/// (`enum_field_types`, what Node's mysql2 puts in `field.type`/`columnType`).
+/// Twin of `perry_stdlib::mysql2::types::mysql_type_id_from_name` (#4917) —
+/// this crate cannot depend on perry-stdlib, keep the two in sync.
+fn mysql_type_id_from_name(name: &str) -> f64 {
+    let base = name.strip_suffix(" UNSIGNED").unwrap_or(name);
+    let id: u8 = match base {
+        "BOOLEAN" | "TINYINT" => 1,
+        "SMALLINT" => 2,
+        "INT" => 3,
+        "FLOAT" => 4,
+        "DOUBLE" => 5,
+        "NULL" => 6,
+        "TIMESTAMP" => 7,
+        "BIGINT" => 8,
+        "MEDIUMINT" => 9,
+        "DATE" => 10,
+        "TIME" => 11,
+        "DATETIME" => 12,
+        "YEAR" => 13,
+        "BIT" => 16,
+        "JSON" => 245,
+        "DECIMAL" => 246,
+        "ENUM" => 247,
+        "SET" => 248,
+        "TINYBLOB" | "TINYTEXT" => 249,
+        "MEDIUMBLOB" | "MEDIUMTEXT" => 250,
+        "LONGBLOB" | "LONGTEXT" => 251,
+        "BLOB" | "TEXT" => 252,
+        "VARCHAR" | "VARBINARY" => 253,
+        "CHAR" | "BINARY" => 254,
+        "GEOMETRY" => 255,
+        _ => 0,
+    };
+    id as f64
+}
+
 fn raw_column_to_field_packet(col: &RawColumnInfo) -> *mut ObjectHeader {
-    let (packed, shape_id) = build_object_shape(&["name", "type", "length"]);
+    let (packed, shape_id) = build_object_shape(&["name", "type", "columnType", "length"]);
     let obj =
-        unsafe { js_object_alloc_with_shape(shape_id, 3, packed.as_ptr(), packed.len() as u32) };
+        unsafe { js_object_alloc_with_shape(shape_id, 4, packed.as_ptr(), packed.len() as u32) };
     let name_str = alloc_string(&col.name);
-    let type_str = alloc_string(&col.type_name);
+    // #4917: `type`/`columnType` carry the numeric wire ID mysql2 exposes;
+    // `length` stays 0 (sqlx 0.8 keeps the wire `max_size` pub(crate)).
+    let type_id = mysql_type_id_from_name(&col.type_name);
     unsafe {
         js_object_set_field(obj, 0, JsValue::from_string_ptr(name_str.as_raw()));
-        js_object_set_field(obj, 1, JsValue::from_string_ptr(type_str.as_raw()));
-        js_object_set_field(obj, 2, JsValue::from_number(0.0));
+        js_object_set_field(obj, 1, JsValue::from_number(type_id));
+        js_object_set_field(obj, 2, JsValue::from_number(type_id));
+        js_object_set_field(obj, 3, JsValue::from_number(0.0));
     }
     obj
 }
 
-/// Build the mysql2 result tuple `[rows, fields]`.
-fn raws_to_result_tuple(raw: &RawQueryResult) -> JsValue {
+/// Build the mysql2 result tuple `[rows, fields]`. When `rows_as_array` each row
+/// is a positional array (mysql2 `{ rowsAsArray: true }`), else a column→value
+/// object.
+fn raws_to_result_tuple(raw: &RawQueryResult, rows_as_array: bool) -> JsValue {
     let mut result = unsafe { js_array_alloc(2) };
     let mut rows_arr = unsafe { js_array_alloc(raw.rows.len() as u32) };
     for r in &raw.rows {
-        let obj = raw_row_to_js_object(r);
-        rows_arr = unsafe { js_array_push(rows_arr, JsValue::from_object_ptr(obj)) };
+        let row_val = if rows_as_array {
+            JsValue::from_object_ptr(raw_row_to_js_array(r))
+        } else {
+            JsValue::from_object_ptr(raw_row_to_js_object(r))
+        };
+        rows_arr = unsafe { js_array_push(rows_arr, row_val) };
     }
     result = unsafe { js_array_push(result, JsValue::from_object_ptr(rows_arr)) };
 
@@ -358,9 +416,9 @@ fn affected_rows_result(affected: u64, last_insert_id: u64) -> JsValue {
     JsValue::from_object_ptr(result)
 }
 
-fn outcome_to_jsvalue(outcome: &QueryOutcome) -> JsValue {
+fn outcome_to_jsvalue(outcome: &QueryOutcome, rows_as_array: bool) -> JsValue {
     match outcome {
-        QueryOutcome::Rows(raw) => raws_to_result_tuple(raw),
+        QueryOutcome::Rows(raw) => raws_to_result_tuple(raw, rows_as_array),
         QueryOutcome::Executed {
             affected_rows,
             last_insert_id,
@@ -504,6 +562,7 @@ unsafe fn run_connection_query(
     conn_handle: Handle,
     sql_ptr: *const u8,
     params_f: f64,
+    rows_as_array: bool,
 ) -> *mut Promise {
     let sql = read_sql(sql_ptr);
     let params = JsValue::from_bits(params_f.to_bits());
@@ -560,7 +619,7 @@ unsafe fn run_connection_query(
             // allocates arrays/objects/strings, which is UB on this blocking-pool
             // thread (worker thread-local arena → dangling on the main thread once
             // the pooled thread idles out). `out` is plain Send Rust data.
-            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out)),
+            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out, rows_as_array)),
             Err(e) => promise.reject_string(&e),
         }
     });
@@ -577,7 +636,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
     sql_ptr: *const u8,
     params_f: f64,
 ) -> *mut Promise {
-    run_connection_query(conn_handle, sql_ptr, params_f)
+    run_connection_query(conn_handle, sql_ptr, params_f, false)
 }
 
 /// `connection.execute(sql, params) -> Promise<[rows, fields]>`.
@@ -591,7 +650,7 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
     sql_ptr: *const u8,
     params_f: f64,
 ) -> *mut Promise {
-    run_connection_query(conn_handle, sql_ptr, params_f)
+    run_connection_query(conn_handle, sql_ptr, params_f, false)
 }
 
 fn run_simple_command(conn_handle: Handle, sql: &'static str) -> *mut Promise {
@@ -666,21 +725,34 @@ impl MysqlPoolConnectionHandle {
 /// `config_f` is a NaN-boxed JsValue.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_create_pool(config_f: f64) -> Handle {
+    // Register the handle method dispatch so generic `pool.query(...)` calls work
+    // (Drizzle threads the pool through interface-typed values, losing the static
+    // "Pool" type the codegen needs to route `.query`/`.execute` natively).
+    ensure_dispatch_registered();
     let config = JsValue::from_bits(config_f.to_bits());
     let mysql_config = parse_mysql_config(config);
     let url = mysql_config.to_url();
 
-    // Build the pool inside spawn_blocking so we have a Tokio
-    // context. Block on completion since createPool returns a
-    // synchronous Handle in mysql2's API.
+    // mysql2's `createPool` is SYNCHRONOUS and does NOT open a connection —
+    // it returns a pool that connects lazily on first query. Mirror that with
+    // sqlx `connect_lazy`: no eager connect (which returned handle 0 when the
+    // DB was unreachable, so the JS pool value was null and every
+    // `pool.constructor` / drizzle `isConfig(pool)` read crashed). `connect_lazy`
+    // still spawns the pool's background reaper, which needs an entered Tokio
+    // context — run it inside `spawn_blocking` (where the global runtime handle
+    // is current) rather than at the bare module-init call site (which panicked
+    // "no reactor running").
     let (tx, rx) = std::sync::mpsc::channel();
     spawn_blocking(move || {
+        // `connect_lazy` is synchronous but still spawns the pool's reaper task,
+        // which needs the runtime context. Run it inside `block_on` (same as the
+        // old eager path) so the spawn has a live reactor; the body returns
+        // immediately because no connection is opened.
         let pool_result = tokio::runtime::Handle::current().block_on(async {
             MySqlPoolOptions::new()
                 .max_connections(10)
                 .acquire_timeout(Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS))
-                .connect(&url)
-                .await
+                .connect_lazy(&url)
         });
         let _ = tx.send(pool_result);
     });
@@ -688,6 +760,153 @@ pub unsafe extern "C" fn js_mysql2_create_pool(config_f: f64) -> Handle {
         Some(pool) => register_handle(MysqlPoolHandle::new(pool)),
         None => 0,
     }
+}
+
+// ── Generic handle method dispatch ────────────────────────────────
+//
+// The codegen routes `pool.query(sql, params)` to the native query fns ONLY
+// when the receiver is statically typed as a mysql2 `Pool`. Drizzle stores the
+// pool behind interface-typed fields (`this.client: Pool | Connection`), so by
+// the time it calls `client.query(query, params)` the static type is lost and
+// the call falls back to a generic dynamic dispatch that returned garbage. The
+// runtime consults HANDLE_METHOD_DISPATCH for a generic call on a small handle;
+// register an extension here so a mysql2 pool/connection handle answers
+// `query`/`execute` (and `end`/`getConnection`) regardless of static type.
+
+const DISPATCH_POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+const DISPATCH_POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+const DISPATCH_TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+extern "C" {
+    fn js_register_handle_method_dispatch_extension(
+        f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize, *mut f64) -> i32,
+    );
+    // Runtime generic field read; returns the runtime `JSValue` (repr-transparent
+    // u64), ABI-compatible with `u64` here.
+    fn js_object_get_field_by_name(obj: *const ObjectHeader, key: *const StringHeader) -> u64;
+}
+
+fn dispatch_nanbox_ptr<T>(ptr: *mut T) -> f64 {
+    f64::from_bits(DISPATCH_POINTER_TAG | (ptr as u64 & DISPATCH_POINTER_MASK))
+}
+
+fn ensure_dispatch_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| unsafe {
+        js_register_handle_method_dispatch_extension(js_mysql2_handle_method_dispatch);
+    });
+}
+
+/// Read a named field off a JS object value. Returns `JsValue::UNDEFINED` for a
+/// non-object receiver or a missing key.
+unsafe fn object_field_by_name(obj: JsValue, name: &str) -> JsValue {
+    let obj_ptr = obj.as_pointer::<ObjectHeader>();
+    if obj_ptr.is_null() {
+        return JsValue::UNDEFINED;
+    }
+    let key = alloc_string(name);
+    let bits = js_object_get_field_by_name(obj_ptr, key.as_raw());
+    JsValue::from_bits(bits)
+}
+
+/// Resolve the SQL `StringHeader` pointer and `rowsAsArray` flag from a `query`
+/// argument that is either a SQL string or a mysql2 options object
+/// (`{ sql, rowsAsArray? }` — Drizzle's shape).
+unsafe fn query_sql_ptr_and_rows_as_array(arg: JsValue) -> Option<(*const u8, bool)> {
+    if arg.is_string() {
+        let p = arg.as_string_ptr();
+        if p.is_null() {
+            return None;
+        }
+        return Some((p as *const u8, false));
+    }
+    if arg.is_pointer() {
+        let sql_val = object_field_by_name(arg, "sql");
+        if sql_val.is_string() {
+            let p = sql_val.as_string_ptr();
+            if !p.is_null() {
+                let rows_as_array = object_field_by_name(arg, "rowsAsArray").to_bool();
+                return Some((p as *const u8, rows_as_array));
+            }
+        }
+    }
+    None
+}
+
+/// Handle-method dispatch extension for mysql2 pool / connection handles.
+#[no_mangle]
+unsafe extern "C" fn js_mysql2_handle_method_dispatch(
+    handle: i64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if method_name_ptr.is_null() || method_name_len == 0 {
+        return 0;
+    }
+    let method =
+        match std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len)) {
+            Ok(m) => m,
+            Err(_) => return 0,
+        };
+    let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    let arg = |i: usize| -> JsValue {
+        args.get(i)
+            .copied()
+            .map(|f| JsValue::from_bits(f.to_bits()))
+            .unwrap_or(JsValue::UNDEFINED)
+    };
+
+    // Only claim methods for handles we actually own.
+    let is_pool = perry_ffi::get_handle::<MysqlPoolHandle>(handle).is_some();
+    let is_pool_conn = perry_ffi::get_handle::<MysqlPoolConnectionHandle>(handle).is_some();
+    let is_conn = perry_ffi::get_handle::<MysqlConnectionHandle>(handle).is_some();
+    if !is_pool && !is_pool_conn && !is_conn {
+        return 0;
+    }
+
+    let result: f64 = match method {
+        "query" | "execute" => {
+            let Some((sql_ptr, rows_as_array)) = query_sql_ptr_and_rows_as_array(arg(0)) else {
+                return 0;
+            };
+            let params_f = args
+                .get(1)
+                .copied()
+                .unwrap_or(f64::from_bits(DISPATCH_TAG_UNDEFINED));
+            let promise = if is_pool {
+                run_pool_query(handle, sql_ptr, params_f, rows_as_array)
+            } else if is_pool_conn {
+                run_pool_conn_query(handle, sql_ptr, params_f, rows_as_array)
+            } else {
+                run_connection_query(handle, sql_ptr, params_f, rows_as_array)
+            };
+            dispatch_nanbox_ptr(promise)
+        }
+        "getConnection" if is_pool => dispatch_nanbox_ptr(js_mysql2_pool_get_connection(handle)),
+        "end" if is_pool => dispatch_nanbox_ptr(js_mysql2_pool_end(handle)),
+        "release" if is_pool_conn => {
+            js_mysql2_pool_connection_release(handle);
+            f64::from_bits(DISPATCH_TAG_UNDEFINED)
+        }
+        "end" if is_conn => dispatch_nanbox_ptr(js_mysql2_connection_end(handle)),
+        // `mysql2/promise` pools are already promise-based: `pool.promise()`
+        // returns the pool itself. Drizzle's `isCallbackClient` only reaches this
+        // when it mis-detects; return the same handle to be safe.
+        "promise" => dispatch_nanbox_ptr(handle as *mut u8),
+        _ => return 0,
+    };
+
+    if !out.is_null() {
+        *out = result;
+    }
+    1
 }
 
 #[no_mangle]
@@ -705,7 +924,12 @@ pub extern "C" fn js_mysql2_pool_end(pool_handle: Handle) -> *mut Promise {
     raw
 }
 
-unsafe fn run_pool_query(pool_handle: Handle, sql_ptr: *const u8, params_f: f64) -> *mut Promise {
+unsafe fn run_pool_query(
+    pool_handle: Handle,
+    sql_ptr: *const u8,
+    params_f: f64,
+    rows_as_array: bool,
+) -> *mut Promise {
     let sql = read_sql(sql_ptr);
     let params = JsValue::from_bits(params_f.to_bits());
     let param_values = extract_params_from_jsvalue(params);
@@ -757,7 +981,7 @@ unsafe fn run_pool_query(pool_handle: Handle, sql_ptr: *const u8, params_f: f64)
             // allocates arrays/objects/strings, which is UB on this blocking-pool
             // thread (worker thread-local arena → dangling on the main thread once
             // the pooled thread idles out). `out` is plain Send Rust data.
-            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out)),
+            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out, rows_as_array)),
             Err(e) => promise.reject_string(&e),
         }
     });
@@ -772,7 +996,7 @@ pub unsafe extern "C" fn js_mysql2_pool_query(
     sql_ptr: *const u8,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_query(pool_handle, sql_ptr, params_f)
+    run_pool_query(pool_handle, sql_ptr, params_f, false)
 }
 
 /// # Safety
@@ -783,7 +1007,7 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
     sql_ptr: *const u8,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_query(pool_handle, sql_ptr, params_f)
+    run_pool_query(pool_handle, sql_ptr, params_f, false)
 }
 
 #[no_mangle]
@@ -824,6 +1048,7 @@ unsafe fn run_pool_conn_query(
     conn_handle: Handle,
     sql_ptr: *const u8,
     params_f: f64,
+    rows_as_array: bool,
 ) -> *mut Promise {
     let sql = read_sql(sql_ptr);
     let params = JsValue::from_bits(params_f.to_bits());
@@ -879,7 +1104,7 @@ unsafe fn run_pool_conn_query(
             // allocates arrays/objects/strings, which is UB on this blocking-pool
             // thread (worker thread-local arena → dangling on the main thread once
             // the pooled thread idles out). `out` is plain Send Rust data.
-            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out)),
+            Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out, rows_as_array)),
             Err(e) => promise.reject_string(&e),
         }
     });
@@ -894,7 +1119,7 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_query(
     sql_ptr: *const u8,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_conn_query(conn_handle, sql_ptr, params_f)
+    run_pool_conn_query(conn_handle, sql_ptr, params_f, false)
 }
 
 /// # Safety
@@ -905,7 +1130,7 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
     sql_ptr: *const u8,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_conn_query(conn_handle, sql_ptr, params_f)
+    run_pool_conn_query(conn_handle, sql_ptr, params_f, false)
 }
 
 #[cfg(test)]

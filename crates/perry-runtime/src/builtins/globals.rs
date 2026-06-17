@@ -45,9 +45,9 @@ const URI_RESERVED: &[u8] = b";/?:@&=+$,#";
 const URI_COMPONENT_UNESCAPED: &[u8] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()";
 
-fn percent_encode(input: &str, safe_chars: &[u8]) -> String {
+fn percent_encode(input: &[u8], safe_chars: &[u8]) -> String {
     let mut result = String::with_capacity(input.len() * 3);
-    for byte in input.as_bytes() {
+    for byte in input {
         if safe_chars.contains(byte) {
             result.push(*byte as char);
         } else {
@@ -58,33 +58,94 @@ fn percent_encode(input: &str, safe_chars: &[u8]) -> String {
     result
 }
 
-fn percent_decode(input: &str, preserve_reserved: bool) -> Result<String, ()> {
-    let bytes = input.as_bytes();
-    let mut result = Vec::with_capacity(bytes.len());
+/// Read a `%XX` escape at byte offset `i`, returning the decoded octet.
+/// Fails (URIError) when there is no `%`, the string is too short, or the two
+/// following code units are not hexadecimal digits.
+fn read_pct_octet(bytes: &[u8], i: usize) -> Result<u8, ()> {
+    if i + 2 >= bytes.len() || bytes[i] != b'%' {
+        return Err(());
+    }
+    match (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+        (Some(h), Some(l)) => Ok(h * 16 + l),
+        _ => Err(()),
+    }
+}
+
+/// ECMAScript `Decode` (sec-decode), operating on the input's WTF-8 bytes so
+/// lone surrogates pass through unchanged. `reserved` is the set whose
+/// single-octet members are left as their original `%XX` escape (decodeURI);
+/// decodeURIComponent passes `None`.
+///
+/// Unlike a naive "decode every `%XX`, then validate the whole buffer", this
+/// validates each multi-octet UTF-8 run at the point it is decoded: a lead
+/// octet must be followed by the correct number of `%`-escaped continuation
+/// octets, and the assembled code point must be a non-overlong, non-surrogate
+/// scalar value — otherwise URIError. Non-`%` code units (including multi-byte
+/// and lone-surrogate WTF-8 bytes) are copied through verbatim.
+fn percent_decode(bytes: &[u8], reserved: Option<&[u8]>) -> Result<Vec<u8>, ()> {
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if i + 2 >= bytes.len() {
+        if bytes[i] != b'%' {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        let b = read_pct_octet(bytes, i)?;
+        if b < 0x80 {
+            if reserved.is_some_and(|set| set.contains(&b)) {
+                out.extend_from_slice(&bytes[i..i + 3]);
+            } else {
+                out.push(b);
+            }
+            i += 3;
+            continue;
+        }
+        // Multi-octet sequence: derive the length from the leading 1-bits.
+        let n = if b & 0xE0 == 0xC0 {
+            2
+        } else if b & 0xF0 == 0xE0 {
+            3
+        } else if b & 0xF8 == 0xF0 {
+            4
+        } else {
+            return Err(()); // lone continuation (10xxxxxx) or 5+-byte lead
+        };
+        let mut cp: u32 = (b as u32) & (0x7F >> n);
+        let mut j = i + 3;
+        for _ in 1..n {
+            let cont = read_pct_octet(bytes, j)?;
+            if cont & 0xC0 != 0x80 {
                 return Err(());
             }
-            let hi = hex_digit(bytes[i + 1]);
-            let lo = hex_digit(bytes[i + 2]);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                let decoded = h * 16 + l;
-                if preserve_reserved && URI_RESERVED.contains(&decoded) {
-                    result.extend_from_slice(&bytes[i..i + 3]);
-                } else {
-                    result.push(decoded);
-                }
-                i += 3;
-                continue;
-            }
+            cp = (cp << 6) | (cont as u32 & 0x3F);
+            j += 3;
+        }
+        let min = match n {
+            2 => 0x80,
+            3 => 0x800,
+            _ => 0x1_0000,
+        };
+        if cp < min || cp > 0x10_FFFF || (0xD800..=0xDFFF).contains(&cp) {
             return Err(());
         }
-        result.push(bytes[i]);
-        i += 1;
+        let ch = char::from_u32(cp).ok_or(())?;
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        i = j;
     }
-    String::from_utf8(result).map_err(|_| ())
+    Ok(out)
+}
+
+/// Build a result string from decoded bytes, choosing the WTF-8 constructor
+/// when lone surrogates survived the round-trip so `.length`/`isWellFormed`
+/// stay correct.
+fn string_from_decoded(out: &[u8]) -> i64 {
+    if std::str::from_utf8(out).is_ok() {
+        js_string_from_bytes(out.as_ptr(), out.len() as u32) as i64
+    } else {
+        js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32) as i64
+    }
 }
 
 fn throw_uri_malformed() -> ! {
@@ -104,7 +165,11 @@ fn hex_digit(b: u8) -> Option<u8> {
 }
 
 fn extract_str_from_nanbox(value: f64) -> String {
-    let str_ptr = crate::value::js_get_string_pointer_unified(value);
+    // Spec: escape/unescape/decodeURI apply `ToString` to the argument, so
+    // `undefined`/`null`/booleans/objects coerce ("undefined", "null", …)
+    // rather than yielding the empty string (`js_get_string_pointer_unified`
+    // only coerces numbers). Strings pass through unchanged.
+    let str_ptr = crate::builtins::js_string_coerce(value);
     if (str_ptr as usize) < 0x1000 {
         return String::new();
     }
@@ -117,14 +182,63 @@ fn extract_str_from_nanbox(value: f64) -> String {
     }
 }
 
+/// ToString-coerce `value` and return its raw WTF-8 bytes (lone surrogates
+/// preserved). Used by the decode family, which must operate byte-wise per the
+/// Decode algorithm rather than dropping non-UTF-8 input.
+fn extract_coerced_bytes(value: f64) -> Vec<u8> {
+    let str_ptr = crate::builtins::js_string_coerce(value);
+    if (str_ptr as usize) < 0x1000 {
+        return Vec::new();
+    }
+    unsafe {
+        let header = str_ptr as *const StringHeader;
+        let len = (*header).byte_len as usize;
+        let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+        std::slice::from_raw_parts(data, len).to_vec()
+    }
+}
+
+struct ExtractedStringBytes {
+    bytes: Vec<u8>,
+    flags: u32,
+}
+
+fn extract_string_bytes_from_nanbox(value: f64) -> ExtractedStringBytes {
+    // encodeURI/encodeURIComponent apply ToString to the argument (sec-encodeuri
+    // step 1), so objects/numbers coerce via toString/valueOf rather than
+    // yielding the empty string (test262 encodeURI/encodeURIComponent A6_T1).
+    let str_ptr = crate::builtins::js_string_coerce(value) as *const StringHeader;
+    if (str_ptr as usize) < 0x1000 {
+        return ExtractedStringBytes {
+            bytes: Vec::new(),
+            flags: 0,
+        };
+    }
+    unsafe {
+        let header = str_ptr as *const StringHeader;
+        let len = (*header).byte_len as usize;
+        let flags = (*header).flags;
+        let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, len).to_vec();
+        ExtractedStringBytes { bytes, flags }
+    }
+}
+
+fn throw_if_lone_surrogate(input: &ExtractedStringBytes) {
+    if input.flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+        throw_uri_malformed();
+    }
+}
+
 /// encodeURI(string) -> string
 #[no_mangle]
 pub extern "C" fn js_encode_uri(value: f64) -> i64 {
-    let input = extract_str_from_nanbox(value);
+    let input = extract_string_bytes_from_nanbox(value);
+    throw_if_lone_surrogate(&input);
     let mut safe = Vec::with_capacity(URI_UNESCAPED.len() + URI_RESERVED.len());
     safe.extend_from_slice(URI_UNESCAPED);
     safe.extend_from_slice(URI_RESERVED);
-    let encoded = percent_encode(&input, &safe);
+    let encoded = percent_encode(&input.bytes, &safe);
     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
     ptr as i64
 }
@@ -132,17 +246,18 @@ pub extern "C" fn js_encode_uri(value: f64) -> i64 {
 /// decodeURI(string) -> string
 #[no_mangle]
 pub extern "C" fn js_decode_uri(value: f64) -> i64 {
-    let input = extract_str_from_nanbox(value);
-    let decoded = percent_decode(&input, true).unwrap_or_else(|_| throw_uri_malformed());
-    let ptr = js_string_from_bytes(decoded.as_ptr(), decoded.len() as u32);
-    ptr as i64
+    let input = extract_coerced_bytes(value);
+    let decoded =
+        percent_decode(&input, Some(URI_RESERVED)).unwrap_or_else(|_| throw_uri_malformed());
+    string_from_decoded(&decoded)
 }
 
 /// encodeURIComponent(string) -> string
 #[no_mangle]
 pub extern "C" fn js_encode_uri_component(value: f64) -> i64 {
-    let input = extract_str_from_nanbox(value);
-    let encoded = percent_encode(&input, URI_COMPONENT_UNESCAPED);
+    let input = extract_string_bytes_from_nanbox(value);
+    throw_if_lone_surrogate(&input);
+    let encoded = percent_encode(&input.bytes, URI_COMPONENT_UNESCAPED);
     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
     ptr as i64
 }
@@ -150,10 +265,111 @@ pub extern "C" fn js_encode_uri_component(value: f64) -> i64 {
 /// decodeURIComponent(string) -> string
 #[no_mangle]
 pub extern "C" fn js_decode_uri_component(value: f64) -> i64 {
+    let input = extract_coerced_bytes(value);
+    let decoded = percent_decode(&input, None).unwrap_or_else(|_| throw_uri_malformed());
+    string_from_decoded(&decoded)
+}
+
+// ============================================================
+// escape / unescape (ECMAScript Annex B B.2.1)
+// ============================================================
+
+/// Characters `escape()` leaves unencoded (ES Annex B B.2.1.1): ASCII
+/// letters, digits, and `@ * _ + - . /`. Unlike `encodeURIComponent`, the
+/// escape set keeps `+` and `@` and encodes everything else — code units
+/// < 256 as `%XX`, the rest as `%uXXXX`.
+const ESCAPE_UNESCAPED: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@*_+-./";
+
+/// `ToString(value)` throws a TypeError for a Symbol argument. `escape` /
+/// `unescape` (and the URI family) apply ToString to their input, so a Symbol
+/// must reject rather than coerce to a `"Symbol(x)"` description string.
+fn throw_if_symbol(value: f64) {
+    if (value.to_bits() & 0xFFFF_0000_0000_0000) == crate::value::POINTER_TAG
+        && crate::symbol::is_registered_symbol(
+            (value.to_bits() & crate::value::POINTER_MASK) as usize,
+        )
+    {
+        let msg = b"Cannot convert a Symbol value to a string";
+        let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(msg_str);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+}
+
+/// escape(string) -> string (legacy, ES Annex B B.2.1.1)
+#[no_mangle]
+pub extern "C" fn js_escape(value: f64) -> i64 {
+    throw_if_symbol(value);
     let input = extract_str_from_nanbox(value);
-    let decoded = percent_decode(&input, false).unwrap_or_else(|_| throw_uri_malformed());
+    let mut result = String::with_capacity(input.len() * 3);
+    let mut buf = [0u16; 2];
+    for c in input.chars() {
+        let cp = c as u32;
+        if cp < 0x80 && ESCAPE_UNESCAPED.contains(&(cp as u8)) {
+            result.push(c);
+        } else {
+            // Encode per UTF-16 code unit so astral code points emit the two
+            // `%uXXXX` escapes for their surrogate pair, matching Node.
+            for unit in c.encode_utf16(&mut buf) {
+                if *unit < 0x100 {
+                    result.push_str(&format!("%{:02X}", *unit));
+                } else {
+                    result.push_str(&format!("%u{:04X}", *unit));
+                }
+            }
+        }
+    }
+    let ptr = js_string_from_bytes(result.as_ptr(), result.len() as u32);
+    ptr as i64
+}
+
+/// unescape(string) -> string (legacy, ES Annex B B.2.1.2)
+#[no_mangle]
+pub extern "C" fn js_unescape(value: f64) -> i64 {
+    throw_if_symbol(value);
+    let input = extract_str_from_nanbox(value);
+    let chars: Vec<char> = input.chars().collect();
+    // Reassemble into UTF-16 code units, then decode, so `%uD835%uDFD8`-style
+    // surrogate pairs recombine into a single astral scalar.
+    let mut units: Vec<u16> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '%' {
+            // %uXXXX
+            if i + 5 < chars.len() && chars[i + 1] == 'u' {
+                if let Some(u) = hex4_chars(&chars[i + 2..i + 6]) {
+                    units.push(u);
+                    i += 6;
+                    continue;
+                }
+            }
+            // %XX
+            if i + 2 < chars.len() {
+                if let (Some(h), Some(l)) = (chars[i + 1].to_digit(16), chars[i + 2].to_digit(16)) {
+                    units.push((h * 16 + l) as u16);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        let mut buf = [0u16; 2];
+        for unit in chars[i].encode_utf16(&mut buf) {
+            units.push(*unit);
+        }
+        i += 1;
+    }
+    let decoded = String::from_utf16_lossy(&units);
     let ptr = js_string_from_bytes(decoded.as_ptr(), decoded.len() as u32);
     ptr as i64
+}
+
+fn hex4_chars(cs: &[char]) -> Option<u16> {
+    let mut v: u16 = 0;
+    for &c in cs {
+        v = v.checked_mul(16)?.checked_add(c.to_digit(16)? as u16)?;
+    }
+    Some(v)
 }
 
 // ============================================================
@@ -523,6 +739,7 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                     for i in 0..len as usize {
                         let elem = *elements.add(i);
                         let cloned = js_structured_clone(elem);
+                        // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
                         *elements.add(i) = cloned;
                         crate::array::note_array_slot(new_arr, i, cloned.to_bits());
                     }
@@ -534,6 +751,7 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                     // arena slot with GC_TYPE_OBJECT but tracked in
                     // REGEX_POINTERS). Clone by reading source/flags and
                     // building a fresh one via js_regexp_new.
+                    #[cfg(feature = "regex-engine")]
                     if crate::regex::is_regex_pointer(ptr as *const u8) {
                         let re_ptr = ptr as *const crate::regex::RegExpHeader;
                         let src = crate::regex::js_regexp_get_source(re_ptr);
@@ -541,6 +759,60 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                         let new_re = crate::regex::js_regexp_new(src, flg);
                         let new_bits =
                             0x7FFD_0000_0000_0000u64 | (new_re as u64 & 0x0000_FFFF_FFFF_FFFF);
+                        return f64::from_bits(new_bits);
+                    }
+                    // #4879: properties that live outside the inline field
+                    // region (OVERFLOW_FIELDS of a dict-grown object, or every
+                    // prop of a `{}`-born object with no inline capacity) are
+                    // invisible to the clone_with_extra fast path below — it
+                    // copies only the inline `field_count` slots and truncates
+                    // the keys array to match. When the keys array is longer
+                    // than the inline region, rebuild the clone key-by-key via
+                    // js_object_get_field (which resolves inline vs overflow
+                    // per index) + js_object_set_field_by_name.
+                    let src_obj = ptr as *const crate::object::ObjectHeader;
+                    let src_keys = (*src_obj).keys_array;
+                    let key_count = if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
+                        crate::array::js_array_length(src_keys) as usize
+                    } else {
+                        0
+                    };
+                    if key_count > (*src_obj).field_count as usize {
+                        let scope = crate::gc::RuntimeHandleScope::new();
+                        let src_handle = scope.root_raw_const_ptr(src_obj);
+                        let new_obj = crate::object::js_object_alloc(0, key_count as u32);
+                        let new_handle = scope.root_raw_mut_ptr(new_obj);
+                        let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                        for i in 0..key_count {
+                            let src_now =
+                                src_handle.get_raw_const_ptr::<crate::object::ObjectHeader>();
+                            let keys_now = (*src_now).keys_array;
+                            if keys_now.is_null()
+                                || i >= crate::array::js_array_length(keys_now) as usize
+                            {
+                                break;
+                            }
+                            let key_val = crate::array::js_array_get(keys_now, i as u32);
+                            // Own the key bytes before the recursive clone —
+                            // it can run a GC cycle.
+                            let key_bytes =
+                                match crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+                                    Some(b) => b.to_vec(),
+                                    None => continue,
+                                };
+                            let field = crate::object::js_object_get_field(src_now, i as u32);
+                            let cloned = js_structured_clone(f64::from_bits(field.bits()));
+                            let key_ptr = crate::string::js_string_from_bytes(
+                                key_bytes.as_ptr(),
+                                key_bytes.len() as u32,
+                            );
+                            let new_now =
+                                new_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                            crate::object::js_object_set_field_by_name(new_now, key_ptr, cloned);
+                        }
+                        let new_now = new_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+                        let new_bits =
+                            0x7FFD_0000_0000_0000u64 | (new_now as u64 & 0x0000_FFFF_FFFF_FFFF);
                         return f64::from_bits(new_bits);
                     }
                     // Clone object using clone_with_extra (0 extra fields, no static keys)
@@ -553,7 +825,11 @@ fn js_structured_clone_inner(value: f64) -> f64 {
                             as *mut f64;
                         for i in 0..field_count as usize {
                             let field = *fields.add(i);
-                            *fields.add(i) = js_structured_clone(field);
+                            let cloned = js_structured_clone(field);
+                            // GC_STORE_AUDIT(BARRIERED): cloned field uses the shared object slot-store helper.
+                            // The recursive clone above can run minor GCs that tenure `cloned_obj`
+                            // mid-loop, so this store must be barriered like the array branch.
+                            crate::object::store_object_field_slot(cloned_obj, i, cloned.to_bits());
                         }
                     }
                     // NaN-box with POINTER_TAG
@@ -878,4 +1154,44 @@ pub(crate) fn test_queued_microtask_snapshot() -> (usize, u64, u64) {
         });
         (callback, store_bits, previous_store_bits)
     })
+}
+
+#[cfg(test)]
+mod structured_clone_tests {
+    use super::*;
+
+    /// #4879: properties past the inline field region (overflow side table /
+    /// `{}`-born objects with no inline capacity) must survive structuredClone.
+    #[test]
+    fn structured_clone_keeps_overflow_properties() {
+        unsafe {
+            let src = crate::object::js_object_alloc(0, 0);
+            let mut names = Vec::new();
+            for i in 0..50 {
+                names.push(format!("f{}", i));
+            }
+            for (i, name) in names.iter().enumerate() {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::object::js_object_set_field_by_name(src, key, i as f64);
+            }
+            let src_v = crate::value::js_nanbox_pointer(src as i64);
+            let cloned_v = js_structured_clone(src_v);
+            let cloned =
+                crate::value::js_nanbox_get_pointer(cloned_v) as *const crate::object::ObjectHeader;
+            assert!(!cloned.is_null());
+            assert_ne!(cloned as usize, src as usize);
+            let cloned_keys = crate::object::js_object_keys(cloned);
+            assert_eq!(crate::array::js_array_length(cloned_keys), 50);
+            for (i, name) in names.iter().enumerate() {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let v = crate::object::js_object_get_field_by_name(cloned, key);
+                assert_eq!(
+                    f64::from_bits(v.bits()),
+                    i as f64,
+                    "property {} lost or wrong in clone",
+                    name
+                );
+            }
+        }
+    }
 }

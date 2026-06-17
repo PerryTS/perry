@@ -30,6 +30,30 @@ pub type HandlePropertySetDispatchFn = unsafe extern "C" fn(
     value: f64,
 );
 
+/// Optional extension dispatchers used by well-known external native crates.
+/// They return 1 when they handled the access and write the result to `out`;
+/// returning 0 lets the primary stdlib dispatcher continue unchanged.
+pub type HandleMethodDispatchExtensionFn = unsafe extern "C" fn(
+    handle: i64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    out: *mut f64,
+) -> i32;
+pub type HandlePropertyDispatchExtensionFn = unsafe extern "C" fn(
+    handle: i64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    out: *mut f64,
+) -> i32;
+pub type HandlePropertySetDispatchExtensionFn = unsafe extern "C" fn(
+    handle: i64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    value: f64,
+) -> i32;
+
 /// Function pointer type for reporting own property names on handle-backed
 /// values. Returns a NaN-boxed Array, or `undefined` when the handle has no
 /// custom shape.
@@ -70,10 +94,21 @@ pub type FetchHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 /// as heap objects.
 pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 pub type EventEmitterAsyncResourceHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+pub type EventEmitterGetDomainFn = unsafe extern "C" fn(handle: i64) -> i64;
+pub type EventEmitterSetDomainFn = unsafe extern "C" fn(handle: i64, domain: i64) -> i32;
 
 /// Probe for stdlib `net.Socket` handles. Socket instances are represented as
 /// pointer-tagged small integer handles, not heap objects with class ids.
 pub type NetSocketHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+
+/// Probe for live `perry-ffi` registry handles. `register_handle`-issued ids
+/// and Node timer ids both occupy the pointer-tagged small-integer band and
+/// both count from 1, so a bare id is ambiguous between (say) an HTTP/2 server
+/// handle and a `setTimeout` id. The timer-method dispatch arm consults this
+/// probe to yield to an authoritative registered handle when the id is one,
+/// so `server.close()` (handle 1) is not swallowed by `clearTimeout(1)` when a
+/// timer with the colliding id also happens to be alive.
+pub type FfiHandleExistsProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 
 /// Narrow registration hook for runtime code that needs to attach an
 /// EventEmitter listener without routing through the generic handle dispatcher.
@@ -88,6 +123,24 @@ pub type EventEmitterOnFn =
 static HANDLE_METHOD_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROPERTY_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROPERTY_SET_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static HANDLE_METHOD_EXTENSION_DISPATCH_PTRS: [AtomicPtr<()>; 4] = [
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+];
+static HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS: [AtomicPtr<()>; 4] = [
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+];
+static HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS: [AtomicPtr<()>; 4] = [
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+    AtomicPtr::new(ptr::null_mut()),
+];
 static HANDLE_OWN_PROPERTY_NAMES_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROTOTYPE_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static STREAM_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
@@ -96,11 +149,128 @@ static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
     AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_GET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_SET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static FFI_HANDLE_EXISTS_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+
+const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+
+fn has_extension(slots: &[AtomicPtr<()>]) -> bool {
+    slots
+        .iter()
+        .any(|slot| !slot.load(Ordering::Acquire).is_null())
+}
+
+fn register_extension(slots: &[AtomicPtr<()>], f: *mut ()) {
+    for slot in slots {
+        if slot.load(Ordering::Acquire) == f {
+            return;
+        }
+    }
+    for slot in slots {
+        if slot
+            .compare_exchange(ptr::null_mut(), f, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return;
+        }
+    }
+    slots[slots.len() - 1].store(f, Ordering::Release);
+}
+
+unsafe extern "C" fn composite_handle_method_dispatch(
+    handle: i64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    for slot in HANDLE_METHOD_EXTENSION_DISPATCH_PTRS.iter() {
+        let p = slot.load(Ordering::Acquire);
+        if p.is_null() {
+            continue;
+        }
+        let f = std::mem::transmute::<*mut (), HandleMethodDispatchExtensionFn>(p);
+        let mut out = f64::from_bits(TAG_UNDEFINED);
+        if f(
+            handle,
+            method_name_ptr,
+            method_name_len,
+            args_ptr,
+            args_len,
+            &mut out,
+        ) != 0
+        {
+            return out;
+        }
+    }
+
+    let p = HANDLE_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        let f = std::mem::transmute::<*mut (), HandleMethodDispatchFn>(p);
+        f(handle, method_name_ptr, method_name_len, args_ptr, args_len)
+    }
+}
+
+unsafe extern "C" fn composite_handle_property_dispatch(
+    handle: i64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+) -> f64 {
+    for slot in HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS.iter() {
+        let p = slot.load(Ordering::Acquire);
+        if p.is_null() {
+            continue;
+        }
+        let f = std::mem::transmute::<*mut (), HandlePropertyDispatchExtensionFn>(p);
+        let mut out = f64::from_bits(TAG_UNDEFINED);
+        if f(handle, property_name_ptr, property_name_len, &mut out) != 0 {
+            return out;
+        }
+    }
+
+    let p = HANDLE_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        let f = std::mem::transmute::<*mut (), HandlePropertyDispatchFn>(p);
+        f(handle, property_name_ptr, property_name_len)
+    }
+}
+
+unsafe extern "C" fn composite_handle_property_set_dispatch(
+    handle: i64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    value: f64,
+) {
+    for slot in HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS.iter() {
+        let p = slot.load(Ordering::Acquire);
+        if p.is_null() {
+            continue;
+        }
+        let f = std::mem::transmute::<*mut (), HandlePropertySetDispatchExtensionFn>(p);
+        if f(handle, property_name_ptr, property_name_len, value) != 0 {
+            return;
+        }
+    }
+
+    let p = HANDLE_PROPERTY_SET_DISPATCH_PTR.load(Ordering::Acquire);
+    if !p.is_null() {
+        let f = std::mem::transmute::<*mut (), HandlePropertySetDispatchFn>(p);
+        f(handle, property_name_ptr, property_name_len, value);
+    }
+}
 
 #[inline]
 pub fn handle_method_dispatch() -> Option<HandleMethodDispatchFn> {
+    if has_extension(&HANDLE_METHOD_EXTENSION_DISPATCH_PTRS) {
+        return Some(composite_handle_method_dispatch);
+    }
     let p = HANDLE_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
     if p.is_null() {
         None
@@ -111,6 +281,37 @@ pub fn handle_method_dispatch() -> Option<HandleMethodDispatchFn> {
 
 #[inline]
 pub fn handle_property_dispatch() -> Option<HandlePropertyDispatchFn> {
+    if has_extension(&HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS) {
+        return Some(composite_handle_property_dispatch);
+    }
+    let p = HANDLE_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandlePropertyDispatchFn>(p) })
+    }
+}
+
+/// #4973: the PRIMARY (stdlib) handle method dispatcher only, skipping the
+/// extension dispatchers. The inherits-alias forwarding uses this because it
+/// KNOWS its handle is an http(s) server handle — going through the
+/// composite would let an id-colliding extension registry (an ext-net
+/// socket with the same small id) claim shared method names like
+/// `address`/`on` first and answer for the wrong object.
+#[inline]
+pub(crate) fn handle_method_dispatch_primary() -> Option<HandleMethodDispatchFn> {
+    let p = HANDLE_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandleMethodDispatchFn>(p) })
+    }
+}
+
+/// Primary-only sibling of `handle_property_dispatch` — see
+/// `handle_method_dispatch_primary`.
+#[inline]
+pub(crate) fn handle_property_dispatch_primary() -> Option<HandlePropertyDispatchFn> {
     let p = HANDLE_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
     if p.is_null() {
         None
@@ -121,6 +322,9 @@ pub fn handle_property_dispatch() -> Option<HandlePropertyDispatchFn> {
 
 #[inline]
 pub fn handle_property_set_dispatch() -> Option<HandlePropertySetDispatchFn> {
+    if has_extension(&HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS) {
+        return Some(composite_handle_property_set_dispatch);
+    }
     let p = HANDLE_PROPERTY_SET_DISPATCH_PTR.load(Ordering::Acquire);
     if p.is_null() {
         None
@@ -153,6 +357,15 @@ pub fn handle_prototype_dispatch() -> Option<HandlePrototypeDispatchFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_handle_method_dispatch(f: HandleMethodDispatchFn) {
     HANDLE_METHOD_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// Register an extension method dispatcher. External native crates use this
+/// when their handles must coexist with the default stdlib dispatcher.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_handle_method_dispatch_extension(
+    f: HandleMethodDispatchExtensionFn,
+) {
+    register_extension(&HANDLE_METHOD_EXTENSION_DISPATCH_PTRS, f as *mut ());
 }
 
 /// #1545: probe getter — see `StreamHandleProbeFn`.
@@ -240,6 +453,36 @@ pub unsafe extern "C" fn js_register_event_emitter_async_resource_handle_probe(
 }
 
 #[inline]
+pub fn event_emitter_get_domain() -> Option<EventEmitterGetDomainFn> {
+    let p = EVENT_EMITTER_GET_DOMAIN_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterGetDomainFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_get_domain(f: EventEmitterGetDomainFn) {
+    EVENT_EMITTER_GET_DOMAIN_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn event_emitter_set_domain() -> Option<EventEmitterSetDomainFn> {
+    let p = EVENT_EMITTER_SET_DOMAIN_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterSetDomainFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_set_domain(f: EventEmitterSetDomainFn) {
+    EVENT_EMITTER_SET_DOMAIN_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
 pub fn net_socket_handle_probe() -> Option<NetSocketHandleProbeFn> {
     let p = NET_SOCKET_HANDLE_PROBE_PTR.load(Ordering::Acquire);
     if p.is_null() {
@@ -252,6 +495,32 @@ pub fn net_socket_handle_probe() -> Option<NetSocketHandleProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_net_socket_handle_probe(f: NetSocketHandleProbeFn) {
     NET_SOCKET_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn ffi_handle_exists_probe() -> Option<FfiHandleExistsProbeFn> {
+    let p = FFI_HANDLE_EXISTS_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), FfiHandleExistsProbeFn>(p) })
+    }
+}
+
+/// Returns `true` only when a probe is registered AND it confirms `id` is a
+/// live `perry-ffi` registry handle. Absent a probe (no native wrapper linked)
+/// this is `false`, preserving the prior behavior.
+#[inline]
+pub fn ffi_handle_exists(id: i64) -> bool {
+    match ffi_handle_exists_probe() {
+        Some(probe) => unsafe { probe(id) },
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_ffi_handle_exists_probe(f: FfiHandleExistsProbeFn) {
+    FFI_HANDLE_EXISTS_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]
@@ -275,10 +544,24 @@ pub unsafe extern "C" fn js_register_handle_property_dispatch(f: HandlePropertyD
     HANDLE_PROPERTY_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn js_register_handle_property_dispatch_extension(
+    f: HandlePropertyDispatchExtensionFn,
+) {
+    register_extension(&HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS, f as *mut ());
+}
+
 /// Register a function to handle property set on handle-based objects.
 #[no_mangle]
 pub unsafe extern "C" fn js_register_handle_property_set_dispatch(f: HandlePropertySetDispatchFn) {
     HANDLE_PROPERTY_SET_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_handle_property_set_dispatch_extension(
+    f: HandlePropertySetDispatchExtensionFn,
+) {
+    register_extension(&HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS, f as *mut ());
 }
 
 /// Register a function to report own property names on handle-backed objects.

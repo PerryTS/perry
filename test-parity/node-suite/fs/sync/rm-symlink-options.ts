@@ -23,4 +23,3 @@ console.log("rm symlink file target kept:", fs.readFileSync(targetFile, "utf8"))
 
 fs.rmSync(ROOT + "/missing.txt", { force: true });
 console.log("rm missing force ok:", true);
-

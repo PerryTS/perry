@@ -5,8 +5,30 @@
 Perry compiles TypeScript to native binaries by linking with your system's C toolchain, so every install path needs a linker:
 
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-- **Linux**: `gcc` or `clang` (`apt install build-essential` on Debian/Ubuntu, `apk add build-base` on Alpine)
+- **Linux**: `gcc` or `clang` — see your distro below
 - **Windows**: LLVM (`winget install LLVM.LLVM`) + `perry setup windows` (lightweight, ~1.5 GB, no Visual Studio needed), or MSVC Build Tools with the "Desktop development with C++" workload — see the [Windows platform guide](../platforms/windows.md) for both options
+
+Linux C toolchain by distribution:
+
+```bash
+# Debian / Ubuntu / Pop!_OS / Mint
+sudo apt install build-essential
+
+# Arch / Manjaro / CachyOS / EndeavourOS
+sudo pacman -S base-devel gcc
+
+# Fedora / RHEL / CentOS Stream
+sudo dnf install gcc gcc-c++ glibc-devel
+
+# openSUSE
+sudo zypper install -t pattern devel_basis
+
+# Alpine / musl-based
+sudo apk add build-base
+
+# Void Linux
+sudo xbps-install -S base-devel
+```
 
 The source install additionally needs the **Rust toolchain** via [rustup](https://rustup.rs/).
 

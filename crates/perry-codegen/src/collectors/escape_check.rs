@@ -261,6 +261,36 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(value, candidates, classes, escaped);
         }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            if let (Expr::LocalGet(id), Expr::LocalGet(receiver_id), Expr::String(property)) =
+                (target.as_ref(), receiver.as_ref(), key.as_ref())
+            {
+                if id == receiver_id {
+                    if let Some(class_name) = candidates.get(id) {
+                        if is_class_setter(classes, class_name, property) {
+                            escaped.insert(*id);
+                            check_escapes_in_expr(value, candidates, classes, escaped);
+                            return;
+                        }
+                        if expr_contains_local_get(value, *id) {
+                            escaped.insert(*id);
+                        }
+                        check_escapes_in_expr(value, candidates, classes, escaped);
+                        return;
+                    }
+                }
+            }
+            check_escapes_in_expr(target, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(value, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
+        }
 
         // Safe uses: PropertyUpdate on a candidate local — *unless* the
         // property is a getter+setter pair (both fire on `obj.x++`).
@@ -344,6 +374,7 @@ pub fn check_escapes_in_expr(
         | Expr::IsUndefinedOrBareNan(operand)
         | Expr::ParseFloat(operand)
         | Expr::ObjectKeys(operand)
+        | Expr::ForInKeys(operand)
         | Expr::ObjectValues(operand)
         | Expr::ObjectEntries(operand)
         | Expr::SetSize(operand)
@@ -351,11 +382,14 @@ pub fn check_escapes_in_expr(
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)
         | Expr::MathRound(operand)
+        | Expr::MathTrunc(operand)
+        | Expr::MathSign(operand)
         | Expr::MathAbs(operand)
         | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)
@@ -364,7 +398,9 @@ pub fn check_escapes_in_expr(
         | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::GetAsyncIterator(operand)
         | Expr::ForOfToArray(operand)
+        | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::FinalizationRegistryNew(operand)
@@ -460,6 +496,7 @@ pub fn check_escapes_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         check_escapes_in_expr(e, candidates, classes, escaped);
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -622,7 +659,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(fi, candidates, classes, escaped);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             check_escapes_in_expr(callee, candidates, classes, escaped);
             for a in args {
                 check_escapes_in_expr(a, candidates, classes, escaped);
@@ -633,6 +670,7 @@ pub fn check_escapes_in_expr(
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             check_escapes_in_expr(url, candidates, classes, escaped);
             check_escapes_in_expr(method, candidates, classes, escaped);
@@ -640,10 +678,50 @@ pub fn check_escapes_in_expr(
             for (_, v) in headers {
                 check_escapes_in_expr(v, candidates, classes, escaped);
             }
+            if let Some(hd) = headers_dynamic {
+                check_escapes_in_expr(hd, candidates, classes, escaped);
+            }
         }
         Expr::SuperCall(args)
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                check_escapes_in_expr(a, candidates, classes, escaped);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            check_escapes_in_expr(home, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(value, candidates, classes, escaped);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            check_escapes_in_expr(home, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(value, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            check_escapes_in_expr(home, candidates, classes, escaped);
+            check_escapes_in_expr(key, candidates, classes, escaped);
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
             for a in args {
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }
@@ -748,6 +826,7 @@ pub fn check_escapes_in_expr(
             }
         }
         Expr::ArrayToReversed { array }
+        | Expr::ArrayReverseValue { receiver: array }
         | Expr::ArrayFlat { array }
         | Expr::ArrayEntries(array)
         | Expr::ArrayKeys(array)
@@ -779,6 +858,19 @@ pub fn check_escapes_in_expr(
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            check_escapes_in_expr(target, candidates, classes, escaped);
+            check_escapes_in_expr(start, candidates, classes, escaped);
+            if let Some(e) = end {
+                check_escapes_in_expr(e, candidates, classes, escaped);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            check_escapes_in_expr(receiver, candidates, classes, escaped);
             check_escapes_in_expr(target, candidates, classes, escaped);
             check_escapes_in_expr(start, candidates, classes, escaped);
             if let Some(e) = end {

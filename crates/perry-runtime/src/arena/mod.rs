@@ -53,6 +53,8 @@ pub use allocators::{
 pub(crate) use allocators::{arena_alloc_gc_old_excluding_pages, arena_alloc_gc_survivor};
 
 // walk.rs
+#[cfg(feature = "diagnostics")]
+pub(crate) use walk::ArenaRegionTelemetry;
 pub use walk::{
     arena_block_count, arena_in_use_bytes, arena_total_bytes, arena_walk_objects,
     arena_walk_objects_addr_sorted, arena_walk_objects_filtered,
@@ -61,8 +63,8 @@ pub use walk::{
 };
 pub(crate) use walk::{
     arena_block_snapshots, arena_telemetry_snapshot, general_block_in_recent_window,
-    ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder, ArenaRegionTelemetry,
-    ArenaTelemetrySnapshot, ArenaWalkOrder,
+    ArenaBlockSnapshot, ArenaObjectCursor, ArenaObjectCursorBuilder, ArenaTelemetrySnapshot,
+    ArenaWalkOrder,
 };
 
 // reset.rs

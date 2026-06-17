@@ -146,7 +146,11 @@ fn derive_target_key(target: Option<&str>) -> String {
         None => format!("{}-{}", std::env::consts::OS, arch),
         Some("macos") => format!("macos-{}", arch),
         Some("linux") => format!("linux-{}", arch),
-        Some("windows") => format!("windows-{}", arch),
+        // musl: keep the linux-<arch> lock key (#4826).
+        Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl") => {
+            format!("linux-{}", arch)
+        }
+        Some("windows") | Some("windows-winui") => format!("windows-{}", arch),
         Some("ios") => "ios".to_string(),
         Some("ios-simulator") => "ios-simulator".to_string(),
         Some("tvos") => "tvos".to_string(),
@@ -155,7 +159,8 @@ fn derive_target_key(target: Option<&str>) -> String {
         Some("watchos-simulator") => "watchos-simulator".to_string(),
         Some("visionos") => "visionos".to_string(),
         Some("visionos-simulator") => "visionos-simulator".to_string(),
-        Some("android") => "android".to_string(),
+        // Wear OS reuses Android's resolved native-dependency set.
+        Some("android") | Some("wearos") => "android".to_string(),
         Some("harmonyos") => "harmonyos".to_string(),
         Some("harmonyos-simulator") => "harmonyos-simulator".to_string(),
         Some("web") => "web".to_string(),

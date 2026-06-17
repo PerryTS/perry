@@ -96,6 +96,103 @@ fn swift_type_for_field(
     }
 }
 
+/// Emit the `, <field>: <decode-expr>` fragment that pulls one entry field out of
+/// the provider's JSON `entryDict` and coerces it to the Swift type used by the
+/// generated `<Name>Entry` struct.
+///
+/// Scalars use a direct `as?` cast. Arrays of objects (and any other JSON-backed
+/// nested shape) are round-tripped through `JSONSerialization`/`JSONDecoder` into
+/// the nested `Codable` struct(s) emitted by `emit_nested_structs`, so that
+/// `[<Name><Field>Item]` actually decodes instead of being cast to `String`
+/// (see issue #5070).
+fn entry_field_decode(parent_name: &str, field_name: &str, field_type: &WidgetFieldType) -> String {
+    match field_type {
+        WidgetFieldType::String => {
+            format!(
+                ", {f}: entryDict[\"{f}\"] as? String ?? \"\"",
+                f = field_name
+            )
+        }
+        WidgetFieldType::Number => {
+            format!(", {f}: entryDict[\"{f}\"] as? Double ?? 0", f = field_name)
+        }
+        WidgetFieldType::Boolean => {
+            format!(
+                ", {f}: entryDict[\"{f}\"] as? Bool ?? false",
+                f = field_name
+            )
+        }
+        WidgetFieldType::Array(inner) => match inner.as_ref() {
+            // Arrays of scalars can be cast directly.
+            WidgetFieldType::String => {
+                format!(
+                    ", {f}: entryDict[\"{f}\"] as? [String] ?? []",
+                    f = field_name
+                )
+            }
+            WidgetFieldType::Number => {
+                format!(
+                    ", {f}: entryDict[\"{f}\"] as? [Double] ?? []",
+                    f = field_name
+                )
+            }
+            WidgetFieldType::Boolean => {
+                format!(", {f}: entryDict[\"{f}\"] as? [Bool] ?? []", f = field_name)
+            }
+            // Arrays of objects (and nested arrays) decode through Codable.
+            _ => {
+                let swift_type = swift_type_for_field(parent_name, field_name, field_type);
+                format!(
+                    ", {f}: {decode} ?? []",
+                    f = field_name,
+                    decode = json_decode_expr(field_name, &swift_type)
+                )
+            }
+        },
+        WidgetFieldType::Object(_) => {
+            // A bare (non-array) object entry field maps to a non-optional struct
+            // that has no zero-value, so we decode and force-unwrap. This mirrors
+            // the placeholder path, which likewise cannot synthesize a default.
+            let swift_type = swift_type_for_field(parent_name, field_name, field_type);
+            format!(
+                ", {f}: {decode}!",
+                f = field_name,
+                decode = json_decode_expr(field_name, &swift_type)
+            )
+        }
+        WidgetFieldType::Optional(inner) => match inner.as_ref() {
+            WidgetFieldType::String => {
+                format!(", {f}: entryDict[\"{f}\"] as? String", f = field_name)
+            }
+            WidgetFieldType::Number => {
+                format!(", {f}: entryDict[\"{f}\"] as? Double", f = field_name)
+            }
+            WidgetFieldType::Boolean => {
+                format!(", {f}: entryDict[\"{f}\"] as? Bool", f = field_name)
+            }
+            _ => {
+                let swift_type = swift_type_for_field(parent_name, field_name, inner);
+                format!(
+                    ", {f}: {decode}",
+                    f = field_name,
+                    decode = json_decode_expr(field_name, &swift_type)
+                )
+            }
+        },
+    }
+}
+
+/// Build a Swift expression that decodes `entryDict["<key>"]` into `swift_type`
+/// via `JSONSerialization` + `JSONDecoder`. The result is an optional (`nil` on
+/// any failure); callers append `?? <default>` for non-optional targets.
+fn json_decode_expr(key: &str, swift_type: &str) -> String {
+    format!(
+        "(entryDict[\"{key}\"]).flatMap {{ try? JSONSerialization.data(withJSONObject: $0) }}.flatMap {{ try? JSONDecoder().decode({ty}.self, from: $0) }}",
+        key = key,
+        ty = swift_type
+    )
+}
+
 /// Capitalize the first letter of a string
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
@@ -256,32 +353,7 @@ fn emit_native_timeline_provider(widget: &WidgetDecl, name: &str) -> String {
     )
     .unwrap();
     for (field_name, field_type) in &widget.entry_fields {
-        match field_type {
-            WidgetFieldType::String => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                field_name, field_name
-            )
-            .unwrap(),
-            WidgetFieldType::Number => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? Double ?? 0",
-                field_name, field_name
-            )
-            .unwrap(),
-            WidgetFieldType::Boolean => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? Bool ?? false",
-                field_name, field_name
-            )
-            .unwrap(),
-            _ => write!(
-                out,
-                ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                field_name, field_name
-            )
-            .unwrap(),
-        }
+        write!(out, "{}", entry_field_decode(name, field_name, field_type)).unwrap();
     }
     writeln!(out, ")").unwrap();
     writeln!(out, "                timelineEntries.append(entry)").unwrap();
@@ -387,32 +459,7 @@ fn emit_app_intent_timeline_provider(
         )
         .unwrap();
         for (field_name, field_type) in &widget.entry_fields {
-            match field_type {
-                WidgetFieldType::String => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                    field_name, field_name
-                )
-                .unwrap(),
-                WidgetFieldType::Number => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? Double ?? 0",
-                    field_name, field_name
-                )
-                .unwrap(),
-                WidgetFieldType::Boolean => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? Bool ?? false",
-                    field_name, field_name
-                )
-                .unwrap(),
-                _ => write!(
-                    out,
-                    ", {}: entryDict[\"{}\"] as? String ?? \"\"",
-                    field_name, field_name
-                )
-                .unwrap(),
-            }
+            write!(out, "{}", entry_field_decode(name, field_name, field_type)).unwrap();
         }
         writeln!(out, ")").unwrap();
         writeln!(out, "                timelineEntries.append(entry)").unwrap();
@@ -650,46 +697,55 @@ pub fn emit_widget_bundle(widget: &WidgetDecl, name: &str) -> String {
     out
 }
 
-/// Emit native provider bridge (glue code for calling LLVM-compiled provider)
-pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
+/// Emit the shared per-bundle runtime FFI block (`PerryWidgetRuntime.swift`).
+///
+/// This block — the `@_silgen_name` perry-runtime imports, the two
+/// `perry_nanbox_string` overloads, the `perry_get_string` wrapper, and the
+/// `@_cdecl("perry_widget_shared_storage_get")` bridge — must be emitted
+/// **once per bundle**, `internal`. A widget bundle is compiled as a single
+/// Swift module (`swiftc *.swift`), so:
+///
+/// - `private` (the #1294 fix) scopes each declaration to its own glue file,
+///   but the helpers are *called* from a different generated file
+///   (`{Name}.swift`), so the call site can't see them → "inaccessible due to
+///   'private'" (#5069).
+/// - non-`private` per-widget emits N copies across N glue files →
+///   "redeclaration" (the original #1294 failure).
+///
+/// Emitting the shared block once, `internal`, satisfies both: a single
+/// definition, visible module-wide. The `@_cdecl` shared-storage bridge
+/// exports a fixed C symbol, so it likewise must appear exactly once per
+/// bundle (≥2 widgets sharing an app group would otherwise duplicate it).
+pub fn emit_shared_runtime(app_group: Option<&str>) -> String {
     let mut out = String::new();
 
     writeln!(out, "// Auto-generated native bridge — do not edit").unwrap();
     writeln!(out, "import Foundation").unwrap();
     writeln!(out).unwrap();
 
-    // Extern declarations for perry-runtime functions.
-    //
-    // #1294: `private` on the @_silgen_name FFI imports + the
-    // String-overload helper / get_string wrapper scopes each
-    // declaration to its enclosing file, so the bundle's `swiftc
-    // *.swift` invocation doesn't see N copies of the same symbol
-    // across N widget glue files. The C symbol name (`js_nanbox_string`
-    // / `js_get_string_pointer_unified`) is still shared at the
-    // linker level — `@_silgen_name` just maps a Swift name onto it.
-    writeln!(out, "// Perry runtime FFI").unwrap();
+    writeln!(
+        out,
+        "// Perry runtime FFI (shared across every widget in this bundle)"
+    )
+    .unwrap();
     writeln!(out, "@_silgen_name(\"perry_runtime_widget_init\")").unwrap();
-    writeln!(out, "private func perry_runtime_widget_init()").unwrap();
+    writeln!(out, "func perry_runtime_widget_init()").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_nanbox_string\")").unwrap();
     writeln!(
         out,
-        "private func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"
+        "func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"
     )
     .unwrap();
     writeln!(out).unwrap();
     writeln!(out, "@_silgen_name(\"js_get_string_pointer_unified\")").unwrap();
     writeln!(
         out,
-        "private func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>"
+        "func perry_get_string_ptr(_ val: Int64) -> UnsafePointer<CChar>"
     )
     .unwrap();
     writeln!(out).unwrap();
-    writeln!(
-        out,
-        "private func perry_nanbox_string(_ s: String) -> Int64 {{"
-    )
-    .unwrap();
+    writeln!(out, "func perry_nanbox_string(_ s: String) -> Int64 {{").unwrap();
     writeln!(
         out,
         "    return s.withCString {{ perry_nanbox_string($0) }}"
@@ -697,24 +753,14 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
     .unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
-    writeln!(
-        out,
-        "private func perry_get_string(_ val: Int64) -> String {{"
-    )
-    .unwrap();
+    writeln!(out, "func perry_get_string(_ val: Int64) -> String {{").unwrap();
     writeln!(out, "    return String(cString: perry_get_string_ptr(val))").unwrap();
     writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
 
-    // Provider function extern
-    if let Some(ref func_name) = widget.provider_func_name {
-        writeln!(out, "@_silgen_name(\"{}\")", func_name).unwrap();
-        writeln!(out, "func {}(_ configJson: Int64) -> Int64", func_name).unwrap();
+    // sharedStorage bridge — emitted once per bundle because @_cdecl exports a
+    // fixed C symbol (`perry_widget_shared_storage_get`).
+    if let Some(app_group) = app_group {
         writeln!(out).unwrap();
-    }
-
-    // sharedStorage bridge
-    if let Some(ref app_group) = widget.app_group {
         writeln!(
             out,
             "// Shared storage bridge — called from native provider code"
@@ -735,6 +781,29 @@ pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
         .unwrap();
         writeln!(out, "    return perry_nanbox_string(value)").unwrap();
         writeln!(out, "}}").unwrap();
+    }
+
+    out
+}
+
+/// Emit the per-widget native bridge: just the widget-unique provider extern.
+///
+/// The shared runtime FFI (`perry_runtime_widget_init`, `perry_nanbox_string`,
+/// `perry_get_string`, …) and the shared-storage `@_cdecl` bridge live in
+/// `PerryWidgetRuntime.swift` (see [`emit_shared_runtime`]); this file declares
+/// only the `@_silgen_name` import of *this* widget's LLVM-compiled provider,
+/// which is uniquely named per widget and so is safe to emit per-file.
+pub fn emit_glue(widget: &WidgetDecl, name: &str) -> String {
+    let mut out = String::new();
+
+    writeln!(out, "// Auto-generated native bridge — do not edit").unwrap();
+    writeln!(out, "import Foundation").unwrap();
+    writeln!(out).unwrap();
+
+    // Provider function extern (unique per widget).
+    if let Some(ref func_name) = widget.provider_func_name {
+        writeln!(out, "@_silgen_name(\"{}\")", func_name).unwrap();
+        writeln!(out, "func {}(_ configJson: Int64) -> Int64", func_name).unwrap();
     }
 
     let _ = name; // suppress unused warning
@@ -1299,6 +1368,52 @@ mod tests {
     }
 
     #[test]
+    fn test_timeline_decode_array_of_objects() {
+        // Regression test for #5070: an array-of-objects entry field must decode
+        // the JSON array into the nested Codable struct, not cast it to String.
+        let mut widget = make_widget(
+            "com.test.TopSites",
+            vec![
+                (
+                    "sites".to_string(),
+                    WidgetFieldType::Array(Box::new(WidgetFieldType::Object(vec![
+                        ("siteUrl".to_string(), WidgetFieldType::String),
+                        ("clicks".to_string(), WidgetFieldType::String),
+                    ]))),
+                ),
+                ("totalClicks".to_string(), WidgetFieldType::Number),
+                (
+                    "tags".to_string(),
+                    WidgetFieldType::Array(Box::new(WidgetFieldType::String)),
+                ),
+            ],
+            vec![],
+        );
+        widget.provider_func_name = Some("topSitesProvider".to_string());
+
+        let provider = emit_timeline_provider(&widget, "TopSites");
+
+        // The decode site must NOT cast the object array to String.
+        assert!(
+            !provider.contains("sites: entryDict[\"sites\"] as? String"),
+            "array-of-objects field must not be decoded as String:\n{provider}"
+        );
+        // It must decode into the nested Codable struct type.
+        assert!(
+            provider.contains("JSONDecoder().decode([TopSitesSitesItem].self"),
+            "expected JSONDecoder decode into [TopSitesSitesItem]:\n{provider}"
+        );
+        assert!(
+            provider.contains("sites: (entryDict[\"sites\"])"),
+            "expected sites to be assigned from entryDict[\"sites\"]:\n{provider}"
+        );
+        // Arrays of scalars cast directly.
+        assert!(provider.contains("tags: entryDict[\"tags\"] as? [String] ?? []"));
+        // Scalars are unchanged.
+        assert!(provider.contains("totalClicks: entryDict[\"totalClicks\"] as? Double ?? 0"));
+    }
+
+    #[test]
     fn test_conditional() {
         let widget = make_widget(
             "com.test.Cond",
@@ -1516,6 +1631,44 @@ mod tests {
         assert!(view.contains("Text(\"\\(Int(entry.totalClicks.rounded()))\")"));
         // And it must not collapse to the empty-string bug.
         assert!(!view.contains("Text(\"\")"));
+    }
+
+    #[test]
+    fn shared_runtime_emits_internal_ffi_once() {
+        // #5069: the perry-runtime FFI helpers must be `internal` (not
+        // `private`) so they're callable from the sibling `{Name}.swift`
+        // files in the same swiftc module.
+        let runtime = emit_shared_runtime(None);
+        assert!(runtime.contains("func perry_runtime_widget_init()"));
+        assert!(runtime.contains("func perry_nanbox_string(_ s: UnsafePointer<CChar>) -> Int64"));
+        assert!(runtime.contains("func perry_get_string(_ val: Int64) -> String"));
+        // No `private` — that's exactly the inaccessibility bug.
+        assert!(!runtime.contains("private func"));
+        // The shared-storage @_cdecl bridge is gated on an app group.
+        assert!(!runtime.contains("@_cdecl"));
+    }
+
+    #[test]
+    fn shared_runtime_includes_storage_bridge_with_app_group() {
+        let runtime = emit_shared_runtime(Some("group.com.example.app"));
+        assert!(runtime.contains("@_cdecl(\"perry_widget_shared_storage_get\")"));
+        assert!(runtime.contains("UserDefaults(suiteName: \"group.com.example.app\")"));
+    }
+
+    #[test]
+    fn per_widget_glue_only_declares_provider_extern() {
+        // The per-widget glue must NOT re-emit the shared FFI helpers (that's
+        // what caused the duplicate-symbol / inaccessibility regression). It
+        // carries only this widget's unique provider import.
+        let mut widget = make_widget("com.test.Glue", vec![], vec![]);
+        widget.provider_func_name = Some("__widget_provider_quickstats".to_string());
+        let glue = emit_glue(&widget, "Glue");
+        assert!(glue.contains("@_silgen_name(\"__widget_provider_quickstats\")"));
+        assert!(glue.contains("func __widget_provider_quickstats(_ configJson: Int64) -> Int64"));
+        // Shared helpers and the @_cdecl bridge live in PerryWidgetRuntime.swift.
+        assert!(!glue.contains("perry_runtime_widget_init"));
+        assert!(!glue.contains("perry_get_string"));
+        assert!(!glue.contains("@_cdecl"));
     }
 
     #[test]

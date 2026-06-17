@@ -20,11 +20,13 @@ mod app_metadata;
 mod apple_info_plist;
 mod audit_manifest;
 mod bootstrap;
+mod build_cache;
 mod bundle_apple;
 mod bundle_ios;
 mod cjs_wrap;
 mod codegen_steps;
 mod collect_modules;
+mod compressed_libs;
 mod env_fold;
 mod harmonyos_shim;
 mod host_config;
@@ -55,6 +57,7 @@ use bootstrap::{
     maybe_init_type_checker, rerun_collect_with_class_field_types, run_native_instance_fixups,
     run_post_collect_preflight,
 };
+use build_cache::BuildCacheProbe;
 use bundle_apple::{bundle_for_tvos, bundle_for_visionos, bundle_for_watchos};
 use bundle_ios::build_ios_app_bundle;
 use collect_modules::collect_modules;
@@ -69,13 +72,13 @@ use library_search::{
     find_geisterhand_stdlib, find_geisterhand_ui, find_harmonyos_sdk, find_lld_link,
     find_llvm_tool, find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk,
     find_runtime_library, find_stdlib_library, find_ui_library, find_wasm_host_library,
-    windows_pe_subsystem_flag,
+    windows_default_output_extension, windows_pe_subsystem_flag, windows_subsystem_needs_ui,
 };
-use link::build_and_run_link;
+use link::{build_and_run_link, write_link_cache_manifest};
 pub use lock_scan::collect_native_archives_for_lock;
 pub(crate) use lock_scan::run_lock_verify_for_compile;
-use object_cache::compute_object_cache_key;
 pub use object_cache::ObjectCache;
+use object_cache::{compute_object_cache_key, djb2_hash};
 use optimized_libs::{build_optimized_libs, OptimizedLibs};
 use parse_cache::parse_cached;
 pub use parse_cache::ParseCache;
@@ -88,10 +91,13 @@ pub(crate) use resolve::validate_native_library_manifest_value;
 use resolve::{
     cached_resolve_import, compute_module_prefix, declaration_sidecar_for_resolved_import,
     extract_compile_package_dir, has_perry_native_library, is_declaration_file,
-    is_in_compile_package, is_in_perry_native_package, is_js_file, parse_native_library_manifest,
-    parse_package_specifier, resolve_import,
+    is_in_compile_package, is_in_perry_native_package, is_js_file, is_recognized_text_asset,
+    parse_native_library_manifest, parse_package_specifier, resolve_import,
 };
-use strip_dedup::strip_duplicate_objects_from_lib;
+use strip_dedup::{
+    dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
+};
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
     compile_for_watchos_widget, compile_for_wearos_tile, find_visionos_swift_runtime,
@@ -102,6 +108,157 @@ use super::progress::{ProgressSnapshot, VerboseProgress};
 
 mod types;
 pub use types::*;
+
+struct NativeObjectArtifact {
+    path: PathBuf,
+    bytes: Option<Vec<u8>>,
+    fingerprint: String,
+    cleanup_after_link: bool,
+    reused_cache_path: bool,
+    stored_cache_path: bool,
+}
+
+impl NativeObjectArtifact {
+    fn materialized_bytes(&self) -> usize {
+        self.bytes.as_ref().map_or(0, Vec::len)
+    }
+}
+
+fn native_object_file_stem(module_name: &str) -> String {
+    let mut stem = module_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+
+    if stem.is_empty() {
+        stem.push('_');
+    }
+
+    #[cfg(windows)]
+    if is_windows_reserved_file_stem(&stem) {
+        stem.push('_');
+    }
+
+    stem
+}
+
+#[cfg(windows)]
+fn is_windows_reserved_file_stem(stem: &str) -> bool {
+    let lower = stem.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
+    )
+}
+
+fn canonical_class_source_prefix(
+    class: &perry_hir::Class,
+    class_canonical_path: &HashMap<perry_hir::ClassId, String>,
+    project_root: &Path,
+    fallback_prefix: &str,
+) -> String {
+    class_canonical_path
+        .get(&class.id)
+        .map(|path| compute_module_prefix(path, project_root))
+        .unwrap_or_else(|| fallback_prefix.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_class_source_prefix_prefers_defining_path() {
+        let class = perry_hir::Class {
+            id: 7,
+            name: "Observable".to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            fields: Vec::new(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: true,
+            aliases: Vec::new(),
+        };
+        let project_root = PathBuf::from("/repo");
+        let mut class_canonical_path = HashMap::new();
+        class_canonical_path.insert(
+            class.id,
+            "/repo/node_modules/rxjs/src/internal/Observable.ts".to_string(),
+        );
+
+        assert_eq!(
+            canonical_class_source_prefix(
+                &class,
+                &class_canonical_path,
+                &project_root,
+                "node_modules_rxjs_src_index_ts",
+            ),
+            "node_modules_rxjs_src_internal_Observable_ts"
+        );
+    }
+
+    #[test]
+    fn native_object_file_stem_sanitizes_module_names() {
+        assert_eq!(
+            native_object_file_stem("table-parser/lib/index"),
+            "table_parser_lib_index"
+        );
+        assert_eq!(native_object_file_stem("///"), "_");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_object_file_stem_avoids_windows_reserved_names() {
+        assert_eq!(native_object_file_stem("con"), "con_");
+        assert_eq!(
+            native_object_file_stem("connected-domain"),
+            "connected_domain"
+        );
+        assert_eq!(native_object_file_stem("aux"), "aux_");
+        assert_eq!(native_object_file_stem("COM1"), "COM1_");
+    }
+}
 
 // `inject_ios_deeplinks`, `inject_google_auth_info_plist`, and
 // `lookup_bundle_id_from_info_plist` moved to `apple_info_plist.rs`.
@@ -122,6 +279,74 @@ pub fn run(
     run_with_parse_cache(args, None, format, use_color, verbose)
 }
 
+/// Fold the `--libc <glibc|musl>` flag into the effective `--target` (#4826).
+///
+/// `--libc musl` upgrades a Linux target to its fully-static musl variant:
+/// `linux`/`linux-x86_64`/native-host-default → `linux-musl`, and
+/// `linux-aarch64`/`linux-arm64` → `linux-aarch64-musl`. It is a no-op for an
+/// already-musl target. `glibc`/`gnu` (or no flag) leave the target untouched.
+/// `--libc musl` against a non-Linux target is a hard error rather than a
+/// silently-ignored flag.
+pub(crate) fn apply_libc_to_target(
+    target: Option<String>,
+    libc: Option<&str>,
+) -> Result<Option<String>> {
+    let libc = match libc {
+        None => return Ok(target),
+        Some(l) => l.trim().to_ascii_lowercase(),
+    };
+    match libc.as_str() {
+        // Default / explicit glibc: nothing to do.
+        "glibc" | "gnu" | "" => Ok(target),
+        "musl" => match target.as_deref() {
+            // Default (native host) or explicit x86_64 Linux → x86_64 musl.
+            None | Some("linux") | Some("linux-x86_64") => Ok(Some("linux-musl".to_string())),
+            Some("linux-aarch64") | Some("linux-arm64") => {
+                Ok(Some("linux-aarch64-musl".to_string()))
+            }
+            // Already a musl target — idempotent.
+            Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl") => {
+                Ok(target)
+            }
+            Some(other) => anyhow::bail!(
+                "--libc musl only applies to Linux targets, but --target is \
+                 '{other}'. Drop --libc musl, or build a Linux target \
+                 (e.g. --target linux)."
+            ),
+        },
+        other => {
+            anyhow::bail!("unknown --libc value '{other}'. Supported: glibc (default) or musl.")
+        }
+    }
+}
+
+fn object_cache_project_root(input: &Path, fallback_project_root: &Path) -> PathBuf {
+    let input_parent = input
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+
+    if let Some(mut dir) = input_parent.clone() {
+        loop {
+            if dir.join("package.json").exists() || dir.join("perry.toml").exists() {
+                return dir;
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+
+    if let (Some(input_parent), Ok(cwd)) = (input_parent, std::env::current_dir()) {
+        let cwd = cwd.canonicalize().unwrap_or(cwd);
+        if input_parent.starts_with(&cwd) {
+            return cwd;
+        }
+    }
+
+    fallback_project_root.to_path_buf()
+}
+
 /// Same as [`run`] but accepts an optional in-memory [`ParseCache`] that
 /// `perry dev` uses to reuse parsed ASTs across rebuilds in a single session.
 /// Pass `None` for the batch-compile path.
@@ -132,6 +357,12 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    // #4826: fold `--libc musl` into the effective target up-front (before any
+    // downstream code reads `args.target`) so the rest of the pipeline only
+    // ever sees the concrete `linux-musl` triple family.
+    let mut args = args;
+    args.target = apply_libc_to_target(args.target.take(), args.libc.as_deref())?;
+
     // #835 + #846: clear the codegen-side FFI provenance set up-front
     // so any leftover entries from a prior `perry dev` rebuild (or a
     // failed-build early-return that skipped our drain below) don't
@@ -201,11 +432,6 @@ pub fn run_with_parse_cache(
         }
     }
 
-    match format {
-        OutputFormat::Text => println!("Collecting modules..."),
-        OutputFormat::Json => {}
-    }
-
     // Canonicalize the input path first so its `.parent()` is an absolute directory.
     // Without this, a bare filename like `perry demo.ts` produced `Path::new("").parent()`
     // → fallback `"."`, and the walk-up loops below (package.json + perry.toml discovery)
@@ -221,6 +447,23 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|| PathBuf::from("."));
 
     let mut ctx = CompilationContext::new(project_root.clone());
+    ctx.cache_root = object_cache_project_root(&args.input, &project_root);
+
+    let build_cache_probe = BuildCacheProbe::new(&args, &project_root, &ctx.cache_root);
+    let mut build_cache_stats = build_cache_probe.probe();
+    if build_cache_stats.hit {
+        if let OutputFormat::Json = format {
+            build_cache_probe.print_json_hit(&build_cache_stats)?;
+        } else if verbose > 0 {
+            println!("Build cache hit: {}", build_cache_stats.reason);
+        }
+        return Ok(build_cache_probe.compile_result_for_hit());
+    }
+
+    match format {
+        OutputFormat::Text => println!("Collecting modules..."),
+        OutputFormat::Json => {}
+    }
 
     // Tier 2.x: package.json + perry.toml + i18n + google_auth config
     // loading lifted into compile/host_config.rs::apply_pkg_and_toml_config.
@@ -355,6 +598,7 @@ pub fn run_with_parse_cache(
     }
 
     let mut obj_paths = Vec::new();
+    let mut obj_cleanup_paths = Vec::new();
 
     // Get canonical path of entry module
     let entry_path = args
@@ -797,9 +1041,50 @@ pub fn run_with_parse_cache(
                 exports.insert(en.name.clone(), path_str.clone());
             }
         }
+        // `export type X` / `export interface X` still lower to an
+        // `Export::Named` (so type re-export chains resolve), but they are
+        // TYPE-ONLY — erased at runtime, with no `perry_fn_*` symbol. They must
+        // not enter the runtime export set: that set drives `import * as ns`
+        // materialization (Object.keys/for-in), and a phantom type name there
+        // resolves to a bogus closure value that breaks consumers enumerating
+        // the namespace (drizzle's `drizzle(pool, { schema })`, where the schema
+        // module also `export type Customer = …` alongside the real tables).
+        // A name that is ALSO a value export (declaration merging, a class)
+        // stays — only names that are exclusively types are dropped.
+        let value_export_names: std::collections::HashSet<&str> = hir_module
+            .functions
+            .iter()
+            .filter(|f| f.is_exported)
+            .map(|f| f.name.as_str())
+            .chain(hir_module.exported_objects.iter().map(|s| s.as_str()))
+            .chain(
+                hir_module
+                    .classes
+                    .iter()
+                    .filter(|c| c.is_exported)
+                    .map(|c| c.name.as_str()),
+            )
+            .chain(
+                hir_module
+                    .enums
+                    .iter()
+                    .filter(|e| e.is_exported)
+                    .map(|e| e.name.as_str()),
+            )
+            .collect();
+        let type_only_export_names: std::collections::HashSet<String> = hir_module
+            .type_aliases
+            .iter()
+            .map(|t| t.name.clone())
+            .chain(hir_module.interfaces.iter().map(|i| i.name.clone()))
+            .filter(|n| !value_export_names.contains(n.as_str()))
+            .collect();
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
             if let perry_hir::Export::Named { local, exported } = export {
+                if type_only_export_names.contains(exported) {
+                    continue;
+                }
                 exports.insert(exported.clone(), path_str.clone());
                 // #1758: a LOCAL renamed export of a CLASS
                 // (`export { Number$ as Number }`, no `from`) must record the
@@ -855,6 +1140,17 @@ pub fn run_with_parse_cache(
                             if let Some(source_exports) = all_module_exports.get(&source_path_str) {
                                 let current_exports = all_module_exports.get(&path_str);
                                 for (name, origin) in source_exports {
+                                    // ESM semantics: `export * from "src"`
+                                    // re-exports every named export EXCEPT
+                                    // `default`. Leaking it made barrels
+                                    // claim a default binding they never
+                                    // define, which breaks the #4872
+                                    // has-default probe that decides whether
+                                    // a default import can bind to
+                                    // `perry_fn_<src>__default`.
+                                    if name == "default" {
+                                        continue;
+                                    }
                                     let already_exists = current_exports
                                         .map(|e| e.contains_key(name))
                                         .unwrap_or(false);
@@ -1408,6 +1704,7 @@ pub fn run_with_parse_cache(
                 | Some("visionos")
                 | Some("visionos-simulator")
                 | Some("android")
+                | Some("wearos")
                 | Some("watchos")
                 | Some("watchos-simulator")
                 | Some("tvos")
@@ -1475,8 +1772,11 @@ pub fn run_with_parse_cache(
         ctx.needs_stdlib = true;
     }
 
-    // Pre-compute JS module specifiers
-    let js_module_specifiers: Vec<String> = ctx.js_modules.keys().cloned().collect();
+    // Pre-compute JS module specifiers in canonical order before this
+    // graph-wide list is cloned into every module's CompileOptions and
+    // object-cache key.
+    let mut js_module_specifiers: Vec<String> = ctx.js_modules.keys().cloned().collect();
+    js_module_specifiers.sort();
 
     // Compile native modules in parallel using rayon
 
@@ -1525,7 +1825,7 @@ pub fn run_with_parse_cache(
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
     let cache_target_dir = target.as_deref().unwrap_or("host");
-    let object_cache = ObjectCache::new(&ctx.project_root, cache_target_dir, cache_enabled);
+    let object_cache = ObjectCache::new(&ctx.cache_root, cache_target_dir, cache_enabled);
     let perry_version = env!("CARGO_PKG_VERSION");
 
     // Issue #100: precompute the dynamic-import plumbing so the rayon
@@ -1798,7 +2098,8 @@ pub fn run_with_parse_cache(
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
-    let compile_results: Vec<Result<(PathBuf, Vec<u8>), String>> = ctx
+    let object_output_dir = std::env::current_dir()?;
+    let compile_results: Vec<Result<NativeObjectArtifact, String>> = ctx
         .native_modules
         .par_iter()
         .map(|(path, hir_module)| {
@@ -1908,7 +2209,10 @@ pub fn run_with_parse_cache(
                     }
                 };
                 for import in &hir_module.imports {
-                    if import.is_dynamic || import.type_only {
+                    // `is_deferred_require`: a function-local `require('S')`
+                    // (lazy in Node). S must NOT chain into this module's init
+                    // — it inits only when the require shim is actually called.
+                    if import.is_dynamic || import.type_only || import.is_deferred_require {
                         continue;
                     }
                     if let Some(resolved) = &import.resolved_path {
@@ -2135,8 +2439,36 @@ pub fn run_with_parse_cache(
                     .find(|nl| nl.module == import.source);
 
                 for spec in &import.specifiers {
-                    // Handle namespace imports (import * as X)
-                    if let perry_hir::ImportSpecifier::Namespace { local } = spec {
+                    // Handle namespace imports (import * as X).
+                    //
+                    // Issue #4872: a DEFAULT import of a compiled module that
+                    // has NO `default` export gets the same treatment. The
+                    // CJS wrap lowers every `require('X')` to `import _req_N
+                    // from 'X'`; when X resolves to an ESM barrel with only
+                    // named exports (rxjs's src/index.ts, uid's index.mjs) or
+                    // to a type-only interface surface with no exports at all
+                    // (nestjs dist `*.interface.js`), there is no
+                    // `perry_fn_<src>__default` symbol for the consumer to
+                    // bind — the old fall-through registered the local as a
+                    // callable function import and the link died on
+                    // `__perry_wrap_perry_fn_<src>__default`. Node's
+                    // `require(esm)` semantics hand back the module namespace
+                    // object, so route the local through the namespace
+                    // machinery: member reads resolve per-export to origin
+                    // symbols, and a whole-value read materializes the
+                    // namespace object (empty for zero-export modules).
+                    let namespace_like_local: Option<&String> = match spec {
+                        perry_hir::ImportSpecifier::Namespace { local } => Some(local),
+                        perry_hir::ImportSpecifier::Default { local }
+                            if !all_module_exports
+                                .get(&resolved_path_str)
+                                .is_some_and(|exports| exports.contains_key("default")) =>
+                        {
+                            Some(local)
+                        }
+                        _ => None,
+                    };
+                    if let Some(local) = namespace_like_local {
                         namespace_imports.push(local.clone());
                         // Register all exports from the source module
                         if let Some(exports) = all_module_exports.get(&resolved_path_str) {
@@ -2151,10 +2483,11 @@ pub fn run_with_parse_cache(
                                 // (`export { default as foo }`) needs the
                                 // codegen to call `perry_fn_<origin>__default`
                                 // when the consumer writes `ns.foo()`.
-                                if let Some(origin_name) = all_module_export_origin_names
+                                let resolved_origin_name = all_module_export_origin_names
                                     .get(&resolved_path_str)
                                     .and_then(|m| m.get(export_name))
-                                {
+                                    .cloned();
+                                if let Some(ref origin_name) = resolved_origin_name {
                                     if origin_name != export_name {
                                         import_function_origin_names
                                             .insert(export_name.clone(), origin_name.clone());
@@ -2190,19 +2523,50 @@ pub fn run_with_parse_cache(
                                 // the closure with `args`. Mirrors the
                                 // named-import branch at the var-detection
                                 // arm below.
-                                if exported_var_names.contains(&key) {
+                                //
+                                // Issue #4841: when the namespace member is a
+                                // re-export of a CJS submodule's `default`
+                                // (`import sfy from './sfy'; export { sfy }`,
+                                // where `./sfy` is `module.exports = function`),
+                                // the origin module records the var under its
+                                // "default" suffix — NOT the consumer-visible
+                                // member name. Probe both keys (mirrors the
+                                // named-import arm) so the var-vs-function
+                                // classification fires; otherwise `ns.sfy` takes
+                                // the function path and wraps the default getter
+                                // in a singleton closure, so `ns.sfy(args)`
+                                // RETURNS the function value instead of being it
+                                // (Stripe's `qs.stringify(...)` returned the qs
+                                // function ⇒ `.replace is not a function`).
+                                let origin_key_under_origin_name = resolved_origin_name
+                                    .as_ref()
+                                    .map(|n| (origin_path.clone(), n.clone()));
+                                if exported_var_names.contains(&key)
+                                    || origin_key_under_origin_name
+                                        .as_ref()
+                                        .map(|k| exported_var_names.contains(k))
+                                        .unwrap_or(false)
+                                {
                                     imported_vars.insert(export_name.clone());
                                 }
                                 if let Some(class) = exported_classes.get(&key) {
+                                    let class_prefix = canonical_class_source_prefix(
+                                        class,
+                                        &class_canonical_path,
+                                        &ctx.project_root,
+                                        &origin_prefix,
+                                    );
                                     imported_classes.push(perry_codegen::ImportedClass {
                                         name: class.name.clone(),
                                         local_alias: None,
-                                        source_prefix: origin_prefix.clone(),
+                                        source_prefix: class_prefix,
                                         constructor_param_count: class
                                             .constructor
                                             .as_ref()
                                             .map(|c| c.params.len())
                                             .unwrap_or(0),
+                                        has_own_constructor: class.constructor.is_some(),
+                                        has_instance_fields: !class.fields.is_empty(),
                                         method_names: class
                                             .methods
                                             .iter()
@@ -2382,15 +2746,23 @@ pub fn run_with_parse_cache(
                                         imported_vars.insert(export_name.clone());
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
+                                        let class_prefix = canonical_class_source_prefix(
+                                            class,
+                                            &class_canonical_path,
+                                            &ctx.project_root,
+                                            &origin_prefix,
+                                        );
                                         imported_classes.push(perry_codegen::ImportedClass {
                                             name: class.name.clone(),
                                             local_alias: None,
-                                            source_prefix: origin_prefix.clone(),
+                                            source_prefix: class_prefix,
                                             constructor_param_count: class
                                                 .constructor
                                                 .as_ref()
                                                 .map(|c| c.params.len())
                                                 .unwrap_or(0),
+                                            has_own_constructor: class.constructor.is_some(),
+                                            has_instance_fields: !class.fields.is_empty(),
                                             method_names: class
                                                 .methods
                                                 .iter()
@@ -2599,6 +2971,12 @@ pub fn run_with_parse_cache(
 
                     // Imported classes
                     if let Some(class) = exported_classes.get(&key) {
+                        let class_prefix = canonical_class_source_prefix(
+                            class,
+                            &class_canonical_path,
+                            &ctx.project_root,
+                            &effective_prefix,
+                        );
                         // Issue #665: when the user wrote `import X from "pkg"`
                         // and `pkg`'s default export is a class, the importer
                         // still registers `exported_name="default"` into
@@ -2625,12 +3003,14 @@ pub fn run_with_parse_cache(
                             imported_classes.push(perry_codegen::ImportedClass {
                                 name: class.name.clone(),
                                 local_alias: Some(exported_name.clone()),
-                                source_prefix: effective_prefix.clone(),
+                                source_prefix: class_prefix.clone(),
                                 constructor_param_count: class
                                     .constructor
                                     .as_ref()
                                     .map(|c| c.params.len())
                                     .unwrap_or(0),
+                                has_own_constructor: class.constructor.is_some(),
+                                has_instance_fields: !class.fields.is_empty(),
                                 method_names: class
                                     .methods
                                     .iter()
@@ -2689,12 +3069,14 @@ pub fn run_with_parse_cache(
                             } else {
                                 None
                             },
-                            source_prefix: effective_prefix.clone(),
+                            source_prefix: class_prefix,
                             constructor_param_count: class
                                 .constructor
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -2846,6 +3228,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3037,31 +3421,13 @@ pub fn run_with_parse_cache(
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
-                            // Some historical submodules model their default
-                            // import as the namespace object. Other submodules
-                            // with CommonJS-style default objects route through
-                            // the explicit "default" export below.
-                            //
-                            if matches!(submod_key.as_str(), "timers" | "trace_events") {
-                                // Default imports of these modules are module
-                                // objects — route to the namespace so they work
-                                // like `import * as ...` (#1213, #2629).
-                                namespace_node_submodules
-                                    .insert(local.clone(), submod_key.clone());
-                                if !namespace_imports.contains(&local) {
-                                    namespace_imports.push(local.clone());
-                                }
-                            } else {
-                                // Default imports route to "default" — these
-                                // submodules either expose a real default
-                                // (`node:sys` aliases `node:util`) or need a
-                                // tracked placeholder to keep the catch-all
-                                // from firing on `import x from "node:..."`.
-                                import_function_node_submodule.insert(
-                                    local.clone(),
-                                    (submod_key.clone(), "default".to_string()),
-                                );
-                            }
+                            // Default imports route to "default" — known Node
+                            // submodules expose an object-valued default export
+                            // that is distinct from the namespace object.
+                            import_function_node_submodule.insert(
+                                local.clone(),
+                                (submod_key.clone(), "default".to_string()),
+                            );
                         }
                         perry_hir::ImportSpecifier::Namespace { local } => {
                             namespace_node_submodules
@@ -3322,6 +3688,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3514,6 +3882,8 @@ pub fn run_with_parse_cache(
                                 .as_ref()
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
+                            has_own_constructor: class.constructor.is_some(),
+                            has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
                                 .methods
@@ -3661,6 +4031,17 @@ pub fn run_with_parse_cache(
                 // alone is insufficient because it's empty when the
                 // target has no `export` statements.
                 is_dynamic_import_target: dyn_target_paths.contains(path),
+                // #5247: source-location tracking for the dynamic call-dispatch
+                // throw path. Gated by `--debug-symbols` so the default build is
+                // unchanged (no source read, no per-call emission). When on, read
+                // the module's original source so codegen can map a Call's byte
+                // offset to a 1-based line.
+                debug_locations: args.debug_symbols,
+                module_source: if args.debug_symbols {
+                    std::fs::read_to_string(path).ok()
+                } else {
+                    None
+                },
             };
             // V2.2 + #686 object cache lookup. The key hashes every
             // codegen-affecting field of `opts` together with this
@@ -3692,76 +4073,96 @@ pub fn run_with_parse_cache(
             } else {
                 (None, None)
             };
-            let object_code = match cache_key.and_then(|k| object_cache.lookup(k)) {
-                Some(bytes) => bytes,
-                None => {
-                    // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache
-                    // key on every miss, so a user can diff hashes between
-                    // builds and answer "why didn't my cosmetic edit hit?"
-                    // (#686 acceptance criterion).
-                    if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
-                        if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
-                            eprintln!(
-                                "  • cache miss: {} hir={:016x} key={:016x}",
-                                hir_module.name, hh, k
-                            );
-                        }
-                        // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform
-                        // HIR of misses to .perry-cache/debug/<key>.txt so a
-                        // user can diff two miss-dumps and see exactly what
-                        // differed. Best-effort — IO errors never fail the
-                        // build.
-                        if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
-                            let dump_dir = ctx.project_root.join(".perry-cache").join("debug");
-                            if std::fs::create_dir_all(&dump_dir).is_ok() {
-                                let dump_path =
-                                    dump_dir.join(format!("{:016x}.txt", k));
-                                let _ = std::fs::write(
-                                    &dump_path,
-                                    format!(
-                                        "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
-                                        hir_module.name,
-                                        path.display(),
-                                        hh,
-                                        k,
-                                        hir_module,
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                    progress.heartbeat(ProgressSnapshot {
-                        stage: "codegen",
-                        module_path: Some(path),
-                        module_name: Some(&hir_module.name),
-                        visited: Some(codegen_index),
-                        total: Some(total_codegen_modules),
-                        collected: Some(total_codegen_modules),
-                        ..Default::default()
-                    });
-                    let bytes = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
-                        format!(
-                            "Error compiling module '{}' ({}) with --backend llvm: {:#}",
-                            hir_module.name,
-                            path.display(),
-                            e
-                        )
-                    })?;
-                    if let Some(k) = cache_key {
-                        object_cache.store(k, &bytes);
-                    }
-                    bytes
-                }
-            };
-            let obj_name = hir_module
-                .name
-                .replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
-                .trim_matches('_')
-                .to_string();
+            let obj_name = native_object_file_stem(&hir_module.name);
             // In bitcode mode the bytes are .ll text; use .ll extension.
             let ext = if bitcode_link { "ll" } else { "o" };
-            let obj_path = PathBuf::from(format!("{}.{}", obj_name, ext));
-            return Ok((obj_path, object_code));
+            let obj_path = object_output_dir.join(format!("{}.{}", obj_name, ext));
+
+            if let Some((key, cached_path)) =
+                cache_key.and_then(|k| object_cache.lookup_path(k).map(|path| (k, path)))
+            {
+                return Ok(NativeObjectArtifact {
+                    path: cached_path,
+                    bytes: None,
+                    fingerprint: format!("cache:{:016x}", key),
+                    cleanup_after_link: false,
+                    reused_cache_path: true,
+                    stored_cache_path: false,
+                });
+            }
+
+            // PERRY_DEV_VERBOSE=1: report the per-module HIR + cache key on
+            // every miss, so a user can diff hashes between builds and answer
+            // "why didn't my cosmetic edit hit?" (#686 acceptance criterion).
+            if let (Some(k), Some(hh)) = (cache_key, hir_hash_for_diag) {
+                if std::env::var("PERRY_DEV_VERBOSE").as_deref() == Ok("1") {
+                    eprintln!(
+                        "  • cache miss: {} hir={:016x} key={:016x}",
+                        hir_module.name, hh, k
+                    );
+                }
+                // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform HIR of
+                // misses to .perry-cache/debug/<key>.txt so a user can diff two
+                // miss-dumps and see exactly what differed. Best-effort — IO
+                // errors never fail the build.
+                if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
+                    let dump_dir = ctx.cache_root.join(".perry-cache").join("debug");
+                    if std::fs::create_dir_all(&dump_dir).is_ok() {
+                        let dump_path = dump_dir.join(format!("{:016x}.txt", k));
+                        let _ = std::fs::write(
+                            &dump_path,
+                            format!(
+                                "module: {}\npath: {}\nhir_hash: {:016x}\ncache_key: {:016x}\n\n{:#?}\n",
+                                hir_module.name,
+                                path.display(),
+                                hh,
+                                k,
+                                hir_module,
+                            ),
+                        );
+                    }
+                }
+            }
+            progress.heartbeat(ProgressSnapshot {
+                stage: "codegen",
+                module_path: Some(path),
+                module_name: Some(&hir_module.name),
+                visited: Some(codegen_index),
+                total: Some(total_codegen_modules),
+                collected: Some(total_codegen_modules),
+                ..Default::default()
+            });
+            let object_code = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
+                format!(
+                    "Error compiling module '{}' ({}) with --backend llvm: {:#}",
+                    hir_module.name,
+                    path.display(),
+                    e
+                )
+            })?;
+            let object_fingerprint = cache_key
+                .map(|k| format!("cache:{:016x}", k))
+                .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
+            if let Some(cached_path) =
+                cache_key.and_then(|k| object_cache.store_and_get_path(k, &object_code))
+            {
+                return Ok(NativeObjectArtifact {
+                    path: cached_path,
+                    bytes: None,
+                    fingerprint: object_fingerprint,
+                    cleanup_after_link: false,
+                    reused_cache_path: false,
+                    stored_cache_path: true,
+                });
+            }
+            return Ok(NativeObjectArtifact {
+                path: obj_path,
+                bytes: Some(object_code),
+                fingerprint: object_fingerprint,
+                cleanup_after_link: true,
+                reused_cache_path: false,
+                stored_cache_path: false,
+            });
         })
         .collect();
 
@@ -3774,10 +4175,10 @@ pub fn run_with_parse_cache(
     // order (preserved); successful writes' "Wrote ..." messages print
     // after all writes complete.
     let mut failed_modules: Vec<String> = Vec::new();
-    let mut to_write: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let mut artifacts: Vec<NativeObjectArtifact> = Vec::new();
     for result in compile_results {
         match result {
-            Ok(pair) => to_write.push(pair),
+            Ok(artifact) => artifacts.push(artifact),
             Err(msg) => {
                 eprintln!("{}", msg);
                 // Extract module name from error message for
@@ -3793,34 +4194,68 @@ pub fn run_with_parse_cache(
     // Parallel write phase. Returns one Result per write so we can
     // bail on the first I/O error after the par_iter finishes.
 
-    let write_results: Vec<Result<(), std::io::Error>> = to_write
+    let object_cache_paths_reused = artifacts
+        .iter()
+        .filter(|artifact| artifact.reused_cache_path)
+        .count();
+    let object_cache_paths_stored = artifacts
+        .iter()
+        .filter(|artifact| artifact.stored_cache_path)
+        .count();
+    let object_temp_writes = artifacts
+        .iter()
+        .filter(|artifact| artifact.bytes.is_some())
+        .count();
+    let object_bytes_materialized: usize = artifacts
+        .iter()
+        .map(NativeObjectArtifact::materialized_bytes)
+        .sum();
+
+    let write_results: Vec<Result<(), (PathBuf, std::io::Error)>> = artifacts
         .par_iter()
-        .map(|(obj_path, object_code)| fs::write(obj_path, object_code))
+        .filter_map(|artifact| {
+            artifact.bytes.as_ref().map(|bytes| {
+                fs::write(&artifact.path, bytes).map_err(|err| (artifact.path.clone(), err))
+            })
+        })
         .collect();
 
     // Bail on first write failure (I/O errors are usually disk-full /
     // permission, not per-file recoverable).
     for r in write_results {
-        if let Err(e) = r {
-            return Err(e.into());
+        if let Err((path, e)) = r {
+            return Err(anyhow!(
+                "failed to write object file {}: {}",
+                path.display(),
+                e
+            ));
         }
     }
 
     // Sequential print + obj_paths collection (output grouped, source
     // order preserved).
-    for (obj_path, _) in to_write {
+    let mut obj_fingerprints: Vec<Option<String>> = Vec::new();
+    for artifact in artifacts {
         match format {
             OutputFormat::Text => {
-                let label = if obj_path.extension().and_then(|e| e.to_str()) == Some("ll") {
+                let label = if artifact.reused_cache_path {
+                    "Reused cached object"
+                } else if artifact.stored_cache_path {
+                    "Stored cached object"
+                } else if artifact.path.extension().and_then(|e| e.to_str()) == Some("ll") {
                     "Wrote LLVM IR"
                 } else {
                     "Wrote object file"
                 };
-                println!("{}: {}", label, obj_path.display());
+                println!("{}: {}", label, artifact.path.display());
             }
             OutputFormat::Json => {}
         }
-        obj_paths.push(obj_path);
+        if artifact.cleanup_after_link {
+            obj_cleanup_paths.push(artifact.path.clone());
+        }
+        obj_fingerprints.push(Some(artifact.fingerprint));
+        obj_paths.push(artifact.path);
     }
 
     // Verbose codegen-cache stats. We print here (rather than in dev.rs
@@ -4020,12 +4455,14 @@ pub fn run_with_parse_cache(
     // for this binary and rebuild perry-runtime + perry-stdlib in a
     // hash-keyed target dir. Both halves fall back to the prebuilt full
     // libraries if the rebuild fails or the workspace source isn't on
-    // disk. `--no-auto-optimize` disables the rebuild path entirely.
+    // disk. `--no-auto-optimize` disables runtime/stdlib rebuilds but
+    // still resolves prebuilt well-known wrapper archives whose symbols
+    // are absent from the full stdlib.
     //
     // The legacy `--minimal-stdlib` flag is now a no-op alias for
     // backward compat — auto-mode already does what it used to and more.
     let optimized_libs: OptimizedLibs = if args.no_auto_optimize {
-        OptimizedLibs::empty()
+        optimized_libs::resolve_no_auto_optimized_libs(&ctx, target.as_deref(), format, verbose)
     } else {
         build_optimized_libs(&ctx, target.as_deref(), &compiled_features, format, verbose)
     };
@@ -4047,8 +4484,9 @@ pub fn run_with_parse_cache(
             .or_else(|| find_runtime_library(target.as_deref()).ok());
         let stdlib_lib_path = stdlib_lib_resolved.clone();
         // Check if stdlib will be linked - if so, it provides perry_runtime symbols (no stubs needed)
-        let target_is_windows = matches!(target.as_deref(), Some("windows"))
-            || (cfg!(target_os = "windows") && target.is_none());
+        let target_is_windows =
+            matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                || (cfg!(target_os = "windows") && target.is_none());
         let will_link_stdlib = (ctx.needs_stdlib || target_is_windows) && stdlib_lib_path.is_some();
         // Issue #76 — when the wasm host is
         // being linked, scan its archive so the `perry_wasm_host_*` symbols
@@ -4088,14 +4526,14 @@ pub fn run_with_parse_cache(
         }
         // Platform detection for nm tool and symbol prefix
         let _is_ios = matches!(target.as_deref(), Some("ios-simulator") | Some("ios"));
-        let is_android = matches!(target.as_deref(), Some("android"));
+        let is_android = matches!(target.as_deref(), Some("android") | Some("wearos"));
         let is_harmonyos = matches!(
             target.as_deref(),
             Some("harmonyos") | Some("harmonyos-simulator")
         );
-        let is_linux = matches!(target.as_deref(), Some("linux"))
+        let is_linux = matches!(target.as_deref(), Some(t) if t.starts_with("linux"))
             || (!cfg!(target_os = "macos") && !cfg!(target_os = "windows") && target.is_none());
-        let is_windows = matches!(target.as_deref(), Some("windows"))
+        let is_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
             || (cfg!(target_os = "windows") && target.is_none());
         // Symbol prefix depends on object format:
         // Mach-O targets (macOS, iOS, watchOS, tvOS): nm shows `_` prefix
@@ -4214,7 +4652,9 @@ pub fn run_with_parse_cache(
                 perry_codegen::stubs::generate_stub_object(&md, &mf, &mi, target.as_deref())?;
             let stub_path = PathBuf::from("_perry_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
+            obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
+            obj_fingerprints.push(None);
         }
     }
 
@@ -4272,9 +4712,16 @@ pub fn run_with_parse_cache(
                             let _ = fs::remove_file(ll);
                         }
                     }
-                    // Replace obj_paths with the merged .o + any stubs
-                    obj_paths = vec![linked_obj];
-                    obj_paths.extend(stub_objs);
+                    // Replace obj_paths with the merged .o + any stubs.
+                    // The merged object is derived after codegen-cache
+                    // materialization, so the original per-module cache
+                    // fingerprints are no longer a trusted proxy for these
+                    // bytes.
+                    obj_cleanup_paths.push(linked_obj.clone());
+                    let mut linked_obj_paths = vec![linked_obj];
+                    linked_obj_paths.extend(stub_objs);
+                    obj_fingerprints = vec![None; linked_obj_paths.len()];
+                    obj_paths = linked_obj_paths;
                     true
                 }
                 Err(e) => {
@@ -4291,7 +4738,8 @@ pub fn run_with_parse_cache(
         // Fall back: compile any .ll files to .o via clang -c.
         eprintln!("  bitcode-link: runtime .bc not available, falling back to normal link");
         let mut new_obj_paths: Vec<PathBuf> = Vec::new();
-        for p in &obj_paths {
+        let mut new_obj_fingerprints: Vec<Option<String>> = Vec::new();
+        for (idx, p) in obj_paths.iter().enumerate() {
             if p.extension().and_then(|e| e.to_str()) == Some("ll") {
                 let ll_text = fs::read_to_string(p)?;
                 let obj_bytes =
@@ -4301,12 +4749,16 @@ pub fn run_with_parse_cache(
                 if !args.keep_intermediates {
                     let _ = fs::remove_file(p);
                 }
+                obj_cleanup_paths.push(obj_path.clone());
                 new_obj_paths.push(obj_path);
+                new_obj_fingerprints.push(None);
             } else {
                 new_obj_paths.push(p.clone());
+                new_obj_fingerprints.push(obj_fingerprints.get(idx).cloned().unwrap_or(None));
             }
         }
         obj_paths = new_obj_paths;
+        obj_fingerprints = new_obj_fingerprints;
         false
     } else {
         false
@@ -4332,7 +4784,9 @@ pub fn run_with_parse_cache(
                 if matches!(format, OutputFormat::Text) {
                     println!("Embedded JS bundle: {}", obj.display());
                 }
+                obj_cleanup_paths.push(obj.clone());
                 obj_paths.push(obj);
+                obj_fingerprints.push(None);
             }
             Err(e) => {
                 // Don't hard-fail — the on-disk `__perry_js_bundle.js`
@@ -4384,7 +4838,34 @@ pub fn run_with_parse_cache(
     // fields, not `&CompileArgs`.
     let input_path_owned: PathBuf = args.input.clone();
     let app_bundle_id_owned: Option<String> = args.app_bundle_id.clone();
-    let exe_path = args.output.unwrap_or_else(|| {
+    let exe_path = match args.output {
+        // #4771: a user-supplied `-o NAME` without an extension won't launch
+        // from PowerShell/cmd on a Windows target (and `.dll`/`.lib` are the
+        // expected library shapes). Default the extension to the
+        // target-appropriate one unless the user already gave one (e.g.
+        // `-o app.appx` is respected verbatim). Non-Windows targets keep the
+        // bare name — Unix executables are conventionally extension-less.
+        Some(p) => {
+            let is_windows_output =
+                matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                    || (target.is_none() && cfg!(target_os = "windows"));
+            if is_windows_output && p.extension().is_none() {
+                p.with_extension(windows_default_output_extension(is_dylib, is_staticlib))
+            } else {
+                p
+            }
+        }
+        None => default_output_path(is_dylib, is_staticlib, target.as_deref(), stem),
+    };
+
+    // The default output path when no `-o` is given. Extracted to a free fn so
+    // the `-o`-provided extension-defaulting above stays readable.
+    fn default_output_path(
+        is_dylib: bool,
+        is_staticlib: bool,
+        target: Option<&str>,
+        stem: &str,
+    ) -> PathBuf {
         if is_dylib {
             #[cfg(target_os = "macos")]
             {
@@ -4398,30 +4879,27 @@ pub fn run_with_parse_cache(
             // #1088 — Windows hosts expect `.lib`; everywhere else uses
             // the Unix `lib<stem>.a` convention so the archive is reachable
             // from `-l<stem>` at the host's link step.
-            if matches!(target.as_deref(), Some("windows"))
+            if matches!(target, Some("windows") | Some("windows-winui"))
                 || (target.is_none() && cfg!(target_os = "windows"))
             {
                 PathBuf::from(format!("{}.lib", stem))
             } else {
                 PathBuf::from(format!("lib{}.a", stem))
             }
-        } else if matches!(
-            target.as_deref(),
-            Some("harmonyos") | Some("harmonyos-simulator")
-        ) {
+        } else if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
             // HarmonyOS apps ship as .so loaded by the ArkTS runtime via
             // napi_module_register — there is no standalone executable
             // shipping shape. `lib` prefix matches the dlopen name used by
             // the generated ArkTS shim (`import entry from 'libapp.so'`).
             PathBuf::from(format!("lib{}.so", stem))
-        } else if matches!(target.as_deref(), Some("windows"))
+        } else if matches!(target, Some("windows") | Some("windows-winui"))
             || (target.is_none() && cfg!(target_os = "windows"))
         {
             PathBuf::from(format!("{}.exe", stem))
         } else {
             PathBuf::from(stem)
         }
-    });
+    }
 
     if !failed_modules.is_empty() {
         // The loud failure summary + abort already ran earlier (right
@@ -4556,7 +5034,9 @@ pub fn run_with_parse_cache(
             )?;
             let stub_path = PathBuf::from("_perry_failed_stubs.o");
             fs::write(&stub_path, &stub_bytes)?;
+            obj_cleanup_paths.push(stub_path.clone());
             obj_paths.push(stub_path);
+            obj_fingerprints.push(None);
         }
     }
 
@@ -4577,6 +5057,8 @@ pub fn run_with_parse_cache(
             bundle_id: None,
             is_dylib,
             codegen_cache_stats,
+            link_cache_stats: None,
+            build_cache_stats: None,
         });
     }
 
@@ -4596,14 +5078,14 @@ pub fn run_with_parse_cache(
         target.as_deref(),
         Some("visionos-simulator") | Some("visionos")
     );
-    let is_android = matches!(target.as_deref(), Some("android"));
+    let is_android = matches!(target.as_deref(), Some("android") | Some("wearos"));
     let is_harmonyos = matches!(
         target.as_deref(),
         Some("harmonyos") | Some("harmonyos-simulator")
     );
-    let is_linux = matches!(target.as_deref(), Some("linux"))
+    let is_linux = matches!(target.as_deref(), Some(t) if t.starts_with("linux"))
         || (target.is_none() && cfg!(target_os = "linux"));
-    let _is_windows = matches!(target.as_deref(), Some("windows"))
+    let _is_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
         || (target.is_none() && cfg!(target_os = "windows"));
     // is_watchos / is_tvos are defined below (near the per-platform link step).
     // The is_cross_* bindings used to live here, but they're now derived
@@ -4616,8 +5098,9 @@ pub fn run_with_parse_cache(
     // emits `perry_module_init` instead of `main` (see is_dylib branch in
     // codegen/entry.rs, which now also covers `staticlib`).
     if is_staticlib {
-        let is_windows_target = matches!(target.as_deref(), Some("windows"))
-            || (target.is_none() && cfg!(target_os = "windows"));
+        let is_windows_target =
+            matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+                || (target.is_none() && cfg!(target_os = "windows"));
         // Best-effort: drop a stale archive first so `ar` doesn't append to a
         // previous build's contents.
         let _ = fs::remove_file(&exe_path);
@@ -4719,7 +5202,7 @@ pub fn run_with_parse_cache(
         }
 
         if !args.keep_intermediates {
-            for obj_path in &obj_paths {
+            for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
         }
@@ -4742,6 +5225,8 @@ pub fn run_with_parse_cache(
             // "no embedded event loop, host drives `perry_module_init`" shape.
             is_dylib: true,
             codegen_cache_stats,
+            link_cache_stats: None,
+            build_cache_stats: None,
         });
     }
 
@@ -4781,7 +5266,7 @@ pub fn run_with_parse_cache(
 
         // Clean up intermediate files
         if !args.keep_intermediates {
-            for obj_path in &obj_paths {
+            for obj_path in &obj_cleanup_paths {
                 let _ = fs::remove_file(obj_path);
             }
         }
@@ -4802,6 +5287,8 @@ pub fn run_with_parse_cache(
             bundle_id: None,
             is_dylib: true,
             codegen_cache_stats,
+            link_cache_stats: None,
+            build_cache_stats: None,
         });
     }
 
@@ -4890,15 +5377,17 @@ pub fn run_with_parse_cache(
 
     // Build & run the per-platform link command. Tier 2.1 final extraction
     // (v0.5.342) — see crates/perry/src/commands/compile/link.rs.
-    build_and_run_link(
+    let link_cache_status = build_and_run_link(
         &args.input,
         &ctx,
         target.as_deref(),
         &obj_paths,
+        &obj_fingerprints,
         &compiled_features,
         &runtime_lib,
         &stdlib_lib,
         &optimized_libs.well_known_libs,
+        optimized_libs.prefer_well_known_before_stdlib,
         &wasm_host_lib,
         &exe_path,
         format,
@@ -5159,11 +5648,40 @@ pub fn run_with_parse_cache(
         match format {
             OutputFormat::Text => println!("Wrote executable: {}", exe_path.display()),
             OutputFormat::Json => {
+                let codegen_cache = summarize_codegen_cache_stats(&object_cache).map(
+                    |(hits, misses, stores, store_errors)| {
+                        serde_json::json!({
+                            "hits": hits,
+                            "misses": misses,
+                            "stores": stores,
+                            "store_errors": store_errors,
+                            "path_reuses": object_cache.path_reuses(),
+                            "hit_bytes_materialized": object_cache.bytes_materialized(),
+                            "object_temp_writes": object_temp_writes,
+                            "object_bytes_materialized": object_bytes_materialized,
+                            "object_cache_paths_reused": object_cache_paths_reused,
+                            "object_cache_paths_stored": object_cache_paths_stored,
+                        })
+                    },
+                );
+                let link_cache_stats = link_cache_status.stats();
                 let result = serde_json::json!({
                     "success": true,
                     "output": exe_path.to_string_lossy(),
                     "native_modules": ctx.native_modules.len(),
                     "js_modules": ctx.js_modules.len(),
+                    "build_cache": {
+                        "hit": false,
+                        "miss_reason": build_cache_stats.reason,
+                    },
+                    "codegen_cache": codegen_cache,
+                    "link_cache": {
+                        "linked": link_cache_stats.linked,
+                        "skipped": link_cache_stats.skipped,
+                        "object_fingerprints_used": link_cache_stats.object_fingerprints_used,
+                        "object_files_hashed": link_cache_stats.object_files_hashed,
+                        "external_inputs_hashed": link_cache_stats.external_inputs_hashed,
+                    },
                 });
                 println!("{}", serde_json::to_string(&result)?);
             }
@@ -5212,23 +5730,57 @@ pub fn run_with_parse_cache(
         format,
     );
 
-    strip_final_binary(
+    if link_cache_status.stats().linked {
+        strip_final_binary(
+            &ctx,
+            &exe_path,
+            target.as_deref(),
+            is_dylib,
+            is_ios,
+            is_visionos,
+            is_tvos,
+            is_watchos,
+            is_harmonyos,
+        );
+        write_link_cache_manifest(&link_cache_status, &exe_path);
+    }
+
+    let mut build_cache_runtime_inputs = Vec::new();
+    build_cache_runtime_inputs.push(runtime_lib.clone());
+    if let Some(path) = &stdlib_lib_resolved {
+        build_cache_runtime_inputs.push(path.clone());
+    }
+    build_cache_runtime_inputs.extend(optimized_libs.well_known_libs.iter().cloned());
+    if let Some(path) = &wasm_host_lib {
+        build_cache_runtime_inputs.push(path.clone());
+    }
+    let build_cache_object_fingerprints: Vec<String> =
+        obj_fingerprints.iter().filter_map(Clone::clone).collect();
+    build_cache_probe.write_manifest_after_success(
+        &mut build_cache_stats,
         &ctx,
         &exe_path,
         target.as_deref(),
-        is_dylib,
-        is_ios,
-        is_visionos,
-        is_tvos,
-        is_watchos,
-        is_harmonyos,
+        &compiled_features,
+        &build_cache_object_fingerprints,
+        &build_cache_runtime_inputs,
     );
 
     emit_attestation_sidecar(&ctx, &exe_path, format);
 
     print_binary_size(format, &exe_path);
 
-    cleanup_intermediates(args.keep_intermediates, &obj_paths);
+    cleanup_intermediates(args.keep_intermediates, &obj_cleanup_paths);
+
+    // #5206 / #5230: visible end-of-compile notice listing every
+    // ahead-of-time-unsupported site that was compiled to a deferred runtime
+    // error instead of blocking the build — runtime-unknown `eval(...)` /
+    // `new Function(<dynamic body>)` and non-resolvable dynamic `import(...)`.
+    // Strict mode (`--strict-eval` / `--strict-dynamic-import` / `perry.eval =
+    // "error"` / `perry.dynamicImport = "error"` / `perry.strict`) never reaches
+    // here for a covered site — it fails the build earlier. Text format only
+    // (JSON consumers get a clean machine-readable result on stdout).
+    print_deferred_eval_notice(format);
 
     let final_output_path = result_app_dir.unwrap_or(exe_path);
     let codegen_cache_stats = summarize_codegen_cache_stats(&object_cache);
@@ -5239,7 +5791,73 @@ pub fn run_with_parse_cache(
         bundle_id: result_bundle_id,
         is_dylib,
         codegen_cache_stats,
+        link_cache_stats: Some(link_cache_status.stats()),
+        build_cache_stats: Some(build_cache_stats),
     })
+}
+
+/// #5206 / #5230: print the end-of-compile notice for ahead-of-time-unsupported
+/// sites (runtime-unknown `eval(...)` / `new Function(...)`, and non-resolvable
+/// dynamic `import(...)`) that were compiled to deferred runtime errors. Drains
+/// the shared process-global sink (so re-running a compile in the same process
+/// starts fresh) and prints a single stand-out block. No-op when there are no
+/// such sites or for JSON output.
+fn print_deferred_eval_notice(format: OutputFormat) {
+    let sites = perry_hir::take_deferred_eval_sites();
+    if sites.is_empty() || !matches!(format, OutputFormat::Text) {
+        return;
+    }
+    // Sort for deterministic output (kind then location).
+    let mut sites = sites;
+    sites.sort_by(|a, b| (&a.kind, &a.location).cmp(&(&b.kind, &b.location)));
+    let n = sites.len();
+    let plural = if n == 1 { "site" } else { "sites" };
+    // ANSI yellow + bold so the notice stands out from the surrounding build
+    // log; degrade to plain text when stderr isn't a TTY.
+    let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let (y, b, r) = if tty {
+        ("\x1b[33m", "\x1b[1m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
+    eprintln!();
+    eprintln!(
+        "{y}{b}notice:{r}{y} {n} ahead-of-time-unsupported {plural} compiled to a deferred runtime error (throws only if reached):{r}"
+    );
+    // Align the locations into a column for readability.
+    let kind_width = sites.iter().map(|s| s.kind.len()).max().unwrap_or(0);
+    for s in &sites {
+        eprintln!(
+            "  - {:<width$}   {}",
+            s.kind,
+            s.location,
+            width = kind_width
+        );
+    }
+    eprintln!(
+        "  Pass {b}--strict-eval{r}/{b}--strict-dynamic-import{r} (or set {b}perry.strict = true{r}) to make these a compile-time error instead."
+    );
+    eprintln!();
+}
+
+#[cfg(test)]
+mod object_cache_root_tests {
+    use super::*;
+
+    #[test]
+    fn object_cache_root_prefers_package_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}\n").unwrap();
+        let input = src.join("main.ts");
+        std::fs::write(&input, "console.log(1);\n").unwrap();
+
+        assert_eq!(
+            object_cache_project_root(&input, &src),
+            dir.path().canonicalize().unwrap()
+        );
+    }
 }
 
 #[cfg(test)]

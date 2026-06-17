@@ -18,6 +18,7 @@ pub mod init;
 pub mod install;
 pub mod lock;
 pub mod login;
+pub mod lower_diagnostic;
 pub mod native;
 pub mod perry_lock;
 pub(crate) mod progress;

@@ -5,6 +5,18 @@
 use super::*;
 use perry_types::{FuncId, GlobalId, LocalId, Type};
 
+/// Fallback when a dynamic `with` object environment does not bind the
+/// assignment target. The object lookup is performed before the RHS is
+/// evaluated, matching ECMAScript Reference resolution order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WithSetFallback {
+    Local(LocalId),
+    ThrowReferenceError,
+    ThrowConstAssignment,
+    Ignore,
+    SloppyImplicit(LocalId),
+}
+
 /// Expression
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -44,6 +56,24 @@ pub enum Expr {
     LocalSet(LocalId, Box<Expr>),
     GlobalGet(GlobalId),
     GlobalSet(GlobalId, Box<Expr>),
+    /// Dynamic object-environment read produced by `with (obj) { name }`.
+    /// If `obj` has a non-unscopable property named `property`, read it;
+    /// otherwise evaluate `fallback` (outer lexical/global resolution).
+    WithGet {
+        object: Box<Expr>,
+        property: String,
+        fallback: Box<Expr>,
+    },
+    /// Dynamic object-environment write produced by `with (obj) { name = v }`.
+    /// Codegen probes the object before lowering `value`; strict PutValue then
+    /// re-checks that the property survived RHS side effects.
+    WithSet {
+        object: Box<Expr>,
+        property: String,
+        value: Box<Expr>,
+        fallback: WithSetFallback,
+        strict: bool,
+    },
 
     // Update (++/--)
     Update {
@@ -83,6 +113,13 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Explicit type arguments (e.g., identity<number>(x))
         type_args: Vec<Type>,
+        /// #5247: byte offset (`call.span.lo.0`) of this call expression in its
+        /// module's source, captured at AST→HIR lowering. Used by codegen (under
+        /// `--debug-symbols`) to attach a `file:line` to the runtime "X is not a
+        /// function" TypeError thrown by the dynamic method-dispatch path. `0`
+        /// when unknown (synthesized calls from transforms/intrinsics, etc.) —
+        /// a 0 sentinel resolves to no location, falling back to `<anonymous>`.
+        byte_offset: u32,
     },
 
     /// Function call with spread arguments (e.g., fn(a, ...arr, b))
@@ -91,6 +128,13 @@ pub enum Expr {
         args: Vec<CallArg>,
         type_args: Vec<Type>,
     },
+
+    /// `super(...)` with spread arguments (`super(...arguments)` — the tsc
+    /// pass-through-ctor emit zod's ZodNumber/ZodBigInt use). The parent
+    /// ctor is invoked at runtime through the CLASS_CONSTRUCTORS registry
+    /// with the materialized args array (codegen can't inline a dynamic
+    /// arg count).
+    SuperCallSpread(Vec<CallArg>),
 
     // Named function reference
     FuncRef(FuncId),
@@ -211,6 +255,39 @@ pub enum Expr {
         property: Box<Expr>,
         object: Box<Expr>,
     },
+    /// Private-name brand check: `#field in obj`.
+    ///
+    /// This is intentionally separate from `In { property: "#field", ... }`
+    /// so ordinary public string keys cannot satisfy private-field syntax.
+    PrivateBrandCheck {
+        class_name: String,
+        field_name: String,
+        object: Box<Expr>,
+    },
+
+    /// Brand+kind guard wrapping the receiver of a private member access
+    /// `obj.#name`. Evaluates `object` exactly once and returns its value
+    /// UNCHANGED when the access is legal; otherwise throws a `TypeError`.
+    ///
+    /// Two checks run, in spec order:
+    ///   1. Brand check — `object` must be an instance of `class_name` (the
+    ///      class that lexically declares `#name`). A wrong receiver (an
+    ///      ordinary object, or an instance of an unrelated/outer class)
+    ///      throws.
+    ///   2. Kind/op check — reading a setter-only accessor, writing a
+    ///      getter-only accessor, or writing a private method all throw.
+    ///
+    /// Because it returns the receiver, it composes with the existing
+    /// `PropertyGet` / `PropertySet` / method-call lowering: those operate on
+    /// the guard's result and need no private-specific changes. `kind` and
+    /// `op` are the wire codes defined by `PrivKind` / 0=get,1=set.
+    PrivateGuard {
+        class_name: String,
+        field_name: String,
+        kind: u8,
+        op: u8,
+        object: Box<Expr>,
+    },
 
     // Await expression (for async functions)
     Await(Box<Expr>),
@@ -227,6 +304,14 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Explicit type arguments (e.g., new Box<number>(42))
         type_args: Vec<Type>,
+        /// #5253: byte offset (`new_expr.span.lo.0`) of this `new` expression
+        /// in its module's source, captured at AST→HIR lowering. Used by
+        /// codegen (under `--debug-symbols`) to attach a `file:line` to the
+        /// runtime "X is not a constructor" TypeError. `0` when unknown
+        /// (synthesized `new` from transforms/intrinsics) — resolves to no
+        /// location, falling back to `<anonymous>`. Mirrors `Call.byte_offset`
+        /// (#5247) and is excluded from stable-hashing.
+        byte_offset: u32,
     },
 
     /// Dynamic new expression (new with non-identifier callee)
@@ -237,7 +322,29 @@ pub enum Expr {
         callee: Box<Expr>,
         /// Arguments to pass to the constructor
         args: Vec<Expr>,
+        /// #5253: source byte offset of the `new` expression — see
+        /// `New::byte_offset`. The `const X: any = undefined; new X()`
+        /// not-a-constructor case lowers here (callee is `LocalGet`), so this
+        /// is the field that localizes ajv's `undefined is not a constructor`.
+        byte_offset: u32,
     },
+
+    /// Dynamic `new` with spread arguments — `new <callee>(...args)`.
+    /// Kept distinct from `NewDynamic` so the spread positions survive
+    /// lowering (a plain `Vec<Expr>` would collapse `...[1,2]` into a single
+    /// array argument). Codegen folds every argument into one JS array
+    /// (regular pushed, spread sources expanded) and dispatches through
+    /// `js_new_function_construct_apply`.
+    NewDynamicSpread {
+        callee: Box<Expr>,
+        args: Vec<CallArg>,
+        /// #5253: source byte offset of the `new` expression — see
+        /// `New::byte_offset`.
+        byte_offset: u32,
+    },
+
+    /// Runtime `new.target` value for ordinary functions.
+    NewTarget,
 
     // Class reference (for new expressions)
     ClassRef(String),
@@ -287,6 +394,31 @@ pub enum Expr {
         parent_expr: Box<Expr>,
     },
 
+    /// Snapshot the CURRENT values of a function-nested class's captured
+    /// outer-scope locals into the runtime `CLASS_CAPTURE_VALUES` table.
+    /// Emitted at the source-order position of the class declaration
+    /// (parallel to `RegisterClassParentDynamic`), so dynamic construction
+    /// of the class VALUE (`exports.C = C; … new mod.C()` — the webpack /
+    /// zod bundle pattern) can fill the synthesized `__perry_cap_<id>`
+    /// constructor params. Static `new C()` sites keep passing captures as
+    /// trailing args and don't consult the table.
+    RegisterClassCaptures {
+        class_name: String,
+        captures: Vec<Expr>,
+    },
+
+    /// Read slot `index` of a class's decl-site capture snapshot
+    /// (`CLASS_CAPTURE_VALUES`, written by `RegisterClassCaptures`). Used by
+    /// STATIC method bodies of function-nested capturing classes — statics
+    /// have no instance to carry `__perry_cap_*` fields, so their prologue
+    /// rebinds read the snapshot instead (vendored zod's
+    /// `static create(...) { … typeName: k.ZodRecord … }` where `k` is an
+    /// enclosing-function local).
+    ClassCaptureValue {
+        class_name: String,
+        index: u32,
+    },
+
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the
     /// class is returned from a factory function body. The static-Symbol
     /// registration must re-run each time the factory is called, with
@@ -301,6 +433,26 @@ pub enum Expr {
         class_name: String,
         key_expr: Box<Expr>,
         value_expr: Box<Expr>,
+    },
+
+    /// Register a computed class method after evaluating the source key
+    /// through runtime `ToPropertyKey` semantics.
+    RegisterClassComputedMethod {
+        class_name: String,
+        key_expr: Box<Expr>,
+        method_name: String,
+        is_static: bool,
+        param_count: u32,
+        has_rest: bool,
+    },
+
+    /// Register one side of a computed class accessor.
+    RegisterClassComputedAccessor {
+        class_name: String,
+        key_expr: Box<Expr>,
+        getter_name: Option<String>,
+        setter_name: Option<String>,
+        is_static: bool,
     },
 
     /// Issue #1772: per-evaluation identity for a class EXPRESSION
@@ -427,6 +579,41 @@ pub enum Expr {
         property: String,
     },
 
+    // Super property assignment. Codegen resolves the current class's parent
+    // prototype at the use site, evaluates key before value, then performs
+    // ordinary [[Set]] with receiver=this.
+    SuperPropertySet {
+        parent_class_id: u32,
+        parent_class_name: Option<String>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+    },
+
+    // Object-literal method `super[key]` read. `home` is the hidden home
+    // object captured when the method literal is created; `receiver` is the
+    // dynamic `this` for the current call.
+    ObjectSuperPropertyGet {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        receiver: Box<Expr>,
+    },
+
+    // Object-literal method `super[key] = value`.
+    ObjectSuperPropertySet {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+        receiver: Box<Expr>,
+    },
+
+    // Object-literal method `super[key](args...)` call.
+    ObjectSuperMethodCall {
+        home: Box<Expr>,
+        key: Box<Expr>,
+        receiver: Box<Expr>,
+        args: Vec<Expr>,
+    },
+
     // Environment variable access: process.env.VARNAME
     EnvGet(String),
     // Dynamic environment variable access: process.env[expr]
@@ -450,6 +637,11 @@ pub enum Expr {
     // value is not a function` at module init and the import
     // resolves to undefined. Followup to #957 / PR #959.
     GlobalThisExpr,
+    /// `this` in module top-level code. Node runs the assembled test files
+    /// as CJS, where top-level `this` is `module.exports` — a fresh plain
+    /// object distinct from `globalThis`. Lowered separately from
+    /// `Expr::This` so function-body `this` semantics are untouched.
+    ModuleTopThis,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,
     // Process current working directory: process.cwd() -> string
@@ -690,6 +882,8 @@ pub enum Expr {
     MathFloor(Box<Expr>),            // Math.floor(x) -> number
     MathCeil(Box<Expr>),             // Math.ceil(x) -> number
     MathRound(Box<Expr>),            // Math.round(x) -> number
+    MathTrunc(Box<Expr>),            // Math.trunc(x) -> number
+    MathSign(Box<Expr>),             // Math.sign(x) -> number
     MathAbs(Box<Expr>),              // Math.abs(x) -> number
     MathSqrt(Box<Expr>),             // Math.sqrt(x) -> number
     MathLog(Box<Expr>),              // Math.log(x) -> number
@@ -802,6 +996,21 @@ pub enum Expr {
     StructuredClone {
         value: Box<Expr>,
         options: Box<Expr>,
+    },
+    /// #4141: link a freshly-built generator/async-generator instance object
+    /// to the spec prototype chain. Emitted ONLY by `transform_generators`
+    /// wrapping the `{next,return,throw}` iterator object it returns. At
+    /// codegen uses the owning closure when available so the instance points at
+    /// the same closure-cached `g.prototype` object exposed by property reads.
+    /// The fallback runtime path interposes a fresh intermediate object whose
+    /// own `[[Prototype]]` is `%Generator.prototype%` /
+    /// `%AsyncGenerator.prototype%`, preserving the two-hop brand-checked
+    /// prototype chain.
+    /// Evaluates to `obj` unchanged. `is_async` selects the sync vs async
+    /// generator prototype tower for the fallback path.
+    LinkGeneratorPrototype {
+        obj: Box<Expr>,
+        is_async: bool,
     },
     /// queueMicrotask(callback) -> void
     QueueMicrotask(Box<Expr>),
@@ -1221,7 +1430,14 @@ pub enum Expr {
         url: Box<Expr>,
         method: Box<Expr>,
         body: Box<Expr>,
+        // Statically-extracted headers from an object *literal* whose keys are
+        // all plain (non-computed) string/ident keys: `{ "k": v, ... }`.
         headers: Vec<(String, Expr)>,
+        // A dynamically-built headers value (a variable, a spread literal, a
+        // call like `Object.assign`/`new Headers`, etc.) that can only be
+        // serialized at runtime. When `Some`, it takes precedence over the
+        // static `headers` pairs above. See #4932.
+        headers_dynamic: Option<Box<Expr>>,
     },
     FetchGetWithAuth {
         // fetchWithAuth(url, authHeader) -> Promise<Response>
@@ -1380,19 +1596,44 @@ pub enum Expr {
         index: Box<Expr>,
         value: Box<Expr>,
     }, // arr.with(index, value) -> new array
+    ArrayReverseValue {
+        receiver: Box<Expr>,
+    }, // Array.prototype.reverse.call(receiver) -> same receiver
     ArrayCopyWithin {
         array_id: LocalId,
         target: Box<Expr>,
         start: Box<Expr>,
         end: Option<Box<Expr>>,
     }, // arr.copyWithin(target, start, end?) -> same array
+    ArrayCopyWithinValue {
+        receiver: Box<Expr>,
+        target: Box<Expr>,
+        start: Box<Expr>,
+        end: Option<Box<Expr>>,
+    }, // Array.prototype.copyWithin.call(arrayLike, target, start, end?) -> same receiver
     ArrayEntries(Box<Expr>), // arr.entries() -> Array<[index, value]> (eager materialization)
     ArrayKeys(Box<Expr>),    // arr.keys() -> Array<index>
     ArrayValues(Box<Expr>),  // arr.values() -> Array<value> (essentially clone)
 
+    /// `Array.prototype.<method>.call/apply(receiver, ...args)` (and the
+    /// bound-local form `const m = [].map; m.call(receiver, ...)`) dispatched
+    /// generically over an *array-like* receiver per ECMA-262 §23.1.3 (#4597).
+    /// Unlike the specialised `Array*` variants above — which require a genuine
+    /// array receiver — this carries the receiver as a raw value so the runtime
+    /// applies `ToObject` + `LengthOfArrayLike` + indexed `Get`/`HasProperty`,
+    /// preserving receiver identity for the callback's 3rd argument.
+    /// `method` is the resolved Array method name; `args` are the post-receiver
+    /// positional arguments (already expanded from `.apply`).
+    ArrayLikeMethod {
+        method: String,
+        receiver: Box<Expr>,
+        args: Vec<Expr>,
+    },
+
     // String methods
     StringSplit(Box<Expr>, Box<Expr>), // string.split(delimiter) -> string[]
     StringFromCharCode(Box<Expr>),     // String.fromCharCode(code) -> single-char string
+    StringFromCharCodeSpread(Box<Expr>), // String.fromCharCode(...arrayLike) -> string
     StringFromCodePoint(Box<Expr>),    // String.fromCodePoint(code) -> string
     StringRaw {
         // Callable String.raw(callSite, ...substitutions) — the non-tagged
@@ -1587,6 +1828,7 @@ pub enum Expr {
     DateToString(Box<Expr>),     // date.toString() / String(date) -> full date string
     DateToDateString(Box<Expr>), // date.toDateString() -> string
     DateToTimeString(Box<Expr>), // date.toTimeString() -> string
+    DateToUTCString(Box<Expr>),  // date.toUTCString() / toGMTString() -> string
     DateToLocaleDateString(Box<Expr>), // date.toLocaleDateString() -> string
     DateToLocaleTimeString(Box<Expr>), // date.toLocaleTimeString() -> string
     DateToLocaleString(Box<Expr>), // date.toLocaleString() -> string
@@ -1636,6 +1878,11 @@ pub enum Expr {
     /// new URL(url) or new URL(url, base) -> URL object (stored as pointer)
     UrlNew {
         url: Box<Expr>,
+        base: Option<Box<Expr>>,
+    },
+    /// new URLPattern(input?, base?) -> URLPattern object
+    UrlPatternNew {
+        input: Box<Expr>,
         base: Option<Box<Expr>>,
     },
     /// url.href -> string (full URL)
@@ -1817,8 +2064,12 @@ pub enum Expr {
         mutable_captures: Vec<LocalId>,
         /// Whether this closure captures `this` from the enclosing scope (arrow function semantics)
         captures_this: bool,
+        /// Whether this closure captures `new.target` from the enclosing scope.
+        captures_new_target: bool,
         /// The enclosing class name if this closure captures `this` (for field access during codegen)
         enclosing_class: Option<String>,
+        /// Whether this closure came from an arrow function expression.
+        is_arrow: bool,
         /// Whether this is an async closure
         is_async: bool,
         /// Whether this is a generator closure (a `function*(){}` expression).
@@ -1866,7 +2117,7 @@ pub enum Expr {
         string: Box<Expr>,
         regex: Box<Expr>,
     },
-    /// string.matchAll(regex) -> Array<Array<string>>
+    /// string.matchAll(pattern) -> RegExp String Iterator
     StringMatchAll {
         string: Box<Expr>,
         regex: Box<Expr>,
@@ -1889,6 +2140,11 @@ pub enum Expr {
     /// Object.keys(obj) -> string[]
     /// Returns an array of the object's own enumerable property names
     ObjectKeys(Box<Expr>),
+    /// `for (key in obj)` enumeration keys -> string[]
+    /// Like `ObjectKeys` but follows ECMA-262 EnumerateObjectProperties:
+    /// null/undefined enumerate nothing (no throw) and inherited enumerable
+    /// string keys on the prototype chain are included (deduplicated).
+    ForInKeys(Box<Expr>),
     /// Object.values(obj) -> any[]
     /// Returns an array of the object's own enumerable property values
     ObjectValues(Box<Expr>),
@@ -1923,6 +2179,8 @@ pub enum Expr {
     /// Array.from(iterable) -> Array
     /// Creates a new array from an iterable (e.g., Map.entries(), Map.keys(), another array)
     ArrayFrom(Box<Expr>),
+    /// Array.prototype generic receiver materialization preserving absent keys as holes.
+    ArrayFromArrayLikeHoley(Box<Expr>),
 
     /// `Iterator.from(iterable)` (#2874) — wrap any iterable/iterator in a lazy
     /// iterator-helper object exposing `.map`/`.filter`/`.take`/`.drop`/
@@ -1932,13 +2190,13 @@ pub enum Expr {
     IteratorFrom(Box<Expr>),
 
     /// Tagged-template strings literal — codegen builds the cooked-strings
-    /// array AND a parallel raw-strings array, registers the (cooked, raw)
-    /// pair via `js_tagged_template_register_raw`, and returns the cooked
-    /// pointer (NaN-boxed). The raw entries are always known at compile
-    /// time (each quasi's `.raw` text), so they're stored as `String` rather
-    /// than `Expr`. Used by `lower_tagged_tpl` for the non-`String.raw`
-    /// fast-path tag-function call.
+    /// array AND a parallel raw-strings array, then asks the runtime for the
+    /// cached frozen template object for this call site. The raw entries are
+    /// always known at compile time (each quasi's `.raw` text), so they're
+    /// stored as `String` rather than `Expr`. Used by `lower_tagged_tpl` for
+    /// the non-`String.raw` fast-path tag-function call.
     TaggedTemplateStrings {
+        site_id: u64,
         cooked: Vec<Expr>,
         raw: Vec<String>,
     },
@@ -1953,6 +2211,11 @@ pub enum Expr {
     /// `operand[Symbol.iterator]()` when iterable, else the operand itself (a
     /// generator object already *is* its iterator). Lowers to `js_get_iterator`.
     GetIterator(Box<Expr>),
+    /// Resolve the iterator for generic `for await...of`: use
+    /// `operand[Symbol.asyncIterator]()` when present, otherwise wrap the
+    /// synchronous iterator from `operand[Symbol.iterator]()` in Perry's
+    /// AsyncFromSyncIterator adapter.
+    GetAsyncIterator(Box<Expr>),
     /// #321: materialize an UNTYPED `for...of` receiver into a plain Array
     /// by inspecting its runtime kind. The `for...of` desugar uses an
     /// index loop (`for (i=0; i<arr.length; i++) item = arr[i]`); when the
@@ -1963,6 +2226,11 @@ pub enum Expr {
     /// else drives its `[Symbol.iterator]`. Without it the index loop read
     /// `.length` off a raw Map/Set handle (→ 0) and iterated zero times.
     ForOfToArray(Box<Expr>),
+    /// Materialize an untyped `for await...of` receiver into a plain Array.
+    /// This routes through the async-iterator protocol first, then falls back
+    /// to the existing array/array-like behavior used by `Array.fromAsync`.
+    /// The lowering wraps this in `Await` before the index loop reads it.
+    ForAwaitToArray(Box<Expr>),
     /// Array.from(iterable, mapFn, thisArg?) -> Array
     /// Creates a new array by applying mapFn to each element of the iterable.
     /// `this_arg` (#2773) binds `this` inside a non-arrow mapFn.
@@ -2160,6 +2428,22 @@ pub enum Expr {
         target: Box<Expr>,
         key: Box<Expr>,
         value: Box<Expr>,
+        /// Optional `receiver` argument (4th): the object actually written
+        /// when the target's own/inherited descriptor allows it (observable
+        /// for Integer-Indexed exotic targets). Lowering supplies `target`
+        /// when the call omits it.
+        receiver: Box<Expr>,
+    },
+    /// Assignment PutValue for property references. Evaluates target/key/value
+    /// in source order, performs ordinary [[Set]] with an explicit receiver,
+    /// returns the RHS value, and throws when `strict` is true and [[Set]]
+    /// reports false.
+    PutValueSet {
+        target: Box<Expr>,
+        key: Box<Expr>,
+        value: Box<Expr>,
+        receiver: Box<Expr>,
+        strict: bool,
     },
     ReflectHas {
         target: Box<Expr>,
@@ -2187,6 +2471,10 @@ pub enum Expr {
         target: Box<Expr>,
         key: Box<Expr>,
         descriptor: Box<Expr>,
+    },
+    ReflectGetOwnPropertyDescriptor {
+        target: Box<Expr>,
+        key: Box<Expr>,
     },
     ReflectGetPrototypeOf(Box<Expr>),
     /// #2761: `Reflect.setPrototypeOf(target, proto)` — returns a boolean
@@ -2253,6 +2541,20 @@ pub enum Expr {
     DynamicImport {
         paths: Vec<String>,
         arg: Box<Expr>,
+        /// Byte offset (`span.lo.0`) of the `import(...)` call in its module's
+        /// source, captured at lowering time. Used by the driver to resolve a
+        /// `file:line` for the #5230 deferred-site notice (HIR `Expr` carries no
+        /// span otherwise). `0` when unknown.
+        byte_offset: u32,
+        /// #5230: when `Some(msg)`, the path argument was non-resolvable
+        /// (runtime-computed) and this site was *deferred* (the default,
+        /// non-strict policy — the analog of #5206's eval deferral). Codegen
+        /// lowers it to a rejected `Promise` carrying an `Error(msg)`, so
+        /// `await import(spec)` throws a descriptive error *only if reached*
+        /// rather than failing the whole build. `None` is the normal case
+        /// (`paths` resolved to a finite set). In strict mode such a site is a
+        /// compile error instead and never produces a node with this set.
+        deferred_error: Option<String>,
     },
     /// Compile-time-resolved `new Worker(filename, options?)` from
     /// `node:worker_threads`. The filename expression follows the same

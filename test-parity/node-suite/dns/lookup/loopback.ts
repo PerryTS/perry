@@ -30,16 +30,6 @@ function thrownShape(label: string, fn: () => void): void {
   }
 }
 
-async function rejectedShape(label: string, fn: () => Promise<unknown>): Promise<void> {
-  try {
-    const promise = fn();
-    await promise;
-    console.log(label + ":", "resolved");
-  } catch (e: any) {
-    console.log(label + ":", e.name, e.code);
-  }
-}
-
 const one = await lookupCb("localhost");
 console.log("callback lookup loopback:", one.err === null, isLoopback(one.value), one.family === 4 || one.family === 6);
 
@@ -67,5 +57,5 @@ console.log("promise lookupService:", typeof promiseService.hostname, promiseSer
 thrownShape("callback lookup missing callback", () => dns.lookup("localhost" as any));
 thrownShape("callback lookup invalid family", () => dns.lookup("localhost", { family: 5 } as any, () => {}));
 thrownShape("callback lookupService bad port", () => dns.lookupService("127.0.0.1", -1, () => {}));
-await rejectedShape("promise lookup invalid family", () => dnsPromises.lookup("localhost", { family: 5 } as any));
-await rejectedShape("promise lookupService bad port", () => dnsPromises.lookupService("127.0.0.1", -1));
+thrownShape("promise lookup invalid family", () => dnsPromises.lookup("localhost", { family: 5 } as any));
+thrownShape("promise lookupService bad port", () => dnsPromises.lookupService("127.0.0.1", -1));

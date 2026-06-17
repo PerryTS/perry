@@ -6,7 +6,7 @@ real-time data visualizations, or custom `Canvas` transitions — where you
 need a frame-aligned tick with an accurate timestamp instead of
 `setInterval(cb, 16)`.
 
-```typescript
+```typescript,no-test
 import { onFrame, cancelFrame } from "perry/ui";
 
 function loop(timestampMs: number, deltaMs: number) {

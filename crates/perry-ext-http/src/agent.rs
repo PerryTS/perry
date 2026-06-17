@@ -69,9 +69,17 @@ fn bind_agent_method(handle: Handle, name: &'static [u8]) -> i64 {
     (bind_agent_method_value(handle, name).to_bits() & PTR_MASK) as i64
 }
 
+fn handle_value(handle: Handle) -> f64 {
+    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
+}
+
 fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
-    let instance = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+    let instance = handle_value(handle);
     unsafe { js_class_method_bind(instance, name.as_ptr(), name.len()) }
+}
+
+fn pointer_value(handle: Handle) -> f64 {
+    f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
 }
 
 // ------------------------------------------------------------------
@@ -203,7 +211,6 @@ pub(crate) fn client_for_agent(handle: Handle) -> reqwest::Client {
     };
 
     let built = reqwest::Client::builder()
-        .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
         .pool_max_idle_per_host(pool_max_idle)
         .pool_idle_timeout(idle_timeout)
         .tcp_keepalive(std::time::Duration::from_secs(60))
@@ -212,6 +219,16 @@ pub(crate) fn client_for_agent(handle: Handle) -> reqwest::Client {
 
     let mut cache = AGENT_CLIENTS.lock().unwrap();
     cache.entry(handle).or_insert(built).clone()
+}
+
+/// The `(keep_alive, max_free_sockets, keep_alive_msecs)` pool config for
+/// `handle`, or `None` when the handle isn't a live AgentHandle. Used by
+/// the #4906 TLS-customized client path, which builds its own
+/// `reqwest::Client` (bypassing the per-agent cache) but still folds in
+/// the Agent's pool settings.
+pub(crate) fn agent_pool_config(handle: Handle) -> Option<(bool, f64, f64)> {
+    get_handle_mut::<AgentHandle>(handle)
+        .map(|a| (a.keep_alive, a.max_free_sockets, a.keep_alive_msecs))
 }
 
 /// Drop the cached client for `handle` so the next dispatch rebuilds it
@@ -451,7 +468,94 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "reuseSocket" => bind_agent_method_value(handle, b"reuseSocket"),
         "getName" => bind_agent_method_value(handle, b"getName"),
         "destroy" => bind_agent_method_value(handle, b"destroy"),
-        "close" => bind_agent_method_value(handle, b"close"),
+        // #4904: data properties — Agents constructed through the dynamic
+        // value path (`const { Agent } = require('http'); new Agent(...)`)
+        // read these through handle property dispatch rather than the
+        // class-filtered native rows.
+        "maxSockets" => js_http_agent_max_sockets(handle),
+        "maxFreeSockets" => js_http_agent_max_free_sockets(handle),
+        "maxTotalSockets" => js_http_agent_max_total_sockets(handle),
+        "keepAliveMsecs" => js_http_agent_keep_alive_msecs(handle),
+        "keepAlive" => js_http_agent_keep_alive(handle),
+        "destroyed" => js_http_agent_destroyed(handle),
+        "defaultPort" => js_http_agent_default_port(handle),
+        "protocol" => {
+            let ptr = js_http_agent_protocol(handle);
+            if ptr.is_null() {
+                f64::from_bits(TAG_UNDEFINED)
+            } else {
+                f64::from_bits(JsValue::from_string_ptr(ptr).bits())
+            }
+        }
+        "sockets" => js_http_agent_sockets(handle),
+        "freeSockets" => js_http_agent_free_sockets(handle),
+        "requests" => js_http_agent_requests(handle),
+        _ => f64::from_bits(TAG_UNDEFINED),
+    }
+}
+
+/// #4904: property writes on a dynamically-dispatched Agent —
+/// `agent.maxSockets = 4` and the `agent.createConnection = fn`
+/// monkeypatch pattern Node's own tests use. Returns 1 when claimed.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_agent_dispatch_property_set(
+    handle: Handle,
+    property_ptr: *const u8,
+    property_len: usize,
+    value: f64,
+) -> i32 {
+    if property_ptr.is_null() || property_len == 0 || get_handle::<AgentHandle>(handle).is_none() {
+        return 0;
+    }
+    let property = String::from_utf8_lossy(std::slice::from_raw_parts(property_ptr, property_len));
+    match property.as_ref() {
+        "maxSockets" => js_http_agent_set_max_sockets(handle, value),
+        "maxFreeSockets" => js_http_agent_set_max_free_sockets(handle, value),
+        "maxTotalSockets" => js_http_agent_set_max_total_sockets(handle, value),
+        "keepAliveMsecs" => js_http_agent_set_keep_alive_msecs(handle, value),
+        "keepAlive" => js_http_agent_set_keep_alive(handle, value),
+        "createConnection" | "createSocket" => {
+            let bits = value.to_bits();
+            let ptr = if JsValue::from_bits(bits).is_pointer() {
+                (bits & PTR_MASK) as i64
+            } else {
+                0
+            };
+            if property.as_ref() == "createConnection" {
+                js_http_agent_set_create_connection(handle, ptr);
+            } else {
+                js_http_agent_set_create_socket(handle, ptr);
+            }
+        }
+        _ => return 0,
+    }
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_http_agent_dispatch_method(
+    handle: Handle,
+    method_ptr: *const u8,
+    method_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if method_ptr.is_null() || method_len == 0 || get_handle_mut::<AgentHandle>(handle).is_none() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let method = String::from_utf8_lossy(std::slice::from_raw_parts(method_ptr, method_len));
+    match method.as_ref() {
+        "getName" => {
+            let options = if !args_ptr.is_null() && args_len > 0 {
+                *args_ptr
+            } else {
+                f64::from_bits(TAG_UNDEFINED)
+            };
+            let ptr = js_http_agent_get_name(handle, options);
+            f64::from_bits(JsValue::from_string_ptr(ptr).bits())
+        }
+        "destroy" => handle_value(js_http_agent_destroy(handle)),
+        "keepSocketAlive" | "reuseSocket" => handle_value(js_http_agent_noop_self(handle)),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
@@ -746,11 +850,18 @@ fn json_value_to_string(v: &serde_json::Value) -> String {
 }
 
 // ------------------------------------------------------------------
-// destroy / close / keepSocketAlive / reuseSocket — chainable no-ops
+// keepSocketAlive / reuseSocket — chainable no-ops (reqwest owns the
+// keep-alive pool, so there is no per-socket hook to forward to);
+// destroy is real (drops the cached client below).
 // ------------------------------------------------------------------
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "http.Agent keepSocketAlive/reuseSocket",
+        "reqwest owns the keep-alive pool; per-socket hooks are no-ops",
+        Some("#4917"),
+    );
     handle
 }
 

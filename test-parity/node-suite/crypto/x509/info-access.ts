@@ -1,0 +1,60 @@
+import { X509Certificate } from "node:crypto";
+
+const aiaPem = `-----BEGIN CERTIFICATE-----
+MIID3DCCAsSgAwIBAgIURhKfsGAAOk8NgtKmZEPsWLA6aBkwDQYJKoZIhvcNAQEL
+BQAwMTEfMB0GA1UEAwwWcGVycnktaW5mby1hY2Nlc3MudGVzdDEOMAwGA1UECgwF
+UGVycnkwHhcNMjYwNjAzMjIwMTUyWhcNMjcwNjAzMjIwMTUyWjAxMR8wHQYDVQQD
+DBZwZXJyeS1pbmZvLWFjY2Vzcy50ZXN0MQ4wDAYDVQQKDAVQZXJyeTCCASIwDQYJ
+KoZIhvcNAQEBBQADggEPADCCAQoCggEBAJ5l1gKQbYY1SsQkCVo6fRFyz7s8pxTo
+b0p+GO0qEikRm2lcoqiQaSHUvtngYsf/QyDu2rg9ogP26XdfJsDEgA2WTYreKBXC
+EmR68UxLvZLAuSXVSY/15EKnpqbZevG5Ww6la43agMqfIozTr9nlYZZN53Jyy1Nk
+agIYsiJIaXwzD7pmIr+jsZMGcicL2aEoKmy+2JT5yHmwdp+czu5EnyRaFdhpeTx6
+9uwMqI5e+RoryvrqugE0eGeEjVrFPX59MOi67I/hbV5757biSo03NaF+qeKH38XU
+xWqpxH/VahnCBy6HD4bLEYHpADbMesQ88t7kaTEiqbN8GIZ9GuKoeHkCAwEAAaOB
+6zCB6DAdBgNVHQ4EFgQUVEg9n7lr5cT4LM1wDFRfGfkhCWEwHwYDVR0jBBgwFoAU
+VEg9n7lr5cT4LM1wDFRfGfkhCWEwDwYDVR0TAQH/BAUwAwEB/zCBlAYIKwYBBQUH
+AQEEgYcwgYQwKQYIKwYBBQUHMAGGHWh0dHA6Ly9vY3NwLnBlcnJ5LnRlc3Qvc3Rh
+dHVzMCoGCCsGAQUFBzABhh5odHRwOi8vb2NzcDIucGVycnkudGVzdC9zdGF0dXMw
+KwYIKwYBBQUHMAKGH2h0dHA6Ly9jYS5wZXJyeS50ZXN0L2lzc3Vlci5wZW0wDQYJ
+KoZIhvcNAQELBQADggEBAD5Z0QvYSYI8z4qsDF82vNVVlxkpPdBF6/FN1hf3oBRE
+27mAOw7epe5GgOswX0bXnmKlLA3cpurudMNqGMTbAAy484bHFQMi/LAnMHgF6gaU
+XJwCoovYt2PVMG9VgClhPeXeNdIGpB6/8k/9b+YoH1Ne6zq81gJf3T3wAxepTqiP
+p/JaX4kOE+uavRRp5RcpbmjPmIDZ1Rw3kyZmzbu8GM+aeBkWnLjSOQ6KL6woqRWZ
+xkf1dtHWoElwLd/3RbkzSPpDkebqP1WVDzO+52ni1jIRagMyPMLnGGujH8UA6zTT
+RnUOsfbYbrbSs+7KSe4P53hVpUX8KB2iLxh4vbX0Igw=
+-----END CERTIFICATE-----`;
+
+const noAiaPem = `-----BEGIN CERTIFICATE-----
+MIIDXzCCAkegAwIBAgIUICGaY01t7nWGtQ+QsMAicwoeRLUwDQYJKoZIhvcNAQEL
+BQAwPzELMAkGA1UEBhMCVVMxCzAJBgNVBAgMAkNBMQ4wDAYDVQQKDAVQZXJyeTET
+MBEGA1UEAwwKcGVycnkudGVzdDAeFw0yNjA1MjMyMjM3NDZaFw0yNzA1MjMyMjM3
+NDZaMD8xCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJDQTEOMAwGA1UECgwFUGVycnkx
+EzARBgNVBAMMCnBlcnJ5LnRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+AoIBAQDSofrefQLAkx4k9mHYD/VrTLCkiPH7DP3RTmTD8UotAG+kv2+JQVIRWJOP
+/mJWC+ZnIVK7dCs8fqvsHS3HuU5BAYPQ4U7IyFyA48/ZBdsHECY6wuqhNW9yD5Pj
+x066iEFMckKKCNBP7gLX3rsrp4R5uWmvmK6lNqMgO4Xx8c3ae9xyxupUaS13fNzA
+inw5NNp7axLJm62llWMBOP+w2ZgQL4UmJDdxe5GI0q94ChHTU7uIr3DMOGAGWuoY
+zXLk8LeSwncgWn3CZZ4WpUxibNvhVG1pmZAbgeWB5GZboUMXd2a0Uyjq3EB2kYfx
+hPQYOp3obhEy1JtodmJHAlqYqG8vAgMBAAGjUzBRMB0GA1UdDgQWBBRB2mlHlpxU
+LohkBQ2NH8rRhV9hQDAfBgNVHSMEGDAWgBRB2mlHlpxULohkBQ2NH8rRhV9hQDAP
+BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQCvghtILxg/BdFTS9ZA
+VarJrhSrEHSlJ2Bqp6v8BJmMpouU9heVhT24RdAx9nM46jZPem6Mt55ZQ+eyR7vK
+iC5T5yPWreaKEWnbS7YhxSTcLZOhMMZ4eah02f1lhYtiDF6u7p6zfY1HjZlJrbE4
+WNdOEcttJh8BTciSV2wuxD7iZNejN5L1wH+PATHTnuEuryksRhky4tOb7UiY7qkj
+M11jjUSojXBNqw754Na4vTz5hhjJo17NeB3hZw6N+r9flCGdTQZ4k02hx9+LbxcJ
+uVylGMusIXcohDauuPEBi/NXk0owHqF6uafjjW5lHK2CnsHKL8U0qHRdcKFJZ4Jx
+/gTV
+-----END CERTIFICATE-----`;
+
+const aiaCert = new X509Certificate(aiaPem);
+const noAiaCert = new X509Certificate(noAiaPem);
+const infoAccess = aiaCert["infoAccess"];
+const lines = infoAccess.split("\n");
+
+console.log("infoAccess type:", typeof infoAccess);
+console.log("infoAccess json:", JSON.stringify(infoAccess));
+console.log("infoAccess line count:", lines.length);
+console.log("infoAccess first:", lines[0]);
+console.log("infoAccess second:", lines[1]);
+console.log("infoAccess third:", lines[2]);
+console.log("missing infoAccess undefined:", noAiaCert["infoAccess"] === undefined);

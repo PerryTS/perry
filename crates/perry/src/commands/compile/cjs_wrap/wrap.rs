@@ -2,12 +2,45 @@
 //! assemble the IIFE-shaped module.
 
 use super::*;
+use std::borrow::Cow;
 use std::path::Path;
 
 /// Wrap CJS source as ESM. `source_path` is the absolute path of the file
 /// being wrapped — used to resolve `require('./relative')` targets when
 /// peeking at re-export wrappers' transitive named exports.
+#[cfg(test)]
 pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Path) -> String {
+    wrap_commonjs_for_target(source, source_path, None)
+}
+
+pub(in crate::commands::compile) fn wrap_commonjs_for_target(
+    source: &str,
+    source_path: &Path,
+    target: Option<&str>,
+) -> String {
+    let mut source_cow = Cow::Borrowed(source);
+
+    if is_depd_index_path(source_path) {
+        if let Some(rewritten) = rewrite_depd_dynamic_wrapper(source_cow.as_ref()) {
+            source_cow = Cow::Owned(rewritten);
+        }
+    }
+    if is_function_bind_implementation_path(source_path) {
+        if let Some(rewritten) = rewrite_function_bind_dynamic_wrapper(source_cow.as_ref()) {
+            source_cow = Cow::Owned(rewritten);
+        }
+    }
+    if is_safer_buffer_path(source_path) {
+        if let Some(rewritten) = rewrite_safer_buffer_private_binding(source_cow.as_ref()) {
+            source_cow = Cow::Owned(rewritten);
+        }
+    }
+    if is_safe_buffer_path(source_path) {
+        if let Some(rewritten) = rewrite_safe_buffer_slow_buffer_fallback(source_cow.as_ref()) {
+            source_cow = Cow::Owned(rewritten);
+        }
+    }
+
     // Issue #665 (fifth pass): rewrite `module.exports = class X { ... };`
     // expressions into declaration form + bare-identifier assignment so the
     // existing hoist + direct-default-export machinery surfaces the class.
@@ -17,16 +50,16 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     // a downstream `class Memory extends RateLimiterAbstract { constructor(o){
     // super(o); ... } }` silently no-ops the parent constructor. The fix
     // mirrors the declaration-form path that v0.5.839 already wired up.
-    let owned_source;
-    let source: &str = match rewrite_module_exports_class_expression(source) {
-        Some(rewritten) => {
-            owned_source = rewritten;
-            &owned_source
-        }
-        None => source,
-    };
+    if let Some(rewritten) = rewrite_module_exports_class_expression(source_cow.as_ref()) {
+        source_cow = Cow::Owned(rewritten);
+    }
+    let source: &str = source_cow.as_ref();
 
-    let require_specs = extract_require_specifiers(source);
+    let mut require_specs = extract_require_specifiers(source);
+    let dead_platform_requires = inactive_platform_guarded_requires(source, target);
+    if !dead_platform_requires.is_empty() {
+        require_specs.retain(|spec| !dead_platform_requires.contains(spec));
+    }
 
     // Issue #652: hoist top-level `class X { ... }` declarations OUT of the
     // IIFE so the consumer's `import { X } from "pkg"` resolves to the real
@@ -76,8 +109,25 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         if hoisted_class_names.iter().any(|c| c == alias) {
             return false;
         }
+        // #5006: a reassigned alias (`s = s.filter(...)`) must stay a real
+        // mutable local — adopting it into an immutable `import s from '...'`
+        // and blanking the declaration makes the reassignment unresolvable
+        // (`ReferenceError: s is not defined`, the signal-exit → ink wall).
+        if identifier_is_reassigned(source, alias) {
+            return false;
+        }
         true
     };
+    // Next.js lazy-require: specifiers whose every `require('S')` call site is
+    // inside a function body (lazy in Node). Computed up front because it also
+    // suppresses alias ADOPTION below — a function-local `const dep =
+    // require('S')` is a function-scoped const, not a module binding, and
+    // adopting it would hoist `import dep from 'S'` to module scope (eager). We
+    // instead keep the synthetic binding and rename it `_lazyreq_N` so the
+    // target stays `Deferred` and inits only when the shim's
+    // `return _lazyreq_N` runs (i.e. when the function actually calls require).
+    let lazy_specs = function_local_specs(source);
+
     let mut import_local_names: Vec<String> = require_specs
         .iter()
         .enumerate()
@@ -87,6 +137,10 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         std::collections::HashSet::new();
     for (alias, spec, _) in &raw_aliases {
         if !alias_is_safe(alias) {
+            continue;
+        }
+        if lazy_specs.contains(spec) {
+            // Don't adopt a function-local alias — keep it lazy (see above).
             continue;
         }
         if import_local_names.iter().any(|n| n == alias) {
@@ -100,6 +154,17 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         }
         import_local_names[idx] = alias.clone();
         chosen_alias_per_spec.insert(spec.clone());
+    }
+
+    // Rename the surviving synthetic bindings for function-local specs so
+    // `collect_modules` can tag the import `is_deferred_require` by name and
+    // codegen can fire `<S>__init()` at the shim read site.
+    if !lazy_specs.is_empty() {
+        for (i, spec) in require_specs.iter().enumerate() {
+            if import_local_names[i] == format!("_req_{i}") && lazy_specs.contains(spec) {
+                import_local_names[i] = format!("_lazyreq_{i}");
+            }
+        }
     }
 
     // #1721: ranges of `const <alias> = require(<spec>)` lines whose alias we
@@ -126,18 +191,125 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .map(|(spec, local)| format!("import {} from '{}';", local, spec))
+        .map(|(spec, local)| {
+            // #4904: Node's underscore-prefixed internal http modules are
+            // require-only re-exports of the public `http` surface
+            // (`require('_http_agent').Agent` etc.). Bind the hoisted import
+            // to the public module; the require shim still matches on the
+            // original specifier string.
+            let import_spec = match spec.as_str() {
+                "_http_agent" | "_http_client" | "_http_incoming" | "_http_outgoing"
+                | "_http_server" => "http",
+                other => other,
+            };
+            format!("import {} from '{}';", local, import_spec)
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
+    // An UNRESOLVABLE adopted specifier (`require('@opentelemetry/api')`
+    // with only Next's vendored copy on disk) leaves its hoisted import
+    // binding as the boolean TRUE sentinel at runtime. Returning that from
+    // the shim defeats the ubiquitous try/require-fallback pattern — Node
+    // throws MODULE_NOT_FOUND and the catch loads the vendored copy, but
+    // the shim handed back `true` and the catch never ran. Guard such an
+    // entry with a throw — but ONLY when a call site of that specifier
+    // sits inside a `try` block: a BARE top-level require of a pruned
+    // build-only module (`require('next/dist/compiled/browserslist')` in
+    // get-supported-browsers.js) must keep the silent sentinel, because
+    // Perry initializes every collected module eagerly while Node never
+    // loads that file at all — a throw there kills startup. (A real module
+    // default-exporting a boolean would mis-trip the guard; no such
+    // package shape has been observed.)
     let require_cases = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .map(|(spec, local)| format!("        if (specifier === '{}') return {};", spec, local))
+        .map(|(spec, local)| {
+            if require_site_in_try(source, spec) {
+                format!(
+                    "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \
+                     throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', \
+                     \"Cannot find module '{spec}'\"); return {local}; }}"
+                )
+            } else {
+                format!("        if (specifier === '{}') return {};", spec, local)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Heuristic: is any `require('<spec>')` call site lexically inside a
+    // `try { … }` block? Reverse brace-depth scan from the call offset to
+    // the nearest unmatched `{`, checking whether `try` precedes it.
+    // String/comment contexts are not stripped — a false positive only
+    // turns the silent sentinel into a (more Node-faithful) throw.
+    fn require_site_in_try(source: &str, spec: &str) -> bool {
+        let needle_sq = format!("require('{}')", spec);
+        let needle_dq = format!("require(\"{}\")", spec);
+        let bytes = source.as_bytes();
+        let mut search = 0usize;
+        loop {
+            let hit = source[search..]
+                .find(&needle_sq)
+                .or_else(|| source[search..].find(&needle_dq));
+            let Some(rel) = hit else { return false };
+            let at = search + rel;
+            // Walk backwards to the nearest unmatched `{`, repeatedly: each
+            // enclosing block is checked for a preceding `try`.
+            let mut depth = 0i32;
+            let mut i = at;
+            while i > 0 {
+                i -= 1;
+                match bytes[i] {
+                    b'}' => depth += 1,
+                    b'{' => {
+                        if depth > 0 {
+                            depth -= 1;
+                        } else {
+                            // Enclosing block opener — does `try` precede it?
+                            let mut j = i;
+                            while j > 0
+                                && (bytes[j - 1] == b' '
+                                    || bytes[j - 1] == b'\t'
+                                    || bytes[j - 1] == b'\r'
+                                    || bytes[j - 1] == b'\n')
+                            {
+                                j -= 1;
+                            }
+                            if j >= 3
+                                && &bytes[j - 3..j] == b"try"
+                                && (j == 3 || !bytes[j - 4].is_ascii_alphanumeric())
+                            {
+                                return true;
+                            }
+                            // Keep walking outward (this block wasn't a try).
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            search = at + 1;
+        }
+    }
+
+    let require_resolve_cases = require_specs
+        .iter()
+        .map(|spec| format!("        if (specifier === '{}') return '{}';", spec, spec))
         .collect::<Vec<_>>()
         .join("\n");
 
     let mut named_exports = extract_exports_from_source(source);
+
+    // Issue #4872: `__exportStar(require('X'), exports)` is tsc's CJS
+    // lowering of `export * from 'X'` — emit exactly that as a real ESM
+    // re-export at module scope. The static `export *` lets compile.rs's
+    // transitive re-export propagation resolve names through multi-level
+    // barrels to their defining module (nestjs's `@nestjs/common/index.js`
+    // → `decorators/index.js` → `core/index.js` → `controller.decorator.js`),
+    // so a consumer's `import { Controller } from '@nestjs/common'` binds
+    // the origin's symbol instead of link-failing on
+    // `perry_fn_<common_index_js>__Controller`. The runtime copy inside the
+    // IIFE still runs, so `_cjs.X` property reads keep working too.
+    let export_star_specs = extract_export_star_specs(source);
 
     // For trivial re-export wrappers (`module.exports = require('./X')`),
     // recursively pull in the target's named exports. Without this,
@@ -146,6 +318,15 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     // "react"` link-fails.
     for spec in &require_specs {
         if !spec.starts_with("./") && !spec.starts_with("../") {
+            continue;
+        }
+        // #4872: specs re-exported via `__exportStar` surface through the
+        // static `export * from` emitted below — resolving to the ORIGIN
+        // module's symbols. Pulling the target's textual exports here would
+        // emit explicit `export const X = _cjs.X;` bindings that shadow the
+        // star re-export (ESM precedence) and degrade those names back to
+        // runtime property reads.
+        if export_star_specs.contains(spec) {
             continue;
         }
         let Some(target) = super::super::resolve::resolve_relative_import_path(spec, source_path)
@@ -280,6 +461,11 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         let aliases = extract_require_aliases_with_ranges(source);
         let lines = aliases
             .iter()
+            // #5006: a reassigned alias must keep its mutable `var alias =
+            // require(...)` local in the IIFE body — never surface it as an
+            // immutable module-scope `const alias = _req_N;` (the const write
+            // would throw) nor strip its declaration below.
+            .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
             .filter_map(|(alias, spec, _range)| {
                 let idx = require_specs.iter().position(|s| s == spec)?;
                 // When the alias is already the spec's import local name
@@ -298,6 +484,7 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         let ranges = aliases
             .into_iter()
             .filter(|(_, spec, _)| require_specs.iter().any(|s| s == spec))
+            .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
             .map(|(_, _, range)| range)
             .collect::<Vec<_>>();
         (lines, ranges)
@@ -330,12 +517,47 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
         None => "export default _cjs;".to_string(),
     };
 
-    let wrapped = format!(
-        r#"{imports}
-{import_aliases}
-{hoisted_class_block}
-const _cjs = (function() {{
-    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
+    // Issue #4933 — flat-emit a `module.exports = <Class>` module that we
+    // could NOT hoist. The hoist refuses any class whose body references a
+    // top-level `const`/`let`/`var` (#2310 — moving the class out of the
+    // IIFE would sever its closure over that binding). For a default-export
+    // class this is fatal: with the class trapped inside the IIFE, the
+    // module's default becomes the opaque `_cjs` result, so compile.rs never
+    // registers class identity. The consumer's `import StackUtils` then gets
+    // a value whose static methods, `.prototype`, AND closure are all gone
+    // (`StackUtils.nodeInternals` / `.prototype.clean` read `undefined`).
+    //
+    // The IIFE exists only to give the body a function scope (so a CJS
+    // top-level `return` is legal). When the body has no top-level `return`
+    // we can drop the IIFE entirely and run the body at ESM module scope:
+    // the class becomes a real top-level declaration (`export default
+    // StackUtils` resolves to it with full identity), every sibling binding
+    // it closes over stays in scope, and statement order is preserved
+    // verbatim. We only take this path for the case that is *currently
+    // broken* (a top-level class that is the single `module.exports = X`
+    // target but did not hoist), so working packages are unaffected.
+    let flat_default_class = extract_single_module_exports_assignment(source).filter(|name| {
+        !hoisted_class_names.contains(name)
+            && top_level_class_names(source).iter().any(|c| c == name)
+            && !source_has_top_level_return(source)
+    });
+
+    // #4872: ESM `export * from` declarations for every `__exportStar`
+    // call detected above.
+    let export_star_decls = export_star_specs
+        .iter()
+        .map(|spec| format!("export * from '{}';", spec))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // #3527 / #4933: the CommonJS runtime preamble (`module` / `exports` /
+    // `require` shims). Built once and shared by the IIFE wrap and the flat
+    // (#4933) emission so the two paths can never drift. The 4-space indent is
+    // written for the in-IIFE position; at module scope (flat) it is purely
+    // cosmetic. Embedding `{cjs_preamble}` reproduces the historical IIFE text
+    // byte-for-byte.
+    let cjs_preamble = format!(
+        r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
     // `var module = X` / `module = X` / `exports = X` — e.g. iconv-lite's
     // `for (...) {{ var module = modules[i]; mergeModules(exports, module); }}`
@@ -347,10 +569,124 @@ const _cjs = (function() {{
     const __cjs_module = {{ exports: {{}} }};
     var module = __cjs_module;
     var exports = __cjs_module.exports;
-    function require(specifier) {{
-{require_cases}
-        throw new Error('require() is not supported: ' + specifier);
+    function __perry_cjs_require_error(kind, code, message) {{
+        const err = kind === 'type' ? new TypeError(message) : new Error(message);
+        err.code = code;
+        return err;
     }}
+    function __perry_cjs_require_is_builtin(specifier) {{
+        switch (specifier) {{
+            case 'assert': case 'node:assert':
+            case 'assert/strict': case 'node:assert/strict':
+            case 'async_hooks': case 'node:async_hooks':
+            case 'buffer': case 'node:buffer':
+            case 'child_process': case 'node:child_process':
+            case 'cluster': case 'node:cluster':
+            case 'console': case 'node:console':
+            case 'constants': case 'node:constants':
+            case 'crypto': case 'node:crypto':
+            case 'dns': case 'node:dns':
+            case 'dns/promises': case 'node:dns/promises':
+            case 'events': case 'node:events':
+            case 'fs': case 'node:fs':
+            case 'http': case 'node:http':
+            case 'http2': case 'node:http2':
+            case 'https': case 'node:https':
+            case 'module': case 'node:module':
+            case 'net': case 'node:net':
+            case 'os': case 'node:os':
+            case 'path': case 'node:path':
+            case 'path/posix': case 'node:path/posix':
+            case 'path/win32': case 'node:path/win32':
+            case 'perf_hooks': case 'node:perf_hooks':
+            case 'process': case 'node:process':
+            case 'punycode': case 'node:punycode':
+            case 'querystring': case 'node:querystring':
+            case 'readline': case 'node:readline':
+            case 'readline/promises': case 'node:readline/promises':
+            case 'stream': case 'node:stream':
+            case 'stream/promises': case 'node:stream/promises':
+            case 'string_decoder': case 'node:string_decoder':
+            case 'sys': case 'node:sys':
+            case 'test': case 'node:test':
+            case 'test/reporters': case 'node:test/reporters':
+            case 'timers': case 'node:timers':
+            case 'timers/promises': case 'node:timers/promises':
+            case 'tty': case 'node:tty':
+            case 'url': case 'node:url':
+            case 'util': case 'node:util':
+            case 'util/types': case 'node:util/types':
+            case 'worker_threads': case 'node:worker_threads':
+            case 'zlib': case 'node:zlib':
+                return true;
+            default:
+                return false;
+        }}
+    }}
+    function require(specifier) {{
+        if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
+        if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
+{require_cases}
+        throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+    }}
+    Object.defineProperty(require, 'name', {{
+        value: 'require',
+        writable: false,
+        enumerable: false,
+        configurable: true,
+    }});
+    require.resolve = function resolve(specifier, options) {{
+        if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
+{require_resolve_cases}
+        if (__perry_cjs_require_is_builtin(specifier)) return specifier;
+        throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', 'Cannot find module ' + specifier);
+    }};
+    require.resolve.paths = function paths(specifier) {{
+        if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "request" argument must be of type string.');
+        return null;
+    }};
+    require.cache = {{}};
+    require.extensions = {{
+        '.js': function(module, filename) {{}},
+        '.json': function(module, filename) {{}},
+        '.node': function(module, filename) {{}},
+    }};
+    require.main = module;"#
+    );
+
+    let wrapped = if let Some(flat_class) = &flat_default_class {
+        // Issue #4933 — flat emission. Drop the IIFE and run the CommonJS body
+        // at ESM module scope: `module.exports = {flat_class}` then resolves to
+        // a real top-level `class {flat_class}` declaration, so the consumer's
+        // default import keeps full class identity (statics, `.prototype`, and
+        // the closure over sibling top-level bindings). `{hoisted_class_block}`
+        // still carries any sibling classes we DID hoist; `{flat_class}` itself
+        // was refused a hoist (it closes over an IIFE-local), so it stays in
+        // `{body_for_iife}` and lands at module scope here unchanged.
+        format!(
+            r#"{imports}
+{import_aliases}
+{hoisted_class_block}
+{cjs_preamble}
+
+{body_for_iife}
+
+const _cjs = __cjs_module.exports;
+export default {flat_class};
+export {{ {flat_class} }};
+{direct_class_exports}
+{direct_named_reexports}
+{named_export_decls}
+{export_star_decls}
+"#
+        )
+    } else {
+        format!(
+            r#"{imports}
+{import_aliases}
+{hoisted_class_block}
+const _cjs = (function() {{
+{cjs_preamble}
 
     {body_for_iife}
 
@@ -361,8 +697,10 @@ const _cjs = (function() {{
 {direct_class_exports}
 {direct_named_reexports}
 {named_export_decls}
+{export_star_decls}
 "#
-    );
+        )
+    };
     if std::env::var("PERRY_DEBUG_CJS_WRAP").is_ok() {
         eprintln!(
             "=== CJS WRAP for {} ===\n{}\n=== END ===",
@@ -371,4 +709,197 @@ const _cjs = (function() {{
         );
     }
     wrapped
+}
+
+fn target_node_platform(target: Option<&str>) -> Option<&'static str> {
+    match target {
+        Some("windows") | Some("windows-winui") => Some("win32"),
+        Some("linux") | Some("linux-x86_64") | Some("linux-arm64") | Some("linux-aarch64")
+        // musl shares node's `process.platform === "linux"` (#4826).
+        | Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl") => {
+            Some("linux")
+        }
+        Some("macos")
+        | Some("ios")
+        | Some("ios-simulator")
+        | Some("ios-widget")
+        | Some("ios-widget-simulator")
+        | Some("visionos")
+        | Some("visionos-simulator")
+        | Some("watchos")
+        | Some("watchos-simulator")
+        | Some("watchos-widget")
+        | Some("watchos-widget-simulator")
+        | Some("tvos")
+        | Some("tvos-simulator") => Some("darwin"),
+        Some(_) => None,
+        None => {
+            #[cfg(target_os = "windows")]
+            {
+                Some("win32")
+            }
+            #[cfg(target_os = "linux")]
+            {
+                Some("linux")
+            }
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            {
+                Some("darwin")
+            }
+            #[cfg(not(any(
+                target_os = "windows",
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "ios"
+            )))]
+            {
+                None
+            }
+        }
+    }
+}
+
+fn inactive_platform_guarded_requires(
+    source: &str,
+    target: Option<&str>,
+) -> std::collections::HashSet<String> {
+    let Some(platform) = target_node_platform(target) else {
+        return std::collections::HashSet::new();
+    };
+    let re = regex::Regex::new(
+        r#"(?s)if\s*\(\s*process\.platform\s*(===|!==)\s*['"]([^'"]+)['"]\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<else>.*?)\}"#,
+    )
+    .unwrap();
+    let mut inactive = std::collections::HashSet::new();
+    for cap in re.captures_iter(source) {
+        let Some(op) = cap.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(expected) = cap.get(2).map(|m| m.as_str()) else {
+            continue;
+        };
+        let condition_true = match op {
+            "===" => platform == expected,
+            "!==" => platform != expected,
+            _ => continue,
+        };
+        let dead_body = if condition_true {
+            cap.name("else")
+        } else {
+            cap.name("then")
+        };
+        if let Some(body) = dead_body {
+            inactive.extend(extract_require_specifiers(body.as_str()));
+        }
+    }
+    inactive
+}
+
+fn is_depd_index_path(source_path: &Path) -> bool {
+    source_path
+        .file_name()
+        .map(|name| name == "index.js")
+        .unwrap_or(false)
+        && source_path
+            .components()
+            .any(|component| component.as_os_str().to_string_lossy() == "depd")
+}
+
+fn is_function_bind_implementation_path(source_path: &Path) -> bool {
+    source_path
+        .file_name()
+        .map(|name| name == "implementation.js")
+        .unwrap_or(false)
+        && source_path
+            .components()
+            .any(|component| component.as_os_str().to_string_lossy() == "function-bind")
+}
+
+fn is_safer_buffer_path(source_path: &Path) -> bool {
+    source_path
+        .file_name()
+        .map(|name| name == "safer.js")
+        .unwrap_or(false)
+        && source_path
+            .components()
+            .any(|component| component.as_os_str().to_string_lossy() == "safer-buffer")
+}
+
+fn is_safe_buffer_path(source_path: &Path) -> bool {
+    source_path
+        .file_name()
+        .map(|name| name == "index.js")
+        .unwrap_or(false)
+        && source_path
+            .components()
+            .any(|component| component.as_os_str().to_string_lossy() == "safe-buffer")
+}
+
+fn rewrite_depd_dynamic_wrapper(source: &str) -> Option<String> {
+    let needle = r#"  // eslint-disable-next-line no-new-func
+  var deprecatedfn = new Function('fn', 'log', 'deprecate', 'message', 'site',
+    '"use strict"\n' +
+    'return function (' + args + ') {' +
+    'log.call(deprecate, message, site)\n' +
+    'return fn.apply(this, arguments)\n' +
+    '}')(fn, log, this, message, site)"#;
+
+    let replacement = r#"  var deprecatedfn = (function (fn, log, deprecate, message, site) {
+    "use strict"
+    return function () {
+      log.call(deprecate, message, site)
+      return fn.apply(this, arguments)
+    }
+  })(fn, log, this, message, site)"#;
+
+    if source.contains(needle) {
+        Some(source.replace(needle, replacement))
+    } else {
+        None
+    }
+}
+
+fn rewrite_function_bind_dynamic_wrapper(source: &str) -> Option<String> {
+    let needle = r#"    bound = Function('binder', 'return function (' + joiny(boundArgs, ',') + '){ return binder.apply(this,arguments); }')(binder);"#;
+    let replacement = r#"    bound = function () {
+        return binder.apply(this, arguments);
+    };"#;
+
+    if source.contains(needle) {
+        Some(source.replace(needle, replacement))
+    } else {
+        None
+    }
+}
+
+fn rewrite_safer_buffer_private_binding(source: &str) -> Option<String> {
+    let needle = r#"if (!safer.kStringMaxLength) {
+  try {
+    safer.kStringMaxLength = process.binding('buffer').kStringMaxLength
+  } catch (e) {
+    // we can't determine kStringMaxLength in environments where process.binding
+    // is unsupported, so let's not set it
+  }
+}"#;
+
+    let replacement = r#"if (!safer.kStringMaxLength) {
+  safer.kStringMaxLength = 536870888
+}"#;
+
+    if source.contains(needle) {
+        Some(source.replace(needle, replacement))
+    } else {
+        None
+    }
+}
+
+fn rewrite_safe_buffer_slow_buffer_fallback(source: &str) -> Option<String> {
+    let needle = "return buffer.SlowBuffer(size)";
+    let replacement = "return Buffer.allocUnsafeSlow(size)";
+
+    if source.contains(needle) {
+        Some(source.replace(needle, replacement))
+    } else {
+        None
+    }
 }

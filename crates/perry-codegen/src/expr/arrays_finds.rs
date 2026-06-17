@@ -236,13 +236,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // minute?, second?, ms?)` in local time. dayjs's parseDate
                 // takes this branch with regex-captured string args — see
                 // js_date_new_local_components for the coercion path.
-                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let mut vals: Vec<String> = Vec::with_capacity(7);
                 for a in args.iter().take(7) {
                     vals.push(lower_expr(ctx, a)?);
                 }
+                // Pad *absent* trailing components with their ECMA-262 default
+                // literal (slot 2 `day` → 1, time slots 3-6 → 0) rather than
+                // `undefined`, so the runtime can run a plain ToNumber on every
+                // forwarded slot: a *present* `undefined` then coerces to NaN
+                // (Invalid Date), while a truly-omitted arg uses its default.
+                // Slots: 0 year, 1 month, 2 day, 3 hour, 4 min, 5 sec, 6 ms.
                 while vals.len() < 7 {
-                    vals.push(undef.clone());
+                    let default = if vals.len() == 2 { 1.0 } else { 0.0 };
+                    vals.push(double_literal(default));
                 }
                 let blk = ctx.block();
                 let call_args: Vec<(crate::types::LlvmType, &str)> =
@@ -257,7 +263,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find",
@@ -269,7 +276,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_findIndex",
@@ -282,7 +290,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find_last",
@@ -294,7 +303,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_find_last_index",
@@ -325,7 +335,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let m_handle = unbox_to_i64(blk, &m_box);
             blk.call_void("js_map_clear", &[(I64, &m_handle)]);
-            Ok(double_literal(0.0))
+            // Map.prototype.clear() returns undefined, not 0.
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 
         // -------- Map.entries / Map.keys / Map.values --------
@@ -552,6 +563,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_get_iterator", &[(DOUBLE, &v)]))
         }
+        Expr::GetAsyncIterator(o) => {
+            let v = lower_expr(ctx, o)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_get_async_iterator", &[(DOUBLE, &v)]))
+        }
         Expr::ForOfToArray(o) => {
             // #321: materialize an untyped `for...of` receiver into a plain
             // Array. Runtime inspects the value's GC kind (Map → [k,v]
@@ -562,6 +579,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_for_of_to_array", &[(DOUBLE, &v)]))
+        }
+        Expr::ForAwaitToArray(o) => {
+            let v = lower_expr(ctx, o)?;
+            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_array_from_async",
+                &[(DOUBLE, &v), (DOUBLE, &undefined), (DOUBLE, &undefined)],
+            ))
         }
         Expr::WeakRefDeref(o) => {
             // `ref.deref()` — returns the wrapped target (or undefined if
@@ -595,7 +621,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let h = blk.call(I64, "js_uint8array_alloc", &[(I32, "0")]);
                     Ok(nanbox_pointer_inline(blk, &h))
                 }
-                Some(Expr::Integer(n)) => {
+                // Only take the i32 fast path when the literal fits in an i32;
+                // a larger length (`new Uint8Array(1e15)`) would truncate via
+                // `*n as i32`, so fall through to the runtime f64 path which
+                // throws `RangeError: Array buffer allocation failed` (#5067).
+                Some(Expr::Integer(n)) if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 => {
                     let size_str = (*n as i32).to_string();
                     let blk = ctx.block();
                     let h = blk.call(I64, "js_uint8array_alloc", &[(I32, &size_str)]);
@@ -650,6 +680,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::Uint8ArrayGet { array, index } => {
+            if !is_numeric_expr(ctx, index) {
+                let a = lower_expr(ctx, array)?;
+                let key = lower_expr(ctx, index)?;
+                let blk = ctx.block();
+                let handle = unbox_to_i64(blk, &a);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_get_dynamic",
+                    &[(I64, &handle), (DOUBLE, &key)],
+                ));
+            }
             let value = lower_uint8array_get_i32(ctx, array, index)?;
             let reason = buffer_access_materialization_reason(ctx, array);
             Ok(materialize_js_value(ctx, value, reason))
@@ -664,6 +705,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             index,
             value,
         } => {
+            if !is_numeric_expr(ctx, index) {
+                let a = lower_expr(ctx, array)?;
+                let key = lower_expr(ctx, index)?;
+                let val = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                let handle = unbox_to_i64(blk, &a);
+                let result = blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_set_dynamic",
+                    &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                );
+                if ctx.discard_expr_value {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(result);
+            }
             if let Some(store) =
                 lower_buffer_store(ctx, array, index, value, BufferAccessSpec::uint8array_set())?
             {
@@ -839,8 +896,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // compile-time-constant numeric lengths, or `js_typed_array_new(kind, val)`
         // for runtime-dispatched arguments (which inspects the NaN-box tag to
         // distinguish a numeric length from a source-array pointer).
-        // Result is a raw pointer bitcast to f64 (no NaN-box tag) — the runtime
-        // formatter and `js_array_*` dispatch helpers detect it via TYPED_ARRAY_REGISTRY.
+        // Result is a normal POINTER_TAG JS value. Element/property fast paths
+        // mask off the tag before consulting TYPED_ARRAY_REGISTRY, and runtime
+        // consumers such as Atomics require the value to satisfy is_pointer().
         Expr::TypedArrayNew { kind, arg } => {
             let kind_str = (*kind as i32).to_string();
             match arg {
@@ -851,18 +909,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_typed_array_new_empty",
                         &[(I32, &kind_str), (I32, &zero)],
                     );
-                    Ok(ctx.block().bitcast_i64_to_double(&p))
+                    Ok(nanbox_pointer_inline(ctx.block(), &p))
                 }
                 Some(arg_expr) => match arg_expr.as_ref() {
-                    // Literal integer length: `new Int32Array(3)`.
-                    Expr::Integer(n) => {
-                        let len_str = (*n as i32).max(0).to_string();
+                    // Literal integer length: `new Int32Array(3)`. A negative
+                    // literal (`new Int32Array(-1)`) is passed through verbatim
+                    // so the runtime throws the spec RangeError (#3662).
+                    // Only take the i32 fast path when the literal actually fits
+                    // in an i32 — otherwise `*n as i32` would silently truncate
+                    // a huge length (`new Uint8Array(1e15)` → a bogus -1.5e9),
+                    // so fall through to the f64 runtime path which throws the
+                    // proper `RangeError: Array buffer allocation failed` (#5067).
+                    Expr::Integer(n) if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 => {
+                        let len_str = (*n as i32).to_string();
                         let p = ctx.block().call(
                             I64,
                             "js_typed_array_new_empty",
                             &[(I32, &kind_str), (I32, &len_str)],
                         );
-                        Ok(ctx.block().bitcast_i64_to_double(&p))
+                        Ok(nanbox_pointer_inline(ctx.block(), &p))
                     }
                     // Literal float that is a non-negative integer: `new Int32Array(3.0)`.
                     Expr::Number(f) if f.fract() == 0.0 && *f >= 0.0 && *f < (i32::MAX as f64) => {
@@ -872,7 +937,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_typed_array_new_empty",
                             &[(I32, &kind_str), (I32, &len_str)],
                         );
-                        Ok(ctx.block().bitcast_i64_to_double(&p))
+                        Ok(nanbox_pointer_inline(ctx.block(), &p))
                     }
                     // Non-literal: dispatch at runtime based on the NaN-box tag.
                     // `js_typed_array_new` detects POINTER_TAG → copy from array,
@@ -885,7 +950,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_typed_array_new",
                             &[(I32, &kind_str), (DOUBLE, &val_box)],
                         );
-                        Ok(blk.bitcast_i64_to_double(&p))
+                        Ok(nanbox_pointer_inline(blk, &p))
                     }
                 },
             }

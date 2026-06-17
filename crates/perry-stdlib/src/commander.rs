@@ -10,7 +10,9 @@
 //! invoked the `.action()` callback, never linked subcommands to their
 //! parent, and never printed help. The docs example silently no-op'd.
 
+use perry_runtime::array::{js_array_from_f64, js_array_get_f64, js_array_length, ArrayHeader};
 use perry_runtime::closure::js_closure_call1;
+use perry_runtime::value::js_jsvalue_to_string;
 use perry_runtime::{
     js_object_alloc, js_object_set_field_by_name, js_string_from_bytes, ClosureHeader, StringHeader,
 };
@@ -44,6 +46,10 @@ pub struct CommanderHandle {
     options: Vec<CommandOption>,
     parsed_values: HashMap<String, ParsedValue>,
     args: Vec<String>,
+    /// Declared positional argument specs from `.argument("<file>")` /
+    /// `.argument("[dir]")` — used only for the `--help` usage line. Parsing
+    /// itself collects every non-option token into `args` regardless.
+    declared_args: Vec<String>,
     /// (subcommand-name, sub-CommanderHandle) — populated by `.command(name)`.
     subcommands: Vec<(String, Handle)>,
     /// Closure pointer (raw bits) for `.action(cb)`. 0 = no action registered.
@@ -76,6 +82,7 @@ impl CommanderHandle {
             options: Vec::new(),
             parsed_values: HashMap::new(),
             args: Vec::new(),
+            declared_args: Vec::new(),
             subcommands: Vec::new(),
             action_callback: 0,
         }
@@ -225,6 +232,25 @@ pub unsafe extern "C" fn js_commander_required_option(
     js_commander_option(handle, flags_ptr, desc_ptr, default_ptr)
 }
 
+/// `.argument("<file>")` / `.argument("[dir]")` — declare a positional
+/// argument. Parsing always collects non-option tokens into `args`, so this
+/// only records the spec for the `--help` usage line and returns the handle so
+/// the fluent chain keeps flowing. #5137: without this entry the call fell
+/// through to generic dynamic dispatch (a silent no-op) instead of staying on
+/// the commander handle.
+#[no_mangle]
+pub unsafe extern "C" fn js_commander_argument(
+    handle: Handle,
+    spec_ptr: *const StringHeader,
+) -> Handle {
+    if let Some(spec) = string_from_header(spec_ptr) {
+        if let Some(cmd) = get_handle_mut::<CommanderHandle>(handle) {
+            cmd.declared_args.push(spec);
+        }
+    }
+    handle
+}
+
 /// Register an action callback. `callback` is a raw closure pointer
 /// (NaN-box-stripped) — codegen passes it via the NA_PTR coercion which
 /// runs `unbox_to_i64` before this entry sees it. Non-zero is the stable
@@ -257,15 +283,53 @@ pub unsafe extern "C" fn js_commander_command(
 // ---------------------------------------------------------------------------
 // Parse + dispatch
 
-/// Top-level parse entry. The second arg is the user's `process.argv`
-/// expression — we ignore it and read `std::env::args()` directly so the
-/// program name (argv[0]) is always real and the surrounding sub-command
-/// argv-slicing logic stays consistent. Codegen still evaluates the user's
-/// argv expression for side effects via the NA_F64 dispatch coercion.
+/// Resolve the argument list `parse(argv?)` should operate on.
+///
+/// npm commander's `parse()` defaults to `from: 'node'`: when an explicit
+/// array is supplied (`program.parse(['node', 'script', ...])`) the first two
+/// entries are the executable + script path and the real args start at index
+/// 2. When called with no argument it reads `process.argv`, which on a Perry
+/// binary is `[exePath, ...realArgs]` (no separate script entry) — so we skip
+/// only the leading exe path. #5137: previously this always read
+/// `std::env::args()` and ignored the passed array, so `program.parse([...])`
+/// with a synthetic argv (the common test/REPL shape, and the issue repro)
+/// silently parsed nothing.
+unsafe fn resolve_parse_args(argv: f64) -> Vec<String> {
+    let bits = argv.to_bits();
+    // A pointer-tagged value is the user's explicit argv array. Anything else
+    // (undefined when `parse()` is called with no argument, or a primitive)
+    // falls back to the real process args.
+    if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize as *const ArrayHeader;
+        if !ptr.is_null() {
+            // Read elements through the bounds-checked, layout-abstracting
+            // runtime accessor rather than indexing the ArrayHeader data
+            // region directly — mirrors the perry-ext-commander copy and
+            // stays correct if the array layout ever changes.
+            let len = js_array_length(ptr);
+            let mut out = Vec::with_capacity(len as usize);
+            for i in 0..len {
+                let elem = js_array_get_f64(ptr, i);
+                if let Some(s) = string_from_header(js_jsvalue_to_string(elem)) {
+                    out.push(s);
+                }
+            }
+            // `from: 'node'` default — drop argv[0] (exe) and argv[1] (script).
+            return out.into_iter().skip(2).collect();
+        }
+    }
+    std::env::args().skip(1).collect()
+}
+
+/// Top-level parse entry. The second arg is the user's `parse(argv)`
+/// expression: when it's an explicit array we honor it (commander's
+/// `from: 'node'` default), otherwise we fall back to the real
+/// `std::env::args()`. Codegen passes the NaN-boxed value through unchanged
+/// via the NA_F64 dispatch slot.
 #[no_mangle]
-pub extern "C" fn js_commander_parse(handle: Handle, _argv: f64) -> Handle {
-    let argv: Vec<String> = std::env::args().collect();
-    parse_and_dispatch(handle, &argv[1..]);
+pub unsafe extern "C" fn js_commander_parse(handle: Handle, argv: f64) -> Handle {
+    let args = resolve_parse_args(argv);
+    parse_and_dispatch(handle, &args);
     handle
 }
 
@@ -304,6 +368,7 @@ fn parse_and_dispatch(handle: Handle, args: &[String]) {
                     })
                     .collect(),
                 subcommands: cmd.subcommands.clone(),
+                declared_args: cmd.declared_args.clone(),
             }
         }
         None => return,
@@ -452,6 +517,7 @@ struct ParseSnapshot {
     version: String,
     options: Vec<OptionMeta>,
     subcommands: Vec<(String, Handle)>,
+    declared_args: Vec<String>,
 }
 
 struct OptionMeta {
@@ -471,11 +537,15 @@ fn print_help(s: &ParseSnapshot) {
     } else {
         s.name.clone()
     };
-    let usage_tail = if s.subcommands.is_empty() {
+    let mut usage_tail = if s.subcommands.is_empty() {
         "[options]".to_string()
     } else {
         "[options] [command]".to_string()
     };
+    for arg in &s.declared_args {
+        usage_tail.push(' ');
+        usage_tail.push_str(arg);
+    }
     println!("Usage: {} {}", prog, usage_tail);
     println!();
     println!("Options:");
@@ -503,9 +573,41 @@ fn print_help(s: &ParseSnapshot) {
 // ---------------------------------------------------------------------------
 // Read-back accessors (queryable post-parse from user TS code).
 
+/// `program.opts()` — return a fresh plain object of the parsed option
+/// values (matching npm commander, where `opts()` returns a data object).
+/// #5137: previously returned the raw handle, so `JSON.stringify(opts)` saw a
+/// bogus pointer and printed `null` and `opts.verbose` never resolved. The
+/// NR_PTR return ABI NaN-boxes this heap pointer as a JS object value.
 #[no_mangle]
 pub extern "C" fn js_commander_opts(handle: Handle) -> Handle {
-    handle
+    let parsed = match get_handle_mut::<CommanderHandle>(handle) {
+        Some(cmd) => cmd.parsed_values.clone(),
+        None => HashMap::new(),
+    };
+    unsafe { build_options_object(&parsed) as Handle }
+}
+
+/// `program.args` — return a fresh JS array of the parsed positional
+/// arguments (everything that wasn't an option flag or option value).
+/// #5137: a bare `program.args` member read lowers to a 0-arg
+/// NativeMethodCall through the commander table; without this getter it
+/// resolved to the zero-sentinel and `program.args[0]` read `undefined`.
+#[no_mangle]
+pub extern "C" fn js_commander_args_array(handle: Handle) -> Handle {
+    let args = match get_handle_mut::<CommanderHandle>(handle) {
+        Some(cmd) => cmd.args.clone(),
+        None => Vec::new(),
+    };
+    unsafe {
+        let boxed: Vec<f64> = args
+            .iter()
+            .map(|a| {
+                let s = js_string_from_bytes(a.as_ptr(), a.len() as u32);
+                f64::from_bits(nanbox_string(s as u64))
+            })
+            .collect();
+        js_array_from_f64(boxed.as_ptr(), boxed.len() as u32) as Handle
+    }
 }
 
 #[no_mangle]
@@ -618,6 +720,7 @@ mod tests {
             options: Vec::new(),
             parsed_values: HashMap::new(),
             args: Vec::new(),
+            declared_args: Vec::new(),
             subcommands: Vec::new(),
             action_callback: 0x1234_5678,
         });

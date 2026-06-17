@@ -299,6 +299,48 @@ pub fn set_truncation_mode(handle: i64, mode: i64) {
     }
 }
 
+/// Set horizontal text alignment on a TextView (issue #3621).
+/// Public `alignment` follows the canonical Perry/AppKit scheme:
+/// 0=left, 1=right, 2=center, 3=justified, 4=natural. Maps to Android
+/// `Gravity` horizontal flags, OR-ed with `CENTER_VERTICAL` so single-line
+/// labels stay vertically centered (matching the Apple `UILabel` default).
+/// For justified (3) we additionally request inter-word justification via
+/// `setJustificationMode` (best-effort; API 26+).
+pub fn set_text_alignment(handle: i64, alignment: i64) {
+    if let Some(view_ref) = super::get_widget(handle) {
+        let mut env = jni_bridge::get_env();
+        let _ = env.push_local_frame(8);
+        // Gravity flags: LEFT=3, RIGHT=5, CENTER_HORIZONTAL=1,
+        // START=0x00800003, CENTER_VERTICAL=16.
+        const CENTER_VERTICAL: i32 = 16;
+        let horiz: i32 = match alignment {
+            1 => 5,           // right
+            2 => 1,           // center horizontal
+            3 => 3,           // justified → left gravity (+ justification mode below)
+            4 => 0x0080_0003, // start (locale-natural)
+            _ => 3,           // left
+        };
+        let _ = env.call_method(
+            view_ref.as_obj(),
+            "setGravity",
+            "(I)V",
+            &[JValue::Int(horiz | CENTER_VERTICAL)],
+        );
+        if alignment == 3 {
+            // JUSTIFICATION_MODE_INTER_WORD = 1 (TextView, API 26+).
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                "setJustificationMode",
+                "(I)V",
+                &[JValue::Int(1)],
+            );
+        }
+        unsafe {
+            env.pop_local_frame(&jni::objects::JObject::null());
+        }
+    }
+}
+
 /// Resolve `mode` to the Android `TextUtils.TruncateAt` enum and call
 /// TextView.setEllipsize. `mode = 0` clears the ellipsize (null).
 fn apply_ellipsize(env: &mut jni::JNIEnv, view: &JObject, mode: i64) {

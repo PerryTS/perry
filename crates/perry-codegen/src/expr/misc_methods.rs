@@ -38,8 +38,8 @@ use super::{
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    lower_index_set_fast, lower_js_args_array, lower_math_operand, lower_object_literal,
+    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
@@ -49,11 +49,11 @@ use super::{
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::MathFround(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "js_math_fround", &[(DOUBLE, &v)]))
         }
         Expr::MathF16round(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_math_f16round", &[(DOUBLE, &v)]))
@@ -528,63 +528,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- arr.forEach(callback) — invoke callback for side effects --------
-        // We don't actually iterate; just lower the callback for side
-        // effects (so closures get auto-collected) and return undefined.
         Expr::ArrayForEach { array, callback } => {
-            // Lower as: for (let i = 0; i < arr.length; i++)
-            //              callback(arr[i], i);
             let arr_box = lower_expr(ctx, array)?;
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
-            // Load length (null-guarded).
-            let len_i32 = blk.safe_load_i32_from_ptr(&arr_handle);
-            // Loop: for i = 0; i < len; i++
-            let cond_idx = ctx.new_block("foreach.cond");
-            let body_idx = ctx.new_block("foreach.body");
-            let exit_idx = ctx.new_block("foreach.exit");
-            let cond_lbl = ctx.block_label(cond_idx);
-            let body_lbl = ctx.block_label(body_idx);
-            let exit_lbl = ctx.block_label(exit_idx);
-            // i alloca — hoisted to the entry block so the loop body
-            // (which lives in its own basic blocks) is dominated by
-            // the slot definition even if this forEach is itself
-            // lowered from inside a nested if-arm.
-            let i_slot = ctx.func.alloca_entry(I32);
-            ctx.block().store(I32, "0", &i_slot);
-            ctx.block().br(&cond_lbl);
-            // cond: i < len
-            ctx.current_block = cond_idx;
-            let i_val = ctx.block().load(I32, &i_slot);
-            let cmp = ctx.block().icmp_slt(I32, &i_val, &len_i32);
-            ctx.block().cond_br(&cmp, &body_lbl, &exit_lbl);
-            // body: callback(arr[i], i)
-            ctx.current_block = body_idx;
-            let i_cur = ctx.block().load(I32, &i_slot);
-            let elem = ctx.block().call(
-                DOUBLE,
-                "js_array_get_f64",
-                &[(I64, &arr_handle), (I32, &i_cur)],
-            );
-            let i_f64 = ctx.block().sitofp(I32, &i_cur, DOUBLE);
-            ctx.block().call(
-                DOUBLE,
-                "js_closure_call3",
-                &[
-                    (I64, &cb_handle),
-                    (DOUBLE, &elem),
-                    (DOUBLE, &i_f64),
-                    (DOUBLE, &arr_box),
-                ],
-            );
-            // i++
-            let i_next = ctx.block().add(I32, &i_cur, "1");
-            ctx.block().store(I32, &i_next, &i_slot);
-            ctx.block().br(&cond_lbl);
-            // exit
-            ctx.current_block = exit_idx;
-            Ok(double_literal(0.0))
+            // #4091: throw TypeError for a non-callable callback before iterating
+            // (validated up front so even an empty array throws, per spec).
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
+            blk.call_void("js_array_forEach", &[(I64, &arr_handle), (I64, &cb_handle)]);
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
 
         // -------- Object.getOwnPropertyDescriptor(obj, key) --------
@@ -610,7 +563,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.cbrt --------
         Expr::MathCbrt(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "js_math_cbrt", &[(DOUBLE, &v)]))
         }
 
@@ -871,13 +824,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(double_literal(0.0));
             }
             if values.len() == 1 {
-                let v = lower_expr(ctx, &values[0])?;
+                let v = lower_math_operand(ctx, &values[0])?;
                 // Math.hypot(x) = |x|
                 return Ok(ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &v)]));
             }
-            let mut acc = lower_expr(ctx, &values[0])?;
+            let mut acc = lower_math_operand(ctx, &values[0])?;
             for v in &values[1..] {
-                let rhs = lower_expr(ctx, v)?;
+                let rhs = lower_math_operand(ctx, v)?;
                 let blk = ctx.block();
                 acc = blk.call(DOUBLE, "js_math_hypot", &[(DOUBLE, &acc), (DOUBLE, &rhs)]);
             }

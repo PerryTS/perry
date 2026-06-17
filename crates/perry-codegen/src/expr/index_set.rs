@@ -35,7 +35,7 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 #[allow(unused_imports)]
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
-    buffer_access_materialization_reason, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
+    buffer_access_materialization_reason, buffer_alias_metadata_suffix,
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_layout_note_slot_on_block, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
     emit_shadow_slot_update_for_expr, emit_string_literal_global,
@@ -69,6 +69,35 @@ fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool
                 | "Float64Array"
         )
     )
+}
+
+fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(
+        receiver_class_name(ctx, object).as_deref(),
+        Some("Uint8Array")
+    )
+}
+
+fn numeric_index_needs_runtime_key(index: &Expr) -> bool {
+    // Only a LITERAL numeric key that is not a clean array index in
+    // `0..=i32::MAX` needs the runtime key helper: out-of-range/negative
+    // integers (`a[2**32-1]`, `a[-1]`), non-integer floats (`a[1.5]`), and
+    // non-finite values (`a[NaN]`/`a[Infinity]`). These become string-keyed
+    // properties and must reach `js_array_*_index_or_string`.
+    //
+    // Computed/dynamic numeric indices are deliberately NOT rerouted here:
+    // they keep flowing through the typed-feedback numeric-array guard path,
+    // which already carries its own out-of-range/non-integer fallback. Sending
+    // them to the runtime key helper would defeat the native numeric-array hot
+    // path and drop the index guard (regressing the native-region proof and
+    // the typed-feedback hot-path tests). (#4557/#4543)
+    match index {
+        Expr::Integer(i) => *i < 0 || *i > i32::MAX as i64,
+        Expr::Number(n) => {
+            !(n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64)
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -151,6 +180,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 return Ok(val_double);
             }
+            if is_uint8array_receiver(ctx, object) && !is_numeric_expr(ctx, index) {
+                let arr_box = lower_expr(ctx, object)?;
+                let idx_double = lower_expr(ctx, index)?;
+                let val_double = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_set_dynamic",
+                    &[
+                        (I64, &arr_i64),
+                        (DOUBLE, &idx_double),
+                        (DOUBLE, &val_double),
+                    ],
+                ));
+            }
             // Issue #637 / hono r2 followup: `arr[stringKey] = val` where
             // the index is statically string-typed (e.g. `for (const i in
             // sparseArr)` produces string i; then `out[i] = val`). Pre-fix
@@ -218,6 +264,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx,
                     TypedFeedbackKind::ArrayElement,
                     "array[dynamic_index]",
+                    TypedFeedbackContract::array_set_index(),
+                );
+                ctx.block().call(
+                    I64,
+                    "js_typed_feedback_array_set_index_or_string",
+                    &[
+                        (I64, &site_id),
+                        (I64, &arr_handle),
+                        (DOUBLE, &idx_double),
+                        (DOUBLE, &val_double),
+                    ],
+                );
+                if value_needs_barrier {
+                    let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
+                    let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
+                    emit_write_barrier(ctx, &arr_bits, &val_bits);
+                }
+                return Ok(val_double);
+            }
+            if is_array_expr(ctx, object) && numeric_index_needs_runtime_key(index) {
+                let arr_box = lower_expr(ctx, object)?;
+                let idx_double = lower_expr(ctx, index)?;
+                let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
+                let val_double = lower_expr(ctx, value)?;
+                let arr_handle = {
+                    let blk = ctx.block();
+                    unbox_to_i64(blk, &arr_box)
+                };
+                let site_id = emit_typed_feedback_register_site(
+                    ctx,
+                    TypedFeedbackKind::ArrayElement,
+                    "array[boundary_index]",
                     TypedFeedbackContract::array_set_index(),
                 );
                 ctx.block().call(
@@ -579,10 +657,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let val_double = lower_expr(ctx, value)?;
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                super::property_set::emit_nullish_write_guard(
+                    ctx,
+                    &obj_bits,
+                    literal,
+                    "iset.literal",
+                );
+                let static_classref =
+                    super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let (obj_handle, key_raw) = {
                     let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    let obj_handle = super::index_get::classref_preserving_handle(
+                        blk,
+                        &obj_bits,
+                        static_classref,
+                    );
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
                     let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -609,10 +699,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let obj_box = lower_expr(ctx, object)?;
                 let key_box = lower_expr(ctx, index)?;
                 let val_double = lower_expr(ctx, value)?;
+                let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                super::property_set::emit_nullish_write_guard(
+                    ctx,
+                    &obj_bits,
+                    "index",
+                    "iset.string",
+                );
+                let static_classref =
+                    super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let (obj_handle, key_handle) = {
                     let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    let obj_handle = super::index_get::classref_preserving_handle(
+                        blk,
+                        &obj_bits,
+                        static_classref,
+                    );
                     // SSO-safe key unbox — see IndexGet branch above for rationale.
                     let key_handle = unbox_str_handle(blk, &key_box);
                     (obj_handle, key_handle)
@@ -642,9 +744,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let obj_box = lower_expr(ctx, object)?;
             let idx_box = lower_expr(ctx, index)?;
             let val_double = lower_expr(ctx, value)?;
+            let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset");
+            let static_classref =
+                super::index_get::index_object_is_class_or_proto_ref(ctx, object.as_ref());
             let obj_handle = {
                 let blk = ctx.block();
-                unbox_to_i64(blk, &obj_box)
+                super::index_get::classref_preserving_handle(blk, &obj_bits, static_classref)
             };
             let feedback_site_id = emit_typed_feedback_register_site(
                 ctx,

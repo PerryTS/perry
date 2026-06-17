@@ -329,6 +329,7 @@ Android-specific configuration for `perry publish android`, `perry run android`,
 | `package_name` | string | Falls back to bundle_id chain | Java package name (e.g., `"com.example.myapp"`) |
 | `min_sdk` | string | — | Minimum Android SDK version (e.g., `"26"` for Android 8.0) |
 | `target_sdk` | string | — | Target Android SDK version (e.g., `"34"` for Android 14) |
+| `version_code` | integer | Derived from `build_number` | Explicit Play `versionCode`. Overrides the derived value; must be strictly greater than any code already uploaded to Play (max `2100000000`). Use it to keep `versionCode` monotonic across CI/build-number changes without touching the marketing version. |
 | `permissions` | string[] | — | Android permissions (e.g., `["INTERNET", "CAMERA", "ACCESS_FINE_LOCATION"]`) |
 | `distribute` | string | — | Distribution method: `"playstore"` |
 | `keystore` | string | — | Path to `.jks` or `.keystore` signing keystore |

@@ -1,4 +1,4 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
+use perry_hir::{BinaryOp, Expr, Function, Stmt, WithSetFallback};
 use std::collections::HashSet;
 
 use super::*;
@@ -176,6 +176,24 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             out.insert(*id);
             walk(value, out);
         }
+        Expr::WithGet {
+            object, fallback, ..
+        } => {
+            walk(object, out);
+            walk(fallback, out);
+        }
+        Expr::WithSet {
+            object,
+            value,
+            fallback,
+            ..
+        } => {
+            walk(object, out);
+            walk(value, out);
+            if let WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) = fallback {
+                out.insert(*id);
+            }
+        }
         Expr::Update { id, .. } => {
             out.insert(*id);
         }
@@ -202,6 +220,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::IsUndefinedOrBareNan(operand)
         | Expr::ParseFloat(operand)
         | Expr::ObjectKeys(operand)
+        | Expr::ForInKeys(operand)
         | Expr::ObjectValues(operand)
         | Expr::ObjectEntries(operand)
         | Expr::ObjectFromEntries(operand)
@@ -213,11 +232,14 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::GetAsyncIterator(operand)
         | Expr::ForOfToArray(operand)
+        | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::QueueMicrotask(operand)
@@ -248,6 +270,8 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)
         | Expr::MathRound(operand)
+        | Expr::MathTrunc(operand)
+        | Expr::MathSign(operand)
         | Expr::MathAbs(operand)
         | Expr::MathLog(operand)
         | Expr::MathLog2(operand)
@@ -357,6 +381,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e, out),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -448,7 +473,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         // soft fallback (returns 0.0) and `js_new_function_construct`
         // saw a NaN-zero callee, allocating a class_id=0 empty object
         // with no prototype-method dispatch.
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             walk(callee, out);
             for a in args {
                 walk(a, out);
@@ -612,6 +637,43 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(a, out);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            walk(key, out);
+            walk(value, out);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(value, out);
+            walk(receiver, out);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+            for a in args {
+                walk(a, out);
+            }
+        }
         Expr::FsWriteFileSync(p, c) => {
             walk(p, out);
             walk(c, out);
@@ -735,7 +797,8 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::ArrayKeys(array)
         | Expr::ArrayValues(array)
         | Expr::ArrayFlat { array }
-        | Expr::ArrayToReversed { array } => {
+        | Expr::ArrayToReversed { array }
+        | Expr::ArrayReverseValue { receiver: array } => {
             walk(array, out);
         }
         Expr::ArrayUnshift { array_id, value } => {
@@ -807,6 +870,19 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(e, out);
             }
         }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            walk(receiver, out);
+            walk(target, out);
+            walk(start, out);
+            if let Some(e) = end {
+                walk(e, out);
+            }
+        }
         // Issue #894: prepended to the Sequence wrapping `Expr::ClassRef`
         // for class expressions returned from factory functions. The
         // key/value reference module-level (or function-local) lets;
@@ -820,6 +896,10 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         } => {
             walk(key_expr, out);
             walk(value_expr, out);
+        }
+        Expr::RegisterClassComputedMethod { key_expr, .. }
+        | Expr::RegisterClassComputedAccessor { key_expr, .. } => {
+            walk(key_expr, out);
         }
         Expr::ClassExprFresh {
             named_statics,

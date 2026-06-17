@@ -8,7 +8,30 @@ use crate::native_value::{
     LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
     PodLocal, SemanticKind,
 };
-use crate::types::{I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
+
+/// #5271: does `init` provably evaluate to a plain object literal? Two
+/// shapes reach codegen: a data-only literal stays `Expr::Object`, while a
+/// literal carrying methods/getters lowers to an immediately-invoked
+/// object-building closure whose sole param is named `__perry_obj_iife`
+/// and whose single argument is the seed `Object(..)`. Recognizing both
+/// lets `o.trim()` / `internals.trim(v, s)` resolve to the receiver's own
+/// member rather than `String.prototype.trim`.
+fn is_object_literal_init(init: &perry_hir::Expr) -> bool {
+    use perry_hir::Expr;
+    match init {
+        Expr::Object(_) => true,
+        Expr::Call { callee, args, .. } => {
+            matches!(args.first(), Some(Expr::Object(_)))
+                && matches!(
+                    callee.as_ref(),
+                    Expr::Closure { params, .. }
+                        if params.first().map_or(false, |p| p.name == "__perry_obj_iife")
+                )
+        }
+        _ => false,
+    }
+}
 
 fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
     matches!(expr, perry_hir::Expr::GlobalGet(_))
@@ -44,6 +67,14 @@ pub(crate) fn lower_let(
         if let Some(init_expr) = init {
             if let Some(props) = crate::lower_call::extract_options_fields(ctx, init_expr) {
                 ctx.option_object_locals.insert(id, props);
+            }
+            // #5271: remember object-literal locals so a builtin-named member
+            // call (`o.trim()`, joi's `internals.trim(v, s)`) resolves to the
+            // object's OWN method instead of being claimed by the static
+            // String-method fast path. Covers both plain literals and the
+            // method-bearing literals that lower to an object-building IIFE.
+            if is_object_literal_init(init_expr) {
+                ctx.object_literal_locals.insert(id);
             }
         }
     }
@@ -114,10 +145,13 @@ pub(crate) fn lower_let(
                     property.as_str(),
                     "URL"
                         | "URLSearchParams"
+                        | "URLPattern"
                         | "TextEncoder"
                         | "TextDecoder"
                         | "TextEncoderStream"
                         | "TextDecoderStream"
+                        | "CompressionStream"
+                        | "DecompressionStream"
                         | "File"
                         | "WebSocket"
                 )
@@ -568,6 +602,26 @@ pub(crate) fn lower_let(
                 let dummy_this = ctx.func.alloca_entry(DOUBLE);
                 ctx.this_stack.push(dummy_this);
 
+                // #2768/new.target: scalar replacement inlines the (own or
+                // inherited) constructor here without going through
+                // `lower_new`, so mirror its `new_target_stack` setup — bind
+                // `new.target` in the inlined body to this leaf class's ref
+                // (`INT32_TAG | class_id`). Without this a `new.target` read in
+                // the ctor (notably `const t = new.target`) fell through to the
+                // runtime cell, which this path never sets, yielding undefined.
+                let new_target_bits = ctx
+                    .class_ids
+                    .get(class_name)
+                    .map(|&cid| crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF))
+                    .unwrap_or(crate::nanbox::TAG_UNDEFINED);
+                let new_target_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.block().store(
+                    DOUBLE,
+                    &crate::nanbox::double_literal(f64::from_bits(new_target_bits)),
+                    &new_target_slot,
+                );
+                ctx.new_target_stack.push(new_target_slot);
+
                 // Stage field initializers around any parent body chain.
                 // Refs #420: leaf field inits may reference state set by
                 // parent body (e.g. drizzle's
@@ -687,6 +741,7 @@ pub(crate) fn lower_let(
                     )?;
                 }
 
+                ctx.new_target_stack.pop();
                 ctx.this_stack.pop();
                 ctx.class_stack.pop();
                 ctx.scalar_ctor_target.pop();
@@ -771,6 +826,19 @@ pub(crate) fn lower_let(
         // branches may capture this id later, and an alloca placed
         // here would not dominate those branches' loads.
         let slot = ctx.func.alloca_entry(DOUBLE);
+        // perry#4926 (source bug behind the #4898 SIGBUS): the alloca
+        // dominates every use, but the store of the box pointer below
+        // only runs when this `Let` executes. A boxed read/write on a
+        // path that skips the Let (sibling-branch closure capture,
+        // switch fallthrough, hoisted-`var` use in a minified function)
+        // loads an uninitialized slot — LLVM folds that load to `undef`
+        // and regalloc substitutes whatever register happens to be live,
+        // handing `js_box_set`/`js_box_get` an arbitrary "plausible"
+        // pointer. Initialize the slot to TAG_UNDEFINED in the entry
+        // block (mirroring the non-boxed path) so skipped-init paths
+        // read a defined non-pointer sentinel that the runtime rejects
+        // deterministically.
+        ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
         let box_as_double = ctx.block().bitcast_i64_to_double(&box_ptr);
         ctx.block().store(DOUBLE, &box_as_double, &slot);
         // Step 2: register BEFORE lowering init.
@@ -872,6 +940,7 @@ pub(crate) fn lower_let(
     let needs_i32_slot = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && i32_safe_local
         && init_in_i32_range
+        && !matches!(refined_ty, perry_types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
         && !ctx.i32_counter_slots.contains_key(&id);
@@ -1436,7 +1505,13 @@ fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = crate::expr::unbox_to_i64(blk, &arr_box);
-            let cb_handle = crate::expr::unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating
+            // (the discarded-result path still validates per spec).
+            let cb_handle = blk.call(
+                I64,
+                "js_validate_array_map_callback",
+                &[(I64, &arr_handle), (DOUBLE, &cb_box)],
+            );
             blk.call_void(
                 "js_array_map_discard",
                 &[(I64, &arr_handle), (I64, &cb_handle)],

@@ -81,6 +81,9 @@ source.abort("later");
 console.log("signal after source abort:", signal.aborted, signal.reason);
 
 await rejected("invalid aborted signal", () => aborted(undefined, {}));
+await rejected("invalid aborted signal null", () => aborted(null, {}));
+await rejected("invalid aborted signal object", () => aborted({}, {}));
+await rejected("invalid aborted signal number", () => aborted(1, {}));
 await rejected("invalid aborted resource", () =>
   aborted(new AbortController().signal, undefined),
 );

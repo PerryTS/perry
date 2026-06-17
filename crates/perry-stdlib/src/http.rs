@@ -17,6 +17,17 @@ use std::sync::Mutex;
 use crate::common::async_bridge::spawn;
 use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Handle};
 
+mod client_request_surface;
+pub(crate) use client_request_surface::{
+    dispatch_client_request_method, dispatch_client_request_property,
+};
+mod agent_dispatch;
+pub(crate) use agent_dispatch::{
+    dispatch_agent_method, dispatch_agent_property, dispatch_agent_property_set,
+};
+#[cfg(feature = "external-http-client-pump")]
+mod external_client_request;
+
 extern "C" {
     fn js_value_is_closure(value_bits: i64) -> i32;
     fn js_class_method_bind(
@@ -97,6 +108,8 @@ fn scan_http_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) 
             visitor.visit_i64_slot(&mut agent.create_socket);
         }
     });
+
+    client_request_surface::scan_roots(visitor);
 }
 
 /// Events that fire on the main thread via js_http_process_pending
@@ -648,6 +661,21 @@ pub unsafe extern "C" fn js_http_request(options_f64: f64, callback_i64: i64) ->
     })
 }
 
+/// `new http.ClientRequest(options)` (#4904). Perry's client model defers
+/// the actual send to `.end()`, so constructing is exactly `http.request`
+/// without a response callback. Node coerces a falsy `options.method` to
+/// `GET` — mirror that here (`http.request` keeps whatever string it got).
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_standalone_new(options_f64: f64) -> Handle {
+    let handle = js_http_request(options_f64, 0);
+    if let Some(req) = get_handle_mut::<ClientRequestHandle>(handle) {
+        if req.method.is_empty() {
+            req.method = "GET".to_string();
+        }
+    }
+    handle
+}
+
 /// https.request(options, callback) -> ClientRequest handle
 /// Same as http.request but defaults to https protocol
 #[no_mangle]
@@ -832,6 +860,12 @@ pub unsafe extern "C" fn js_http_client_request_write(handle: Handle, body_f64: 
         if let Some(body_str) = extract_string_value(body_f64) {
             req.body.extend_from_slice(body_str.as_bytes());
         }
+        return handle;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        let _ = unsafe { external_client_request::dispatch_method(handle, "write", &[body_f64]) };
     }
     handle
 }
@@ -852,7 +886,15 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
     let (method, url, headers, body, timeout_ms, agent_pool) = {
         let req = match get_handle_mut::<ClientRequestHandle>(handle) {
             Some(r) => r,
-            None => return handle,
+            None => {
+                #[cfg(feature = "external-http-client-pump")]
+                {
+                    let _ = unsafe {
+                        external_client_request::dispatch_method(handle, "end", &[body_f64])
+                    };
+                }
+                return handle;
+            }
         };
         if req.ended {
             return handle; // Already sent
@@ -1041,8 +1083,22 @@ pub unsafe extern "C" fn js_http_set_header(
         None => return handle,
     };
 
-    if let Some(req) = get_handle_mut::<ClientRequestHandle>(handle) {
-        req.headers.insert(name, value);
+    if client_request_surface::is_client_request_handle(handle) {
+        client_request_surface::set_header(handle, &name, value);
+        return handle;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        let name_value = f64::from_bits(0x7FFF_0000_0000_0000u64 | (name_ptr as u64 & PTR_MASK));
+        let value_value = f64::from_bits(0x7FFF_0000_0000_0000u64 | (value_ptr as u64 & PTR_MASK));
+        let _ = unsafe {
+            external_client_request::dispatch_method(
+                handle,
+                "setHeader",
+                &[name_value, value_value],
+            )
+        };
     }
 
     handle
@@ -1053,6 +1109,12 @@ pub unsafe extern "C" fn js_http_set_header(
 pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle {
     if let Some(req) = get_handle_mut::<ClientRequestHandle>(handle) {
         req.timeout_ms = Some(ms as u64);
+        return handle;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        let _ = unsafe { external_client_request::dispatch_method(handle, "setTimeout", &[ms]) };
     }
     handle
 }
@@ -1104,56 +1166,81 @@ pub unsafe extern "C" fn js_http_incoming_message_set_encoding(
 
 #[no_mangle]
 pub extern "C" fn js_http_client_request_method(handle: Handle) -> *mut StringHeader {
-    let method = get_handle_mut::<ClientRequestHandle>(handle)
-        .map(|req| req.method.clone())
-        .unwrap_or_default();
+    let method = match get_handle_mut::<ClientRequestHandle>(handle) {
+        Some(req) => req.method.clone(),
+        None => {
+            #[cfg(feature = "external-http-client-pump")]
+            if let Some(ptr) = unsafe { external_client_request::string_property(handle, "method") }
+            {
+                return ptr;
+            }
+            String::new()
+        }
+    };
     unsafe { js_string_from_bytes(method.as_ptr(), method.len() as u32) }
 }
 
 #[no_mangle]
 pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut StringHeader {
-    let protocol = get_handle_mut::<ClientRequestHandle>(handle)
-        .map(|req| {
-            reqwest::Url::parse(&req.url)
-                .map(|u| format!("{}:", u.scheme()))
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
+    let protocol = match get_handle_mut::<ClientRequestHandle>(handle) {
+        Some(req) => reqwest::Url::parse(&req.url)
+            .map(|u| format!("{}:", u.scheme()))
+            .unwrap_or_default(),
+        None => {
+            #[cfg(feature = "external-http-client-pump")]
+            if let Some(ptr) =
+                unsafe { external_client_request::string_property(handle, "protocol") }
+            {
+                return ptr;
+            }
+            String::new()
+        }
+    };
     unsafe { js_string_from_bytes(protocol.as_ptr(), protocol.len() as u32) }
 }
 
 #[no_mangle]
 pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHeader {
-    let host = get_handle_mut::<ClientRequestHandle>(handle)
-        .map(|req| {
-            reqwest::Url::parse(&req.url)
-                .ok()
-                .and_then(|u| u.host_str().map(|s| s.to_string()))
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
+    let host = match get_handle_mut::<ClientRequestHandle>(handle) {
+        Some(req) => reqwest::Url::parse(&req.url)
+            .ok()
+            .and_then(|u| u.host_str().map(|s| s.to_string()))
+            .unwrap_or_default(),
+        None => {
+            #[cfg(feature = "external-http-client-pump")]
+            if let Some(ptr) = unsafe { external_client_request::string_property(handle, "host") } {
+                return ptr;
+            }
+            String::new()
+        }
+    };
     unsafe { js_string_from_bytes(host.as_ptr(), host.len() as u32) }
 }
 
 #[no_mangle]
 pub extern "C" fn js_http_client_request_path(handle: Handle) -> *mut StringHeader {
-    let path = get_handle_mut::<ClientRequestHandle>(handle)
-        .map(|req| {
-            reqwest::Url::parse(&req.url)
-                .map(|u| {
-                    let mut path = u.path().to_string();
-                    if path.is_empty() {
-                        path.push('/');
-                    }
-                    if let Some(q) = u.query() {
-                        path.push('?');
-                        path.push_str(q);
-                    }
-                    path
-                })
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
+    let path = match get_handle_mut::<ClientRequestHandle>(handle) {
+        Some(req) => reqwest::Url::parse(&req.url)
+            .map(|u| {
+                let mut path = u.path().to_string();
+                if path.is_empty() {
+                    path.push('/');
+                }
+                if let Some(q) = u.query() {
+                    path.push('?');
+                    path.push_str(q);
+                }
+                path
+            })
+            .unwrap_or_default(),
+        None => {
+            #[cfg(feature = "external-http-client-pump")]
+            if let Some(ptr) = unsafe { external_client_request::string_property(handle, "path") } {
+                return ptr;
+            }
+            String::new()
+        }
+    };
     unsafe { js_string_from_bytes(path.as_ptr(), path.len() as u32) }
 }
 
@@ -1166,8 +1253,8 @@ pub unsafe extern "C" fn js_http_client_request_listener_count(
         Some(e) => e,
         None => return 0.0,
     };
-    get_handle_mut::<ClientRequestHandle>(handle)
-        .map(|req| {
+    match get_handle_mut::<ClientRequestHandle>(handle) {
+        Some(req) => {
             let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
             let implicit_response = if event == "response" && req.response_callback != 0 {
                 1
@@ -1175,8 +1262,25 @@ pub unsafe extern "C" fn js_http_client_request_listener_count(
                 0
             };
             (explicit + implicit_response) as f64
-        })
-        .unwrap_or(0.0)
+        }
+        None => {
+            #[cfg(feature = "external-http-client-pump")]
+            {
+                let event_value =
+                    f64::from_bits(0x7FFF_0000_0000_0000u64 | (event_ptr as u64 & PTR_MASK));
+                if let Some(value) = unsafe {
+                    external_client_request::dispatch_method(
+                        handle,
+                        "listenerCount",
+                        &[event_value],
+                    )
+                } {
+                    return value;
+                }
+            }
+            0.0
+        }
+    }
 }
 
 /// IncomingMessage.statusCode — get response status code
@@ -1681,10 +1785,18 @@ unsafe fn append_https_agent_name_fields(name: &mut String, options_f64: f64) {
     push_truthy_string(name, "privateKeyEngine");
 }
 
-/// `agent.destroy()` / `.close()` — release pooled sockets. Perry doesn't
-/// pool today, so it's a no-op that returns the receiver for chainability.
+/// `agent.keepSocketAlive(socket)` / `agent.reuseSocket(socket, req)` —
+/// this Agent flavor exposes no per-socket hooks to act on, so these return
+/// the receiver for chainability but otherwise do nothing. Warn once instead
+/// of silently succeeding (#4917). (Default builds route http through
+/// perry-ext-http, where reqwest owns the keep-alive pool.)
 #[no_mangle]
 pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
+    perry_runtime::stub_diag::perry_stub_warn(
+        "http.Agent keepSocketAlive/reuseSocket",
+        "this http Agent has no per-socket hooks; the call is a no-op",
+        Some("#4917"),
+    );
     handle
 }
 
@@ -1828,39 +1940,6 @@ pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
     handle
 }
 
-/// Allocate a fresh empty JS object — Node returns `{}` from
-/// `agent.sockets` / `.freeSockets` / `.requests` until the agent has
-/// dispatched a request. Returns NaN-boxed pointer bits as `f64`
-/// (same ABI as `__get_protocol` etc. for the codegen-direct dispatch
-/// rows).
-fn empty_object_bits_f64() -> f64 {
-    // `js_object_alloc(num_keys, capacity)` returns an empty object
-    // pointer; the `0,0` shape is reused across allocations.
-    let obj = unsafe { perry_runtime::js_object_alloc(0, 0) };
-    if obj.is_null() {
-        return f64::from_bits(JSValue::undefined().bits());
-    }
-    f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_sockets(handle: Handle) -> f64 {
-    let _ = handle;
-    empty_object_bits_f64()
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_free_sockets(handle: Handle) -> f64 {
-    let _ = handle;
-    empty_object_bits_f64()
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_requests(handle: Handle) -> f64 {
-    let _ = handle;
-    empty_object_bits_f64()
-}
-
 #[no_mangle]
 pub extern "C" fn js_http_agent_set_create_connection(handle: Handle, closure_ptr: i64) {
     if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
@@ -1872,36 +1951,6 @@ pub extern "C" fn js_http_agent_set_create_connection(handle: Handle, closure_pt
 pub extern "C" fn js_http_agent_set_create_socket(handle: Handle, closure_ptr: i64) {
     if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
         agent.create_socket = closure_ptr;
-    }
-}
-
-fn bind_agent_method(handle: Handle, name: &'static [u8]) -> i64 {
-    let instance = f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
-    let bound = unsafe { js_class_method_bind(instance, name.as_ptr(), name.len()) };
-    (bound.to_bits() & PTR_MASK) as i64
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_create_connection(handle: Handle) -> i64 {
-    let stored = get_handle_mut::<AgentHandle>(handle)
-        .map(|a| a.create_connection)
-        .unwrap_or(0);
-    if stored != 0 {
-        stored
-    } else {
-        bind_agent_method(handle, b"createConnection")
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_agent_create_socket(handle: Handle) -> i64 {
-    let stored = get_handle_mut::<AgentHandle>(handle)
-        .map(|a| a.create_socket)
-        .unwrap_or(0);
-    if stored != 0 {
-        stored
-    } else {
-        bind_agent_method(handle, b"createSocket")
     }
 }
 

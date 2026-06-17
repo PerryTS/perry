@@ -28,11 +28,16 @@ console.log(
     ),
   ),
 );
+errorLine("transform enum", () =>
+  Module.stripTypeScriptTypes("enum Color { Red = 1 }\nconsole.log(Color.Red);", {
+    mode: "transform",
+  }),
+);
 console.log(
-  "transform enum contains:",
-  /var Color/.test(
-    Module.stripTypeScriptTypes("enum Color { Red = 1 }\nconsole.log(Color.Red);", {
-      mode: "transform",
+  "sourceMap false:",
+  JSON.stringify(
+    Module.stripTypeScriptTypes("const mapped: number = 1;", {
+      sourceMap: false,
     }),
   ),
 );
@@ -41,9 +46,13 @@ errorLine("bad code", () => Module.stripTypeScriptTypes(1));
 errorLine("bad mode", () =>
   Module.stripTypeScriptTypes("const x = 1;", { mode: "bad" }),
 );
-errorLine("bad sourceMap", () =>
+errorLine("sourceMap true", () =>
   Module.stripTypeScriptTypes("const x = 1;", {
-    mode: "transform",
+    sourceMap: true,
+  }),
+);
+errorLine("sourceMap string", () =>
+  Module.stripTypeScriptTypes("const x = 1;", {
     sourceMap: "yes",
   }),
 );

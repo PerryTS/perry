@@ -87,13 +87,28 @@ bundled-fastify = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:byt
 # `bundled-streams` directly, and also strips `http-client` when
 # axios / node-fetch / http / https is imported through the
 # well-known table — both ends move in lockstep.
-http-client = ["dep:reqwest", "async-runtime", "bundled-streams"]
+#
+# #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API —
+# `fetch()`, `Headers`, `Request`, `Response`, `Blob`/`File`, in
+# `src/fetch/` + `src/fetch_blob.rs`) plus the bundled node:http client
+# (`src/http.rs` + `src/axios.rs`). The halves share the
+# reqwest/async-runtime/streams deps but are otherwise independent.
+# Keeping them separable lets the well-known flip strip *only* the
+# bundled node:http client when `node:http` routes to perry-ext-http,
+# while preserving the Web Fetch FFIs a program needs for a bare
+# `new Headers()` / `new Response()`. Linking both the bundled client
+# and perry-ext-http previously produced duplicate
+# `js_http_process_pending` (et al.) symbols, and perry-ext-http's
+# aux-pump call bound to perry-stdlib's empty-queue copy — wedging the
+# in-process response pump (#5174).
+web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams"]
+http-client = ["web-fetch"]
 
 # Web Streams API (issue #237). Per-binding gate v0.5.572 — the
 # well-known flip routes `import 'streams'` to perry-ext-streams
 # by stripping this feature. Default-on through `default = ["full"]`
 # and through the `http-client` umbrella for legacy callers.
-bundled-streams = []
+bundled-streams = ["dep:flate2", "dep:brotli"]
 
 # WebSocket — `websocket` umbrella retained for backwards-compat;
 # v0.5.571's well-known flip toggles `bundled-ws` instead so
@@ -178,10 +193,28 @@ external-http-client-pump = ["async-runtime"]
 # handlers hang. Mirrors `external-http-server-pump`.
 external-fastify-pump = ["async-runtime"]
 
+# Activated by `optimized_libs::build_optimized_libs` when the well-known
+# flip routes `node:events` to perry-ext-events. Makes
+# `js_stdlib_init_dispatch` register perry-ext-events'
+# `js_event_emitter_new_with_options` as the runtime's events construct
+# dispatcher at startup, so a dynamic `new` on the bound
+# `events.EventEmitter` export value (`require('events')`, default import,
+# aliased ctor) builds a real emitter instead of an empty object. Without
+# this, ext-events only registers its hooks lazily on the first *static*
+# emitter construction. Issue #4995.
+external-events-construct = []
+
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.
-tls = ["bundled-net", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs"]
+tls = [
+    "bundled-net",
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:rustls-native-certs",
+    "dep:rustls-pemfile",
+    "dep:base64",
+]
 
 # Databases
 database = ["database-postgres", "database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
@@ -212,7 +245,7 @@ bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:aes-gcm", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:x509-cert", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
+crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:x509-cert", "dep:ml-kem", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-jsonwebtoken", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-runtime"]
 bundled-argon2 = ["dep:argon2", "async-runtime"]
 bundled-jsonwebtoken = ["dep:jsonwebtoken", "dep:p256", "dep:rsa", "dep:spki"]
@@ -224,7 +257,7 @@ bundled-ethers = []
 # Compression (zlib + brotli)
 # `brotli` rides under the same `compression` umbrella; needed by
 # axios's `zlib.createBrotliDecompress` feature-check (#axios e2e).
-compression = ["dep:flate2", "dep:brotli"]
+compression = ["dep:flate2", "dep:brotli", "dep:zstd"]
 
 # Email (nodemailer) — `email` umbrella retained for
 # backwards-compat; v0.5.558's well-known flip toggles
@@ -273,11 +306,32 @@ bundled-nanoid = ["dep:nanoid"]
 # Async runtime (tokio) - internal feature
 async-runtime = ["dep:tokio"]
 
+# OCI container subsystem (perry/container, perry/compose, perry/workloads).
+# Pulls in perry-container-compose and exposes the `js_container_*` and
+# `js_compose_*` FFI exports that the codegen dispatch table targets.
+container = ["dep:perry-container-compose", "async-runtime"]
+
 [dependencies]
 perry-runtime = { workspace = true, features = ["stdlib"] }
 # Re-bundle updater symbols into libperry_stdlib.a so user binaries that
 # call `perry/updater` resolve at link time without extra wiring.
 perry-updater = { workspace = true }
+# Container subsystem (gated behind the `container` feature). The stdlib
+# container/ module re-exports `perry_container_compose::*` types and
+# delegates orchestration to `ComposeEngine` / `ContainerBackend`.
+#
+# NOTE 1: this is a DIRECT path dep (not `workspace = true`) so the
+# build doesn't break if the `[workspace.dependencies]
+# perry-container-compose` line gets stripped. The `[workspace] members`
+# entry is still required for `cargo build -p perry-container-compose`
+# to succeed — that's enforced by the `crate_in_workspace_members` test
+# in this crate's tests/.
+#
+# NOTE 2: do NOT enable the crate's own `ffi` feature here — it exports
+# a *different* legacy `js_compose_*` shape (YAML-file-path-based) that
+# would collide with stdlib's canonical SPEC §9.1 stack-handle
+# signatures at link.
+perry-container-compose = { path = "../perry-container-compose", optional = true }
 
 thiserror.workspace = true
 anyhow.workspace = true
@@ -317,6 +371,7 @@ futures-util = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
+rustls-pemfile = { version = "2", optional = true }
 
 # Database
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }
@@ -329,6 +384,8 @@ rusqlite = { version = "0.32.1", features = ["bundled", "column_decltype", "limi
 sha2 = { version = "0.11", optional = true }
 sha1 = { version = "0.11", optional = true }
 sha3 = { version = "0.11", optional = true }
+sha3_010 = { package = "sha3", version = "0.10", optional = true, default-features = false }
+sha3-utils = { version = "0.5", optional = true }
 rsa-sha1 = { package = "sha1", version = "0.10", optional = true }
 md-5 = { version = "0.11", optional = true }
 hex = { version = "0.4", optional = true }
@@ -336,7 +393,9 @@ hmac = { version = "0.13", optional = true }
 bcrypt = { version = "0.17", optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
-rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "sha2"] }
+p384 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+p521 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
+rsa = { version = "0.9", optional = true, default-features = false, features = ["pem", "pkcs5", "sha2"] }
 # #1367 node:crypto X509Certificate — DER/PEM cert parsing (RustCrypto, reuses
 # the der/spki/const-oid already in the lock).
 x509-cert = { version = "0.2", optional = true, default-features = false, features = ["pem"] }
@@ -350,19 +409,25 @@ pbkdf2 = { version = "0.13", features = ["hmac"], optional = true }
 argon2 = { version = "0.5", optional = true }
 base64 = { version = "0.22", optional = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
+x448 = { version = "0.14.0-pre.9", features = ["static_secrets"], optional = true }
 ed25519-dalek = { version = "2.1", optional = true }
+ed448-goldilocks = { version = "0.14.0-pre.13", default-features = false, features = ["alloc", "signing"], optional = true }
 aes-gcm = { version = "0.10", optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
 ghash = { version = "0.5", optional = true }
 # AES-KW (RFC 3394) — used by `crypto.subtle.wrapKey` / `unwrapKey`
 # when the wrap algorithm is `{ name: 'AES-KW' }`. Gated under the
 # `crypto` umbrella so it tracks the rest of the symmetric surface.
 aes-kw = { version = "0.3.0", optional = true }
 hkdf = { version = "0.13", optional = true }
+ml-kem = { version = "0.3.2", features = ["pkcs8"], optional = true }
 
 # Compression
 flate2 = { version = "1.0", optional = true }
 # Brotli decompression — feature-checked by axios at module init.
 brotli = { version = "8.0.2", optional = true }
+# Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
+zstd = { version = "0.13.3", optional = true }
 
 # Email
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"], optional = true }
@@ -374,7 +439,7 @@ image = { version = "0.25", optional = true }
 scraper = { version = "0.27", optional = true }
 
 # Scheduler
-cron = { version = "0.12", optional = true }
+cron = { version = "0.16", optional = true }
 tokio-cron-scheduler = { version = "0.10", optional = true }
 
 # Rate limiting
@@ -382,10 +447,10 @@ governor = { version = "0.10", optional = true }
 
 # Validation
 validator = { version = "0.20", features = ["derive"], optional = true }
-regex = { version = "1.10", optional = true }
+regex = { version = "1.12", optional = true }
 
 # IDs
-uuid = { version = "1.11", features = ["v4", "v1", "v7"], optional = true }
+uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"], optional = true }
 nanoid = { version = "0.5", optional = true }
 
 # LRU Cache — optional from v0.5.539 so the well-known flip can
@@ -413,3 +478,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_Foundation",
 ] }
+
+[dev-dependencies]
+# Property tests for the container FFI bridge (gated behind `container` feature
+# at the test-file level via `#[cfg(feature = "container")]`).
+proptest = "1"
+serde_yaml = "0.9"

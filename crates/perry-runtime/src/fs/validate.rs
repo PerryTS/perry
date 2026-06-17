@@ -228,6 +228,13 @@ fn read_js_string(value: f64) -> String {
     string_header_to_string(ptr)
 }
 
+/// Public accessor for [`read_js_string`] so the shared `validators` module
+/// can render a string value's contents in an `ERR_INVALID_ARG_VALUE` /
+/// `validateOneOf` message.
+pub fn read_js_string_pub(value: f64) -> String {
+    read_js_string(value)
+}
+
 /// Render a string the way Node's `determineSpecificType` does for the
 /// `Received …` clause: single-quoted (switched to double quotes when the
 /// content has a single quote but no double quote), then truncated to 25
@@ -533,17 +540,62 @@ pub(crate) fn validate_string_or_object_options(arg_name: &str, value: f64) {
 /// Validate fs options parameters that accept only an options object. Node
 /// accepts an omitted value but rejects `null`, arrays, functions, and
 /// primitives with `ERR_INVALID_ARG_TYPE`.
-pub(crate) fn validate_object_options(arg_name: &str, value: f64) {
+pub(crate) fn object_options_type_error_value(arg_name: &str, value: f64) -> Option<f64> {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || is_plain_options_object(value) {
-        return;
+        return None;
     }
     let message = format!(
         "The \"{}\" argument must be of type object. Received {}",
         arg_name,
         describe_received(value)
     );
-    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    Some(build_type_error_with_code_value(
+        &message,
+        "ERR_INVALID_ARG_TYPE",
+    ))
+}
+
+pub(crate) fn validate_object_options(arg_name: &str, value: f64) {
+    if let Some(err) = object_options_type_error_value(arg_name, value) {
+        crate::exception::js_throw(err);
+    }
+}
+
+/// Validate the options object passed to `fs.mkdir*` (#3662). Node accepts an
+/// omitted value or a numeric/string `mode` shorthand without inspecting it;
+/// when an options *object* is supplied it requires `recursive` to be a boolean
+/// and `mode` to be a number or string, throwing
+/// `TypeError [ERR_INVALID_ARG_TYPE]` otherwise. `recursive` is checked first,
+/// matching Node's `validateBoolean(recursive, 'options.recursive')` ordering.
+pub(crate) fn validate_mkdir_options(options_value: f64) {
+    if !is_plain_options_object(options_value) {
+        return;
+    }
+    let obj =
+        JSValue::from_bits(options_value.to_bits()).as_pointer::<crate::object::ObjectHeader>();
+
+    let recursive_key = js_string_from_bytes(b"recursive".as_ptr(), 9);
+    let recursive = crate::object::js_object_get_field_by_name_f64(obj, recursive_key);
+    let recursive_jv = JSValue::from_bits(recursive.to_bits());
+    if !is_nullish(recursive_jv) && !recursive_jv.is_bool() {
+        let message = format!(
+            "The \"options.recursive\" property must be of type boolean. Received {}",
+            describe_received(recursive)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+
+    let mode_key = js_string_from_bytes(b"mode".as_ptr(), 4);
+    let mode = crate::object::js_object_get_field_by_name_f64(obj, mode_key);
+    let mode_jv = JSValue::from_bits(mode.to_bits());
+    if !is_nullish(mode_jv) && !is_numeric(mode_jv) && !mode_jv.is_any_string() {
+        let message = format!(
+            "The \"options.mode\" property must be of type number. Received {}",
+            describe_received(mode)
+        );
+        throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
 }
 
 /// Validate the `mode` bitmask used by `fs.access*` and `fs.copyFile*`.

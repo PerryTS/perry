@@ -26,6 +26,11 @@ pub(crate) fn obj_value_no_extend(value: f64) -> bool {
         if obj.is_null() || (obj as usize) <= 0x10000 {
             return false;
         }
+        // Typed arrays use a side table (small ones carry no `GcHeader`, so
+        // the header read below would be allocator-metadata garbage).
+        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+            return crate::typedarray_props::typed_array_owner_no_extend(obj as usize);
+        }
         let gc = gc_header_for(obj);
         (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0
     }
@@ -44,6 +49,62 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         let obj = extract_obj_ptr(value);
         if obj.is_null() {
             return false;
+        }
+        let obj_addr = obj as usize;
+        // TypedArray FIRST: own keys are the valid integer indices plus the
+        // expando side table. Must precede the GC-header read below — small
+        // typed arrays are plain-`alloc`ed without a `GcHeader`, so reading
+        // `addr - 8` is allocator-metadata garbage.
+        if crate::typedarray::lookup_typed_array_kind(obj_addr).is_some() {
+            let key_str = crate::builtins::js_string_coerce(key);
+            if key_str.is_null() {
+                return false;
+            }
+            return crate::typedarray_props::typed_array_has_own_property(
+                obj as *const crate::typedarray::TypedArrayHeader,
+                key_str,
+            );
+        }
+        if obj_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+            let gc = gc_header_for(obj);
+            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+                || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            {
+                let arr = crate::array::clean_arr_ptr(obj as *const crate::array::ArrayHeader);
+                if arr.is_null() {
+                    return false;
+                }
+                let key_str = crate::builtins::js_string_coerce(key);
+                if key_str.is_null() {
+                    return false;
+                }
+                return super::has_own_helpers::array_own_key_present(arr, key_str);
+            }
+        }
+        if crate::closure::is_closure_ptr(obj_addr) {
+            let Some(key_name) = key_to_rust_string(key) else {
+                return false;
+            };
+            return super::has_own_helpers::closure_own_key_present(obj_addr, &key_name);
+        }
+        // Native-module namespaces (console, fs, …) expose their members as
+        // VIRTUAL keys — dispatch tables, not keys_array entries. Mirror the
+        // `js_object_get_own_property_descriptor` arm so a redefinition like
+        // `Object.defineProperty(console, 'error', { value })` (Next.js
+        // patches console methods this way, repeatedly) is treated as
+        // redefining an EXISTING property — absent descriptor attributes then
+        // retain the property's writable/enumerable/configurable=true
+        // defaults instead of collapsing to the new-property `false`s (which
+        // made the SECOND patch throw `Cannot redefine property`).
+        if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+            if let (Some(module_name), Some(key_name)) = (
+                super::native_module::read_native_module_name(obj),
+                key_to_rust_string(key),
+            ) {
+                if super::native_module::native_module_has_enumerable_key(&module_name, &key_name) {
+                    return true;
+                }
+            }
         }
         let key_str = crate::builtins::js_string_coerce(key);
         if key_str.is_null() {
@@ -76,6 +137,47 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
         let k = key_to_rust_string(key)?;
         super::get_property_attrs(obj as usize, &k).map(|a| (a.writable(), a.configurable()))
     }
+}
+
+#[inline]
+fn reflect_bool(b: bool) -> f64 {
+    f64::from_bits(crate::value::JSValue::bool(b).bits())
+}
+
+/// Ordinary (non-proxy) `Reflect.defineProperty` `[[DefineOwnProperty]]`,
+/// reporting success as a NaN-boxed boolean. Shared by `crate::proxy`'s
+/// `Reflect.defineProperty` entry point (both the no-trap and direct paths).
+pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f64 {
+    // TypedArrays are Integer-Indexed exotic objects: a canonical numeric index
+    // key returns true/false here rather than going through the ordinary object
+    // machinery (which would mishandle in-bounds element writes and treats the
+    // view as non-extensible).
+    match unsafe { super::typed_array_define_own_property(obj, key, descriptor) } {
+        super::TypedArrayDefineOutcome::Defined => return reflect_bool(true),
+        super::TypedArrayDefineOutcome::Rejected => return reflect_bool(false),
+        super::TypedArrayDefineOutcome::NotTypedArray => {}
+    }
+    // The array exotic `[[DefineOwnProperty]]` for `length` (ArraySetLength)
+    // reports success/failure as a boolean here rather than throwing — bypass
+    // the generic non-configurable pre-check below, which would mishandle the
+    // (non-configurable but writable) `length` property.
+    if let Some(ok) = unsafe { super::array_length_reflect_define(obj, key, descriptor) } {
+        return reflect_bool(ok);
+    }
+    let has_own = obj_value_has_own_key(obj, key);
+    // Redefining a non-configurable existing property fails.
+    if has_own {
+        if let Some((_writable, configurable)) = obj_value_attrs(obj, key) {
+            if !configurable {
+                return reflect_bool(false);
+            }
+        }
+    } else if obj_value_no_extend(obj) {
+        // Defining a brand-new property on a non-extensible object fails.
+        return reflect_bool(false);
+    }
+    super::js_object_define_property(obj, key, descriptor);
+    reflect_bool(true)
 }
 
 unsafe fn key_to_rust_string(value: f64) -> Option<String> {

@@ -102,7 +102,10 @@ pub extern "C" fn js_is_truthy(value: f64) -> i32 {
     //      this check.
     // Both filters together make a false-positive astronomically unlikely
     // while still preserving the legacy bitcast path for real pointers.
-    if bits >= 0x10_0000 && bits < 0x0001_0000_0000_0000 && (bits & 0x7) == 0 {
+    if crate::value::addr_class::is_above_handle_band(bits as usize)
+        && bits < 0x0001_0000_0000_0000
+        && (bits & 0x7) == 0
+    {
         // This could be a raw string pointer - check if it's a valid string
         let str_ptr = bits as *const crate::string::StringHeader;
         // Try to read the string length - empty string is falsy

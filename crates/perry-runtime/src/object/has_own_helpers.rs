@@ -15,13 +15,41 @@ pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
     if crate::closure::closure_is_key_deleted(ptr, key) {
         return false;
     }
+    if super::get_accessor_descriptor(ptr, key).is_some() {
+        return true;
+    }
     match key {
         // Always-present built-in function slots.
         "name" | "length" => true,
-        // `prototype` and user props are real own dynamic props (constructors
-        // stash `prototype` in the side table; methods/arrows have neither).
+        // A constructor-capable function's `.prototype` is an own property
+        // from birth even though Perry materializes the object lazily —
+        // `f.hasOwnProperty('prototype')` must be true BEFORE any read of
+        // `f.prototype`. Predicate only: materializing here would lock the
+        // slot's attributes ahead of a later `defineProperty(fn,
+        // "prototype", …)`.
+        "prototype" => {
+            crate::closure::closure_has_own_dynamic_prop(ptr, key) || {
+                let val = crate::value::js_nanbox_pointer(ptr as i64);
+                super::class_registry::function_would_have_own_prototype(val)
+            }
+        }
+        // User props are real own dynamic props in the side table.
         _ => crate::closure::closure_has_own_dynamic_prop(ptr, key),
     }
+}
+
+/// `RequireObjectCoercible(value)` for object destructuring binding/assignment
+/// (`let {a} = src`, `method({a}) {}`). Throws a TypeError when `value` is
+/// `null` or `undefined` (so even an empty pattern `{}` rejects nullish input),
+/// otherwise returns the value unchanged. Property reads happen afterward via
+/// the ordinary `[[Get]]` path, which boxes primitives as needed.
+#[no_mangle]
+pub extern "C" fn js_require_object_coercible(value: f64) -> f64 {
+    let bits = value.to_bits();
+    if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
+        throw_to_object_nullish_type_error();
+    }
+    value
 }
 
 pub(crate) fn throw_to_object_nullish_type_error() -> ! {
@@ -77,10 +105,18 @@ pub(super) unsafe fn array_own_key_present(
     arr: *const crate::array::ArrayHeader,
     key: *const crate::StringHeader,
 ) -> bool {
+    // Issue #233: resolve a grow forwarding pointer so `arr.hasOwnProperty(i)` /
+    // `getOwnPropertyDescriptor` stay correct after `arr.length = N` reallocated
+    // the buffer (the `in` path already does this; the named-method paths reach
+    // here with the stale pre-grow pointer otherwise).
+    let arr = crate::array::clean_arr_ptr(arr);
     let Some(key_name) = string_header_as_str(key) else {
         return false;
     };
     if key_name == "length" {
+        return true;
+    }
+    if super::get_accessor_descriptor(arr as usize, key_name).is_some() {
         return true;
     }
     if crate::array::array_named_property_has(arr, key) {
@@ -93,7 +129,23 @@ pub(super) unsafe fn array_own_key_present(
     if index >= length {
         return false;
     }
+    if index >= (*arr).capacity {
+        return false;
+    }
     let elements =
         (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
     std::ptr::read(elements.add(index as usize)) != crate::value::TAG_HOLE
+}
+
+pub(super) unsafe fn buffer_own_key_present(
+    buf: *const crate::buffer::BufferHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    let Some(key_name) = string_header_as_str(key) else {
+        return false;
+    };
+    let Some(index) = super::canonical_array_index(key_name) else {
+        return false;
+    };
+    index < (*buf).length
 }

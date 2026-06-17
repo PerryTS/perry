@@ -16,6 +16,77 @@
 
 use super::*;
 
+thread_local! {
+    static BUILTIN_MAP_SET_VALUE_BITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static BUILTIN_SET_ADD_VALUE_BITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn is_builtin_map_set_value(value: f64) -> bool {
+    is_remembered_builtin_collection_method(value, &BUILTIN_MAP_SET_VALUE_BITS)
+}
+
+pub(crate) fn is_builtin_set_add_value(value: f64) -> bool {
+    is_remembered_builtin_collection_method(value, &BUILTIN_SET_ADD_VALUE_BITS)
+}
+
+fn is_remembered_builtin_collection_method(
+    value: f64,
+    cell: &'static std::thread::LocalKey<std::cell::Cell<u64>>,
+) -> bool {
+    let ptr = normalized_collection_method_ptr(value);
+    ptr != 0 && cell.with(|remembered| remembered.get() == ptr)
+}
+
+fn remember_builtin_collection_method(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+    value: f64,
+    cell: &'static std::thread::LocalKey<std::cell::Cell<u64>>,
+) {
+    let value = installed_collection_method_value(proto_obj, method_name).unwrap_or(value);
+    let ptr = normalized_collection_method_ptr(value);
+    cell.with(|remembered| remembered.set(ptr));
+}
+
+fn normalized_collection_method_ptr(value: f64) -> u64 {
+    (crate::value::js_nanbox_get_pointer(value) as u64) & !0x7
+}
+
+fn installed_collection_method_value(
+    proto_obj: *mut ObjectHeader,
+    method_name: &str,
+) -> Option<f64> {
+    if proto_obj.is_null() {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    unsafe {
+        super::own_data_field_by_name(proto_obj, key).map(|value| f64::from_bits(value.bits()))
+    }
+}
+
+/// Resolve a collection prototype method to the SAME brand-checking thunk value
+/// installed on `<Builtin>.prototype`. Used so reading a method off an *instance*
+/// (`const m = s.forEach`) yields the identical function object as
+/// `Set.prototype.forEach` — which (a) makes `m === Set.prototype.forEach` hold
+/// and (b) routes `m.call(badReceiver)` through the brand check that throws a
+/// `TypeError` on an incompatible `this`. Previously the instance read returned a
+/// `js_class_method_bind` closure pre-bound to the instance, so `.call(0)` kept
+/// the bound Set and silently skipped the check (test262
+/// `Set/prototype/forEach/this-not-object-throw-*`, and the Map/Set families).
+///
+/// `builtin_name` is one of `Map`/`Set`/`WeakMap`/`WeakSet`. Returns `None` for
+/// unknown names/methods so callers fall back to their existing path.
+pub(crate) fn collection_proto_method_value(builtin_name: &str, method_name: &str) -> Option<f64> {
+    let proto = super::global_this::builtin_prototype_value(builtin_name);
+    if proto.to_bits() == crate::value::TAG_UNDEFINED {
+        return None;
+    }
+    let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+    installed_collection_method_value(proto_ptr, method_name)
+        .filter(|v| v.to_bits() != crate::value::TAG_UNDEFINED)
+}
+
 /// Install the brand-checking `.prototype` methods for the collection named
 /// `builtin_name` (`Map`/`Set`/`WeakMap`/`WeakSet`). Returns `true` when
 /// `builtin_name` is one of those collections — the caller then adds the
@@ -29,9 +100,21 @@ pub(super) fn install_collection_proto_methods(
     use super::global_this::install_proto_method as ipm;
     match builtin_name {
         "Map" => {
+            // #4099: install the `size` *accessor* BEFORE the data methods.
+            // Installing an accessor descriptor onto a prototype that already
+            // holds data properties corrupts one of those data slots (the
+            // accessor/data-field bookkeeping desyncs), which left
+            // `Map.prototype.set` reading back as a garbage number — a later
+            // `Map.prototype.set.call(...)` then dereferenced it and crashed
+            // (SIGBUS). Installing the lone accessor first sidesteps the desync.
+            install_collection_size_getter(
+                proto_obj,
+                "size",
+                map_proto_size_getter_thunk as *const u8,
+            );
             ipm(proto_obj, "clear", map_proto_clear_thunk as *const u8, 0);
             ipm(proto_obj, "delete", map_proto_delete_thunk as *const u8, 1);
-            ipm(
+            let entries_value = ipm(
                 proto_obj,
                 "entries",
                 map_proto_entries_thunk as *const u8,
@@ -46,11 +129,24 @@ pub(super) fn install_collection_proto_methods(
             ipm(proto_obj, "get", map_proto_get_thunk as *const u8, 1);
             ipm(proto_obj, "has", map_proto_has_thunk as *const u8, 1);
             ipm(proto_obj, "keys", map_proto_keys_thunk as *const u8, 0);
-            ipm(proto_obj, "set", map_proto_set_thunk as *const u8, 2);
+            let set_value = ipm(proto_obj, "set", map_proto_set_thunk as *const u8, 2);
             ipm(proto_obj, "values", map_proto_values_thunk as *const u8, 0);
+            install_collection_iterator_symbol(proto_obj, entries_value);
+            remember_builtin_collection_method(
+                proto_obj,
+                "set",
+                set_value,
+                &BUILTIN_MAP_SET_VALUE_BITS,
+            );
         }
         "Set" => {
-            ipm(proto_obj, "add", set_proto_add_thunk as *const u8, 1);
+            // #4099: install the `size` accessor first (see the Map arm).
+            install_collection_size_getter(
+                proto_obj,
+                "size",
+                set_proto_size_getter_thunk as *const u8,
+            );
+            let add_value = ipm(proto_obj, "add", set_proto_add_thunk as *const u8, 1);
             ipm(proto_obj, "clear", set_proto_clear_thunk as *const u8, 0);
             ipm(proto_obj, "delete", set_proto_delete_thunk as *const u8, 1);
             ipm(
@@ -67,7 +163,14 @@ pub(super) fn install_collection_proto_methods(
             );
             ipm(proto_obj, "has", set_proto_has_thunk as *const u8, 1);
             ipm(proto_obj, "keys", set_proto_keys_thunk as *const u8, 0);
-            ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
+            let values_value = ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
+            install_collection_iterator_symbol(proto_obj, values_value);
+            remember_builtin_collection_method(
+                proto_obj,
+                "add",
+                add_value,
+                &BUILTIN_SET_ADD_VALUE_BITS,
+            );
         }
         "WeakMap" => {
             ipm(
@@ -93,6 +196,68 @@ pub(super) fn install_collection_proto_methods(
         _ => return false,
     }
     true
+}
+
+fn install_collection_iterator_symbol(proto_obj: *mut ObjectHeader, method_value: f64) {
+    if proto_obj.is_null() || method_value.to_bits() == crate::value::TAG_UNDEFINED {
+        return;
+    }
+    let iter = crate::symbol::well_known_symbol("iterator");
+    if iter.is_null() {
+        return;
+    }
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            crate::value::js_nanbox_pointer(proto_obj as i64),
+            f64::from_bits(crate::value::JSValue::pointer(iter as *const u8).bits()),
+            method_value,
+        );
+    }
+    crate::symbol::set_symbol_property_attrs(
+        proto_obj as usize,
+        iter as usize,
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
+fn install_collection_size_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+    if proto_obj.is_null() {
+        return;
+    }
+    unsafe {
+        crate::closure::js_register_closure_arity(func_ptr, 0);
+        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+        if closure.is_null() {
+            return;
+        }
+        super::native_module::set_bound_native_closure_name(closure, "get size");
+        super::native_module::set_builtin_closure_length(closure as usize, 0);
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        super::object_ops::ensure_key_in_keys_array(proto_obj, key);
+        super::set_accessor_descriptor(
+            proto_obj as usize,
+            name.to_string(),
+            super::AccessorDescriptor {
+                get: crate::value::js_nanbox_pointer(closure as i64).to_bits(),
+                set: 0,
+            },
+        );
+        super::set_property_attrs(
+            proto_obj as usize,
+            name.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+        super::set_builtin_property_attrs(
+            closure as usize,
+            "name".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
+        super::set_builtin_property_attrs(
+            closure as usize,
+            "length".to_string(),
+            super::PropertyAttrs::new(false, false, true),
+        );
+    }
 }
 
 /// Throw `TypeError: Method <proto>.<method> called on incompatible receiver`.
@@ -149,6 +314,13 @@ pub(super) extern "C" fn set_proto_has_thunk(
 ) -> f64 {
     let set = set_receiver_or_throw("has");
     f64::from_bits(crate::value::JSValue::bool(crate::set::js_set_has(set, v) != 0).bits())
+}
+
+pub(super) extern "C" fn set_proto_size_getter_thunk(
+    _c: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let set = set_receiver_or_throw("size");
+    crate::set::js_set_size(set) as f64
 }
 
 pub(super) extern "C" fn set_proto_delete_thunk(
@@ -241,6 +413,13 @@ pub(super) extern "C" fn map_proto_has_thunk(
 ) -> f64 {
     let map = map_receiver_or_throw("has");
     f64::from_bits(crate::value::JSValue::bool(crate::map::js_map_has(map, k) != 0).bits())
+}
+
+pub(super) extern "C" fn map_proto_size_getter_thunk(
+    _c: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let map = map_receiver_or_throw("size");
+    crate::map::js_map_size(map) as f64
 }
 
 pub(super) extern "C" fn map_proto_delete_thunk(

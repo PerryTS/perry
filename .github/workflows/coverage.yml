@@ -63,6 +63,7 @@ jobs:
             --exclude perry-ui-gtk4 \
             --exclude perry-ui-android \
             --exclude perry-ui-windows \
+            --exclude perry-ui-windows-winui \
             --html --output-dir target/llvm-cov-html
           cargo llvm-cov report --no-fail-fast \
             --exclude perry-doc-fixture-my-bindings \
@@ -74,6 +75,7 @@ jobs:
             --exclude perry-ui-gtk4 \
             --exclude perry-ui-android \
             --exclude perry-ui-windows \
+            --exclude perry-ui-windows-winui \
             --lcov --output-path target/lcov.info
           cargo llvm-cov report --no-fail-fast \
             --exclude perry-doc-fixture-my-bindings \
@@ -85,6 +87,7 @@ jobs:
             --exclude perry-ui-gtk4 \
             --exclude perry-ui-android \
             --exclude perry-ui-windows \
+            --exclude perry-ui-windows-winui \
             --summary-only > target/summary.txt
         # Don't fail the workflow on a non-zero exit — the artifacts
         # below are still useful, and a missing test in one crate

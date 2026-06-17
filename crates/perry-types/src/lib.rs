@@ -34,6 +34,9 @@ pub enum Type {
     BigInt,
     /// String type
     String,
+    /// String literal type (e.g. `"./a.ts"`). Most runtime/type-analysis
+    /// paths treat this as `String`; AOT-only analyses can inspect the value.
+    StringLiteral(String),
     /// Symbol type
     Symbol,
     /// Array type with element type
@@ -128,6 +131,7 @@ impl Type {
                 | Type::Int32
                 | Type::BigInt
                 | Type::String
+                | Type::StringLiteral(_)
                 | Type::Symbol
         )
     }

@@ -376,8 +376,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "setEncoding",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_noop_self",
-        args: &[],
+        // #4973: real setEncoding — switches 'data' delivery to strings.
+        runtime: "js_net_socket_set_encoding",
+        args: &[NA_STR],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -458,11 +459,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         ret: NR_OBJ_FROM_JSON_STR,
     },
     // #2549 — `net.Socket` state / counter / metadata property getters.
-    // A bare member read on a `("net","Socket")` instance lowers to a
-    // zero-arg `NativeMethodCall` with `class_name: None` (see
-    // `perry-hir/.../expr_member.rs`), so these rows use `class_filter:
-    // None`; the `module: "net"` qualifier still disambiguates them from
-    // other modules' getters in the generic dispatch pass.
+    // Socket rows remain generic so they still match in the fallback pass when
+    // the HIR preserves a more specific net class filter for nearby accessors
+    // such as `Server.listening` and `SocketAddress.address`.
     NativeModSig {
         module: "net",
         has_receiver: true,
@@ -723,17 +722,22 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_F64],
         ret: NR_PROMISE,
     },
-    // Factory: `tls.connect(host, port, servername, verify)` opens plain TCP
-    // then runs a full TLS handshake before firing 'connect'. Returns a Socket
-    // handle that behaves identically to one produced by net.createConnection
-    // (same write/end/destroy/on surface).
+    // Factory: `tls.connect(...)` opens plain TCP then runs a full TLS
+    // handshake before firing 'connect'. Returns a Socket handle that behaves
+    // identically to one produced by net.createConnection (same
+    // write/end/destroy/on surface). All four args pass through as raw
+    // NaN-boxed values so the runtime can resolve Node's overloads —
+    // `connect(options[, cb])`, `connect(port[, host][, options][, cb])` —
+    // plus Perry's legacy positional `connect(host, port, servername, verify)`
+    // (#4971: the old NA_STR first arg string-coerced the options object, so
+    // `tls.connect({ port })` returned a null handle).
     NativeModSig {
         module: "tls",
         has_receiver: false,
         method: "connect",
         class_filter: None,
         runtime: "js_tls_connect",
-        args: &[NA_STR, NA_F64, NA_STR, NA_F64],
+        args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
     // ========== net.Server (issue #1123 followup) ==========
@@ -750,7 +754,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "listen",
         class_filter: Some("Server"),
         runtime: "js_net_server_listen",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -987,6 +991,43 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
+    // #2685: top-level stream byte-view helpers and destroyed-state predicate.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "_isArrayBufferView",
+        class_filter: None,
+        runtime: "js_node_stream_is_array_buffer_view",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "_isUint8Array",
+        class_filter: None,
+        runtime: "js_node_stream_is_uint8_array",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "_uint8ArrayToBuffer",
+        class_filter: None,
+        runtime: "js_node_stream_uint8_array_to_buffer",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "isDestroyed",
+        class_filter: None,
+        runtime: "js_node_stream_is_destroyed",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     // #1537: `stream.getDefaultHighWaterMark(objectMode)` /
     // `setDefaultHighWaterMark(objectMode, value)` — the per-mode platform
     // default highWaterMark (65536 byte / 16 objectMode), mutable at runtime.
@@ -1067,14 +1108,36 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_F64,
     },
-    // #1540: Web-stream interop. Node exposes static helpers on
-    // both Readable and Writable for converting to/from WHATWG
-    // streams (Readable.toWeb / Readable.fromWeb /
-    // Writable.toWeb / Writable.fromWeb). Perry returns a fresh
-    // Duplex stub for either direction (data isn't propagated
-    // between Node and WHATWG universes yet); typeof + truthy +
-    // method-existence checks pass. Real adapters are tracked
-    // separately.
+    // #2521: Web-stream interop. Class-specific rows route to real
+    // Node/WHATWG adapters; generic rows below remain as shape fallbacks when
+    // HIR did not preserve the stream class receiver.
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "toWeb",
+        class_filter: Some("Readable"),
+        runtime: "js_node_stream_readable_to_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "toWeb",
+        class_filter: Some("Writable"),
+        runtime: "js_node_stream_writable_to_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "toWeb",
+        class_filter: Some("Duplex"),
+        runtime: "js_node_stream_duplex_to_web",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
     NativeModSig {
         module: "stream",
         has_receiver: false,
@@ -1082,6 +1145,33 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_stream_to_web",
         args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "fromWeb",
+        class_filter: Some("Readable"),
+        runtime: "js_node_stream_readable_from_web",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "fromWeb",
+        class_filter: Some("Writable"),
+        runtime: "js_node_stream_writable_from_web",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "stream",
+        has_receiver: false,
+        method: "fromWeb",
+        class_filter: Some("Duplex"),
+        runtime: "js_node_stream_duplex_from_web",
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

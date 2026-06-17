@@ -29,6 +29,19 @@ pub(super) fn try_local_array_methods(
             let method_name = method_ident.sym.as_ref();
             if let ast::Expr::Ident(arr_ident) = member.obj.as_ref() {
                 let arr_name = arr_ident.sym.to_string();
+                // #5196: a Proxy-wrapped array routes ALL its method calls
+                // through the proxy member-call path (`ProxyGet` +
+                // `js_native_call_method`), so the method's `this` binds to the
+                // proxy and element reads fire its `get` trap. Folding to the
+                // dense `Expr::Array*` fast paths below would dereference the
+                // proxy id as a real `ArrayHeader` and SIGSEGV. `arr.map`/
+                // `.filter`/`.find` already escaped via the `is_class_instance`
+                // gate (a proxy local is typed `Named("Proxy")`), but
+                // `reduce`/`forEach`/`join`/`sort`/`splice`/… did not — guard
+                // them all here, uniformly, by falling through.
+                if ctx.proxy_locals.contains(&arr_name) {
+                    return Ok(Err(args));
+                }
                 // Check that this is NOT a String type (Array, Set, Map are all OK)
                 // When type is unknown, only enter array block for array-only methods
                 // (push, pop, etc.), NOT for methods shared with strings (indexOf,
@@ -44,10 +57,20 @@ pub(super) fn try_local_array_methods(
                     type_info,
                     Some(Type::Union(variants)) if variants.iter().any(|v| matches!(v, Type::String))
                 );
+                // A boxed `String` wrapper (`new String("x")`, type `Named("String")`)
+                // is NOT an array: the ambiguous methods shared with Array
+                // (`indexOf`/`includes`/`slice`/`lastIndexOf`) must route to the
+                // string dispatch (which `ToString`-coerces the wrapper), not to
+                // `ArrayIndexOf`/`ArrayIncludes` (which read it as an array and
+                // return -1/false). `search`/`match`/`split` already bypass this
+                // file because they aren't Array methods.
+                let is_boxed_string_wrapper =
+                    matches!(type_info, Some(Type::Named(n)) if n == "String");
                 let is_known_string = type_info
                     .map(|ty| matches!(ty, Type::String))
                     .unwrap_or(false)
-                    || is_union_with_string;
+                    || is_union_with_string
+                    || is_boxed_string_wrapper;
                 // A user-defined class instance is NOT an array — must skip the array
                 // fast path so user-defined methods like Stack<T>.push() are dispatched
                 // to the class method, not runtime js_array_push. Map/Set/Promise are
@@ -97,6 +120,18 @@ pub(super) fn try_local_array_methods(
                 );
                 let is_unknown_recv =
                     matches!(type_info, None | Some(Type::Any) | Some(Type::Unknown));
+                // #5139: Array-mutator names that a plain object can also own as a
+                // closure-valued property. The runtime's `js_native_call_method`
+                // dispatches all of these correctly on either a real array or a
+                // plain object (see `try_object_arraylike_mutator` + the generic
+                // own-field scan), so for an `any`-typed receiver we defer to it
+                // rather than committing to the array-only fast path. Mirrors the
+                // method set special-cased in
+                // `array::try_object_arraylike_mutator`.
+                let is_arraylike_mutator_method = matches!(
+                    method_name,
+                    "push" | "pop" | "shift" | "unshift" | "reverse" | "splice" | "sort" | "concat"
+                );
                 let is_known_not_string = type_info
                     .map(|ty| !matches!(ty, Type::String | Type::Any | Type::Unknown))
                     .unwrap_or(false)
@@ -117,6 +152,14 @@ pub(super) fn try_local_array_methods(
                     Some(Type::Named(n))
                         if n == "Uint8Array" || n == "Buffer" || n == "Uint8ClampedArray"
                 );
+                let is_node_stream_readable_type = matches!(
+                    type_info,
+                    Some(Type::Named(n))
+                        if matches!(
+                            n.as_str(),
+                            "Readable" | "Duplex" | "Transform" | "PassThrough"
+                        )
+                );
                 let is_ambiguous_method = matches!(
                     method_name,
                     "indexOf" | "includes" | "slice" | "lastIndexOf"
@@ -129,12 +172,28 @@ pub(super) fn try_local_array_methods(
                     false // object type literal — dispatch via method call, not array ops
                 } else if is_buffer_type {
                     false // Buffer/Uint8Array — runtime dispatch handles byte-level methods
+                } else if is_node_stream_readable_type {
+                    false // Node streams expose iterator helpers with Array-like names
                 } else if is_known_not_string {
                     true // definitely not a string, enter array block
                 } else if is_ambiguous_method {
                     false // type unknown + ambiguous method, skip array block (fall through to general dispatch)
                 } else if is_unknown_recv && is_class_overlapping_method {
                     false // type unknown + method commonly defined on user classes — fall through
+                } else if is_unknown_recv && is_arraylike_mutator_method {
+                    // #5139: type unknown + an Array-mutator name that a plain
+                    // object can legitimately own (`{ push(c) {…} }` passed as
+                    // `any` — e.g. react-dom/server's SSR `destination`). Eagerly
+                    // emitting `Expr::ArrayPush`/etc. reads the object's header as
+                    // an `ArrayHeader` and corrupts it (push returns a bogus length
+                    // and never runs the user method). Fall through to the runtime
+                    // `js_native_call_method` dispatch, which inspects the actual
+                    // receiver shape: real array → dense `js_array_push_f64`; plain
+                    // object with an own callable of this name → that method (this
+                    // case routes via `try_object_arraylike_mutator`, whose
+                    // own-user-method gate returns `None`, then the generic
+                    // own-field scan invokes the closure with `this` = receiver).
+                    false
                 } else {
                     true // type unknown + array-only method (push, pop, etc.), enter array block
                 };
@@ -144,6 +203,52 @@ pub(super) fn try_local_array_methods(
                 // runtime but built-in constructors aren't first-class closure objects.
                 if is_not_string {
                     if let Some(array_id) = ctx.lookup_local(&arr_name) {
+                        // thisArg routing: the dense `Expr::Array<Method>` fast
+                        // paths drop a 2nd positional `thisArg`, so
+                        // `arr.every(cb, thisArg)` ran the callback with
+                        // `this === undefined`. Route the callback iterators
+                        // through the spec-complete `Expr::ArrayLikeMethod`
+                        // lowering (which binds the callback `this`) when an
+                        // explicit thisArg is supplied with no spread.
+                        // Map/Set/URLSearchParams keep their own forEach contract
+                        // (thisArg binding via `js_{map,set}_foreach`); folding
+                        // `set.forEach(cb, thisArg)` into the array-like path ran
+                        // the callback against an array view → zero iterations
+                        // (test262 Set/Map forEach this-arg-explicit). The 1-arg
+                        // `match` below already excludes them; mirror that here.
+                        let recv_is_non_array_collection = {
+                            let is_nac = |ty: &Type| {
+                                matches!(ty, Type::Generic { base, .. } if base == "Map" || base == "Set")
+                                    || matches!(ty, Type::Named(n) if n == "URLSearchParams")
+                            };
+                            match ctx.lookup_local_type(&arr_name) {
+                                Some(ty) if is_nac(ty) => true,
+                                Some(Type::Union(variants)) => variants.iter().any(is_nac),
+                                _ => false,
+                            }
+                        };
+                        if !recv_is_non_array_collection
+                            && matches!(
+                                method_name,
+                                "map"
+                                    | "filter"
+                                    | "forEach"
+                                    | "find"
+                                    | "findIndex"
+                                    | "findLast"
+                                    | "findLastIndex"
+                                    | "some"
+                                    | "every"
+                            )
+                            && call.args.len() >= 2
+                            && call.args.iter().all(|a| a.spread.is_none())
+                        {
+                            return Ok(Ok(Expr::ArrayLikeMethod {
+                                method: method_name.to_string(),
+                                receiver: Box::new(Expr::LocalGet(array_id)),
+                                args,
+                            }));
+                        }
                         match method_name {
                             "push" => {
                                 if args.is_empty() {
@@ -160,14 +265,27 @@ pub(super) fn try_local_array_methods(
                                 // exactly what the last ArrayPush returns.
                                 let any_spread = call.args.iter().any(|a| a.spread.is_some());
                                 if any_spread {
-                                    if args.len() == 1 {
+                                    if args.len() == 1 && call.args[0].spread.is_some() {
                                         return Ok(Ok(Expr::ArrayPushSpread {
                                             array_id,
                                             source: Box::new(args.into_iter().next().unwrap()),
                                         }));
                                     }
-                                    // Mixed regular + spread: bail to generic
-                                    // dispatch (no current single-IR-shape).
+                                    let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
+                                    for (ast_arg, arg) in call.args.iter().zip(args.into_iter()) {
+                                        if ast_arg.spread.is_some() {
+                                            stmts.push(Expr::ArrayPushSpread {
+                                                array_id,
+                                                source: Box::new(arg),
+                                            });
+                                        } else {
+                                            stmts.push(Expr::ArrayPush {
+                                                array_id,
+                                                value: Box::new(arg),
+                                            });
+                                        }
+                                    }
+                                    return Ok(Ok(Expr::Sequence(stmts)));
                                 } else {
                                     if args.len() == 1 {
                                         return Ok(Ok(Expr::ArrayPush {

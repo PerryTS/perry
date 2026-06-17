@@ -1,0 +1,39 @@
+[package]
+name = "perry-ui-windows-winui"
+version.workspace = true
+edition.workspace = true
+
+# Opt-in WinUI 3 (Fluent) Windows backend — issue #4680. Selected via
+# `--target windows-winui`. This is the SCAFFOLD: the crate re-exports the
+# Win32/GDI backend (`perry-ui-windows`) verbatim so the full `perry_ui_*`
+# FFI ABI is satisfied and apps built for `windows-winui` link and run today
+# (rendering through Win32). The WinUI/XAML widget mapping then lands
+# incrementally in the `winui` module, replacing Win32 widget creation one
+# widget at a time, without ever breaking the link surface.
+
+[lib]
+# Same shape as perry-ui-windows: an rlib for Rust consumers and a staticlib
+# the perry driver /WHOLEARCHIVE's into the final executable. The staticlib
+# bundles perry-ui-windows's object code (all its #[no_mangle] extern "C"
+# symbols), so no symbol is lost by going through this crate.
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+# The entire current Windows backend. Re-exported wholesale (see src/lib.rs).
+perry-ui-windows = { path = "../perry-ui-windows" }
+
+# Step 2 (#4680) — Windows App SDK bootstrap — is implemented in
+# `src/winui.rs` via *runtime* dynamic loading (LoadLibraryW + GetProcAddress
+# on Microsoft.WindowsAppRuntime.Bootstrap.dll), NOT a link dependency. That
+# deliberately keeps the single self-contained .exe model: a windows-winui
+# binary starts fine on a host without the SDK and falls back to Win32 instead
+# of failing to load. So no bootstrap .lib / cargo crate is needed for it.
+#
+# Future (XAML widget mapping, #4680 step 3+): driving Microsoft.UI.Xaml
+# controls through the windows-rs WinRT projections. When that lands, add:
+#   windows = { version = "0.58", features = [
+#       "UI_Xaml", "UI_Xaml_Controls", "UI_Xaml_Hosting", ... ] }
+# gated so it is constructed only after bootstrap::initialize() reports Ready.
+
+[features]
+geisterhand = ["perry-ui-windows/geisterhand"]

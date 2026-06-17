@@ -267,6 +267,42 @@ pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
         throw_bigint_type_error("Cannot convert null to a BigInt");
     }
 
+    // Object / Symbol pointer. ECMAScript ToBigInt step 1 is
+    // `ToPrimitive(value, number)`, so `valueOf` / `toString` /
+    // `@@toPrimitive` must run (and propagate their exceptions) *before* the
+    // integer check — `BigInt({valueOf(){throw}})` rethrows, and
+    // `BigInt({valueOf(){return 2n}})` is 2n. Previously a non-string,
+    // non-bigint pointer fell through to the Number branch below, where its
+    // NaN-boxed bits read as NaN and threw a (premature) RangeError. A Symbol
+    // has no primitive conversion → TypeError. Mirrors `js_number_coerce`.
+    if jsval.is_pointer() {
+        let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if crate::symbol::is_registered_symbol(ptr) {
+            throw_bigint_type_error("Cannot convert a Symbol value to a BigInt");
+        }
+        // `@@toPrimitive("number")` first.
+        let primitive = unsafe { crate::symbol::js_to_primitive(value, 1) };
+        if primitive.to_bits() != value.to_bits() {
+            return js_bigint_from_f64(primitive);
+        }
+        // OrdinaryToPrimitive(O, "number"): valueOf then toString.
+        match unsafe { crate::value::ordinary_to_primitive_number_for_add(value) } {
+            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => {
+                if p.to_bits() != value.to_bits() {
+                    return js_bigint_from_f64(p);
+                }
+            }
+            crate::value::OrdinaryToPrimitiveOutcome::TypeError
+            | crate::value::OrdinaryToPrimitiveOutcome::DefaultString => {}
+        }
+        // Fall back to string coercion (e.g. an array → join → parse:
+        // `BigInt([5])` === 5n, `BigInt([])` === 0n).
+        let str_ptr = crate::value::js_jsvalue_to_string(value);
+        if !str_ptr.is_null() {
+            return js_bigint_from_f64(crate::value::js_nanbox_string(str_ptr as i64));
+        }
+    }
+
     // Remaining case: a real Number. Node only converts finite integers;
     // NaN, ±Infinity, and any value with a fractional part throw RangeError.
     if !value.is_finite() || value.fract() != 0.0 {
@@ -526,6 +562,17 @@ pub extern "C" fn js_bigint_neg(a: *const BigIntHeader) -> *mut BigIntHeader {
         carry = (sum >> 64) as u64;
     }
 
+    bigint_alloc_with_limbs(result)
+}
+
+/// Bitwise NOT of a BigInt (`~a`).
+#[no_mangle]
+pub extern "C" fn js_bigint_not(a: *const BigIntHeader) -> *mut BigIntHeader {
+    let a_limbs = bigint_limbs_or_zero(a);
+    let mut result = ZERO_LIMBS;
+    for i in 0..BIGINT_LIMBS {
+        result[i] = !a_limbs[i];
+    }
     bigint_alloc_with_limbs(result)
 }
 
@@ -1067,6 +1114,47 @@ pub extern "C" fn js_bigint_cmp(a: *const BigIntHeader, b: *const BigIntHeader) 
     }
 }
 
+/// `StringToBigInt` (ES2024 §7.1.14), non-throwing. Returns `None` when the
+/// string is not a valid BigInt literal — the abstract relational comparison
+/// treats that as `undefined` (so the comparison yields `false`) rather than a
+/// thrown `SyntaxError`. Leading/trailing whitespace is trimmed, an empty
+/// string is `0n`, and the `0x`/`0o`/`0b` radix prefixes are accepted.
+pub(crate) fn string_to_bigint(raw: &str) -> Option<*mut BigIntHeader> {
+    parse_bigint_string(raw).ok().map(bigint_alloc_with_limbs)
+}
+
+/// Mathematically compare a BigInt `x` against a Number `y` (ES2024 §7.2.13,
+/// the mixed BigInt/Number step). Comparison is exact — no precision loss from
+/// `BigInt → f64` — because `y` is decomposed into its integer floor (converted
+/// to a BigInt without rounding) and any leftover fraction.
+///
+/// Returns `-1` (x < y), `0` (x == y), `1` (x > y), or `2` (undefined: `y` is
+/// `NaN`, the one incomparable case).
+pub(crate) fn bigint_cmp_f64(x: *const BigIntHeader, y: f64) -> i32 {
+    if y.is_nan() {
+        return 2;
+    }
+    if y == f64::INFINITY {
+        return -1; // x < +Infinity for every finite BigInt
+    }
+    if y == f64::NEG_INFINITY {
+        return 1; // x > -Infinity
+    }
+    // `y` is finite. Compare `x` with `floor(y)` as exact integers; if equal,
+    // a positive fractional part of `y` makes `x` strictly smaller.
+    let floor = y.floor();
+    let floor_big = js_bigint_from_f64(floor);
+    let c = js_bigint_cmp(x, floor_big);
+    if c != 0 {
+        return c;
+    }
+    if y > floor {
+        -1
+    } else {
+        0
+    }
+}
+
 /// Check if two BigInts are equal
 #[no_mangle]
 pub extern "C" fn js_bigint_eq(a: *const BigIntHeader, b: *const BigIntHeader) -> i32 {
@@ -1303,6 +1391,71 @@ fn subtract_limbs(a: &mut [u64; BIGINT_LIMBS], b: &[u64; BIGINT_LIMBS]) {
             borrow = 0;
         }
     }
+}
+
+/// Mask a 1024-bit two's-complement limb array down to its low `bits` bits,
+/// zeroing everything at or above bit index `bits`. `bits >= BIGINT_BITS`
+/// leaves the value unchanged.
+fn mask_low_bits(mut limbs: [u64; BIGINT_LIMBS], bits: usize) -> [u64; BIGINT_LIMBS] {
+    if bits >= BIGINT_BITS {
+        return limbs;
+    }
+    let full_limbs = bits / 64;
+    let rem = bits % 64;
+    for (i, l) in limbs.iter_mut().enumerate() {
+        if i < full_limbs {
+            // keep
+        } else if i == full_limbs && rem != 0 {
+            *l &= (1u64 << rem) - 1;
+        } else {
+            *l = 0;
+        }
+    }
+    limbs
+}
+
+/// `BigInt.asUintN(bits, bigint)` — wrap `value` to a `bits`-wide UNSIGNED
+/// integer: `value mod 2^bits`, always non-negative. (`asUintN(0, x)` → 0n.)
+#[no_mangle]
+pub extern "C" fn js_bigint_as_uint_n(bits: u32, value: *const BigIntHeader) -> *mut BigIntHeader {
+    let limbs = bigint_limbs_or_zero(value);
+    let masked = mask_low_bits(limbs, bits as usize);
+    bigint_alloc_with_limbs(masked)
+}
+
+/// `BigInt.asIntN(bits, bigint)` — wrap `value` to a `bits`-wide SIGNED
+/// two's-complement integer: `value mod 2^bits`, then interpret the top bit
+/// (bit `bits-1`) as the sign and sign-extend. (`asIntN(0, x)` → 0n.)
+#[no_mangle]
+pub extern "C" fn js_bigint_as_int_n(bits: u32, value: *const BigIntHeader) -> *mut BigIntHeader {
+    let bits = bits as usize;
+    if bits == 0 {
+        return bigint_alloc_with_limbs(ZERO_LIMBS);
+    }
+    if bits >= BIGINT_BITS {
+        // No truncation possible within our width; value already two's-complement.
+        return bigint_alloc_with_limbs(bigint_limbs_or_zero(value));
+    }
+    let mut masked = mask_low_bits(bigint_limbs_or_zero(value), bits);
+    // If the sign bit (bit bits-1) is set, sign-extend: set all bits >= bits-1.
+    let sign_limb = (bits - 1) / 64;
+    let sign_pos = (bits - 1) % 64;
+    let sign_set = (masked[sign_limb] >> sign_pos) & 1 == 1;
+    if sign_set {
+        // Set every bit from `bits` upward to 1 (two's-complement negative).
+        let full_limbs = bits / 64;
+        let rem = bits % 64;
+        for (i, l) in masked.iter_mut().enumerate() {
+            if i < full_limbs {
+                // low full limbs: keep
+            } else if i == full_limbs && rem != 0 {
+                *l |= !((1u64 << rem) - 1);
+            } else if i >= full_limbs {
+                *l = u64::MAX;
+            }
+        }
+    }
+    bigint_alloc_with_limbs(masked)
 }
 
 #[cfg(test)]
@@ -1627,6 +1780,27 @@ mod tests {
         assert_eq!(read_as_i64(js_bigint_shl(one, four)), 16);
         let two = js_bigint_from_i64(2);
         assert_eq!(read_as_i64(js_bigint_shr(eight, two)), 2);
+    }
+
+    #[test]
+    fn permission_bitwise_values_match_node() {
+        let bitfield = js_bigint_from_i64(9216);
+        let zero = js_bigint_from_i64(0);
+        let one = js_bigint_from_i64(1);
+        let eleven = js_bigint_from_i64(11);
+        let thirteen = js_bigint_from_i64(13);
+
+        let manage_messages = js_bigint_shl(one, thirteen);
+        let send_messages = js_bigint_shl(one, eleven);
+        let and_result = js_bigint_and(bitfield, manage_messages);
+        let or_result = js_bigint_or(zero, send_messages);
+        let not_result = js_bigint_not(send_messages);
+
+        assert_eq!(read_as_i64(manage_messages), 8192);
+        assert_eq!(read_as_i64(send_messages), 2048);
+        assert_eq!(read_as_i64(and_result), 8192);
+        assert_eq!(read_as_i64(or_result), 2048);
+        assert_eq!(read_as_i64(not_result), -2049);
     }
 
     #[test]

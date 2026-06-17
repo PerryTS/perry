@@ -12,11 +12,58 @@ fn array_receiver_value(arr: *const ArrayHeader) -> f64 {
     f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
 }
 
+#[inline(always)]
+unsafe fn array_elements_ptr(arr: *const ArrayHeader) -> *const f64 {
+    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+}
+
+#[inline(always)]
+fn undefined_value() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[inline(always)]
+unsafe fn present_array_element(elements_ptr: *const f64, index: usize) -> Option<f64> {
+    let element = *elements_ptr.add(index);
+    (element.to_bits() != crate::value::TAG_HOLE).then_some(element)
+}
+
+#[inline(always)]
+unsafe fn array_element_get_value(elements_ptr: *const f64, index: usize) -> f64 {
+    let element = *elements_ptr.add(index);
+    if element.to_bits() == crate::value::TAG_HOLE {
+        undefined_value()
+    } else {
+        element
+    }
+}
+
+/// Bind the callback's `this` to `undefined` for the duration of a dense
+/// iteration (spec: absent `thisArg` means the callback's `this` is
+/// `undefined` — NOT whatever ambient receiver the enclosing call left in
+/// IMPLICIT_THIS; test262 some/15.4.4.17-5-25, filter/15.4.4.20-5-30).
+/// Explicit-`thisArg` call sites route through the `js_arraylike_*` engine
+/// instead of these helpers. Arrow callbacks capture `this` lexically and
+/// are unaffected.
+struct DenseThisGuard(f64);
+impl DenseThisGuard {
+    fn bind_undefined() -> Self {
+        DenseThisGuard(crate::object::js_implicit_this_set(f64::from_bits(
+            crate::value::TAG_UNDEFINED,
+        )))
+    }
+}
+impl Drop for DenseThisGuard {
+    fn drop(&mut self) {
+        crate::object::js_implicit_this_set(self.0);
+    }
+}
+
 /// forEach - call callback(element, index) for each element
 /// Returns nothing (void)
 #[no_mangle]
 pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const ClosureHeader) {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return;
     }
@@ -29,11 +76,23 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
+        if crate::array::array_iteration_is_exotic(arr) {
+            for i in 0..length as usize {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                let element = crate::array::array_spec_get(arr, i as u32);
+                js_closure_call3(callback, element, i as f64, arr_value);
+            }
+            return;
+        }
+        let elements_ptr = array_elements_ptr(arr);
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             // JS forEach passes (element, index, array). The callback
             // dispatch path supports call3 safely, so bound native
             // methods like `array.forEach(console.log)` can observe the
@@ -50,7 +109,7 @@ pub extern "C" fn js_array_map(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
@@ -64,40 +123,55 @@ pub extern "C" fn js_array_map(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-
-        // Allocate result array with same capacity
-        let result = js_array_alloc(length);
-        let result_elements =
-            (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
 
+        // ECMA-262 §23.1.3.20 step 5: ArraySpeciesCreate(O, len) runs BEFORE
+        // the iteration — it reads `O.constructor` / `@@species` (firing any
+        // accessor, propagating a poison throw) and throws TypeError on a
+        // non-constructor species, so a bad constructor aborts before the
+        // callback is ever invoked. For the common case (plain array whose
+        // constructor is the intrinsic `Array`) this returns a fresh plain
+        // array, identical to the prior `js_array_alloc_with_length`.
+        let result_box = crate::array::species::array_species_create(arr_value, length as usize);
+        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
+        let result = crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
+        let result_elements = if is_plain {
+            (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64
+        } else {
+            ptr::null_mut()
+        };
+
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                match present_array_element(elements_ptr, i) {
+                    Some(e) => e,
+                    None => continue,
+                }
+            };
             // JS .map() callback receives (element, index, array).
             let mapped = js_closure_call3(callback, element, i as f64, arr_value);
-            // GC_STORE_AUDIT(INIT): map result is unpublished; slot layout is noted immediately below.
-            ptr::write(result_elements.add(i), mapped);
-            let mapped_bits = mapped.to_bits();
-            if length <= 64 {
-                // Fast path: skip the generational write barrier.
-                // `result` was just allocated; for length ≤ 64 it stays
-                // in the nursery for the whole loop in practice, so the
-                // young→old barrier is redundant — only the layout slot
-                // metadata is needed for GC tracing. If a future GC
-                // policy starts tenuring nursery objects mid-loop
-                // (e.g. aggressive evacuation under
-                // `PERRY_GC_FORCE_EVACUATE=1` triggered by the callback
-                // allocating), this path needs the full barrier helper
-                // because subsequent stores would miss the remembered
-                // set. The 64-element cap keeps that probability low.
-                note_array_slot_layout_only(result, i, mapped_bits);
+            if is_plain {
+                // GC_STORE_AUDIT(INIT): plain result is unpublished; slot layout noted below.
+                ptr::write(result_elements.add(i), mapped);
+                let mapped_bits = mapped.to_bits();
+                if length <= 64 {
+                    note_array_slot_layout_only(result, i, mapped_bits);
+                } else {
+                    note_array_slot(result, i, mapped_bits);
+                }
             } else {
-                note_array_slot(result, i, mapped_bits);
+                // Custom species container: CreateDataPropertyOrThrow via [[Set]].
+                crate::array::species::species_result_set(result_box, i, mapped);
             }
-            (*result).length = (i + 1) as u32;
         }
-        (*result).length = length;
 
         result
     }
@@ -107,17 +181,29 @@ pub extern "C" fn js_array_map(
 /// effects without allocating or filling the result array.
 #[no_mangle]
 pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const ClosureHeader) {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return;
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         let arr_value = array_receiver_value(arr);
-
+        let _tg = DenseThisGuard::bind_undefined();
+        if crate::array::array_iteration_is_exotic(arr) {
+            for i in 0..length as usize {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                let element = crate::array::array_spec_get(arr, i as u32);
+                let _ = js_closure_call3(callback, element, i as f64, arr_value);
+            }
+            return;
+        }
+        let elements_ptr = array_elements_ptr(arr);
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             let _ = js_closure_call3(callback, element, i as f64, arr_value);
         }
     }
@@ -130,7 +216,7 @@ pub extern "C" fn js_array_filter(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
@@ -142,20 +228,41 @@ pub extern "C" fn js_array_filter(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-
-        // Allocate result array with same capacity (might be smaller)
-        let mut result = js_array_alloc(length);
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
-        // #854: `js_array_push_f64` already maintains `(*result).length`, so the
-        // separate `result_len` counter that used to live here was dead.
+        let _tg = DenseThisGuard::bind_undefined();
 
+        // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
+        // iteration (validates `O.constructor` / `@@species`, throwing on a
+        // poisoned getter or non-constructor species before the callback runs).
+        let result_box = crate::array::species::array_species_create(arr_value, 0);
+        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
+        let mut result = crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
+        // #854: `js_array_push_f64` already maintains `(*result).length`.
+        let mut to = 0usize;
+
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                match present_array_element(elements_ptr, i) {
+                    Some(e) => e,
+                    None => continue,
+                }
+            };
             let keep = js_closure_call3(callback, element, i as f64, arr_value);
             // Proper truthy check: handles NaN-boxed booleans (TAG_FALSE != 0.0 but is falsy)
             if crate::value::js_is_truthy(keep) != 0 {
-                result = js_array_push_f64(result, element);
+                if is_plain {
+                    result = js_array_push_f64(result, element);
+                } else {
+                    crate::array::species::species_result_set(result_box, to, element);
+                    to += 1;
+                }
             }
         }
 
@@ -164,10 +271,10 @@ pub extern "C" fn js_array_filter(
 }
 
 /// find - find first element that matches callback(element) => true
-/// Returns the element as f64, or f64::NAN (undefined) if not found
+/// Returns the element as f64, or undefined if not found.
 #[no_mangle]
 pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -179,11 +286,17 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
+        let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                array_element_get_value(elements_ptr, i)
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
@@ -191,8 +304,8 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             }
         }
 
-        // Not found - return undefined (NaN)
-        f64::NAN
+        // Not found
+        undefined_value()
     }
 }
 
@@ -203,7 +316,7 @@ pub extern "C" fn js_array_findIndex(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
     }
@@ -215,11 +328,17 @@ pub extern "C" fn js_array_findIndex(
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
+        let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                array_element_get_value(elements_ptr, i)
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
@@ -238,7 +357,7 @@ pub extern "C" fn js_array_find_last(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -250,10 +369,16 @@ pub extern "C" fn js_array_find_last(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                array_element_get_value(elements_ptr, i)
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -269,7 +394,7 @@ pub extern "C" fn js_array_find_last_index(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> i32 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
     }
@@ -282,10 +407,16 @@ pub extern "C" fn js_array_find_last_index(
     }
     unsafe {
         let length = (*arr).length as usize;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                array_element_get_value(elements_ptr, i)
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -298,7 +429,7 @@ pub extern "C" fn js_array_find_last_index(
 /// at - element access supporting negative indices (arr.at(-1) = last)
 #[no_mangle]
 pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -336,8 +467,8 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
         if idx < 0 || idx >= length {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-        *elements_ptr.add(idx as usize)
+        let elements_ptr = array_elements_ptr(arr);
+        array_element_get_value(elements_ptr, idx as usize)
     }
 }
 
@@ -347,7 +478,7 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
 pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
@@ -359,11 +490,23 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
+        let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                match present_array_element(elements_ptr, i) {
+                    Some(e) => e,
+                    None => continue,
+                }
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
@@ -380,7 +523,7 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
 pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const ClosureHeader) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(TAG_TRUE);
     }
@@ -392,11 +535,23 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
+        let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                match present_array_element(elements_ptr, i) {
+                    Some(e) => e,
+                    None => continue,
+                }
+            };
             let result = js_closure_call3(callback, element, i as f64, arr_value);
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
@@ -414,19 +569,22 @@ pub extern "C" fn js_array_flatMap(
     arr: *const ArrayHeader,
     callback: *const ClosureHeader,
 ) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
     unsafe {
         let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let elements_ptr = array_elements_ptr(arr);
 
         let mut result = js_array_alloc(length);
         let arr_value = array_receiver_value(arr);
+        let _tg = DenseThisGuard::bind_undefined();
 
         for i in 0..length as usize {
-            let element = *elements_ptr.add(i);
+            let Some(element) = present_array_element(elements_ptr, i) else {
+                continue;
+            };
             let mapped = js_closure_call3(callback, element, i as f64, arr_value);
             // Check if the mapped value is an array (pointer-tagged)
             let bits = mapped.to_bits();
@@ -440,7 +598,9 @@ pub extern "C" fn js_array_flatMap(
                         .add(std::mem::size_of::<ArrayHeader>())
                         as *const f64;
                     for j in 0..sub_len as usize {
-                        let sub_element = *sub_elements.add(j);
+                        let Some(sub_element) = present_array_element(sub_elements, j) else {
+                            continue;
+                        };
                         result = js_array_push_f64(result, sub_element);
                     }
                 }
@@ -464,7 +624,7 @@ pub extern "C" fn js_array_reduce(
     has_initial: i32,
     initial: f64,
 ) -> f64 {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         if has_initial != 0 {
             return initial;
@@ -483,8 +643,8 @@ pub extern "C" fn js_array_reduce(
         );
     }
     unsafe {
-        let length = (*arr).length;
-        let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let length = (*arr).length as usize;
+        let elements_ptr = array_elements_ptr(arr);
 
         if length == 0 {
             if has_initial != 0 {
@@ -495,16 +655,37 @@ pub extern "C" fn js_array_reduce(
             throw_reduce_of_empty();
         }
 
+        let exotic = crate::array::array_iteration_is_exotic(arr);
+        let present = |i: usize| -> Option<f64> {
+            if exotic {
+                crate::array::array_spec_has_index(arr, i as u32)
+                    .then(|| crate::array::array_spec_get(arr, i as u32))
+            } else {
+                present_array_element(elements_ptr, i)
+            }
+        };
+
         let (mut accumulator, start_idx) = if has_initial != 0 {
             (initial, 0)
         } else {
-            // Use first element as initial
-            (*elements_ptr, 1)
+            let mut seed = None;
+            for i in 0..length {
+                if let Some(element) = present(i) {
+                    seed = Some((element, i + 1));
+                    break;
+                }
+            }
+            match seed {
+                Some(seed) => seed,
+                None => throw_reduce_of_empty(),
+            }
         };
 
         let arr_value = array_receiver_value(arr);
-        for i in start_idx..length as usize {
-            let element = *elements_ptr.add(i);
+        for i in start_idx..length {
+            let Some(element) = present(i) else {
+                continue;
+            };
             // Spec callback is `(accumulator, currentValue, currentIndex, array)`.
             accumulator = js_closure_call4(callback, accumulator, element, i as f64, arr_value);
         }
@@ -533,7 +714,7 @@ pub extern "C" fn js_array_join(
     use crate::string::{js_string_from_bytes, StringHeader};
     use crate::value::JSValue;
 
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
@@ -644,6 +825,19 @@ pub extern "C" fn js_array_join(
                 } else {
                     result.push_str("[object Object]");
                 }
+            } else if jsvalue.is_bigint() {
+                // BigInt elements are NaN-boxed with BIGINT_TAG (not POINTER_TAG),
+                // so they bypass the pointer arm above and previously fell through
+                // to the `[object Object]` catch-all. ToString(BigInt) is the plain
+                // decimal digits with NO `n` suffix (`[10n].join() === "10"`).
+                let s_ptr = crate::bigint::js_bigint_to_string(jsvalue.as_bigint_ptr());
+                if !s_ptr.is_null() {
+                    let str_len = (*s_ptr).byte_len as usize;
+                    let str_data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+                    result.push_str(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        str_data, str_len,
+                    )));
+                }
             } else if jsvalue.is_number() {
                 let n = jsvalue.as_number();
                 if n.is_nan() {
@@ -705,6 +899,11 @@ pub extern "C" fn js_array_join_value(
     let separator = if separator_value.to_bits() == crate::value::TAG_UNDEFINED {
         ptr::null()
     } else {
+        // `ToString(separator)`: a Symbol separator throws a TypeError
+        // (§7.1.17) instead of rendering as "Symbol(…)".
+        if unsafe { crate::symbol::js_is_symbol(separator_value) } != 0 {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+        }
         crate::value::js_jsvalue_to_string(separator_value) as *const crate::string::StringHeader
     };
     js_array_join(arr, separator)
@@ -737,7 +936,7 @@ pub extern "C" fn js_array_to_locale_string(
     locales: f64,
     options: f64,
 ) -> *mut crate::string::StringHeader {
-    let arr = clean_arr_ptr(arr);
+    let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
     }
@@ -787,3 +986,144 @@ static KEEP_ARRAY_TO_LOCALE_STRING: extern "C" fn(
     f64,
     f64,
 ) -> *mut crate::string::StringHeader = js_array_to_locale_string;
+
+// ---------------------------------------------------------------------------
+// #4091: non-callable callback validation for higher-order array / TypedArray
+// methods (map/forEach/filter/reduce/find*/some/every/flatMap). Per ECMA-262
+// these throw a `TypeError` *before* iterating when the callback is not
+// callable. Codegen has already unboxed the closure pointer by the time the
+// runtime entry runs, so — mirroring `js_validate_array_comparator` (sort,
+// #2796) — the boxed value is threaded into a validator that returns the
+// resolved `ClosureHeader*` (as `i64`) or throws.
+// ---------------------------------------------------------------------------
+
+/// Read a runtime `StringHeader*` into an owned Rust `String`.
+fn header_to_owned_string(sp: *const crate::string::StringHeader) -> String {
+    if sp.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let header = &*sp;
+        let bytes_ptr = (sp as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        let slice = std::slice::from_raw_parts(bytes_ptr, header.byte_len as usize);
+        std::str::from_utf8(slice).unwrap_or("").to_string()
+    }
+}
+
+#[inline]
+fn jsvalue_to_owned_string(v: f64) -> String {
+    header_to_owned_string(crate::value::js_jsvalue_to_string(v))
+}
+
+#[inline]
+fn typeof_owned_string(v: f64) -> String {
+    header_to_owned_string(crate::builtins::js_value_typeof(v))
+}
+
+/// Resolve a higher-order callback argument to its `ClosureHeader*` (as
+/// `i64`). Returns `Some(ptr)` only for values the runtime can actually
+/// invoke (real closures, bound methods/functions); `None` for any
+/// non-callable so the caller can throw the spec `TypeError`.
+#[inline]
+fn resolve_callback_ptr(cb_boxed: f64) -> Option<i64> {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cb_boxed.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<ClosureHeader>();
+        if !crate::closure::get_valid_func_ptr(ptr).is_null() {
+            return Some(ptr as i64);
+        }
+    }
+    None
+}
+
+/// Render a non-callable value for the *standard* V8 message used by every
+/// `Array.prototype` iteration method and all `%TypedArray%.prototype`
+/// methods except `map`: `<typeof> <value>` (e.g. `number 5`, `string "x"`,
+/// `object null`, `undefined`, `boolean true`, `object`, `bigint`, `symbol`).
+fn render_callback_typeof(cb_boxed: f64) -> String {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cb_boxed.to_bits());
+    let ty = typeof_owned_string(cb_boxed);
+    match ty.as_str() {
+        "undefined" => "undefined".to_string(),
+        "object" if jv.is_null() => "object null".to_string(),
+        // Plain objects/arrays render as just the type — no value.
+        "object" => "object".to_string(),
+        "number" | "boolean" => format!("{} {}", ty, jsvalue_to_owned_string(cb_boxed)),
+        "string" => format!("{} \"{}\"", ty, jsvalue_to_owned_string(cb_boxed)),
+        // bigint / symbol render as just the type — no value.
+        _ => ty,
+    }
+}
+
+/// Render a non-callable value for `%TypedArray%.prototype.map`, which uses a
+/// distinct rendering with no `typeof` prefix (e.g. `5`, `x`, `null`, `true`,
+/// `undefined`). Object receivers fall back to V8's `#<Object>`.
+fn render_callback_plain(cb_boxed: f64) -> String {
+    use crate::value::JSValue;
+    let jv = JSValue::from_bits(cb_boxed.to_bits());
+    if jv.is_undefined()
+        || jv.is_null()
+        || jv.is_bool()
+        || jv.is_number()
+        || jv.is_int32()
+        || jv.is_any_string()
+        || jv.is_bigint()
+    {
+        return jsvalue_to_owned_string(cb_boxed);
+    }
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<u8>();
+        if crate::symbol::is_registered_symbol(ptr as usize) {
+            return jsvalue_to_owned_string(cb_boxed);
+        }
+        return "#<Object>".to_string();
+    }
+    jsvalue_to_owned_string(cb_boxed)
+}
+
+#[cold]
+fn throw_not_a_function(rendered: String) -> ! {
+    let message = format!("{} is not a function", rendered);
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
+/// Validate a higher-order array/TypedArray callback (#4091). Returns the
+/// resolved `ClosureHeader*` (as `i64`) for callable values, or throws a
+/// `TypeError` with V8's standard `<typeof> <value> is not a function`
+/// message. Used by every iteration method except `map`.
+#[no_mangle]
+pub extern "C" fn js_validate_array_callback(cb_boxed: f64) -> i64 {
+    if let Some(p) = resolve_callback_ptr(cb_boxed) {
+        return p;
+    }
+    throw_not_a_function(render_callback_typeof(cb_boxed));
+}
+
+#[used]
+static KEEP_VALIDATE_ARRAY_CALLBACK: extern "C" fn(f64) -> i64 = js_validate_array_callback;
+
+/// Validate a `map` callback (#4091). Identical to
+/// [`js_validate_array_callback`] except that, for a typed-array receiver, the
+/// non-callable message uses `%TypedArray%.prototype.map`'s distinct rendering
+/// (no `typeof` prefix). Takes the receiver handle so it can pick the format.
+#[no_mangle]
+pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64 {
+    if let Some(p) = resolve_callback_ptr(cb_boxed) {
+        return p;
+    }
+    let is_typed_array = crate::typedarray::lookup_typed_array_kind(arr as usize).is_some();
+    let rendered = if is_typed_array {
+        render_callback_plain(cb_boxed)
+    } else {
+        render_callback_typeof(cb_boxed)
+    };
+    throw_not_a_function(rendered);
+}
+
+#[used]
+static KEEP_VALIDATE_ARRAY_MAP_CALLBACK: extern "C" fn(i64, f64) -> i64 =
+    js_validate_array_map_callback;

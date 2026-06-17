@@ -27,6 +27,33 @@ pub(super) fn try_inline_array_methods(
                 if let ast::Expr::Array(_arr_lit) = member.obj.as_ref() {
                     // Lower the array literal
                     let array_expr = lower_expr(ctx, &member.obj)?;
+                    // thisArg routing: the dense `Expr::Array<Method>` fast
+                    // paths drop a 2nd positional `thisArg`, so
+                    // `[x].map(cb, thisArg)` ran the callback with
+                    // `this === undefined`. Route the callback iterators
+                    // through the spec-complete `Expr::ArrayLikeMethod`
+                    // lowering (which binds the callback `this`) when an
+                    // explicit thisArg is supplied with no spread.
+                    if matches!(
+                        method_name,
+                        "map"
+                            | "filter"
+                            | "forEach"
+                            | "find"
+                            | "findIndex"
+                            | "findLast"
+                            | "findLastIndex"
+                            | "some"
+                            | "every"
+                    ) && call.args.len() >= 2
+                        && call.args.iter().all(|a| a.spread.is_none())
+                    {
+                        return Ok(Ok(Expr::ArrayLikeMethod {
+                            method: method_name.to_string(),
+                            receiver: Box::new(array_expr),
+                            args,
+                        }));
+                    }
                     match method_name {
                         "join" => {
                             // ['a', 'b'].join(separator?) -> string

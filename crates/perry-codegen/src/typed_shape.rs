@@ -3,6 +3,7 @@ use perry_types::Type;
 pub(crate) fn type_is_pointer_bearing(ty: &Type) -> bool {
     match ty {
         Type::String
+        | Type::StringLiteral(_)
         | Type::BigInt
         | Type::Symbol
         | Type::Array(_)

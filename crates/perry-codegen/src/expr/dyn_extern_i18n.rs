@@ -59,6 +59,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            // An empty `paths` list means collect_modules could not resolve
+            // the filename statically (it warned at compile time). Many real
+            // packages construct Workers only on cold paths (e.g. Next.js
+            // build-time worker pools) — throw if one is actually reached at
+            // runtime instead of failing the whole compile.
+            if paths.is_empty() {
+                let msg = "worker_threads Worker filename was not statically \
+                           resolvable at compile time; constructing this Worker \
+                           is unsupported in the compiled binary";
+                let msg_idx = ctx.strings.intern(msg);
+                let msg_entry = ctx.strings.entry(msg_idx);
+                let msg_bytes_global = format!("@{}", msg_entry.bytes_global);
+                let msg_len_str = msg_entry.byte_len.to_string();
+                let blk = ctx.block();
+                blk.call_void(
+                    "js_throw_error_with_code",
+                    &[
+                        (PTR, &msg_bytes_global),
+                        (I64, &msg_len_str),
+                        (PTR, &"null".to_string()),
+                        (I64, &"0".to_string()),
+                        (I32, &"0".to_string()),
+                    ],
+                );
+                blk.unreachable();
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             if paths.len() != 1 {
                 bail!(
                     "worker_threads Worker requires exactly one compile-time-resolved filename, got {}",
@@ -86,7 +113,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(I64, &entry_ptr), (DOUBLE, &options_val)],
             ))
         }
-        Expr::DynamicImport { paths, arg } => {
+        Expr::DynamicImport {
+            paths,
+            arg,
+            deferred_error,
+            ..
+        } => {
+            // #5230: a non-resolvable (runtime-computed) specifier was
+            // *deferred* (the default, non-strict policy — analog of #5206's
+            // eval deferral). Evaluate the arg for its side effects, then
+            // reject the promise with a descriptive `Error` so
+            // `await import(spec)` throws only if this site is actually
+            // reached, instead of failing the whole build.
+            if let Some(msg) = deferred_error {
+                let _ = lower_expr(ctx, arg)?;
+                // Build the `Error(msg)` value the same way `new Error(<str>)`
+                // does (see `Expr::ErrorNew`): intern the message as a string
+                // literal handle, then `js_error_new_from_value`.
+                let msg_val = lower_expr(ctx, &Expr::String(msg.clone()))?;
+                let blk = ctx.block();
+                let err_ptr = blk.call(I64, "js_error_new_from_value", &[(DOUBLE, &msg_val)]);
+                let err_box = nanbox_pointer_inline(blk, &err_ptr);
+                let p = blk.call(I64, "js_promise_rejected", &[(DOUBLE, &err_box)]);
+                return Ok(nanbox_pointer_inline(blk, &p));
+            }
+
             // Defensive: an empty `paths` list means the resolver pass
             // failed to populate this node, which `collect_modules`
             // should have raised as a compile error. Fall through to a
@@ -105,8 +156,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if paths.len() == 1 {
                 // Evaluate the arg for side effects (most are pure but
                 // a template literal with computed parts can have e.g.
-                // function calls); the result is discarded.
-                let _ = lower_expr(ctx, arg)?;
+                // function calls) and let registered module loader hooks
+                // observe/delegate the import. The statically known target
+                // still determines the namespace in Perry's compile-time graph.
+                let path_val = lower_expr(ctx, arg)?;
+                let _ = ctx.block().call(
+                    DOUBLE,
+                    "js_module_dynamic_import_apply_hooks",
+                    &[(DOUBLE, &path_val)],
+                );
                 let path = &paths[0];
                 let target_prefix = ctx.dynamic_import_path_to_prefix.get(path).cloned();
                 // #1671: a dynamic import of a known node-submodule
@@ -120,7 +178,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let key = key.to_string();
                         let submod_label = emit_string_literal_global(ctx, &key);
                         let submod_len = key.len();
+                        let install_sym = crate::nm_install::nm_submod_install_symbol(&key);
                         let blk = ctx.block();
+                        if let Some(s) = install_sym {
+                            blk.call_void(s, &[]);
+                        }
                         let ns_val = blk.call(
                             DOUBLE,
                             "js_node_submodule_namespace",
@@ -141,6 +203,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let mod_label = emit_string_literal_global(ctx, &name);
                         let mod_len = name.len();
                         let blk = ctx.block();
+                        if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
+                            blk.call_void(s, &[]);
+                        }
                         let ns_val = blk.call(
                             DOUBLE,
                             "js_create_native_module_namespace",
@@ -178,7 +243,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // successful compare resolves to its corresponding
             // namespace global. The final fallback emits a rejected
             // promise.
-            let path_val = lower_expr(ctx, arg)?;
+            let raw_path_val = lower_expr(ctx, arg)?;
+            let path_val = ctx.block().call(
+                DOUBLE,
+                "js_module_dynamic_import_apply_hooks",
+                &[(DOUBLE, &raw_path_val)],
+            );
             // Result phi slot: every successful match stores the
             // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
             // a join block which loads and returns. Using an alloca
@@ -246,7 +316,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let key = key.to_string();
                     let submod_label = emit_string_literal_global(ctx, &key);
                     let submod_len = key.len();
-                    ctx.block().call(
+                    let install_sym = crate::nm_install::nm_submod_install_symbol(&key);
+                    let blk = ctx.block();
+                    if let Some(s) = install_sym {
+                        blk.call_void(s, &[]);
+                    }
+                    blk.call(
                         DOUBLE,
                         "js_node_submodule_namespace",
                         &[(PTR, &submod_label), (I32, &submod_len.to_string())],
@@ -257,7 +332,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let name = name.to_string();
                     let mod_label = emit_string_literal_global(ctx, &name);
                     let mod_len = name.len();
-                    ctx.block().call(
+                    let blk = ctx.block();
+                    if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
+                        blk.call_void(s, &[]);
+                    }
+                    blk.call(
                         DOUBLE,
                         "js_create_native_module_namespace",
                         &[(PTR, &mod_label), (I64, &mod_len.to_string())],
@@ -327,7 +406,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
                 return Ok(double_literal(f64::from_bits(bits)));
             }
+            // Issue #841: named imports from Node submodules Perry recognizes
+            // as runtime-backed values must win over the generic native-module
+            // closure wrapper. Default imports use this map too; returning the
+            // runtime export here keeps `import consumers from
+            // "node:stream/consumers"` equal to the namespace's `.default`
+            // object instead of the namespace object itself.
+            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
+            {
+                let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
+                let submod_label = emit_string_literal_global(ctx, submod_key);
+                let name_label = emit_string_literal_global(ctx, exported_name);
+                let submod_len = submod_key.len();
+                let name_len = exported_name.len();
+                let blk = ctx.block();
+                if let Some(s) = install_sym {
+                    blk.call_void(s, &[]);
+                }
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_export_as_function",
+                    &[
+                        (PTR, &submod_label),
+                        (I32, &submod_len.to_string()),
+                        (PTR, &name_label),
+                        (I32, &name_len.to_string()),
+                    ],
+                ));
+            }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
+                // Next.js lazy-require: a `_lazyreq_N` binding is the CJS require
+                // shim's handle to a FUNCTION-LOCAL `require('S')`. S is
+                // `Deferred` (never eager-initialized), so before reading its
+                // default-export getter, fire `<S>__init()` — idempotent, so
+                // re-reads cost a guard check. This is the moment Node would run
+                // S's module body: when `require('S')` is actually called.
+                if name.starts_with("_lazyreq_") {
+                    let init_fn = format!("{}__init", source_prefix);
+                    ctx.pending_declares
+                        .push((init_fn.clone(), crate::types::VOID, vec![]));
+                    ctx.block().call_void(&init_fn, &[]);
+                }
                 // Issue #678 followup: a V8-fallback import used as a value
                 // (rather than called directly) has no native singleton
                 // wrapper to point at — the `__perry_wrap_extern_*` for V8
@@ -409,34 +528,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
                 return Ok(nanbox_pointer_inline(blk, &closure_handle));
             }
-            // Issue #841: named imports from the five Node submodules
-            // Perry recognizes but has no perry-stdlib backing for
-            // (`node:timers/promises`, `node:readline/promises`,
-            // `node:stream/promises`, `node:stream/consumers`,
-            // `node:sys`). Pre-fix the catch-all returned TAG_TRUE so
-            // `typeof setTimeout === "boolean"` and the value literally
-            // printed as `true`. Route to the runtime helper
-            // `js_node_submodule_export_as_function` which returns a
-            // NaN-boxed function singleton; the singleton's thunk is a
-            // thrower (a follow-up under #793 wires real impls).
-            if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name)
-            {
-                let submod_label = emit_string_literal_global(ctx, submod_key);
-                let name_label = emit_string_literal_global(ctx, exported_name);
-                let submod_len = submod_key.len();
-                let name_len = exported_name.len();
-                let blk = ctx.block();
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_node_submodule_export_as_function",
-                    &[
-                        (PTR, &submod_label),
-                        (I32, &submod_len.to_string()),
-                        (PTR, &name_label),
-                        (I32, &name_len.to_string()),
-                    ],
-                ));
-            }
             // Issue #841 companion: namespace imports for the same five
             // submodules. The `collect_modules.rs` rejection skips
             // these so the namespace binding flows through HIR and
@@ -446,7 +537,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(submod_key) = ctx.namespace_node_submodules.get(name) {
                 let submod_label = emit_string_literal_global(ctx, submod_key);
                 let submod_len = submod_key.len();
+                let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
                 let blk = ctx.block();
+                if let Some(s) = install_sym {
+                    blk.call_void(s, &[]);
+                }
                 return Ok(blk.call(
                     DOUBLE,
                     "js_node_submodule_namespace",
@@ -466,9 +561,105 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // dedicated arms above; this catch-all only fires for
             // names with no resolution at all.
             if ctx.namespace_imports.contains(name) {
+                // A namespace import used as a whole VALUE (passed to a
+                // function, iterated by `Object.keys`/`for…in`/`Object.entries`,
+                // spread, …) must be a real object whose OWN ENUMERABLE
+                // properties are the source module's exports — not the empty
+                // `js_unresolved_namespace_stub`. Drizzle's
+                // `drizzle(pool, { schema })` (with `import * as schema`) and
+                // Stripe's `_prepResources` (`for (const name in resources)`
+                // over `import * as resources`) both enumerate the namespace and
+                // silently saw zero members otherwise. Materialize the object by
+                // resolving each exported member through the SAME per-member
+                // `ns.member` PropertyGet lowering (functions → closure
+                // singletons, consts → getters, classes → class refs).
+                let mut members: Vec<String> = ctx
+                    .namespace_member_prefixes
+                    .keys()
+                    .filter(|(ns, _)| ns == name)
+                    .map(|(_, m)| m.clone())
+                    .collect();
+                if !members.is_empty() {
+                    members.sort();
+                    members.dedup();
+                    let n_str = (members.len() as u32).to_string();
+                    let zero_str = "0".to_string();
+                    let handle = ctx.block().call(
+                        I64,
+                        "js_object_alloc",
+                        &[(I32, &zero_str), (I32, &n_str)],
+                    );
+                    for member in &members {
+                        let member_get = Expr::PropertyGet {
+                            object: Box::new(Expr::ExternFuncRef {
+                                name: name.clone(),
+                                param_types: Vec::new(),
+                                return_type: HirType::Any,
+                            }),
+                            property: member.clone(),
+                        };
+                        let v_box = lower_expr(ctx, &member_get)?;
+                        let key_idx = ctx.strings.intern(member);
+                        let key_handle_global =
+                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                        let blk = ctx.block();
+                        let key_box = blk.load(DOUBLE, &key_handle_global);
+                        let key_bits = blk.bitcast_double_to_i64(&key_box);
+                        let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                        blk.call_void(
+                            "js_object_set_field_by_name",
+                            &[(I64, &handle), (I64, &key_raw), (DOUBLE, &v_box)],
+                        );
+                    }
+                    let blk = ctx.block();
+                    return Ok(nanbox_pointer_inline(blk, &handle));
+                }
                 return Ok(ctx
                     .block()
                     .call(DOUBLE, "js_unresolved_namespace_stub", &[]));
+            }
+            // #4950: built-in globals that HIR lowers to `ExternFuncRef` even
+            // in VALUE position (the `is_builtin_function` timer set —
+            // `setTimeout`, `setImmediate`, …) used to fall through to the
+            // TAG_TRUE sentinel, so `var localSetImmediate = setImmediate`
+            // read a boolean and calling through it threw `value is not a
+            // function` (scheduler's host-callback setup, → react-reconciler
+            // → every React renderer). Resolve them to the same
+            // `populate_global_this_builtins` closure `globalThis.<name>`
+            // reads, which is callable through the dynamic dispatch path.
+            if is_global_this_builtin_name(name) {
+                let name_idx = ctx.strings.intern(name);
+                let name_bytes_global = format!("@{}", ctx.strings.entry(name_idx).bytes_global);
+                let name_len = name.len().to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_get_global_this_builtin_value",
+                    &[(PTR, &name_bytes_global), (I64, &name_len)],
+                ));
+            }
+            // A default-import alias of a Node builtin module used as a VALUE
+            // (`const nodeTimers = require('node:timers')`, adopted to an
+            // import by the CJS wrap) — materialize the real native-module
+            // namespace object so member reads, monkey-patch writes, and
+            // enumeration behave. Previously fell through to TAG_TRUE:
+            // `typeof nodeTimers === "boolean"` and Next.js's
+            // fast-set-immediate extension threw on
+            // `nodeTimers.setImmediate = patched` at startup.
+            if let Some(source) = ctx.imported_class_sources.get(name) {
+                let bare = source.strip_prefix("node:").unwrap_or(source).to_string();
+                if perry_hir::is_node_builtin_module(&bare) {
+                    let module_label = emit_string_literal_global(ctx, &bare);
+                    let module_len = bare.len();
+                    let blk = ctx.block();
+                    if let Some(s) = crate::nm_install::nm_install_symbol(&bare) {
+                        blk.call_void(s, &[]);
+                    }
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_create_native_module_namespace",
+                        &[(PTR, &module_label), (I64, &module_len.to_string())],
+                    ));
+                }
             }
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)))
         }

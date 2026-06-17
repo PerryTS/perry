@@ -231,6 +231,11 @@ pub(super) fn hidden_stream_auto_destroy_key() -> *mut crate::string::StringHead
 }
 
 #[inline]
+pub(super) fn hidden_stream_emit_close_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_EMIT_CLOSE_KEY)
+}
+
+#[inline]
 pub(super) fn hidden_pipeline_callback_done_key() -> *mut crate::string::StringHeader {
     hidden_key(STREAM_PIPELINE_CALLBACK_DONE_KEY)
 }

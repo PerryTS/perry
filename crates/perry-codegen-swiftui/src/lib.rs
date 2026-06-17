@@ -19,13 +19,27 @@ pub struct WidgetBundle {
     pub bundle_id: String,
 }
 
+/// Emit the shared per-bundle runtime FFI block (`PerryWidgetRuntime.swift`).
+///
+/// A widget bundle is compiled as one Swift module, so the perry-runtime FFI
+/// helpers and the `@_cdecl` shared-storage bridge must be defined exactly once,
+/// `internal`. The driver calls this a single time per bundle and writes the
+/// result alongside the per-widget files (see #5069). Pass the bundle's app
+/// group (if any widget configures one) to include the shared-storage bridge.
+pub fn emit_shared_runtime(app_group: Option<&str>) -> String {
+    emit::emit_shared_runtime(app_group)
+}
+
 /// Compile a WidgetDecl to a complete WidgetKit extension bundle.
 ///
 /// Generates:
 /// - {Name}.swift: Entry struct, SwiftUI View, TimelineProvider, @main entry point
-/// - {Name}Glue.swift: Native FFI bridge (if provider_func_name is set)
+/// - {Name}Glue.swift: Native provider extern (if provider_func_name is set)
 /// - {Name}Intent.swift: AppIntent configuration (if config_params is non-empty)
 /// - Info.plist
+///
+/// The shared runtime FFI (`PerryWidgetRuntime.swift`) is emitted once per
+/// bundle by the driver via [`emit_shared_runtime`], not per widget.
 pub fn compile_widget(widget: &WidgetDecl, app_bundle_id: &str) -> Result<WidgetBundle> {
     let safe_name = sanitize_kind(&widget.kind);
     let bundle_id = format!("{}.widget", app_bundle_id);
@@ -71,8 +85,11 @@ pub fn compile_widget(widget: &WidgetDecl, app_bundle_id: &str) -> Result<Widget
         swift_files.push((format!("{}Intent.swift", safe_name), intent_file));
     }
 
-    // Generate native bridge glue if provider function exists
-    if widget.provider_func_name.is_some() || widget.app_group.is_some() {
+    // Generate the per-widget native bridge (the widget-unique provider extern)
+    // when this widget calls into an LLVM-compiled provider. The shared runtime
+    // FFI + shared-storage bridge are emitted once per bundle by the driver via
+    // `emit_shared_runtime` (see #5069), not here.
+    if widget.provider_func_name.is_some() {
         let glue_source = emit::emit_glue(widget, &safe_name);
         swift_files.push((format!("{}Glue.swift", safe_name), glue_source));
     }

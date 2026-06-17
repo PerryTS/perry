@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2454 entries across 105 modules.
+Total: 2808 entries across 115 modules.
 
 ## Modules
 
@@ -44,6 +44,8 @@ Total: 2454 entries across 105 modules.
 - [`http`](#http)
 - [`http2`](#http2)
 - [`https`](#https)
+- [`inspector`](#inspector)
+- [`inspector/promises`](#inspector-promises)
 - [`ioredis`](#ioredis)
 - [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
@@ -67,6 +69,9 @@ Total: 2454 entries across 105 modules.
 - [`perry/ads`](#perry-ads)
 - [`perry/audio`](#perry-audio)
 - [`perry/background`](#perry-background)
+- [`perry/compose`](#perry-compose)
+- [`perry/container`](#perry-container)
+- [`perry/container-compose`](#perry-container-compose)
 - [`perry/i18n`](#perry-i18n)
 - [`perry/media`](#perry-media)
 - [`perry/plugin`](#perry-plugin)
@@ -76,6 +81,8 @@ Total: 2454 entries across 105 modules.
 - [`perry/ui`](#perry-ui)
 - [`perry/updater`](#perry-updater)
 - [`perry/widget`](#perry-widget)
+- [`perry/workloads`](#perry-workloads)
+- [`perry/yoga`](#perry-yoga)
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
@@ -84,6 +91,8 @@ Total: 2454 entries across 105 modules.
 - [`readline`](#readline)
 - [`readline/promises`](#readline-promises)
 - [`redis`](#redis)
+- [`repl`](#repl)
+- [`sea`](#sea)
 - [`sharp`](#sharp)
 - [`slugify`](#slugify)
 - [`sqlite`](#sqlite)
@@ -107,6 +116,7 @@ Total: 2454 entries across 105 modules.
 - [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`validator`](#validator)
+- [`vm`](#vm)
 - [`wasi`](#wasi)
 - [`worker_threads`](#worker-threads)
 - [`ws`](#ws)
@@ -147,6 +157,7 @@ Total: 2454 entries across 105 modules.
 
 ### Classes
 
+- `Assert`
 - `AssertionError`
 
 ### Methods
@@ -180,6 +191,7 @@ Total: 2454 entries across 105 modules.
 
 ### Classes
 
+- `Assert`
 - `AssertionError`
 
 ### Methods
@@ -219,6 +231,8 @@ Total: 2454 entries across 105 modules.
 ### Methods
 
 - `asyncId` — instance *(class: `AsyncResource`)*
+- `bind` — module *(class: `AsyncLocalStorage`)*
+- `bind` — module *(class: `AsyncResource`)*
 - `bind` — instance *(class: `AsyncResource`)*
 - `createHook` — module
 - `disable` — instance
@@ -226,15 +240,18 @@ Total: 2454 entries across 105 modules.
 - `enable` — instance *(class: `AsyncHook`)*
 - `enterWith` — instance
 - `executionAsyncId` — module
+- `executionAsyncResource` — module
 - `exit` — instance
 - `getStore` — instance
 - `run` — instance
 - `runInAsyncScope` — instance *(class: `AsyncResource`)*
+- `snapshot` — module *(class: `AsyncLocalStorage`)*
 - `triggerAsyncId` — module
 - `triggerAsyncId` — instance *(class: `AsyncResource`)*
 
 ### Properties
 
+- `asyncWrapProviders`
 - `default`
 
 ## `axios`
@@ -334,6 +351,7 @@ Total: 2454 entries across 105 modules.
 
 ### Methods
 
+- `_forkChild` — module
 - `exec` — module
 - `execFile` — module
 - `execFileSync` — module
@@ -363,6 +381,7 @@ Total: 2454 entries across 105 modules.
 
 - `SCHED_NONE`
 - `SCHED_RR`
+- `default`
 - `isMaster`
 - `isPrimary`
 - `isWorker`
@@ -375,6 +394,8 @@ Total: 2454 entries across 105 modules.
 ### Methods
 
 - `action` — instance
+- `args` — instance
+- `argument` — instance
 - `command` — instance
 - `description` — instance
 - `name` — instance
@@ -383,6 +404,10 @@ Total: 2454 entries across 105 modules.
 - `parse` — instance
 - `requiredOption` — instance
 - `version` — instance
+
+### Properties
+
+- `args`
 
 ## `console`
 
@@ -394,8 +419,10 @@ Total: 2454 entries across 105 modules.
 
 - `assert` — module
 - `clear` — module
+- `context` — module
 - `count` — module
 - `countReset` — module
+- `createTask` — module
 - `debug` — module
 - `dir` — module
 - `dirxml` — module
@@ -675,7 +702,10 @@ Total: 2454 entries across 105 modules.
 
 - `Cipheriv`
 - `Decipheriv`
+- `DiffieHellman`
+- `DiffieHellmanGroup`
 - `ECDH`
+- `KeyObject`
 - `X509Certificate`
 
 ### Methods
@@ -684,6 +714,10 @@ Total: 2454 entries across 105 modules.
 - `Hmac` — module
 - `Sign` — module
 - `Verify` — module
+- `argon2` — module
+- `argon2Sync` — module
+- `checkPrime` — module
+- `checkPrimeSync` — module
 - `createCipheriv` — module
 - `createDecipheriv` — module
 - `createDiffieHellman` — module
@@ -698,9 +732,17 @@ Total: 2454 entries across 105 modules.
 - `createSign` — module
 - `createVerify` — module
 - `createVerify` — module
+- `decapsulate` — module
+- `diffieHellman` — module
+- `encapsulate` — module
+- `generateKey` — module
+- `generateKeyPair` — module
 - `generateKeyPairSync` — module
 - `generateKeyPairSync` — module
 - `generateKeySync` — module
+- `generatePrime` — module
+- `generatePrimeSync` — module
+- `getCipherInfo` — module
 - `getCiphers` — module
 - `getCurves` — module
 - `getDiffieHellman` — module
@@ -708,6 +750,7 @@ Total: 2454 entries across 105 modules.
 - `getHashes` — module
 - `getRandomValues` — module
 - `hash` — module
+- `hkdf` — module
 - `hkdfSync` — module
 - `pbkdf2` — module
 - `pbkdf2Sync` — module
@@ -721,7 +764,10 @@ Total: 2454 entries across 105 modules.
 - `randomInt` — module
 - `randomInt` — module
 - `randomUUID` — module
+- `scrypt` — module
 - `scryptSync` — module
+- `secureHeapUsed` — module
+- `setFips` — module
 - `sign` — module
 - `timingSafeEqual` — module
 - `verify` — module
@@ -830,6 +876,7 @@ Total: 2454 entries across 105 modules.
 - `dropMembership` — instance *(class: `Socket`)*
 - `dropSourceSpecificMembership` — instance *(class: `Socket`)*
 - `emit` — instance *(class: `Socket`)*
+- `eventNames` — instance *(class: `Socket`)*
 - `getRecvBufferSize` — instance *(class: `Socket`)*
 - `getSendBufferSize` — instance *(class: `Socket`)*
 - `getSendQueueCount` — instance *(class: `Socket`)*
@@ -850,6 +897,10 @@ Total: 2454 entries across 105 modules.
 - `setSendBufferSize` — instance *(class: `Socket`)*
 - `setTTL` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
+
+### Properties
+
+- `default`
 
 ## `diagnostics_channel`
 
@@ -1349,6 +1400,8 @@ Total: 2454 entries across 105 modules.
 - `mkdtempDisposable` — module
 - `open` — module
 - `opendir` — module
+- `pull` — instance *(class: `FileHandle`)*
+- `pullSync` — instance *(class: `FileHandle`)*
 - `readFile` — module
 - `readdir` — module
 - `readlink` — module
@@ -1364,6 +1417,7 @@ Total: 2454 entries across 105 modules.
 - `utimes` — module
 - `watch` — module
 - `writeFile` — module
+- `writer` — instance *(class: `FileHandle`)*
 
 ### Properties
 
@@ -1378,33 +1432,45 @@ Total: 2454 entries across 105 modules.
 - `ClientRequest`
 - `IncomingMessage`
 - `IncomingMessage`
+- `OutgoingMessage`
+- `OutgoingMessage`
 - `Server`
 - `Server`
 - `ServerResponse`
 - `ServerResponse`
+- `WebSocket`
 
 ### Methods
 
 - `Agent` — module
 - `Server` — module
+- `__get_aborted` — instance *(class: `ClientRequest`)*
 - `__get_aborted` — instance *(class: `IncomingMessage`)*
 - `__get_complete` — instance *(class: `IncomingMessage`)*
+- `__get_connection` — instance *(class: `ClientRequest`)*
 - `__get_createConnection` — instance *(class: `Agent`)*
 - `__get_createSocket` — instance *(class: `Agent`)*
 - `__get_defaultPort` — instance *(class: `Agent`)*
 - `__get_destroyed` — instance *(class: `Agent`)*
+- `__get_destroyed` — instance *(class: `ClientRequest`)*
 - `__get_destroyed` — instance *(class: `IncomingMessage`)*
+- `__get_finished` — instance *(class: `ClientRequest`)*
 - `__get_freeSockets` — instance *(class: `Agent`)*
 - `__get_headers` — instance *(class: `IncomingMessage`)*
 - `__get_headersSent` — instance *(class: `ServerResponse`)*
 - `__get_headersTimeout` — instance *(class: `HttpServer`)*
 - `__get_host` — instance *(class: `ClientRequest`)*
 - `__get_httpVersion` — instance *(class: `IncomingMessage`)*
+- `__get_httpVersionMajor` — instance *(class: `IncomingMessage`)*
+- `__get_httpVersionMinor` — instance *(class: `IncomingMessage`)*
 - `__get_keepAlive` — instance *(class: `Agent`)*
 - `__get_keepAliveMsecs` — instance *(class: `Agent`)*
 - `__get_keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `__get_keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
+- `__get_listening` — instance *(class: `HttpServer`)*
 - `__get_maxFreeSockets` — instance *(class: `Agent`)*
 - `__get_maxHeadersCount` — instance *(class: `HttpServer`)*
+- `__get_maxHeadersCount` — instance *(class: `ClientRequest`)*
 - `__get_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
 - `__get_maxSockets` — instance *(class: `Agent`)*
 - `__get_maxTotalSockets` — instance *(class: `Agent`)*
@@ -1415,6 +1481,8 @@ Total: 2454 entries across 105 modules.
 - `__get_protocol` — instance *(class: `ClientRequest`)*
 - `__get_requestTimeout` — instance *(class: `HttpServer`)*
 - `__get_requests` — instance *(class: `Agent`)*
+- `__get_reusedSocket` — instance *(class: `ClientRequest`)*
+- `__get_socket` — instance *(class: `ClientRequest`)*
 - `__get_sockets` — instance *(class: `Agent`)*
 - `__get_statusCode` — instance *(class: `IncomingMessage`)*
 - `__get_statusCode` — instance *(class: `ServerResponse`)*
@@ -1422,7 +1490,9 @@ Total: 2454 entries across 105 modules.
 - `__get_timeout` — instance *(class: `HttpServer`)*
 - `__get_trailers` — instance *(class: `IncomingMessage`)*
 - `__get_url` — instance *(class: `IncomingMessage`)*
+- `__get_writableEnded` — instance *(class: `ClientRequest`)*
 - `__get_writableEnded` — instance *(class: `ServerResponse`)*
+- `__get_writableFinished` — instance *(class: `ClientRequest`)*
 - `__get_writableFinished` — instance *(class: `ServerResponse`)*
 - `__set_createConnection` — instance *(class: `Agent`)*
 - `__set_createSocket` — instance *(class: `Agent`)*
@@ -1430,6 +1500,7 @@ Total: 2454 entries across 105 modules.
 - `__set_keepAlive` — instance *(class: `Agent`)*
 - `__set_keepAliveMsecs` — instance *(class: `Agent`)*
 - `__set_keepAliveTimeout` — instance *(class: `HttpServer`)*
+- `__set_keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
 - `__set_maxFreeSockets` — instance *(class: `Agent`)*
 - `__set_maxHeadersCount` — instance *(class: `HttpServer`)*
 - `__set_maxRequestsPerSocket` — instance *(class: `HttpServer`)*
@@ -1437,31 +1508,47 @@ Total: 2454 entries across 105 modules.
 - `__set_maxTotalSockets` — instance *(class: `Agent`)*
 - `__set_protocol` — instance *(class: `Agent`)*
 - `__set_requestTimeout` — instance *(class: `HttpServer`)*
+- `__set_sendDate` — instance *(class: `ServerResponse`)*
 - `__set_statusCode` — instance *(class: `ServerResponse`)*
 - `__set_statusMessage` — instance *(class: `ServerResponse`)*
+- `__set_strictContentLength` — instance *(class: `ServerResponse`)*
 - `__set_timeout` — instance *(class: `HttpServer`)*
+- `_connectionListener` — module
+- `abort` — instance *(class: `ClientRequest`)*
 - `addListener` — instance *(class: `HttpServer`)*
 - `addListener` — instance *(class: `IncomingMessage`)*
 - `addListener` — instance *(class: `ServerResponse`)*
 - `addTrailers` — instance *(class: `ServerResponse`)*
 - `address` — instance *(class: `HttpServer`)*
+- `appendHeader` — instance *(class: `ServerResponse`)*
 - `close` — instance *(class: `Agent`)*
 - `close` — instance *(class: `HttpServer`)*
 - `closeAllConnections` — instance *(class: `HttpServer`)*
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
+- `cork` — instance *(class: `ClientRequest`)*
+- `cork` — instance *(class: `ServerResponse`)*
 - `createServer` — module
 - `createServer` — module
 - `defaultPort` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `Agent`)*
 - `destroy` — instance *(class: `IncomingMessage`)*
+- `destroy` — instance *(class: `ClientRequest`)*
 - `destroyed` — instance *(class: `Agent`)*
 - `end` — instance *(class: `ServerResponse`)*
+- `flushHeaders` — instance *(class: `ClientRequest`)*
 - `flushHeaders` — instance *(class: `ServerResponse`)*
 - `freeSockets` — instance *(class: `Agent`)*
 - `get` — module
+- `getHeader` — instance *(class: `ClientRequest`)*
 - `getHeader` — instance *(class: `ServerResponse`)*
+- `getHeaderNames` — instance *(class: `ClientRequest`)*
+- `getHeaderNames` — instance *(class: `ServerResponse`)*
+- `getHeaders` — instance *(class: `ClientRequest`)*
+- `getHeaders` — instance *(class: `ServerResponse`)*
 - `getName` — instance *(class: `Agent`)*
+- `getRawHeaderNames` — instance *(class: `ClientRequest`)*
 - `getStatus` — instance *(class: `ServerResponse`)*
+- `hasHeader` — instance *(class: `ClientRequest`)*
 - `hasHeader` — instance *(class: `ServerResponse`)*
 - `headers` — instance *(class: `IncomingMessage`)*
 - `headersTimeout` — instance *(class: `HttpServer`)*
@@ -1469,9 +1556,11 @@ Total: 2454 entries across 105 modules.
 - `keepAlive` — instance *(class: `Agent`)*
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
-- `keepSocketAlive` — instance *(class: `Agent`)*
+- `keepAliveTimeoutBuffer` — instance *(class: `HttpServer`)*
+- `keepSocketAlive` — instance *(class: `Agent`)* ⚠ **stub** — reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)
 - `listen` — instance *(class: `HttpServer`)*
 - `listenerCount` — instance *(class: `ClientRequest`)*
+- `listening` — instance *(class: `HttpServer`)*
 - `maxFreeSockets` — instance *(class: `Agent`)*
 - `maxHeadersCount` — instance *(class: `HttpServer`)*
 - `maxRequestsPerSocket` — instance *(class: `HttpServer`)*
@@ -1484,29 +1573,41 @@ Total: 2454 entries across 105 modules.
 - `pause` — instance *(class: `IncomingMessage`)*
 - `protocol` — instance *(class: `Agent`)*
 - `read` — instance *(class: `IncomingMessage`)*
+- `ref` — instance *(class: `HttpServer`)*
+- `removeHeader` — instance *(class: `ClientRequest`)*
 - `removeHeader` — instance *(class: `ServerResponse`)*
 - `request` — module
 - `requestTimeout` — instance *(class: `HttpServer`)*
 - `requests` — instance *(class: `Agent`)*
 - `resume` — instance *(class: `IncomingMessage`)*
-- `reuseSocket` — instance *(class: `Agent`)*
+- `reuseSocket` — instance *(class: `Agent`)* ⚠ **stub** — reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)
 - `setEncoding` — instance *(class: `IncomingMessage`)*
 - `setGlobalProxyFromEnv` — module
+- `setHeader` — instance *(class: `ClientRequest`)*
 - `setHeader` — instance *(class: `ServerResponse`)*
+- `setHeaders` — instance *(class: `ServerResponse`)*
 - `setMaxIdleHTTPParsers` — module
+- `setNoDelay` — instance *(class: `ClientRequest`)*
+- `setSocketKeepAlive` — instance *(class: `ClientRequest`)*
 - `setStatus` — instance *(class: `ServerResponse`)*
 - `setTimeout` — instance *(class: `HttpServer`)*
+- `setTimeout` — instance *(class: `IncomingMessage`)*
 - `setTimeout` — instance *(class: `ClientRequest`)*
+- `setTimeout` — instance *(class: `ServerResponse`)*
 - `sockets` — instance *(class: `Agent`)*
 - `statusCode` — instance *(class: `IncomingMessage`)*
 - `statusMessage` — instance *(class: `IncomingMessage`)*
 - `timeout` — instance *(class: `HttpServer`)*
 - `trailers` — instance *(class: `IncomingMessage`)*
+- `uncork` — instance *(class: `ClientRequest`)*
+- `uncork` — instance *(class: `ServerResponse`)*
+- `unref` — instance *(class: `HttpServer`)*
 - `url` — instance *(class: `IncomingMessage`)*
 - `validateHeaderName` — module
 - `validateHeaderValue` — module
 - `write` — instance *(class: `ServerResponse`)*
 - `writeContinue` — instance *(class: `ServerResponse`)*
+- `writeEarlyHints` — instance *(class: `ServerResponse`)*
 - `writeHead` — instance *(class: `ServerResponse`)*
 - `writeProcessing` — instance *(class: `ServerResponse`)*
 
@@ -1515,6 +1616,7 @@ Total: 2454 entries across 105 modules.
 - `METHODS`
 - `STATUS_CODES`
 - `globalAgent`
+- `kConnectionsCheckingInterval`
 - `maxHeaderSize`
 
 ## `http2`
@@ -1554,12 +1656,15 @@ Total: 2454 entries across 105 modules.
 - `Server` — module
 - `__get_headersTimeout` — instance *(class: `HttpsServer`)*
 - `__get_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__get_keepAliveTimeoutBuffer` — instance *(class: `HttpsServer`)*
+- `__get_listening` — instance *(class: `HttpsServer`)*
 - `__get_maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `__get_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `__get_requestTimeout` — instance *(class: `HttpsServer`)*
 - `__get_timeout` — instance *(class: `HttpsServer`)*
 - `__set_headersTimeout` — instance *(class: `HttpsServer`)*
 - `__set_keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `__set_keepAliveTimeoutBuffer` — instance *(class: `HttpsServer`)*
 - `__set_maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `__set_maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `__set_requestTimeout` — instance *(class: `HttpsServer`)*
@@ -1574,18 +1679,68 @@ Total: 2454 entries across 105 modules.
 - `get` — module
 - `headersTimeout` — instance *(class: `HttpsServer`)*
 - `keepAliveTimeout` — instance *(class: `HttpsServer`)*
+- `keepAliveTimeoutBuffer` — instance *(class: `HttpsServer`)*
 - `listen` — instance *(class: `HttpsServer`)*
+- `listening` — instance *(class: `HttpsServer`)*
 - `maxHeadersCount` — instance *(class: `HttpsServer`)*
 - `maxRequestsPerSocket` — instance *(class: `HttpsServer`)*
 - `on` — instance *(class: `HttpsServer`)*
+- `ref` — instance *(class: `HttpsServer`)*
 - `request` — module
 - `requestTimeout` — instance *(class: `HttpsServer`)*
 - `setTimeout` — instance *(class: `HttpsServer`)*
 - `timeout` — instance *(class: `HttpsServer`)*
+- `unref` — instance *(class: `HttpsServer`)*
 
 ### Properties
 
 - `globalAgent`
+
+## `inspector`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `close` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `open` — module ⚠ **stub** — accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916)
+- `post` — instance *(class: `Session`)* ⚠ **stub** — only Runtime.enable and a canned Runtime.evaluate subset respond; every other protocol method throws Inspector error -32601 (#4916)
+- `url` — module ⚠ **stub** — always undefined: Perry never exposes a real inspector endpoint (#4916)
+- `waitForDebugger` — module ⚠ **stub** — returns immediately after open(); there is no debugger to wait for (#4916)
+
+### Properties
+
+- `Network`
+- `console`
+- `default`
+
+## `inspector/promises`
+
+### Classes
+
+- `Session`
+
+### Methods
+
+- `Session` — module
+- `connect` — instance *(class: `Session`)*
+- `connectToMainThread` — instance *(class: `Session`)*
+- `disconnect` — instance *(class: `Session`)*
+- `on` — instance *(class: `Session`)*
+- `once` — instance *(class: `Session`)*
+- `post` — instance *(class: `Session`)*
+
+### Properties
+
+- `default`
 
 ## `ioredis`
 
@@ -1681,11 +1836,20 @@ Total: 2454 entries across 105 modules.
 
 ### Classes
 
+- `Module`
 - `SourceMap`
 
 ### Methods
 
+- `Module` — module
 - `SourceMap` — module
+- `_findPath` — module
+- `_initPaths` — module
+- `_load` — module
+- `_nodeModulePaths` — module
+- `_preloadModules` — module
+- `_resolveFilename` — module
+- `_resolveLookupPaths` — module
 - `createRequire` — module
 - `enableCompileCache` — module
 - `findPackageJSON` — module
@@ -1703,8 +1867,14 @@ Total: 2454 entries across 105 modules.
 
 ### Properties
 
+- `Module`
+- `_cache`
+- `_extensions`
+- `_pathCache`
 - `builtinModules`
 - `constants`
+- `default`
+- `globalPaths`
 
 ## `moment`
 
@@ -1790,25 +1960,36 @@ Total: 2454 entries across 105 modules.
 
 ### Classes
 
+- `BlockList`
 - `Server`
 - `Socket`
+- `SocketAddress`
 - `Stream`
 
 ### Methods
 
+- `BlockList` — module
 - `Server` — module
 - `Socket` — module
+- `SocketAddress` — module
 - `Stream` — module
+- `__set_dropMaxConnection` — instance *(class: `Server`)*
+- `__set_maxConnections` — instance *(class: `Server`)*
 - `_createServerHandle` — module
 - `_normalizeArgs` — module
+- `addAddress` — instance *(class: `BlockList`)*
 - `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
+- `addRange` — instance *(class: `BlockList`)*
+- `addSubnet` — instance *(class: `BlockList`)*
 - `address` — instance *(class: `Socket`)*
+- `address` — instance *(class: `SocketAddress`)*
 - `address` — instance *(class: `Server`)*
 - `autoSelectFamilyAttemptedAddresses` — instance *(class: `Socket`)*
 - `bufferSize` — instance *(class: `Socket`)*
 - `bytesRead` — instance *(class: `Socket`)*
 - `bytesWritten` — instance *(class: `Socket`)*
+- `check` — instance *(class: `BlockList`)*
 - `close` — instance *(class: `Server`)*
 - `connect` — module
 - `connect` — instance *(class: `Socket`)*
@@ -1818,29 +1999,47 @@ Total: 2454 entries across 105 modules.
 - `createServer` — module
 - `destroy` — instance *(class: `Socket`)*
 - `destroyed` — instance *(class: `Socket`)*
+- `dropMaxConnection` — instance *(class: `Server`)*
 - `end` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Socket`)*
 - `eventNames` — instance *(class: `Server`)*
+- `exportKeyingMaterial` — instance *(class: `Socket`)*
+- `family` — instance *(class: `SocketAddress`)*
+- `flowlabel` — instance *(class: `SocketAddress`)*
+- `fromJSON` — instance *(class: `BlockList`)*
+- `getCertificate` — instance *(class: `Socket`)*
+- `getCipher` — instance *(class: `Socket`)*
+- `getConnections` — instance *(class: `Server`)*
 - `getDefaultAutoSelectFamily` — module
 - `getDefaultAutoSelectFamilyAttemptTimeout` — module
+- `getPeerCertificate` — instance *(class: `Socket`)*
+- `getProtocol` — instance *(class: `Socket`)*
+- `getSession` — instance *(class: `Socket`)*
+- `getTypeOfService` — instance *(class: `Socket`)*
+- `isBlockList` — module *(class: `BlockList`)*
 - `isIP` — module
 - `isIPv4` — module
 - `isIPv6` — module
+- `isSessionReused` — instance *(class: `Socket`)*
 - `listen` — instance *(class: `Server`)*
 - `listenerCount` — instance *(class: `Socket`)*
 - `listenerCount` — instance *(class: `Server`)*
 - `listeners` — instance *(class: `Socket`)*
 - `listeners` — instance *(class: `Server`)*
+- `listening` — instance *(class: `Server`)*
 - `localAddress` — instance *(class: `Socket`)*
 - `localFamily` — instance *(class: `Socket`)*
 - `localPort` — instance *(class: `Socket`)*
+- `maxConnections` — instance *(class: `Server`)*
 - `off` — instance *(class: `Socket`)*
 - `off` — instance *(class: `Server`)*
 - `on` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Socket`)*
 - `once` — instance *(class: `Server`)*
+- `parse` — module *(class: `SocketAddress`)*
 - `pause` — instance *(class: `Socket`)*
 - `pending` — instance *(class: `Socket`)*
+- `port` — instance *(class: `SocketAddress`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
 - `readyState` — instance *(class: `Socket`)*
@@ -1854,14 +2053,18 @@ Total: 2454 entries across 105 modules.
 - `removeListener` — instance *(class: `Server`)*
 - `resetAndDestroy` — instance *(class: `Socket`)*
 - `resume` — instance *(class: `Socket`)*
+- `rules` — instance *(class: `BlockList`)*
 - `setDefaultAutoSelectFamily` — module
 - `setDefaultAutoSelectFamilyAttemptTimeout` — module
 - `setDefaultEncoding` — instance *(class: `Socket`)*
 - `setEncoding` — instance *(class: `Socket`)*
 - `setKeepAlive` — instance *(class: `Socket`)*
+- `setMaxSendFragment` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
+- `setTypeOfService` — instance *(class: `Socket`)*
 - `timeout` — instance *(class: `Socket`)*
+- `toJSON` — instance *(class: `BlockList`)*
 - `uncork` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
@@ -2079,6 +2282,62 @@ Total: 2454 entries across 105 modules.
 - `cancel` — module
 - `registerTask` — module
 - `schedule` — module
+
+## `perry/compose`
+
+### Methods
+
+- `config` — module
+- `down` — module
+- `exec` — module
+- `logs` — module
+- `ps` — module
+- `restart` — module
+- `start` — module
+- `stop` — module
+- `up` — module
+
+## `perry/container`
+
+### Methods
+
+- `composeUp` — module
+- `create` — module
+- `detectBackend` — module
+- `downAll` — module
+- `downByProject` — module
+- `exec` — module
+- `getAvailableBackends` — module
+- `getBackend` — module
+- `getBackendPriority` — module
+- `inspect` — module
+- `list` — module
+- `listImages` — module
+- `logs` — module
+- `pullImage` — module
+- `remove` — module
+- `removeIfExists` — module
+- `removeImage` — module
+- `run` — module
+- `selectBackendFor` — module
+- `setBackend` — module
+- `setBackends` — module
+- `start` — module
+- `stop` — module
+
+## `perry/container-compose`
+
+### Methods
+
+- `config` — module
+- `down` — module
+- `exec` — module
+- `logs` — module
+- `ps` — module
+- `restart` — module
+- `start` — module
+- `stop` — module
+- `up` — module
 
 ## `perry/i18n`
 
@@ -2406,6 +2665,39 @@ Total: 2454 entries across 105 modules.
 
 - `Widget` — module
 
+## `perry/workloads`
+
+### Methods
+
+- `graph` — module
+- `inspectGraph` — module
+- `node` — module
+- `runGraph` — module
+
+### Properties
+
+- `policy`
+- `runtime`
+
+## `perry/yoga`
+
+### Methods
+
+- `calculateLayout` — module
+- `childCount` — module
+- `getComputed` — module
+- `getComputedEdge` — module
+- `insertChild` — module
+- `nodeFree` — module
+- `nodeNew` — module
+- `removeChild` — module
+- `setEdge` — module
+- `setEnum` — module
+- `setGap` — module
+- `setMeasureFunc` — module
+- `setNumber` — module
+- `unsetMeasureFunc` — module
+
 ## `pg`
 
 ### Classes
@@ -2427,14 +2719,28 @@ Total: 2454 entries across 105 modules.
 
 ### Methods
 
+- `_debugEnd` — module
+- `_debugProcess` — module
+- `_fatalException` — module
+- `_getActiveHandles` — module
+- `_getActiveRequests` — module
+- `_kill` — module
+- `_linkedBinding` — module
+- `_rawDebug` — module
+- `_startProfilerIdleNotifier` — module
+- `_stopProfilerIdleNotifier` — module
+- `_tickCallback` — module
 - `abort` — module
 - `addUncaughtExceptionCaptureCallback` — module
 - `availableMemory` — module
+- `binding` — module
 - `chdir` — module
 - `constrainedMemory` — module
 - `cpuUsage` — module
 - `cwd` — module
+- `dlopen` — module
 - `emitWarning` — module
+- `execve` — module
 - `exit` — module
 - `getActiveResourcesInfo` — module
 - `getBuiltinModule` — module
@@ -2450,6 +2756,9 @@ Total: 2454 entries across 105 modules.
 - `loadEnvFile` — module
 - `memoryUsage` — module
 - `nextTick` — module
+- `openStdin` — module
+- `reallyExit` — module
+- `ref` — module
 - `resourceUsage` — module
 - `setSourceMapsEnabled` — module
 - `setSourceMapsEnabled` — module
@@ -2463,19 +2772,40 @@ Total: 2454 entries across 105 modules.
 - `sourceMapsEnabled` — module
 - `threadCpuUsage` — module
 - `umask` — module
+- `unref` — module
 - `uptime` — module
 
 ### Properties
 
+- `_eval`
+- `_events`
+- `_eventsCount`
+- `_exiting`
+- `_maxListeners`
+- `_preload_modules`
+- `allowedNodeEnvironmentFlags`
 - `arch`
 - `argv`
+- `argv0`
+- `config`
+- `debugPort`
+- `domain`
 - `env`
+- `execArgv`
+- `execPath`
+- `features`
+- `finalization`
+- `moduleLoadList`
+- `permission`
 - `pid`
 - `platform`
 - `ppid`
+- `release`
+- `report`
 - `stderr`
 - `stdin`
 - `stdout`
+- `title`
 - `version`
 - `versions`
 
@@ -2529,6 +2859,7 @@ Total: 2454 entries across 105 modules.
 - `emitKeypressEvents` — module
 - `getCursorPos` — instance
 - `getPrompt` — instance
+- `iterator` — instance
 - `line` — instance
 - `moveCursor` — module
 - `on` — instance
@@ -2562,6 +2893,49 @@ Total: 2454 entries across 105 modules.
 ### Methods
 
 - `createClient` — module
+
+## `repl`
+
+### Classes
+
+- `REPLServer`
+- `Recoverable`
+
+### Methods
+
+- `REPLServer` — module ⚠ **stub** — REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)
+- `Recoverable` — module
+- `addListener` — instance *(class: `REPLServer`)*
+- `clearBufferedCommand` — instance *(class: `REPLServer`)*
+- `defineCommand` — instance *(class: `REPLServer`)*
+- `displayPrompt` — instance *(class: `REPLServer`)*
+- `emit` — instance *(class: `REPLServer`)*
+- `on` — instance *(class: `REPLServer`)*
+- `once` — instance *(class: `REPLServer`)*
+- `setupHistory` — instance *(class: `REPLServer`)*
+- `start` — module ⚠ **stub** — REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916)
+- `write` — instance *(class: `REPLServer`)*
+
+### Properties
+
+- `REPL_MODE_SLOPPY`
+- `REPL_MODE_STRICT`
+- `builtinModules`
+- `default`
+
+## `sea`
+
+### Methods
+
+- `getAsset` — module
+- `getAssetAsBlob` — module
+- `getAssetKeys` — module
+- `getRawAsset` — module
+- `isSea` — module
+
+### Properties
+
+- `default`
 
 ## `sharp`
 
@@ -2664,6 +3038,9 @@ Total: 2454 entries across 105 modules.
 
 ### Methods
 
+- `_isArrayBufferView` — module
+- `_isUint8Array` — module
+- `_uint8ArrayToBuffer` — module
 - `addAbortSignal` — module
 - `addListener` — instance
 - `allowHalfOpen` — instance
@@ -2681,6 +3058,7 @@ Total: 2454 entries across 105 modules.
 - `finished` — module
 - `getDefaultHighWaterMark` — module
 - `getMaxListeners` — instance
+- `isDestroyed` — module
 - `isDisturbed` — module
 - `isErrored` — module
 - `isPaused` — instance
@@ -2942,12 +3320,29 @@ Total: 2454 entries across 105 modules.
 ### Methods
 
 - `SecureContext` — module
+- `Server` — module
+- `TLSSocket` — module
+- `addListener` — instance *(class: `Server`)*
+- `address` — instance *(class: `Server`)*
 - `checkServerIdentity` — module
+- `close` — instance *(class: `Server`)*
 - `connect` — module
 - `createSecureContext` — module
+- `createServer` — module
+- `eventNames` — instance *(class: `Server`)*
 - `getCACertificates` — module
 - `getCiphers` — module
+- `getTicketKeys` — instance *(class: `Server`)*
+- `listen` — instance *(class: `Server`)*
+- `listenerCount` — instance *(class: `Server`)*
+- `off` — instance *(class: `Server`)*
+- `on` — instance *(class: `Server`)*
+- `once` — instance *(class: `Server`)*
+- `removeAllListeners` — instance *(class: `Server`)*
+- `removeListener` — instance *(class: `Server`)*
 - `setDefaultCACertificates` — module
+- `setSecureContext` — instance *(class: `Server`)*
+- `setTicketKeys` — instance *(class: `Server`)*
 
 ### Properties
 
@@ -3005,6 +3400,7 @@ Total: 2454 entries across 105 modules.
 ### Classes
 
 - `URL`
+- `URLPattern`
 - `URLSearchParams`
 - `Url`
 
@@ -3013,6 +3409,7 @@ Total: 2454 entries across 105 modules.
 - `Url` — module
 - `domainToASCII` — module
 - `domainToUnicode` — module
+- `exec` — instance *(class: `URLPattern`)*
 - `fileURLToPath` — module
 - `fileURLToPathBuffer` — module
 - `format` — module
@@ -3020,6 +3417,7 @@ Total: 2454 entries across 105 modules.
 - `pathToFileURL` — module
 - `resolve` — module
 - `resolveObject` — module
+- `test` — instance *(class: `URLPattern`)*
 - `urlToHttpOptions` — module
 
 ### Properties
@@ -3127,9 +3525,12 @@ Total: 2454 entries across 105 modules.
 ### Methods
 
 - `v1` — module
+- `v3` — module
 - `v4` — module
+- `v5` — module
 - `v7` — module
 - `validate` — module
+- `version` — module
 
 ## `v8`
 
@@ -3149,10 +3550,10 @@ Total: 2454 entries across 105 modules.
 - `createHook` — instance *(class: `promiseHooks`)*
 - `deserialize` — module
 - `getCppHeapStatistics` — module
-- `getHeapCodeStatistics` — module
+- `getHeapCodeStatistics` — module ⚠ **stub** — all fields 0; Perry compiles AOT, there is no JIT code heap (#4916)
 - `getHeapSnapshot` — module
-- `getHeapSpaceStatistics` — module
-- `getHeapStatistics` — module
+- `getHeapSpaceStatistics` — module ⚠ **stub** — Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916)
+- `getHeapStatistics` — module ⚠ **stub** — Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916)
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
 - `isStringOneByteRepresentation` — module
 - `onAfter` — instance *(class: `promiseHooks`)*
@@ -3173,7 +3574,7 @@ Total: 2454 entries across 105 modules.
 - `setHeapSnapshotNearHeapLimit` — module
 - `start` — instance *(class: `GCProfiler`)*
 - `startCpuProfile` — module
-- `stop` — instance *(class: `GCProfiler`)*
+- `stop` — instance *(class: `GCProfiler`)* ⚠ **stub** — report has the Node shape but the statistics array is always empty (#4916)
 - `stopCoverage` — module
 - `takeCoverage` — module
 - `writeDouble` — instance *(class: `Serializer`)*
@@ -3198,6 +3599,42 @@ Total: 2454 entries across 105 modules.
 - `isJSON` — module
 - `isURL` — module
 - `isUUID` — module
+
+## `vm`
+
+### Classes
+
+- `Script`
+
+### Methods
+
+- `compileFunction` — module
+- `createCachedData` — instance
+- `createContext` — module
+- `createScript` — module
+- `dependencySpecifiers` — instance
+- `error` — instance
+- `evaluate` — instance
+- `hasAsyncGraph` — instance
+- `hasTopLevelAwait` — instance
+- `identifier` — instance
+- `instantiate` — instance
+- `isContext` — module
+- `link` — instance
+- `linkRequests` — instance
+- `measureMemory` — module
+- `moduleRequests` — instance
+- `namespace` — instance
+- `runInContext` — module
+- `runInNewContext` — module
+- `runInThisContext` — module
+- `setExport` — instance
+- `status` — instance
+
+### Properties
+
+- `constants`
+- `default`
 
 ## `wasi`
 
@@ -3230,7 +3667,10 @@ Total: 2454 entries across 105 modules.
 
 - `BroadcastChannel` — module
 - `MessageChannel` — module
+- `cpuUsage` — instance *(class: `Worker`)*
 - `getEnvironmentData` — module
+- `getHeapSnapshot` — instance *(class: `Worker`)*
+- `getHeapStatistics` — instance *(class: `Worker`)*
 - `isMarkedAsUntransferable` — module
 - `markAsUncloneable` — module
 - `markAsUntransferable` — module
@@ -3242,6 +3682,8 @@ Total: 2454 entries across 105 modules.
 - `receiveMessageOnPort` — module
 - `ref` — instance *(class: `Worker`)*
 - `setEnvironmentData` — module
+- `startCpuProfile` — instance *(class: `Worker`)*
+- `startHeapProfile` — instance *(class: `Worker`)*
 - `terminate` — instance *(class: `Worker`)*
 - `unref` — instance *(class: `Worker`)*
 
@@ -3280,6 +3722,13 @@ Total: 2454 entries across 105 modules.
 - `send` — instance *(class: `Client`)*
 - `sendToClient` — module
 
+### Properties
+
+- `CLOSED`
+- `CLOSING`
+- `CONNECTING`
+- `OPEN`
+
 ## `zlib`
 
 ### Classes
@@ -3312,17 +3761,17 @@ Total: 2454 entries across 105 modules.
 - `brotliDecompress` — module
 - `brotliDecompressSync` — module
 - `crc32` — module
-- `createBrotliCompress` — module
-- `createBrotliDecompress` — module
-- `createDeflate` — module
-- `createDeflateRaw` — module
+- `createBrotliCompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createBrotliDecompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createDeflate` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
+- `createDeflateRaw` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
 - `createGunzip` — module
-- `createGzip` — module
+- `createGzip` — module ⚠ **stub** — level honored; strategy/memLevel validated but not applied (#4917)
 - `createInflate` — module
 - `createInflateRaw` — module
 - `createUnzip` — module
-- `createZstdCompress` — module
-- `createZstdDecompress` — module
+- `createZstdCompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
+- `createZstdDecompress` — module ⚠ **stub** — params/quality options accepted but ignored, warns once (#4917)
 - `deflate` — module
 - `deflateRaw` — module
 - `deflateRawSync` — module
@@ -3337,6 +3786,10 @@ Total: 2454 entries across 105 modules.
 - `inflateSync` — module
 - `unzip` — module
 - `unzipSync` — module
+- `zstdCompress` — module
+- `zstdCompressSync` — module
+- `zstdDecompress` — module
+- `zstdDecompressSync` — module
 
 ### Properties
 

@@ -11,7 +11,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
-use super::super::LoweringContext;
+use super::super::{lower_expr, LoweringContext};
 use super::object_static::build_object_static_method_call;
 
 /// Proxy apply / revoke fast path. If the bare callee ident is a
@@ -78,7 +78,51 @@ pub(super) fn try_object_static_alias_call(
                 let name = ident.sym.to_string();
                 if let Some(id) = ctx.lookup_local(&name) {
                     if let Some(method) = ctx.object_static_method_aliases.get(&id).cloned() {
+                        if let Some(method) = method.strip_prefix("Response.") {
+                            return Ok(Expr::NativeMethodCall {
+                                module: "fetch".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method.to_string(),
+                                args,
+                            });
+                        }
+                        if method == "Array.isArray" {
+                            let value = args.first().cloned().unwrap_or(Expr::Undefined);
+                            return Ok(Expr::ArrayIsArray(Box::new(value)));
+                        }
                         return Ok(build_object_static_method_call(&method, args));
+                    }
+                }
+            }
+        }
+    }
+    Err(args)
+}
+
+/// Indirect call through a captured `Array.<staticMethod>` alias.
+///
+/// Test262's property helper captures `Array.isArray` into `__isArray` and
+/// calls that local later. Direct `Array.isArray(x)` lowers through the
+/// dedicated intrinsic already; this mirrors the `Object.<static>` alias
+/// repair above for the captured form.
+pub(super) fn try_array_static_alias_call(
+    ctx: &LoweringContext,
+    call: &ast::CallExpr,
+    args: Vec<Expr>,
+    has_spread: bool,
+) -> Result<Expr, Vec<Expr>> {
+    if !has_spread {
+        if let ast::Callee::Expr(callee_expr) = &call.callee {
+            if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
+                let name = ident.sym.to_string();
+                if let Some(id) = ctx.lookup_local(&name) {
+                    if matches!(
+                        ctx.array_static_method_aliases.get(&id).map(String::as_str),
+                        Some("isArray")
+                    ) {
+                        let value = args.first().cloned().unwrap_or(Expr::Undefined);
+                        return Ok(Expr::ArrayIsArray(Box::new(value)));
                     }
                 }
             }
@@ -125,11 +169,45 @@ pub(super) fn try_object_has_own_call(
                                         }),
                                         args,
                                         type_args: Vec::new(),
+                                        byte_offset: 0,
                                     });
                                 }
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+    Err(args)
+}
+
+/// `obj.hasOwnProperty(key)` → `js_object_has_own(obj, key)`.
+pub(super) fn try_direct_has_own_call(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+    args: Vec<Expr>,
+    has_spread: bool,
+) -> Result<Expr, Vec<Expr>> {
+    if has_spread || args.len() != 1 {
+        return Err(args);
+    }
+    if let ast::Callee::Expr(callee_expr) = &call.callee {
+        if let ast::Expr::Member(member) = callee_expr.as_ref() {
+            if let ast::MemberProp::Ident(prop) = &member.prop {
+                if prop.sym.as_ref() == "hasOwnProperty" {
+                    let receiver =
+                        lower_expr(ctx, member.obj.as_ref()).map_err(|_| args.clone())?;
+                    return Ok(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_object_has_own".to_string(),
+                            param_types: Vec::new(),
+                            return_type: Type::Any,
+                        }),
+                        args: vec![receiver, args[0].clone()],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    });
                 }
             }
         }
@@ -153,7 +231,7 @@ pub(super) fn try_object_prototype_call(
     args: Vec<Expr>,
     has_spread: bool,
 ) -> Result<Expr, Vec<Expr>> {
-    if !has_spread && (args.len() == 1 || args.len() == 2) {
+    if !has_spread && (1..=3).contains(&args.len()) {
         if let ast::Callee::Expr(callee_expr) = &call.callee {
             if let ast::Expr::Member(outer) = callee_expr.as_ref() {
                 if let (ast::MemberProp::Ident(outer_prop), ast::Expr::Member(mid)) =
@@ -170,6 +248,11 @@ pub(super) fn try_object_prototype_call(
                                 ("propertyIsEnumerable", 2) => {
                                     Some("js_object_property_is_enumerable")
                                 }
+                                // Annex B accessor helpers: .call(obj, key[, fn]).
+                                ("__defineGetter__", 3) => Some("js_object_define_getter"),
+                                ("__defineSetter__", 3) => Some("js_object_define_setter"),
+                                ("__lookupGetter__", 2) => Some("js_object_lookup_getter"),
+                                ("__lookupSetter__", 2) => Some("js_object_lookup_setter"),
                                 _ => None,
                             };
                             if let Some(runtime_fn) = runtime_fn {
@@ -189,6 +272,7 @@ pub(super) fn try_object_prototype_call(
                                             }),
                                             args,
                                             type_args: Vec::new(),
+                                            byte_offset: 0,
                                         });
                                     }
                                 }

@@ -65,16 +65,7 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                         ctx.weakset_locals.insert(name);
                     }
                     Some("Proxy") => {
-                        ctx.proxy_locals.insert(name.clone());
-                        // Track proxy target class for `new p(args)` fold.
-                        if let Some(args) = new_expr.args.as_ref() {
-                            if let Some(first) = args.first() {
-                                if let ast::Expr::Ident(cls_ident) = first.expr.as_ref() {
-                                    let cls_name = cls_ident.sym.to_string();
-                                    ctx.proxy_target_classes.insert(name, cls_name);
-                                }
-                            }
-                        }
+                        ctx.proxy_locals.insert(name);
                     }
                     _ => {}
                 }
@@ -271,6 +262,44 @@ pub(crate) fn pre_scan_mixin_functions(ast_module: &ast::Module, ctx: &mut Lower
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// #4510: pre-register module-level `enum` declarations so a forward
+/// reference (an enum used in a function body or earlier statement, before its
+/// textual declaration) resolves instead of falling through to the
+/// "unknown identifier → GlobalGet(0) → 0" silent-miscompile path. Enum
+/// bindings are module-scoped in TypeScript, so a function declared above the
+/// `enum` may legally compare against `Enum.Member`. Member values are computed
+/// purely (`compute_enum_members`), so registering here produces the same id +
+/// values the real declaration site would, and `lower_enum_decl` reuses this
+/// registration rather than minting a duplicate.
+pub(crate) fn pre_register_module_enums(ast_module: &ast::Module, ctx: &mut LoweringContext) {
+    for item in &ast_module.body {
+        let enum_decl = match item {
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsEnum(e))) => Some(e),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export)) => {
+                if let ast::Decl::TsEnum(e) = &export.decl {
+                    Some(e)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(e) = enum_decl {
+            // `declare enum` / `const enum` ambient declarations still carry
+            // member values usable as constants; register them too.
+            let name = e.id.sym.to_string();
+            if ctx.lookup_enum(&name).is_some() {
+                continue;
+            }
+            let members = crate::lower_decl::compute_enum_members(e);
+            let member_values: Vec<(String, EnumValue)> =
+                members.into_iter().map(|m| (m.name, m.value)).collect();
+            let id = ctx.fresh_enum();
+            ctx.define_enum(name, id, member_values);
         }
     }
 }

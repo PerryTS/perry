@@ -41,6 +41,12 @@ show("same storage globals", localStorage === sessionStorage);
 globalDesc("Storage desc", "Storage");
 globalDesc("localStorage desc", "localStorage");
 globalDesc("sessionStorage desc", "sessionStorage");
+const localDesc: any = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+const sessionDesc: any = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+show(
+  "descriptor getters",
+  (localDesc.get.call(g) === localStorage) + "/" + (sessionDesc.get.call(g) === sessionStorage),
+);
 
 for (const name of ["clear", "getItem", "key", "removeItem", "setItem"]) {
   const fn = (Storage.prototype as any)[name];

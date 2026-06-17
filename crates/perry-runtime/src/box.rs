@@ -87,7 +87,7 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             // address (alloc gives 8-aligned pointers in user space)
             // matches `is_plausible_box_ptr` to keep this a no-op for
             // any pathological entry.
-            if addr >= 0x1000 && addr < 0x0001_0000_0000_0000 && addr % 8 == 0 {
+            if addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0 {
                 unsafe {
                     visitor.visit_nanbox_f64_raw_slot(&raw mut (*ptr).value);
                 }
@@ -98,17 +98,18 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 
 /// Get the value from a box
 ///
-/// Same robustness as `js_box_set`: invalid pointers return NaN
+/// Same robustness as `js_box_set`: invalid pointers return `undefined`
 /// rather than dereferencing. See perry#393 for the failure mode.
 #[no_mangle]
 pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
     unsafe {
-        if !is_plausible_box_ptr(ptr) {
+        if !is_registered_box_ptr(ptr) {
             // perry#924: production services see these in tight bursts of
             // 3 synced with normal request handling and the operator can't
             // tell whether anything is wrong. The path is correctness-safe
-            // (we already return NaN to the caller); gate the diagnostic
-            // behind `PERRY_DEBUG=1` so it only surfaces during bisection.
+            // (we already return a defined value to the caller); gate the
+            // diagnostic behind `PERRY_DEBUG=1` so it only surfaces during
+            // bisection.
             if std::env::var_os("PERRY_DEBUG").is_some() {
                 let count = BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
                 if count < 3 {
@@ -118,7 +119,14 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
                     );
                 }
             }
-            return f64::NAN;
+            // perry#4926: with codegen entry-initializing boxed slots to
+            // TAG_UNDEFINED, this arm is the read-before-initialization
+            // path for a boxed variable — in JS that reads as `undefined`
+            // (Perry has no TDZ), not as the number NaN. TAG_UNDEFINED is
+            // itself a quiet-NaN bit pattern, so numeric consumers behave
+            // exactly as before; JS-level checks (`typeof`, `== null`)
+            // now see `undefined`.
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
         (*ptr).value
     }
@@ -138,7 +146,7 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
     unsafe {
-        if !is_plausible_box_ptr(ptr) {
+        if !is_registered_box_ptr(ptr) {
             // perry#924: silent-skip is correctness-safe (caller's box
             // mutation is dropped, which is the same as no closure
             // capture having existed). Gate diagnostics behind
@@ -170,6 +178,19 @@ pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
 /// `align = 8`) is 8-byte aligned. Pointers below the first user page
 /// or above the user-address ceiling, or unaligned ones, can only come
 /// from stale/uninitialized stack slots reinterpreted as box pointers.
+///
+/// perry#4898: the structural checks are necessary but **not sufficient**.
+/// A miscompiled `js_box_set` can be handed a box-pointer operand that was
+/// effectively `undef`/poison at the IR level (e.g. a mutable-capture box
+/// whose allocation was elided on the taken path). LLVM then fills the
+/// register with whatever was conveniently live — under typed-feedback
+/// (#854) instrumentation that is the read-only `..._guard` string constant
+/// passed to `js_typed_feedback_register_site`. That constant is ≥0x1000,
+/// untagged (top-16 zero), and 8-byte aligned, so it sails through every
+/// structural check — and `(*ptr).value = value` then writes into
+/// `__TEXT.__cstring`, a SIGBUS. The address `read_static`-looks like a box
+/// but isn't one. `is_registered_box_ptr` closes that gap: a pointer that
+/// `js_box_alloc` never minted is rejected before the deref.
 #[inline]
 fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
     let addr = ptr as usize;
@@ -179,7 +200,7 @@ fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
     if addr < 0x1000 {
         return false;
     }
-    if addr >= 0x0001_0000_0000_0000 {
+    if (addr as u64) >= 0x0001_0000_0000_0000 {
         return false;
     }
     if addr % std::mem::align_of::<Box>() != 0 {
@@ -188,7 +209,66 @@ fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
     true
 }
 
+/// Authoritative box-pointer check: the address must have been minted by
+/// `js_box_alloc` (and thus recorded in `BOX_REGISTRY`). Boxes are never
+/// freed — the registry is monotonic per thread — so membership has no
+/// false negatives for a real live box and no stale-reuse hazard: an
+/// address that isn't in the registry is provably not a box, regardless of
+/// how plausible its bit-pattern looks. This is what stops a stray
+/// read-only/garbage pointer (perry#4898) from being dereferenced as a box.
+#[inline]
+fn is_registered_box_ptr(ptr: *mut Box) -> bool {
+    if !is_plausible_box_ptr(ptr) {
+        return false;
+    }
+    BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_box_registry() {
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// perry#4898: a structurally-plausible pointer that `js_box_alloc`
+    /// never minted (here, a `&'static` read-only constant that is ≥0x1000,
+    /// untagged, and 8-byte aligned — exactly the shape of the leaked
+    /// `..._guard` string) must NOT be dereferenced by `js_box_set`. Before
+    /// the registry check this stored into read-only memory → SIGBUS.
+    #[test]
+    fn box_set_skips_unregistered_plausible_pointer() {
+        test_clear_box_registry();
+        // 8-byte aligned static — passes every structural check, is not a box.
+        static RODATA: [u64; 2] = [0xDEAD_BEEF, 0xFEED_FACE];
+        let fake = (&RODATA[0] as *const u64) as *mut Box;
+        assert!(is_plausible_box_ptr(fake), "test needs a plausible ptr");
+        assert!(!is_registered_box_ptr(fake), "fake must not be registered");
+        // Must be a silent no-op, not a write/crash.
+        js_box_set(fake, 1.0);
+        assert_eq!(RODATA[0], 0xDEAD_BEEF, "rodata must be untouched");
+        // Reads from an unregistered pointer return `undefined` (perry#4926:
+        // the read-before-initialization value of a boxed variable), never
+        // deref. TAG_UNDEFINED is a NaN bit pattern, so this also preserves
+        // the older "returns NaN" numeric behavior.
+        assert_eq!(
+            js_box_get(fake).to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "unregistered box read must yield undefined"
+        );
+    }
+
+    /// A real `js_box_alloc` box still round-trips through set/get after the
+    /// registry gate (no false negatives on genuine boxes).
+    #[test]
+    fn box_set_get_roundtrips_for_real_box() {
+        test_clear_box_registry();
+        let b = js_box_alloc(3.5);
+        assert!(is_registered_box_ptr(b));
+        assert_eq!(js_box_get(b), 3.5);
+        js_box_set(b, 42.0);
+        assert_eq!(js_box_get(b), 42.0);
+    }
 }

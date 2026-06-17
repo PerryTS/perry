@@ -52,6 +52,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Resolve --json-out to an absolute path up front: the script `cd`s into
+# $SUITE_DIR during compilation, so a relative path like
+# `.bench-results/current.json` would be created (or fail to be created)
+# relative to benchmarks/suite/ instead of the caller's cwd. This silently
+# broke the CI regression gate for weeks: the JSON write threw
+# FileNotFoundError, `| tee` swallowed the non-zero exit, and the workflow's
+# "grep REGRESSION" found nothing — every release-mode performance gate
+# passed vacuously.
+if [[ -n "$JSON_OUT" ]]; then
+  mkdir -p "$(dirname "$JSON_OUT")"
+  JSON_OUT="$(cd "$(dirname "$JSON_OUT")" && pwd)/$(basename "$JSON_OUT")"
+fi
+
 if [[ ! -f "$COMPILETS" ]]; then
   echo -e "${RED}Perry not found at $COMPILETS${NC}"
   echo "Run: cargo build --release"
@@ -462,8 +475,15 @@ print("-" * 72)
 # Noise floors: percentage swings on tiny measurements are unreliable.
 # A 7ms jitter on a 9ms benchmark is 78% but means nothing. Require both
 # the absolute delta AND percentage to exceed the threshold.
-MIN_SPEED_DELTA_MS = 20   # need at least 20ms absolute change to flag
-MIN_RAM_DELTA_KB = 2048   # need at least 2MB absolute change to flag
+#
+# 20ms was too tight for macos-14 runner-to-runner variance: at v0.5.1151
+# bench_string_heavy measured 60/81/104ms across three same-commit runs
+# (the 21-44ms swings hard-failed the release gate twice on pure noise,
+# while every CPU-bound row over ~300ms tracked within ~10%). Any release
+# regression worth hard-failing on (the v0.5.1129 hang was a ~4000x case)
+# clears 100ms by orders of magnitude.
+MIN_SPEED_DELTA_MS = 100  # need at least 100ms absolute change to flag
+MIN_RAM_DELTA_KB = 4096   # need at least 4MB absolute change to flag
 
 for name, cur in current["benchmarks"].items():
     correctness = cur.get("correctness", {})

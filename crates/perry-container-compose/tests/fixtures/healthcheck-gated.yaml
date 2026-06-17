@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: example
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  api:
+    image: myapp/api:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:example@db:5432/postgres
+    ports:
+      - "8080:8080"
+volumes:
+  pgdata:
+    driver: local

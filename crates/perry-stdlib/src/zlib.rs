@@ -149,6 +149,9 @@ unsafe fn crc32_bytes(value: f64) -> Vec<u8> {
 /// out-of-range throws `RangeError [ERR_OUT_OF_RANGE]` before compression).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
+    // Gzip compression requires `windowBits >= 9`; option validation runs
+    // before the buffer is touched so a bad option reports Node's error first.
+    perry_runtime::js_zlib_validate_options(opts, 9);
     let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
     let data = codec_bytes(f64::from_bits(data_bits as u64));
 
@@ -185,6 +188,8 @@ pub unsafe extern "C" fn js_zlib_gunzip_sync(data_bits: i64) -> *mut BufferHeade
 /// #2935: honor `options.level` (see `js_zlib_gzip_sync`).
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_deflate_sync(data_bits: i64, opts: f64) -> *mut BufferHeader {
+    // Raw/zlib deflate accepts `windowBits >= 8` (only gzip needs 9).
+    perry_runtime::js_zlib_validate_options(opts, 8);
     let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
     let data = codec_bytes(f64::from_bits(data_bits as u64));
 
@@ -217,11 +222,15 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut BufferHead
 }
 
 /// Raw deflate compress synchronously (no zlib header, no adler32).
-/// zlib.deflateRawSync(data) -> Buffer
+/// zlib.deflateRawSync(data, options?) -> Buffer
+///
+/// #4917: honor `options.level` (see `js_zlib_gzip_sync`).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_deflate_raw_sync(data_value: f64) -> *mut BufferHeader {
+pub unsafe extern "C" fn js_zlib_deflate_raw_sync(data_value: f64, opts: f64) -> *mut BufferHeader {
+    perry_runtime::js_zlib_validate_options(opts, 8);
+    let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
     let data = codec_bytes(data_value);
-    let mut encoder = DeflateEncoder::new(&data[..], Compression::default());
+    let mut encoder = DeflateEncoder::new(&data[..], level);
     let mut compressed = Vec::new();
     match encoder.read_to_end(&mut compressed) {
         Ok(_) => buffer_from_slice(&compressed),
@@ -306,7 +315,11 @@ enum Codec {
     Unzip,
     BrotliCompress,
     BrotliDecompress,
+    ZstdCompress,
+    ZstdDecompress,
 }
+
+const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
 fn run_one_shot_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
@@ -341,6 +354,12 @@ fn run_one_shot_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
         }
         Codec::BrotliDecompress => {
             out = brotli_decompress_bytes(input)?;
+        }
+        Codec::ZstdCompress => {
+            out = zstd_compress_bytes(input)?;
+        }
+        Codec::ZstdDecompress => {
+            out = zstd_decompress_bytes(input)?;
         }
     }
     Ok(out)
@@ -427,16 +446,16 @@ fn brotli_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 /// `zlib.brotliCompressSync(data)` -> Buffer
 ///
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut BufferHeader {
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
     let out = brotli_compress_bytes(&data);
     buffer_from_slice(&out)
 }
 
 /// `zlib.brotliDecompressSync(data)` -> Buffer
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_value: f64) -> *mut BufferHeader {
-    let data = codec_bytes(data_value);
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut BufferHeader {
+    let data = codec_bytes(f64::from_bits(data_bits as u64));
     match brotli_decompress_bytes(&data) {
         Ok(out) => buffer_from_slice(&out),
         Err(e) => throw_zlib_error(&format!("brotli: {}", e)),
@@ -453,6 +472,56 @@ pub unsafe extern "C" fn js_zlib_brotli_compress(data_value: f64, callback_value
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_value: f64) {
     queue_zlib_callback(Codec::BrotliDecompress, data_value, callback_value);
+}
+
+// ============================================================================
+// Zstd one-shot functions (#2510)
+// ============================================================================
+
+fn zstd_compress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    zstd::stream::encode_all(data, ZSTD_DEFAULT_LEVEL)
+}
+
+fn zstd_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
+    zstd::stream::decode_all(data)
+}
+
+/// `zlib.zstdCompressSync(data)` -> Buffer
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_compress_sync(
+    data_value: f64,
+    _opts: f64,
+) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
+    match zstd_compress_bytes(&data) {
+        Ok(out) => buffer_from_slice(&out),
+        Err(e) => throw_zlib_error(&format!("zstd: {}", e)),
+    }
+}
+
+/// `zlib.zstdDecompressSync(data)` -> Buffer
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_decompress_sync(
+    data_value: f64,
+    _opts: f64,
+) -> *mut BufferHeader {
+    let data = codec_bytes(data_value);
+    match zstd_decompress_bytes(&data) {
+        Ok(out) => buffer_from_slice(&out),
+        Err(e) => throw_zlib_error(&format!("zstd: {}", e)),
+    }
+}
+
+/// `zlib.zstdCompress(data, callback)` -> undefined
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_compress(data_value: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::ZstdCompress, data_value, callback_value);
+}
+
+/// `zlib.zstdDecompress(data, callback)` -> undefined
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_zstd_decompress(data_value: f64, callback_value: f64) {
+    queue_zlib_callback(Codec::ZstdDecompress, data_value, callback_value);
 }
 
 // ============================================================================
@@ -477,6 +546,9 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_val
 
 struct ZlibStreamState {
     codec: Codec,
+    /// Compression level resolved from the factory's `{ level }` option
+    /// (#4917) — kept so `.reset()` rebuilds the codec at the same level.
+    level: Compression,
     /// Streaming codec, fed incrementally by `.write()`. `None` for
     /// `createUnzip` (uses `input` + `run_codec` on `.end()`) or once finalized.
     codec_state: Option<CodecState>,
@@ -508,8 +580,11 @@ lazy_static::lazy_static! {
     static ref NEXT_ZLIB_ID: Mutex<i64> = Mutex::new(ZLIB_STREAM_HANDLE_ID_START);
 }
 
-const ZLIB_STREAM_HANDLE_ID_START: i64 = 0xE0000;
-const ZLIB_STREAM_HANDLE_ID_END: i64 = 0xF0000;
+// Band boundaries owned by `perry_runtime::value::addr_class`.
+const ZLIB_STREAM_HANDLE_ID_START: i64 =
+    perry_runtime::value::addr_class::ZLIB_HANDLE_BAND_START as i64;
+const ZLIB_STREAM_HANDLE_ID_END: i64 =
+    perry_runtime::value::addr_class::ZLIB_HANDLE_BAND_END as i64;
 
 static ZLIB_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
 
@@ -556,14 +631,15 @@ fn next_zlib_id() -> i64 {
     id
 }
 
-fn create_zlib_stream(codec: Codec) -> i64 {
+fn create_zlib_stream(codec: Codec, level: Compression) -> i64 {
     ensure_zlib_gc_scanner();
     let id = next_zlib_id();
     ZLIB_STREAMS.lock().unwrap().insert(
         id,
         ZlibStreamState {
             codec,
-            codec_state: make_codec_state(codec),
+            level,
+            codec_state: make_codec_state(codec, level),
             input: Vec::new(),
             ended: false,
             bytes_written: 0,
@@ -584,53 +660,90 @@ pub fn is_zlib_stream_handle(handle: i64) -> bool {
 
 // ── factories ──────────────────────────────────────────────────────────────
 
+/// Resolve the `{ level }` option for a deflate-family stream factory
+/// (decompressors resolve too — the value is simply unused — so a bad `level`
+/// throws the same `RangeError` Node's shared `Zlib` constructor raises).
+unsafe fn stream_factory_level(opts: f64) -> Compression {
+    Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32)
+}
+
+/// Warn once when a Brotli/zstd factory receives an options object: their
+/// option shape (`params` quality/window knobs) is not wired up yet (#4917).
+unsafe fn warn_ignored_codec_params(opts: f64, name: &'static str) {
+    if JSValue::from_bits(opts.to_bits()).is_pointer() {
+        perry_runtime::stub_diag::perry_stub_warn(
+            name,
+            "options (params/quality) are accepted but ignored",
+            Some("#4917"),
+        );
+    }
+}
+
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_gzip(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::Gzip)
+pub unsafe extern "C" fn js_zlib_create_gzip(opts: f64) -> i64 {
+    // Node validates the options object in the stream constructor, before any
+    // data flows. Gzip compression needs `windowBits >= 9` (#3662).
+    perry_runtime::js_zlib_validate_options(opts, 9);
+    let level = stream_factory_level(opts);
+    create_zlib_stream(Codec::Gzip, level)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_gunzip(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::Gunzip)
+pub unsafe extern "C" fn js_zlib_create_gunzip(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
+    let level = stream_factory_level(opts);
+    create_zlib_stream(Codec::Gunzip, level)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_deflate(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::Deflate)
+pub unsafe extern "C" fn js_zlib_create_deflate(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
+    let level = stream_factory_level(opts);
+    create_zlib_stream(Codec::Deflate, level)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_inflate(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::Inflate)
+pub unsafe extern "C" fn js_zlib_create_inflate(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
+    let level = stream_factory_level(opts);
+    create_zlib_stream(Codec::Inflate, level)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_deflate_raw(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::DeflateRaw)
+pub unsafe extern "C" fn js_zlib_create_deflate_raw(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
+    let level = stream_factory_level(opts);
+    create_zlib_stream(Codec::DeflateRaw, level)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_inflate_raw(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::InflateRaw)
+pub unsafe extern "C" fn js_zlib_create_inflate_raw(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
+    let level = stream_factory_level(opts);
+    create_zlib_stream(Codec::InflateRaw, level)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_unzip(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::Unzip)
+pub unsafe extern "C" fn js_zlib_create_unzip(opts: f64) -> i64 {
+    perry_runtime::js_zlib_validate_options(opts, 8);
+    let level = stream_factory_level(opts);
+    create_zlib_stream(Codec::Unzip, level)
 }
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (Brotli `params` are not
+/// wired up yet — a warn-once fires when an options object is passed).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_brotli_compress(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::BrotliCompress)
+pub unsafe extern "C" fn js_zlib_create_brotli_compress(opts: f64) -> i64 {
+    warn_ignored_codec_params(opts, "zlib.createBrotliCompress options");
+    create_zlib_stream(Codec::BrotliCompress, Compression::default())
 }
 /// `zlib.createBrotliDecompress(options?)` — returns a real Transform-stream
 /// handle. (Previously a feature-check Buffer stub; axios's
@@ -638,10 +751,28 @@ pub unsafe extern "C" fn js_zlib_create_brotli_compress(_opts: f64) -> i64 {
 /// response now actually decodes.)
 ///
 /// # Safety
-/// FFI entry; `_opts` is the (ignored) NaN-boxed options object.
+/// FFI entry; `opts` is the NaN-boxed options object (decompression params
+/// are not wired up yet — a warn-once fires when an options object is passed).
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_create_brotli_decompress(_opts: f64) -> i64 {
-    create_zlib_stream(Codec::BrotliDecompress)
+pub unsafe extern "C" fn js_zlib_create_brotli_decompress(opts: f64) -> i64 {
+    warn_ignored_codec_params(opts, "zlib.createBrotliDecompress options");
+    create_zlib_stream(Codec::BrotliDecompress, Compression::default())
+}
+/// # Safety
+/// FFI entry; `opts` is the NaN-boxed options object (zstd params are not
+/// wired up yet — a warn-once fires when an options object is passed).
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_create_zstd_compress(opts: f64) -> i64 {
+    warn_ignored_codec_params(opts, "zlib.createZstdCompress options");
+    create_zlib_stream(Codec::ZstdCompress, Compression::default())
+}
+/// # Safety
+/// FFI entry; `opts` is the NaN-boxed options object (zstd params are not
+/// wired up yet — a warn-once fires when an options object is passed).
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_create_zstd_decompress(opts: f64) -> i64 {
+    warn_ignored_codec_params(opts, "zlib.createZstdDecompress options");
+    create_zlib_stream(Codec::ZstdDecompress, Compression::default())
 }
 
 // ── one-shot codec used by the streams on .end() ─────────────────────────────
@@ -680,6 +811,12 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
         }
         Codec::BrotliDecompress => {
             out = brotli_decompress_bytes(input)?;
+        }
+        Codec::ZstdCompress => {
+            out = zstd_compress_bytes(input)?;
+        }
+        Codec::ZstdDecompress => {
+            out = zstd_decompress_bytes(input)?;
         }
     }
     Ok(out)
@@ -756,19 +893,14 @@ impl CodecState {
     }
 }
 
-fn make_codec_state(codec: Codec) -> Option<CodecState> {
+fn make_codec_state(codec: Codec, level: Compression) -> Option<CodecState> {
     use flate2::write;
     Some(match codec {
-        Codec::Gzip => CodecState::GzEnc(write::GzEncoder::new(Vec::new(), Compression::default())),
+        Codec::Gzip => CodecState::GzEnc(write::GzEncoder::new(Vec::new(), level)),
         Codec::Gunzip => CodecState::GzDec(write::GzDecoder::new(Vec::new())),
-        Codec::Deflate => {
-            CodecState::ZlibEnc(write::ZlibEncoder::new(Vec::new(), Compression::default()))
-        }
+        Codec::Deflate => CodecState::ZlibEnc(write::ZlibEncoder::new(Vec::new(), level)),
         Codec::Inflate => CodecState::ZlibDec(write::ZlibDecoder::new(Vec::new())),
-        Codec::DeflateRaw => CodecState::DeflateEnc(write::DeflateEncoder::new(
-            Vec::new(),
-            Compression::default(),
-        )),
+        Codec::DeflateRaw => CodecState::DeflateEnc(write::DeflateEncoder::new(Vec::new(), level)),
         Codec::InflateRaw => CodecState::DeflateDec(write::DeflateDecoder::new(Vec::new())),
         Codec::BrotliCompress => {
             CodecState::BrotliEnc(brotli::CompressorWriter::new(Vec::new(), 4096, 11, 22))
@@ -776,7 +908,9 @@ fn make_codec_state(codec: Codec) -> Option<CodecState> {
         Codec::BrotliDecompress => {
             CodecState::BrotliDec(brotli::DecompressorWriter::new(Vec::new(), 4096))
         }
-        Codec::Unzip => return None,
+        // Zstd streams stay buffer-until-end for this compatibility cut,
+        // matching the existing `createUnzip` path.
+        Codec::Unzip | Codec::ZstdCompress | Codec::ZstdDecompress => return None,
     })
 }
 
@@ -896,7 +1030,7 @@ pub fn zlib_stream_params(_handle: i64, cb: i64) {
 pub fn zlib_stream_reset(handle: i64) {
     let mut g = ZLIB_STREAMS.lock().unwrap();
     if let Some(s) = g.get_mut(&handle) {
-        s.codec_state = make_codec_state(s.codec);
+        s.codec_state = make_codec_state(s.codec, s.level);
         s.input.clear();
         s.ended = false;
         s.bytes_written = 0;
@@ -1224,11 +1358,19 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
             ptr_to_f64(js_zlib_deflate_sync(arg(0).to_bits() as i64, arg(1)) as *const u8)
         }
         "inflateSync" => ptr_to_f64(js_zlib_inflate_sync(arg(0).to_bits() as i64) as *const u8),
-        "deflateRawSync" => ptr_to_f64(js_zlib_deflate_raw_sync(arg(0)) as *const u8),
+        "deflateRawSync" => ptr_to_f64(js_zlib_deflate_raw_sync(arg(0), arg(1)) as *const u8),
         "inflateRawSync" => ptr_to_f64(js_zlib_inflate_raw_sync(arg(0)) as *const u8),
         "unzipSync" => ptr_to_f64(js_zlib_unzip_sync(arg(0)) as *const u8),
-        "brotliCompressSync" => ptr_to_f64(js_zlib_brotli_compress_sync(arg(0)) as *const u8),
-        "brotliDecompressSync" => ptr_to_f64(js_zlib_brotli_decompress_sync(arg(0)) as *const u8),
+        "brotliCompressSync" => {
+            ptr_to_f64(js_zlib_brotli_compress_sync(arg(0).to_bits() as i64) as *const u8)
+        }
+        "brotliDecompressSync" => {
+            ptr_to_f64(js_zlib_brotli_decompress_sync(arg(0).to_bits() as i64) as *const u8)
+        }
+        "zstdCompressSync" => ptr_to_f64(js_zlib_zstd_compress_sync(arg(0), arg(1)) as *const u8),
+        "zstdDecompressSync" => {
+            ptr_to_f64(js_zlib_zstd_decompress_sync(arg(0), arg(1)) as *const u8)
+        }
         "crc32" => {
             let seed = if args_len >= 2 { arg(1) } else { 0.0 };
             js_zlib_crc32(arg(0), seed)
@@ -1270,6 +1412,16 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
             js_zlib_brotli_decompress(arg(0), arg(1));
             undefined
         }
+        "zstdCompress" => {
+            js_zlib_zstd_compress(arg(0), arg(1));
+            undefined
+        }
+        "zstdDecompress" => {
+            js_zlib_zstd_decompress(arg(0), arg(1));
+            undefined
+        }
+        "createZstdCompress" => ptr_to_f64(js_zlib_create_zstd_compress(arg(0)) as *const u8),
+        "createZstdDecompress" => ptr_to_f64(js_zlib_create_zstd_decompress(arg(0)) as *const u8),
         _ => undefined,
     }
 }
@@ -1290,7 +1442,7 @@ mod stream_tests {
     /// Drive the streaming codec like the FFI ops do: write + drain, flush +
     /// drain between chunks, then finish — reassembling the full stream.
     fn stream_compress(codec: Codec, chunks: &[&[u8]]) -> Vec<u8> {
-        let mut cs = make_codec_state(codec).expect("streaming codec");
+        let mut cs = make_codec_state(codec, Compression::default()).expect("streaming codec");
         let mut out = Vec::new();
         for c in chunks {
             cs.write_chunk(c).unwrap();
@@ -1325,6 +1477,29 @@ mod stream_tests {
         assert_eq!(
             run_codec(Codec::BrotliDecompress, &c).unwrap(),
             b"brotli stream test"
+        );
+    }
+
+    #[test]
+    fn zstd_one_shot_roundtrips() {
+        let c = run_one_shot_codec(Codec::ZstdCompress, b"zstd one-shot test").unwrap();
+        assert!(!c.is_empty());
+        assert_eq!(
+            run_one_shot_codec(Codec::ZstdDecompress, &c).unwrap(),
+            b"zstd one-shot test"
+        );
+    }
+
+    #[test]
+    fn zstd_buffer_until_end_stream_roundtrips() {
+        assert!(make_codec_state(Codec::ZstdCompress, Compression::default()).is_none());
+        assert!(make_codec_state(Codec::ZstdDecompress, Compression::default()).is_none());
+
+        let c = run_codec(Codec::ZstdCompress, b"zstd stream test").unwrap();
+        assert!(!c.is_empty());
+        assert_eq!(
+            run_codec(Codec::ZstdDecompress, &c).unwrap(),
+            b"zstd stream test"
         );
     }
 }

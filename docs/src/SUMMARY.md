@@ -68,7 +68,9 @@
 - [visionOS](platforms/visionos.md)
 - [tvOS](platforms/tvos.md)
 - [watchOS](platforms/watchos.md)
+  - [Publishing to the App Store](platforms/watchos-app-store.md)
 - [Android](platforms/android.md)
+- [Wear OS](platforms/wearos.md)
 - [HarmonyOS NEXT](platforms/harmonyos.md)
 - [Windows](platforms/windows.md)
   - [Windows 7 Compatibility](platforms/windows-7.md)
@@ -83,9 +85,20 @@
 - [HTTP & Networking](stdlib/http.md)
 - [Databases](stdlib/database.md)
 - [Cryptography](stdlib/crypto.md)
+- [Containers](stdlib/container.md)
 - [Utilities](stdlib/utilities.md)
 - [Other Modules](stdlib/other.md)
 - [API Reference (auto-generated)](api/reference.md)
+
+# Containers
+
+- [Overview](container/overview.md)
+- [Single-Container Lifecycle](container/containers.md)
+- [Compose Orchestration](container/compose.md)
+- [Networking](container/networking.md)
+- [Volumes](container/volumes.md)
+- [Security](container/security.md)
+- [Production Patterns](container/production-patterns.md)
 
 # Internationalization
 

@@ -139,24 +139,29 @@ pub(super) fn emit_guarded_direct_method_call(
     direct_fn: &str,
     direct_arg_slices: &[(crate::types::LlvmType, &str)],
     fallback_user_args: &[String],
+    shape_only_guard: bool,
 ) -> Option<String> {
     let expected_class_id = *ctx.class_ids.get(receiver_class_name)?;
     let keys_global_name = ctx.class_keys_globals.get(receiver_class_name)?.clone();
+
+    let expected_class_id_str = expected_class_id.to_string();
+    let expected_keys_slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
+    let expected_keys = ctx.block().load(I64, &expected_keys_slot);
 
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
     let bytes_global = format!("@{}", entry.bytes_global);
     let name_len_str = entry.byte_len.to_string();
-    let expected_class_id_str = expected_class_id.to_string();
-
-    let site_id = emit_typed_feedback_register_site(
-        ctx,
-        TypedFeedbackKind::MethodCall,
-        property,
-        TypedFeedbackContract::method_direct_call(),
-    );
-    let expected_keys_slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
-    let expected_keys = ctx.block().load(I64, &expected_keys_slot);
+    let site_id = if shape_only_guard {
+        None
+    } else {
+        Some(emit_typed_feedback_register_site(
+            ctx,
+            TypedFeedbackKind::MethodCall,
+            property,
+            TypedFeedbackContract::method_direct_call(),
+        ))
+    };
 
     let guard_idx = ctx.new_block("method_direct.guard");
     let fast_idx = ctx.new_block("method_direct.fast");
@@ -169,19 +174,34 @@ pub(super) fn emit_guarded_direct_method_call(
     ctx.block().br(&guard_label);
 
     ctx.current_block = guard_idx;
-    let guard_ok = ctx.block().call(
-        I32,
-        "js_typed_feedback_method_direct_call_guard",
-        &[
-            (I64, &site_id),
-            (DOUBLE, recv_box),
-            (I32, &expected_class_id_str),
-            (I64, &expected_keys),
-            (crate::types::PTR, &bytes_global),
-            (I64, &name_len_str),
-            (crate::types::PTR, &format!("@{}", direct_fn)),
-        ],
-    );
+    let guard_ok = if shape_only_guard {
+        ctx.block().call(
+            I32,
+            "js_method_direct_shape_guard",
+            &[
+                (DOUBLE, recv_box),
+                (I32, &expected_class_id_str),
+                (I64, &expected_keys),
+            ],
+        )
+    } else {
+        ctx.block().call(
+            I32,
+            "js_typed_feedback_method_direct_call_guard",
+            &[
+                (
+                    I64,
+                    site_id.as_deref().expect("typed-feedback method site id"),
+                ),
+                (DOUBLE, recv_box),
+                (I32, &expected_class_id_str),
+                (I64, &expected_keys),
+                (crate::types::PTR, &bytes_global),
+                (I64, &name_len_str),
+                (crate::types::PTR, &format!("@{}", direct_fn)),
+            ],
+        )
+    };
     let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
     ctx.block()
         .cond_br(&guard_pass, &fast_label, &fallback_label);
@@ -212,8 +232,10 @@ pub(super) fn emit_guarded_direct_method_call(
         ));
         (ptr_reg, n.to_string())
     };
-    ctx.block()
-        .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+    if let Some(site_id) = site_id {
+        ctx.block()
+            .call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
+    }
     let fallback_value = ctx.block().call(
         DOUBLE,
         "js_native_call_method",

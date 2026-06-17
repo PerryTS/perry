@@ -32,6 +32,22 @@ fn value_to_string(value: f64) -> String {
     }
 }
 
+fn string_header_to_string(ptr: *const crate::StringHeader) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn is_function_value(value: f64) -> bool {
+    let ptr = crate::builtins::js_value_typeof(value) as *const crate::StringHeader;
+    string_header_to_string(ptr) == "function"
+}
+
 fn is_null_or_undefined(value: f64) -> bool {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     jv.is_null() || jv.is_undefined()
@@ -68,6 +84,7 @@ fn regexp_ptr(pattern: f64) -> Option<*const crate::regex::RegExpHeader> {
     Some(ptr as *const crate::regex::RegExpHeader)
 }
 
+#[cfg(feature = "regex-engine")]
 fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     let re = regexp_ptr(pattern)?;
     let input_string = value_to_string(input);
@@ -76,10 +93,24 @@ fn regex_test_value(pattern: f64, input: f64) -> Option<bool> {
     Some(crate::regex::js_regexp_test(re, input_ptr) != 0)
 }
 
+/// Regex engine gated off: no RegExp value can exist, so `expected` is never a
+/// RegExp — report "not a RegExp matcher" so callers fall to their non-regex
+/// comparison path.
+#[cfg(not(feature = "regex-engine"))]
+fn regex_test_value(_pattern: f64, _input: f64) -> Option<bool> {
+    None
+}
+
+#[cfg(feature = "regex-engine")]
 fn regex_test_string(re: *const crate::regex::RegExpHeader, input: f64) -> bool {
     let input_ptr =
         crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
     !input_ptr.is_null() && crate::regex::js_regexp_test(re, input_ptr) != 0
+}
+
+#[cfg(not(feature = "regex-engine"))]
+fn regex_test_string(_re: *const crate::regex::RegExpHeader, _input: f64) -> bool {
+    false
 }
 
 fn validate_regexp_argument(regexp: f64) -> *const crate::regex::RegExpHeader {
@@ -250,7 +281,56 @@ fn expected_error_matches(thrown: f64, expected: f64) -> bool {
     if crate::value::js_is_truthy(crate::object::js_instanceof_dynamic(thrown, expected)) != 0 {
         return true;
     }
-    constructor_name_matches_builtin_error(thrown, expected)
+    if constructor_name_matches_builtin_error(thrown, expected) {
+        return true;
+    }
+    // Node: a function `expected` not matched by the instanceof / constructor
+    // checks above is treated as a *validation function* — it is called with
+    // the thrown error and a strict `true` return means the error matched
+    // (`lib/internal/assert`). Arrow and plain `function (err) {…}` validators
+    // both land here. A throw from calling it (e.g. an `Error` subclass invoked
+    // without `new`) counts as no-match, mirroring Node's Error-subclass fail
+    // path.
+    if expected_is_callable(expected) {
+        if let Ok(ret) = call_validator_capturing(expected, thrown) {
+            const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+            return ret.to_bits() == TAG_TRUE;
+        }
+    }
+    false
+}
+
+/// Whether `value` is a callable closure (a NaN-boxed `POINTER_TAG` value
+/// pointing at a `ClosureHeader`). Used to recognize an `assert.throws`
+/// validation function.
+fn expected_is_callable(value: f64) -> bool {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) != POINTER_TAG {
+        return false;
+    }
+    crate::closure::is_closure_ptr((bits & POINTER_MASK) as usize)
+}
+
+/// Call an `assert.throws` validation function with the thrown error,
+/// trapping any throw it raises (so a class-without-`new` or a side-effecting
+/// validator can't escape as an uncaught exception). Mirrors
+/// [`call_block_capturing_throw`] but passes one argument.
+fn call_validator_capturing(validator: f64, arg: f64) -> Result<f64, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    let result = if jumped == 0 {
+        let args = [arg];
+        let value = unsafe { crate::closure::js_native_call_value(validator, args.as_ptr(), 1) };
+        Ok(value)
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(exc)
+    };
+    crate::exception::js_try_end();
+    result
 }
 
 fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {
@@ -266,6 +346,30 @@ fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {
     };
     crate::exception::js_try_end();
     result
+}
+
+fn invalid_function_argument(arg_name: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{arg_name}\" argument must be of type function. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn invalid_promise_fn_argument(value: f64) -> f64 {
+    let message = format!(
+        "The \"promiseFn\" argument must be of type function or an instance of Promise. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn invalid_promise_fn_return(value: f64) -> f64 {
+    let message = format!(
+        "Expected instance of Promise to be returned from the \"promiseFn\" function but got {}.",
+        crate::fs::validate::describe_received(value)
+    );
+    crate::fs::validate::build_type_error_with_code_value(&message, "ERR_INVALID_RETURN_VALUE")
 }
 
 fn assertion_message(custom_message: f64, fallback: &str) -> String {
@@ -393,13 +497,34 @@ fn rejected_promise(reason: f64) -> *mut crate::promise::Promise {
     promise
 }
 
-fn promise_from_assert_async_input(input: f64) -> *mut crate::promise::Promise {
+struct AssertAsyncInput {
+    promise: *mut crate::promise::Promise,
+    validation_error: bool,
+}
+
+fn promise_from_assert_async_input(input: f64) -> AssertAsyncInput {
     if let Some(promise) = promise_ptr_from_value(input) {
-        return promise;
+        return AssertAsyncInput {
+            promise,
+            validation_error: false,
+        };
     }
-    match call_block_capturing_throw(input) {
-        Ok(value) => promise_ptr_from_value(value).unwrap_or_else(|| fulfilled_promise(value)),
-        Err(reason) => rejected_promise(reason),
+    if !is_function_value(input) {
+        return AssertAsyncInput {
+            promise: rejected_promise(invalid_promise_fn_argument(input)),
+            validation_error: true,
+        };
+    }
+    let (promise, validation_error) = match call_block_capturing_throw(input) {
+        Ok(value) => match promise_ptr_from_value(value) {
+            Some(promise) => (promise, false),
+            None => (rejected_promise(invalid_promise_fn_return(value)), true),
+        },
+        Err(reason) => (rejected_promise(reason), false),
+    };
+    AssertAsyncInput {
+        promise,
+        validation_error,
     }
 }
 
@@ -498,6 +623,12 @@ fn deep_equal_bool(actual: f64, expected: f64) -> bool {
     crate::value::js_is_truthy(crate::builtins::js_util_is_deep_strict_equal(
         actual, expected,
     )) != 0
+}
+
+fn deep_equal_skip_prototype_bool(actual: f64, expected: f64) -> bool {
+    crate::value::js_is_truthy(
+        crate::builtins::js_util_is_deep_strict_equal_skip_prototype(actual, expected),
+    ) != 0
 }
 
 fn heap_value_type(value: f64) -> Option<(*const u8, u8)> {
@@ -770,6 +901,24 @@ pub extern "C" fn js_assert_deep_strict_equal(actual: f64, expected: f64, messag
 }
 
 #[no_mangle]
+pub extern "C" fn js_assert_deep_strict_equal_skip_prototype(
+    actual: f64,
+    expected: f64,
+    message: f64,
+) -> f64 {
+    if deep_equal_skip_prototype_bool(actual, expected) {
+        return undefined_f64();
+    }
+    throw_assertion(
+        assertion_message(message, "Expected values to be deeply strictly equal"),
+        actual,
+        expected,
+        "deepStrictEqual",
+        is_null_or_undefined(message),
+    )
+}
+
+#[no_mangle]
 pub extern "C" fn js_assert_partial_deep_strict_equal(
     actual: f64,
     expected: f64,
@@ -805,6 +954,24 @@ pub extern "C" fn js_assert_deep_equal(actual: f64, expected: f64, message: f64)
 }
 
 #[no_mangle]
+pub extern "C" fn js_assert_deep_equal_skip_prototype(
+    actual: f64,
+    expected: f64,
+    message: f64,
+) -> f64 {
+    if deep_equal_skip_prototype_bool(actual, expected) {
+        return undefined_f64();
+    }
+    throw_assertion(
+        assertion_message(message, "Expected values to be deeply equal"),
+        actual,
+        expected,
+        "deepEqual",
+        is_null_or_undefined(message),
+    )
+}
+
+#[no_mangle]
 pub extern "C" fn js_assert_not_deep_strict_equal(actual: f64, expected: f64, message: f64) -> f64 {
     if !deep_equal_bool(actual, expected) {
         return undefined_f64();
@@ -822,8 +989,50 @@ pub extern "C" fn js_assert_not_deep_strict_equal(actual: f64, expected: f64, me
 }
 
 #[no_mangle]
+pub extern "C" fn js_assert_not_deep_strict_equal_skip_prototype(
+    actual: f64,
+    expected: f64,
+    message: f64,
+) -> f64 {
+    if !deep_equal_skip_prototype_bool(actual, expected) {
+        return undefined_f64();
+    }
+    throw_assertion(
+        assertion_message(
+            message,
+            "Expected actual not to be deeply strictly equal to expected",
+        ),
+        actual,
+        expected,
+        "notDeepStrictEqual",
+        is_null_or_undefined(message),
+    )
+}
+
+#[no_mangle]
 pub extern "C" fn js_assert_not_deep_equal(actual: f64, expected: f64, message: f64) -> f64 {
     if !deep_equal_bool(actual, expected) {
+        return undefined_f64();
+    }
+    throw_assertion(
+        assertion_message(
+            message,
+            "Expected actual not to be deeply equal to expected",
+        ),
+        actual,
+        expected,
+        "notDeepEqual",
+        is_null_or_undefined(message),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn js_assert_not_deep_equal_skip_prototype(
+    actual: f64,
+    expected: f64,
+    message: f64,
+) -> f64 {
+    if !deep_equal_skip_prototype_bool(actual, expected) {
         return undefined_f64();
     }
     throw_assertion(
@@ -875,6 +1084,9 @@ pub extern "C" fn js_assert_does_not_match(actual: f64, expected: f64, message: 
 
 #[no_mangle]
 pub extern "C" fn js_assert_throws(block: f64, expected: f64, message: f64) -> f64 {
+    if !is_function_value(block) {
+        invalid_function_argument("fn", block);
+    }
     match call_block_capturing_throw(block) {
         Err(thrown) if expected_error_matches(thrown, expected) => undefined_f64(),
         Err(thrown) => throw_assertion(
@@ -899,6 +1111,9 @@ pub extern "C" fn js_assert_throws(block: f64, expected: f64, message: f64) -> f
 
 #[no_mangle]
 pub extern "C" fn js_assert_does_not_throw(block: f64, expected: f64, message: f64) -> f64 {
+    if !is_function_value(block) {
+        invalid_function_argument("fn", block);
+    }
     match call_block_capturing_throw(block) {
         Ok(_) => undefined_f64(),
         // With a matcher present, a throw that does NOT match the matcher
@@ -922,6 +1137,9 @@ pub extern "C" fn js_assert_does_not_throw(block: f64, expected: f64, message: f
 #[no_mangle]
 pub extern "C" fn js_assert_rejects(input: f64, expected: f64, message: f64) -> f64 {
     let source = promise_from_assert_async_input(input);
+    if source.validation_error {
+        return promise_value_from_ptr(source.promise);
+    }
     let result = crate::promise::js_promise_new();
     let on_fulfilled = closure3(
         assert_rejects_fulfilled as *const u8,
@@ -935,13 +1153,16 @@ pub extern "C" fn js_assert_rejects(input: f64, expected: f64, message: f64) -> 
         expected,
         message,
     );
-    crate::promise::js_promise_then(source, on_fulfilled, on_rejected);
+    crate::promise::js_promise_then(source.promise, on_fulfilled, on_rejected);
     promise_value_from_ptr(result)
 }
 
 #[no_mangle]
 pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: f64) -> f64 {
     let source = promise_from_assert_async_input(input);
+    if source.validation_error {
+        return promise_value_from_ptr(source.promise);
+    }
     let result = crate::promise::js_promise_new();
     let on_fulfilled =
         crate::closure::js_closure_alloc(assert_does_not_reject_fulfilled as *const u8, 1);
@@ -951,7 +1172,7 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: 
     crate::closure::js_closure_set_capture_ptr(on_rejected, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(on_rejected, 1, message);
     crate::closure::js_closure_set_capture_f64(on_rejected, 2, expected);
-    crate::promise::js_promise_then(source, on_fulfilled, on_rejected);
+    crate::promise::js_promise_then(source.promise, on_fulfilled, on_rejected);
     promise_value_from_ptr(result)
 }
 
@@ -1019,6 +1240,52 @@ pub extern "C" fn js_assert_assertion_error_ctor(options: f64) -> f64 {
         };
         make_assertion_error(message, actual, expected, &operator_str, generated)
     }
+}
+
+fn assert_option_bool(options: f64, key: &str) -> Option<bool> {
+    if gc_type_of(options) != Some(crate::gc::GC_TYPE_OBJECT) {
+        return None;
+    }
+    let value = read_property(options, key);
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(crate::value::js_is_truthy(value) != 0)
+    }
+}
+
+/// `new assert.Assert(options)` constructor. Instances are represented as
+/// native-module namespace objects with private module names that encode the
+/// option-sensitive dispatch mode.
+#[no_mangle]
+pub extern "C" fn js_assert_assert_ctor(options: f64) -> f64 {
+    let strict = assert_option_bool(options, "strict").unwrap_or(true);
+    let skip_prototype = assert_option_bool(options, "skipPrototype").unwrap_or(false);
+    let module_name = match (strict, skip_prototype) {
+        (false, false) => "assert.instance",
+        (false, true) => "assert.instance.skip",
+        (true, false) => "assert/strict.instance",
+        (true, true) => "assert/strict.instance.skip",
+    };
+    let instance = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+    let jv = crate::value::JSValue::from_bits(instance.to_bits());
+    if jv.is_pointer() {
+        let obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+        if !obj.is_null() {
+            let ctor = bound_native_callable_export_value("assert", "Assert");
+            let key = crate::string::js_string_from_bytes(
+                b"constructor".as_ptr(),
+                "constructor".len() as u32,
+            );
+            js_object_set_field_by_name(obj, key, ctor);
+            super::set_builtin_property_attrs(
+                obj as usize,
+                "constructor".to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
+    }
+    instance
 }
 
 #[no_mangle]

@@ -9,13 +9,90 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{DOUBLE, I32, I8, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::helpers::{
     emit_namespace_populator, enable_module_init_shadow_frame, init_static_fields_early,
-    init_static_fields_late, register_module_globals_as_gc_roots, write_barriers_enabled,
+    init_static_fields_late, is_macos_triple, register_module_globals_as_gc_roots,
+    write_barriers_enabled,
 };
 use super::opts::CrossModuleCtx;
+
+/// Collect the entry module's top-level `process.env.<NAME> = "<literal>"`
+/// assignments so they can be applied to the OS environment BEFORE eager
+/// module init (see the call site in `compile_module_entry`).
+///
+/// Node runs the entry script top-to-bottom, so a `process.env.NODE_ENV =
+/// 'production'` on line 1 is observed by every `require()`d dependency's
+/// init. Perry hoists `require`s to eager imports that init before the entry
+/// body runs, so without this the dependency observes the unmodified env —
+/// e.g. `react-dom/index.js` branches on `process.env.NODE_ENV === 'production'`
+/// to pick the production vs development bundle, and the development file is
+/// pruned from a Next.js standalone build, so the wrong branch yields an empty
+/// module and a downstream `ReactDOMSharedInternals.d` crash.
+///
+/// Only *unconditional module-top-level* assignments are collected: the entry
+/// init statements, plus one+ levels into a cjs-wrap IIFE (`_cjs =
+/// (function(){ ... })()`), which is where the wrapped entry's top-level
+/// statements live. Assignments nested in conditionals or inner functions are
+/// deliberately skipped — those run conditionally/lazily, exactly as in Node.
+fn collect_entry_env_literals(init: &[perry_hir::Stmt]) -> Vec<(String, String)> {
+    use perry_hir::{Expr, Stmt};
+
+    fn record(expr: &Expr, out: &mut Vec<(String, String)>) {
+        // `process.env.X = "lit"` lowers to either form depending on path.
+        if let Expr::PutValueSet {
+            target, key, value, ..
+        } = expr
+        {
+            if matches!(target.as_ref(), Expr::ProcessEnv) {
+                if let (Expr::String(k), Expr::String(v)) = (key.as_ref(), value.as_ref()) {
+                    out.push((k.clone(), v.clone()));
+                }
+            }
+        }
+        if let Expr::PropertySet {
+            object,
+            property,
+            value,
+        } = expr
+        {
+            if matches!(object.as_ref(), Expr::ProcessEnv) {
+                if let Expr::String(v) = value.as_ref() {
+                    out.push((property.clone(), v.clone()));
+                }
+            }
+        }
+    }
+
+    fn descend_iife(expr: &Expr, out: &mut Vec<(String, String)>, depth: u32) {
+        if depth >= 4 {
+            return;
+        }
+        if let Expr::Call { callee, .. } = expr {
+            if let Expr::Closure { body, .. } = callee.as_ref() {
+                scan(body, out, depth + 1);
+            }
+        }
+    }
+
+    fn scan(stmts: &[Stmt], out: &mut Vec<(String, String)>, depth: u32) {
+        for s in stmts {
+            match s {
+                Stmt::Expr(e) => {
+                    record(e, out);
+                    descend_iife(e, out, depth);
+                }
+                Stmt::Let { init: Some(e), .. } => descend_iife(e, out, depth),
+                _ => {}
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    scan(init, &mut out, 0);
+    out
+}
 
 /// Emit the module's entry function.
 ///
@@ -45,7 +122,7 @@ pub(super) fn compile_module_entry(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     is_entry: bool,
@@ -131,7 +208,15 @@ pub(super) fn compile_module_entry(
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
-            llmod.define_function("main", I32, vec![])
+            // Allow the host build to override the C entry symbol. On arm64_32
+            // watchOS we can't rename `_main → __perry_user_main` after the
+            // fact (rust-objcopy's MachOWriter crashes on arm64_32 objects), so
+            // we emit the final symbol directly. Pass e.g. `_perry_user_main`
+            // (the leading underscore yields Mach-O `__perry_user_main`, which
+            // the Swift `@main` shell references via @_silgen_name).
+            let entry_name =
+                std::env::var("PERRY_ENTRY_SYMBOL").unwrap_or_else(|_| "main".to_string());
+            llmod.define_function(&entry_name, I32, vec![])
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
@@ -140,6 +225,18 @@ pub(super) fn compile_module_entry(
             blk.call_void("js_gc_init", &[]);
             if write_barriers_enabled() {
                 blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);
+            }
+            // macOS `.app` assets live in `Contents/Resources/`, but a Finder
+            // launch starts at CWD=`/`. chdir there before any user code or
+            // native engine init so relative asset paths (`assets/...`) resolve.
+            // No-op on non-macOS and on non-bundle binaries (see the runtime fn).
+            // Emitted only for macOS triples (#4856): the runtime fn is a no-op
+            // everywhere else anyway, and referencing it from every `main` made
+            // iOS/tvOS links depend on non-macOS runtime archives carrying a
+            // macOS-only symbol — a stale cross runtime then failed the link
+            // with `undefined symbol: _perry_macos_bundle_chdir`.
+            if is_macos_triple(&cross_module.target_triple) {
+                blk.call_void("perry_macos_bundle_chdir", &[]);
             }
             if let Some((const_name, byte_len)) = app_group_init.as_ref() {
                 let suite_ptr = format!("@{}", const_name);
@@ -182,6 +279,25 @@ pub(super) fn compile_module_entry(
             let blk = main.block_mut(0).unwrap();
             // Entry module's own string pool first.
             blk.call_void(&strings_init_name, &[]);
+            // Apply the entry module's top-level `process.env.<NAME> =
+            // "<literal>"` assignments NOW — after the string pool is live but
+            // BEFORE any dependency's `__init` runs — so eager-inited deps that
+            // branch on `process.env` at init time observe what the entry sets,
+            // matching Node's require-is-lazy ordering. See
+            // `collect_entry_env_literals`. The "NODE_ENV"/"production" string
+            // handles are interned here and populated by the strings-init call
+            // above (the entry body also references them, so they share slots).
+            for (name, value) in collect_entry_env_literals(&hir.init) {
+                let name_idx = strings.intern(&name);
+                let value_idx = strings.intern(&value);
+                let name_global = format!("@{}", strings.entry(name_idx).handle_global);
+                let value_global = format!("@{}", strings.entry(value_idx).handle_global);
+                let name_box = blk.load(DOUBLE, &name_global);
+                let name_bits = blk.bitcast_double_to_i64(&name_box);
+                let name_handle = blk.and(I64, &name_bits, crate::nanbox::POINTER_MASK_I64);
+                let value_box = blk.load(DOUBLE, &value_global);
+                blk.call_void("js_setenv", &[(I64, &name_handle), (DOUBLE, &value_box)]);
+            }
             // Then every non-entry module's init in order. Each
             // non-entry module's `<prefix>__init` runs its own string
             // pool init internally before its top-level statements.
@@ -225,6 +341,7 @@ pub(super) fn compile_module_entry(
             &hir.init,
             &flat_const_ids,
             &clamp_fn_ids,
+            &cross_module.clamp3_functions,
             &main_boxed_vars,
             module_globals,
             classes,
@@ -249,6 +366,8 @@ pub(super) fn compile_module_entry(
             pending_label: None,
             classes,
             this_stack: Vec::new(),
+            inline_ctor_return: Vec::new(),
+            new_target_stack: Vec::new(),
             class_stack: Vec::new(),
             methods,
             module_globals,
@@ -279,11 +398,14 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
             option_object_locals: HashMap::new(),
+            object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
+            local_generator_funcs: &cross_module.local_generator_funcs,
+            funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
             type_aliases: &cross_module.type_aliases,
             imported_func_param_counts: &cross_module.imported_func_param_counts,
             imported_func_has_rest: &cross_module.imported_func_has_rest,
@@ -367,6 +489,14 @@ pub(super) fn compile_module_entry(
         // fallback both validate against the known-heap-pointer set and
         // discard non-matching bits.
         register_module_globals_as_gc_roots(&mut ctx, module_globals);
+        // ESM entry (import/export syntax or top-level await — Node's module
+        // detection): mark the pending module-evaluation checkpoint so the
+        // first microtask drain finishes promise/queueMicrotask jobs before
+        // the nextTick queue, matching Node's job-within-checkpoint ordering
+        // for ESM evaluation (#788). CJS-style entries keep ticks-first.
+        if !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await {
+            ctx.block().call_void("js_mark_entry_module_esm", &[]);
+        }
         // Initialize static class fields with their declared init
         // expressions. Runs once at the top of main, before user code.
         //
@@ -494,6 +624,13 @@ pub(super) fn compile_module_entry(
                 let _ = ctx.block().call(I32, "js_timer_tick_if_refed", &[]);
                 let _ = ctx.block().call(I32, "js_callback_timer_tick", &[]);
                 let _ = ctx.block().call(I32, "js_interval_timer_tick", &[]);
+                ctx.block()
+                    .call_void("js_process_run_finalization_exit", &[]);
+                // After the event loop drains, surface any still-unhandled
+                // promise rejection (Node exits non-zero; this matches the
+                // oracle for `Promise.reject`/combinator-reject programs).
+                ctx.block()
+                    .call_void("js_promise_report_unhandled_rejections", &[]);
                 ctx.block().ret(I32, "0");
             }
         }
@@ -645,6 +782,7 @@ pub(super) fn compile_module_entry(
             &hir.init,
             &flat_const_ids,
             &clamp_fn_ids,
+            &cross_module.clamp3_functions,
             &init_boxed_vars,
             module_globals,
             classes,
@@ -667,6 +805,8 @@ pub(super) fn compile_module_entry(
             pending_label: None,
             classes,
             this_stack: Vec::new(),
+            inline_ctor_return: Vec::new(),
+            new_target_stack: Vec::new(),
             class_stack: Vec::new(),
             methods,
             module_globals,
@@ -697,11 +837,14 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
             option_object_locals: HashMap::new(),
+            object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             imported_async_funcs: &cross_module.imported_async_funcs,
             local_async_funcs: &cross_module.local_async_funcs,
+            local_generator_funcs: &cross_module.local_generator_funcs,
+            funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
             type_aliases: &cross_module.type_aliases,
             imported_func_param_counts: &cross_module.imported_func_param_counts,
             imported_func_has_rest: &cross_module.imported_func_has_rest,

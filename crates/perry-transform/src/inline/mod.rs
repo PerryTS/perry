@@ -16,6 +16,7 @@ mod exact_receivers;
 mod factory_specialize;
 mod imul;
 mod substitute;
+mod super_detect;
 
 // Public re-exports (explicit named — globs don't propagate transitively
 // through `pub(crate) use crate::inline::*` consumers).
@@ -28,7 +29,7 @@ pub use cross_module::{
 pub(crate) use analysis::{
     body_calls_func, class_chain_property_sets, construction_expr_can_affect_method_lookup,
     construction_stmt_can_affect_method_lookup, construction_stmts_can_affect_method_lookup,
-    find_max_local_id_in_module, is_inlinable, method_lookup_is_unshadowed,
+    find_max_local_id_in_module, is_inlinable, is_inlinable_method, method_lookup_is_unshadowed,
 };
 pub(crate) use call_inliner::{
     build_inline_arg_bindings, convert_returns_in_stmts, inline_calls_in_expr,
@@ -37,8 +38,9 @@ pub(crate) use call_inliner::{
 };
 pub(crate) use clamp::{is_clamp3, is_clamp_u8};
 pub(crate) use closure_analysis::{
-    body_contains_closure_capturing, body_contains_super_call, collect_closure_captured_local_ids,
-    find_max_local_id, has_simple_control_flow, is_pure_function,
+    body_contains_closure_capturing, body_contains_super_call, body_references_dynamic_this,
+    collect_closure_captured_local_ids, collect_mutated_local_ids, find_max_local_id,
+    has_simple_control_flow, is_pure_function, method_body_blocks_this_substitution,
 };
 pub(crate) use cross_module::{
     body_references_class_in_set, collect_nonexported_class_names,
@@ -58,6 +60,9 @@ pub(crate) use imul::{
 pub(crate) use substitute::{
     collect_body_local_ids, substitute_locals, substitute_locals_in_stmts, substitute_this,
     substitute_this_in_stmts,
+};
+pub(crate) use super_detect::{
+    enter_inline_expr_recursion, method_contains_lexical_super, MAX_INLINE_EXPR_RECURSION_DEPTH,
 };
 
 use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
@@ -110,7 +115,7 @@ pub fn inline_functions(
     module: &mut Module,
     extra_methods: &HashMap<(String, String), MethodCandidate>,
     extra_class_fields: &HashMap<(String, String), String>,
-    extra_anon_classes: &HashMap<String, Class>,
+    extra_anon_classes: &HashMap<String, &Class>,
 ) {
     // ── Cross-module anon-class propagation ──
     // Anon-shape classes (`__AnonShape_<hash>`) are content-addressed by
@@ -261,7 +266,7 @@ pub fn inline_functions(
                 continue;
             }
             if let Some(src_cls) = extra_anon_classes.get(&name) {
-                let mut cloned = src_cls.clone();
+                let mut cloned = (**src_cls).clone();
                 if let Some(ctor) = &mut cloned.constructor {
                     let mut remap: HashMap<LocalId, Expr> = HashMap::new();
                     for p in ctor.params.iter_mut() {
@@ -492,6 +497,8 @@ pub fn inline_functions(
                     type_only: false,
                     is_dynamic: false,
                     is_dynamic_target: false,
+                    is_deferred_require: false,
+                    is_adopted_require: false,
                 });
             }
         }
@@ -508,7 +515,7 @@ pub fn inline_functions(
             continue;
         }
         for method in &class.methods {
-            if is_inlinable(method) {
+            if is_inlinable_method(method) {
                 // Methods don't have 'this' as a parameter in the HIR;
                 // they access it via Expr::This. So this_param_id is
                 // None.
@@ -697,8 +704,11 @@ mod tests {
             methods: Vec::new(),
             getters: Vec::new(),
             setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
@@ -710,6 +720,7 @@ mod tests {
             class_name: name.to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
+            byte_offset: 0,
         })
     }
 
@@ -781,15 +792,11 @@ mod tests {
             ("A".to_string(), "m".to_string()),
             candidate(2, vec![anon_new("__AnonShape_aaa")], Vec::new()),
         );
+        let anon_bbb = anon_class(2, "__AnonShape_bbb");
+        let anon_aaa = anon_class(1, "__AnonShape_aaa");
         let mut extra_anon_classes = HashMap::new();
-        extra_anon_classes.insert(
-            "__AnonShape_bbb".to_string(),
-            anon_class(2, "__AnonShape_bbb"),
-        );
-        extra_anon_classes.insert(
-            "__AnonShape_aaa".to_string(),
-            anon_class(1, "__AnonShape_aaa"),
-        );
+        extra_anon_classes.insert("__AnonShape_bbb".to_string(), &anon_bbb);
+        extra_anon_classes.insert("__AnonShape_aaa".to_string(), &anon_aaa);
 
         inline_functions(
             &mut module,

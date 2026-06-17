@@ -1,0 +1,4 @@
+direct a: ./fixtures/dynamic-alias/a.ts:alias-a
+direct b: ./fixtures/dynamic-alias/b.ts:alias-b
+template a: a:alias-a
+template b: b:alias-b

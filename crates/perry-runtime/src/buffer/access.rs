@@ -142,6 +142,11 @@ unsafe fn collect_buffer_set_bytes(source: BufferSetSource, source_len: usize) -
             }
         }
         BufferSetSource::TypedArray(ptr) => {
+            if let Some(kind) = crate::typedarray::lookup_typed_array_kind(ptr as usize) {
+                if crate::typedarray::bigint::is_bigint_kind(kind) {
+                    crate::typedarray::bigint::throw_bigint_number_mix();
+                }
+            }
             for i in 0..source_len {
                 bytes.push(to_uint8(crate::typedarray::js_typed_array_get(
                     ptr, i as i32,

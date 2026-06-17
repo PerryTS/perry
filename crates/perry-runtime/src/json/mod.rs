@@ -70,8 +70,9 @@ pub(crate) use stringify::{
     arm_to_json_result_guard, build_shape_prefix_template, estimate_json_size, is_closure_value,
     is_object_pointer, object_get_to_json, shape_template_for, stringify_array,
     stringify_array_depth, stringify_buffer, stringify_buffer_pretty, stringify_object,
-    stringify_object_inner, stringify_value, stringify_value_depth, try_emit_shape_element,
-    write_escaped_string, write_number, ShapeTemplate,
+    stringify_object_inner, stringify_typed_array, stringify_typed_array_pretty, stringify_value,
+    stringify_value_depth, try_emit_shape_element, write_escaped_string, write_number,
+    ShapeTemplate,
 };
 #[allow(unused_imports)]
 pub(crate) use stringify_api::{
@@ -611,6 +612,34 @@ mod tests {
     }
 
     #[test]
+    fn stringify_typed_array_emits_node_index_shape() {
+        // Regression (#5111): a `TypedArrayHeader`-backed typed array (small
+        // ones have NO GcHeader) used to reach `gc_obj_type`, read garbage 8
+        // bytes before the header, and SIGSEGV. It must serialize as the Node
+        // index shape `{"0":v,…}` instead.
+        unsafe {
+            let ta = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT32, 3);
+            crate::typedarray::js_typed_array_set(ta, 0, 2.0);
+            crate::typedarray::js_typed_array_set(ta, 1, 4.0);
+            crate::typedarray::js_typed_array_set(ta, 2, 6.0);
+            let boxed = f64::from_bits(POINTER_TAG | (ta as u64 & POINTER_MASK));
+            let output = js_json_stringify(boxed, TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output).unwrap(), r#"{"0":2,"1":4,"2":6}"#);
+
+            let mut pretty = String::new();
+            stringify_typed_array_pretty(ta as *const u8, &mut pretty, "  ", 0);
+            assert_eq!(pretty, "{\n  \"0\": 2,\n  \"1\": 4,\n  \"2\": 6\n}");
+
+            let empty = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_FLOAT64, 0);
+            let empty_boxed = f64::from_bits(POINTER_TAG | (empty as u64 & POINTER_MASK));
+            assert_eq!(
+                str_from_header(js_json_stringify(empty_boxed, TYPE_UNKNOWN)).unwrap(),
+                "{}"
+            );
+        }
+    }
+
+    #[test]
     fn direct_parse_shared_shape_roundtrips_array_records() {
         let input = br#"[{"id":1,"name":"item_1","nested":{"x":1,"y":2}},{"id":2,"name":"item_2","nested":{"x":2,"y":4}}]"#;
         let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
@@ -757,5 +786,20 @@ mod tests {
         let outer_boxed = crate::value::js_nanbox_pointer(outer as i64);
         let output = unsafe { js_json_stringify(outer_boxed, TYPE_UNKNOWN) };
         assert_eq!(unsafe { str_from_header(output).unwrap() }, r#"{"o":{}}"#);
+    }
+
+    #[test]
+    fn stringify_uses_two_char_short_forms_for_backspace_and_formfeed() {
+        // #5047: QuoteJSONString mandates the two-character escapes for
+        // U+0008 (\b) and U+000C (\f); Perry emitted the 4-hex-digit form for both. Other
+        // control characters keep the 4-hex-digit form.
+        let input = b"a\x08b\x0cc\x0bd";
+        let s = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let boxed = f64::from_bits(STRING_TAG | (s as u64 & POINTER_MASK));
+        let output = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
+        assert_eq!(
+            unsafe { str_from_header(output).unwrap() },
+            "\"a\\bb\\fc\\u000bd\""
+        );
     }
 }

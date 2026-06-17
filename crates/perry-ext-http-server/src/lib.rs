@@ -52,13 +52,23 @@ use std::sync::Once;
 
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
+mod cluster_bind;
+// Unit-test binaries do not link the host stdlib/runtime archive that
+// provides the perry_ffi async bridge; without these the test link is at the
+// mercy of --gc-sections keeping/dropping the perry-ffi references pulled in
+// via the perry-ext-net rlib (same shims as perry-ext-net / perry-ext-fetch).
 mod handle_dispatch;
 mod http2_server;
+mod http2_session_settings;
 mod http2_settings;
+mod http2_stream_props;
 mod https_server;
+mod raw_upgrade;
 mod request;
 mod response;
 mod server;
+#[cfg(test)]
+mod test_async_shims;
 mod tls;
 mod types;
 mod upgrade;
@@ -122,6 +132,12 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     fn scan_base_server_roots(server: &mut HttpServer, visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_i64_slot(&mut server.handler);
         scan_listener_roots(&mut server.listeners, visitor);
+        // #4903 — listen callbacks queued for the deferred `'listening'`
+        // emit; a GC between `listen()` and the pump tick must not sweep
+        // them.
+        for cb in server.deferred_listen_cbs.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
     }
 
     iter_handles_of_mut::<HttpServer, _>(|s| {
@@ -137,9 +153,29 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     });
     iter_handles_of_mut::<IncomingMessage, _>(|im| {
         scan_listener_roots(&mut im.listeners, visitor);
+        visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
+        visitor.visit_nanbox_f64_slot(&mut im.signal);
+        visitor.visit_nanbox_f64_slot(&mut im.socket_value);
     });
     iter_handles_of_mut::<ServerResponse, _>(|sr| {
         scan_listener_roots(&mut sr.listeners, visitor);
+        visitor.visit_nanbox_f64_slot(&mut sr.standalone_socket);
+        for cb in sr.pending_write_callbacks.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
+    });
+    iter_handles_of_mut::<Http2SessionHandle, _>(|session| {
+        scan_listener_roots(&mut session.listeners, visitor);
+        for cb in session.close_callbacks.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
+        for cb in session.pending_callbacks.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
+        visitor.visit_i64_slot(&mut session.timeout_callback);
+    });
+    iter_handles_of_mut::<Http2StreamHandle, _>(|stream| {
+        scan_listener_roots(&mut stream.listeners, visitor);
     });
 }
 
@@ -159,11 +195,15 @@ mod tests {
 
     impl GcTestGuard {
         fn new() -> Self {
+            Self::new_with_slots(0)
+        }
+
+        fn new_with_slots(slot_count: u32) -> Self {
             let lock = GC_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             perry_runtime::gc::js_gc_write_barriers_emitted(1);
-            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+            let frame = perry_runtime::gc::js_shadow_frame_push(slot_count);
             Self { frame, _lock: lock }
         }
     }
@@ -179,9 +219,21 @@ mod tests {
         perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
     }
 
+    fn young_gc_value() -> f64 {
+        f64::from_bits(
+            crate::types::POINTER_TAG | (young_gc_root() as u64 & crate::types::PTR_MASK),
+        )
+    }
+
     fn assert_rewritten(before: i64, after: i64) {
         assert_ne!(after, before);
         assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
+    }
+
+    fn assert_nanbox_rewritten(before: f64, after: f64) {
+        assert_ne!(after.to_bits(), before.to_bits());
+        let ptr = after.to_bits() & crate::types::PTR_MASK;
+        assert!(perry_runtime::arena::pointer_in_nursery(ptr as usize));
     }
 
     fn listener_map(event: &str, cb: i64) -> HashMap<String, Vec<i64>> {
@@ -202,9 +254,10 @@ mod tests {
         let s = HttpServer::with_handler(0);
         assert_eq!(s.headers_timeout, 60_000.0);
         assert_eq!(s.keep_alive_timeout, 5_000.0);
+        assert_eq!(s.keep_alive_timeout_buffer, 1_000.0);
         assert_eq!(s.request_timeout, 300_000.0);
         assert_eq!(s.idle_timeout, 0.0);
-        assert_eq!(s.max_headers_count, 2000.0);
+        assert_eq!(s.max_headers_count.to_bits(), crate::types::TAG_NULL);
         assert_eq!(s.max_requests_per_socket, 0.0);
         assert!(s.no_delay);
         assert!(!s.keep_alive);
@@ -222,13 +275,22 @@ mod tests {
             crate::server::js_node_http_server_headers_timeout(handle),
             60_000.0
         );
+        assert_eq!(
+            crate::server::js_node_http_server_keep_alive_timeout_buffer(handle),
+            1_000.0
+        );
         // Set then read back.
         crate::server::js_node_http_server_set_headers_timeout(handle, 0.0);
+        crate::server::js_node_http_server_set_keep_alive_timeout_buffer(handle, 250.0);
         crate::server::js_node_http_server_set_idle_timeout(handle, 45_000.0);
         crate::server::js_node_http_server_set_max_requests_per_socket(handle, 100.0);
         assert_eq!(
             crate::server::js_node_http_server_headers_timeout(handle),
             0.0
+        );
+        assert_eq!(
+            crate::server::js_node_http_server_keep_alive_timeout_buffer(handle),
+            250.0
         );
         assert_eq!(
             crate::server::js_node_http_server_idle_timeout(handle),
@@ -252,6 +314,25 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(listener_count, 1);
         drop_handle(handle);
+    }
+
+    #[test]
+    fn http_server_options_store_keep_alive_timeout_buffer() {
+        let _guard = GcTestGuard::new_with_slots(1);
+        let options_json = perry_ffi::alloc_string(
+            r#"{"headersTimeout":111,"keepAliveTimeout":222,"keepAliveTimeoutBuffer":321,"requestTimeout":444}"#,
+        );
+        let options_ptr = options_json.as_raw() as *const perry_runtime::StringHeader;
+        let options = unsafe { perry_runtime::json::js_json_parse(options_ptr) };
+        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+
+        let mut server = HttpServer::with_handler(0);
+        crate::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+
+        assert_eq!(server.headers_timeout, 111.0);
+        assert_eq!(server.keep_alive_timeout, 222.0);
+        assert_eq!(server.keep_alive_timeout_buffer, 321.0);
+        assert_eq!(server.request_timeout, 444.0);
     }
 
     #[test]
@@ -287,6 +368,7 @@ mod tests {
         let h2_handle = register_handle(Http2SecureServer {
             handler: h2_handler,
             tls_config: None,
+            plaintext: false,
             base: http_server(h2_base_handler, listener_map("close", h2_listener)),
         });
 
@@ -301,6 +383,10 @@ mod tests {
             1234,
         );
         incoming.listeners = listener_map("data", incoming_listener);
+        let incoming_signal_controller = young_gc_value();
+        let incoming_signal = young_gc_value();
+        incoming.signal_controller = incoming_signal_controller;
+        incoming.signal = incoming_signal;
         let incoming_handle = register_handle(incoming);
 
         let response_listener = young_gc_root();
@@ -328,6 +414,8 @@ mod tests {
 
             let incoming = get_handle::<IncomingMessage>(incoming_handle).expect("incoming");
             assert_rewritten(incoming_listener, incoming.listeners["data"][0]);
+            assert_nanbox_rewritten(incoming_signal_controller, incoming.signal_controller);
+            assert_nanbox_rewritten(incoming_signal, incoming.signal);
 
             let response = get_handle::<ServerResponse>(response_handle).expect("response");
             assert_rewritten(response_listener, response.listeners["finish"][0]);

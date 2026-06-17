@@ -7,6 +7,8 @@ pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 pub const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+pub const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+pub const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 pub const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 
 // Runtime symbols not yet wrapped by perry-ffi — declared locally.
@@ -28,6 +30,14 @@ extern "C" {
     /// from an options-object argument. Defined in
     /// `crates/perry-runtime/src/closure/dynamic_props.rs::js_value_is_closure`.
     pub fn js_value_is_closure(value_bits: i64) -> i32;
+    /// #4965 — normalize a `res.setHeaders(x)` argument into a JSON
+    /// `[name, value]` entries array (value is a string, or an array of
+    /// strings for multi-valued headers like `Set-Cookie`). Returns null when
+    /// `x` is neither a `Headers` nor a `Map` (→ `ERR_INVALID_ARG_TYPE`).
+    /// Classifies by address band so a `Headers` registry *handle* is never
+    /// dereferenced as a heap object. Defined in
+    /// `crates/perry-runtime/src/object/global_fetch.rs`.
+    pub fn js_node_setheaders_entries_json(value: f64) -> *mut StringHeader;
 }
 
 /// Opaque marker for the runtime's Promise struct — pass pointers

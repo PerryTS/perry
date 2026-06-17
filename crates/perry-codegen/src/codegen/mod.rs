@@ -39,6 +39,7 @@ use crate::runtime_decls;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I64, VOID};
 
+pub(crate) mod arguments;
 mod artifacts;
 mod closure;
 mod entry;
@@ -50,15 +51,16 @@ mod string_pool;
 
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{default_target_triple, write_barriers_enabled};
-pub(crate) use opts::CrossModuleCtx;
 pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
+pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
 use helpers::{
-    collect_return_class, emit_buffer_alias_metadata, sanitize, scoped_fn_name, scoped_method_name,
+    collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
+    sanitize, sanitize_member, scoped_fn_name, scoped_method_name, scoped_static_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
@@ -70,6 +72,10 @@ pub(super) fn spec_function_length(params: &[perry_hir::Param]) -> usize {
         .iter()
         .take_while(|p| !p.is_rest && p.default.is_none())
         .count()
+}
+
+pub(crate) fn static_method_registry_key(method_name: &str) -> String {
+    format!("__perry_static__{}", method_name)
 }
 
 /// Compile a Perry HIR module to an object file via LLVM IR.
@@ -125,6 +131,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // becomes part of every emitted global so multi-module programs
     // don't collide on `.str.0.handle`.
     let mut strings = StringPool::with_prefix(module_prefix.clone());
+    // #5247: install per-module source-location context for the dynamic
+    // call-dispatch throw path, but only under `--debug-symbols` (which sets
+    // `opts.debug_locations` + `opts.module_source`). Off by default — no
+    // source clone, no per-call emission.
+    if opts.debug_locations {
+        if let Some(src) = opts.module_source.clone() {
+            strings.set_debug_location_ctx(Some((hir.name.clone(), src)));
+        }
+    }
 
     // Class lookup table for `Expr::New`. Indexed by class name —
     // the HIR has unique names per module.
@@ -292,9 +307,50 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             class_ids.insert(ic.name.clone(), class_id);
         }
 
+        let imported_getters: Vec<perry_hir::Function> = ic
+            .getter_names
+            .iter()
+            .map(|prop| perry_hir::Function {
+                id: 0,
+                name: format!("get_{}", prop),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: perry_types::Type::Any,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            })
+            .collect();
+        let imported_setters: Vec<perry_hir::Function> = ic
+            .setter_names
+            .iter()
+            .map(|prop| perry_hir::Function {
+                id: 0,
+                name: format!("set_{}", prop),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: perry_types::Type::Any,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            })
+            .collect();
+
         // Build a stub Class with the minimum fields the codegen needs.
-        // Most fields are empty — only name, extends_name, and methods
-        // are consulted by dispatch.
+        // Imported accessor bodies execute from the source module; carrying
+        // their names here keeps dispatch and field inference conservative.
         let stub = perry_hir::Class {
             id: 0, // imported — no local ClassId
             name: effective_name.to_string(),
@@ -347,10 +403,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     decorators: Vec::new(),
                 })
                 .collect(),
-            getters: Vec::new(),
-            setters: Vec::new(),
+            getters: ic
+                .getter_names
+                .iter()
+                .cloned()
+                .zip(imported_getters)
+                .collect(),
+            setters: ic
+                .setter_names
+                .iter()
+                .cloned()
+                .zip(imported_setters)
+                .collect(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
@@ -490,6 +559,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // (the per-function loop further down). Built here so the CrossModuleCtx
     // construction is complete before the FnCtx instances reference it.
     let mut local_async_funcs: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut local_generator_funcs: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
+    let mut funcs_reading_dynamic_this: std::collections::HashSet<u32> =
+        std::collections::HashSet::new();
     for f in &hir.functions {
         // Include both truly-async functions and those transformed from
         // async to generator (was_plain_async=true, is_async=false after
@@ -497,6 +570,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // so is_promise_expr must recognize their call sites.
         if f.is_async || f.was_plain_async {
             local_async_funcs.insert(f.id);
+        }
+        if function_body_returns_generator_object(&f.body) {
+            local_generator_funcs.insert(f.id);
+        }
+        if perry_hir::analysis::body_reads_dynamic_this(&f.body) {
+            funcs_reading_dynamic_this.insert(f.id);
         }
     }
 
@@ -596,8 +675,35 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .map(|(_, p, ext, fields)| (fields.clone(), ext.clone(), p.clone()))
     };
 
+    // Distinct source class names can `sanitize()` to the SAME symbol — e.g.
+    // `$X` and `_X` both become `_X` (minified bundles use `$`/`_` heavily).
+    // Two such classes are genuinely different (different shapes), so each needs
+    // its OWN keys-global; emitting `@perry_class_keys_<prefix>__<sanitized>`
+    // twice makes clang reject the IR ("redefinition of global"). Track every
+    // emitted name and disambiguate collisions with a numeric suffix. The
+    // (real-name-keyed) `class_keys_globals_map` stores the unique name, so every
+    // `new ClassName()` site still resolves to the right global.
+    let mut used_class_keys_globals: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    fn unique_global(base: String, used: &mut std::collections::HashSet<String>) -> String {
+        if used.insert(base.clone()) {
+            return base;
+        }
+        let mut n = 1u32;
+        loop {
+            let candidate = format!("{base}_{n}");
+            if used.insert(candidate.clone()) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
     for c in &hir.classes {
-        let global_name = format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name),);
+        let global_name = unique_global(
+            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+            &mut used_class_keys_globals,
+        );
         llmod.add_internal_global(&global_name, I64, "0");
 
         // Build the packed-keys string. Format: each field name
@@ -766,7 +872,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         if class_keys_globals_map.contains_key(&c.name) {
             continue;
         }
-        let global_name = format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name),);
+        let global_name = unique_global(
+            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+            &mut used_class_keys_globals,
+        );
         llmod.add_internal_global(&global_name, I64, "0");
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
         let mut packed_keys = String::new();
@@ -936,10 +1045,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // with 2 scalar args while the signature expects (rest_array),
         // and `arguments.length` reads garbage / undefined.
         for sm in &cls.static_methods {
-            method_param_counts.insert((cls.name.clone(), sm.name.clone()), sm.params.len());
+            let key = static_method_registry_key(&sm.name);
+            method_param_counts.insert((cls.name.clone(), key.clone()), sm.params.len());
             let has_rest = sm.params.iter().any(|p| p.is_rest);
             if has_rest {
-                method_has_rest.insert((cls.name.clone(), sm.name.clone()), true);
+                method_has_rest.insert((cls.name.clone(), key), true);
             }
         }
     }
@@ -1016,6 +1126,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         namespace_member_prefixes: opts.namespace_member_prefixes,
         imported_async_funcs: opts.imported_async_funcs,
         local_async_funcs,
+        local_generator_funcs,
+        funcs_reading_dynamic_this,
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
         import_function_origin_names: opts.import_function_origin_names.clone(),
@@ -1041,7 +1153,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 let ctor_name = format!("{}__{}_constructor", ic.source_prefix, ic.name);
                 (
                     effective_name.to_string(),
-                    (ctor_name, ic.constructor_param_count),
+                    ImportedCtor {
+                        symbol: ctor_name,
+                        param_count: ic.constructor_param_count,
+                        has_own_constructor: ic.has_own_constructor,
+                        has_instance_fields: ic.has_instance_fields,
+                    },
                 )
             })
             .collect(),
@@ -1262,6 +1379,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         for sm in &c.static_methods {
             scan_body(&sm.params, &sm.body, &mut referenced_from_fn);
         }
+        for member in &c.computed_members {
+            scan_body(
+                &member.function.params,
+                &member.function.body,
+                &mut referenced_from_fn,
+            );
+        }
         for (_, getter_fn) in &c.getters {
             scan_body(&getter_fn.params, &getter_fn.body, &mut referenced_from_fn);
         }
@@ -1316,6 +1440,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             for sm in &c.static_methods {
                 collect_closures_in_stmts(&sm.body, &mut seen, &mut closures);
+            }
+            for member in &c.computed_members {
+                collect_closures_in_stmts(&member.function.body, &mut seen, &mut closures);
             }
             if let Some(ctor) = &c.constructor {
                 collect_closures_in_stmts(&ctor.body, &mut seen, &mut closures);
@@ -1377,6 +1504,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 module_global_types.insert(*id, ty.clone());
             }
             if referenced_from_fn.contains(id) || exported_var_names.contains(name) {
+                // A `var` redeclared at module scope (`var x = …; … var x = …;`)
+                // lowers to multiple `Stmt::Let` sharing the SAME id. The backing
+                // global (and any exported getter) is keyed by that id, so emit it
+                // exactly once — a second `add_global` for the same symbol is an
+                // LLVM "redefinition of global" hard error. Captured + redeclared
+                // module vars are the trigger (e.g. test262 capability tests).
+                if module_globals.contains_key(id) {
+                    continue;
+                }
                 // Use external linkage for exported vars so other
                 // modules can reference them. Internal for the rest.
                 let is_exported = exported_var_names.contains(name);
@@ -1478,8 +1614,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let name = format!(
                 "perry_static_{}__{}__{}",
                 module_prefix,
-                sanitize(&c.name),
-                sanitize(&sf.name),
+                sanitize_member(&c.name),
+                sanitize_member(&sf.name),
             );
             // External linkage so importing modules can reference the same
             // global. Static class fields are spec-level shared state across
@@ -1516,8 +1652,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     let global_name = format!(
                         "perry_static_{}__{}__{}",
                         module_prefix,
-                        sanitize(&ic.name),
-                        sanitize(sf_name),
+                        sanitize_member(&ic.name),
+                        sanitize_member(sf_name),
                     );
                     static_field_globals.insert(key, global_name);
                 }
@@ -1531,8 +1667,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let global_name = format!(
                 "perry_static_{}__{}__{}",
                 ic.source_prefix,
-                sanitize(&ic.name),
-                sanitize(sf_name),
+                sanitize_member(&ic.name),
+                sanitize_member(sf_name),
             );
             // Declare external (not define) — the source module owns the
             // defining global. Skip if already declared (multiple imports of
@@ -1574,6 +1710,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .get(&c.name)
             .map(|s| s.as_str())
             .unwrap_or(c.name.as_str());
+        let class_symbol_id = class_ids.get(&c.name).copied().unwrap_or(c.id);
         for m in &c.methods {
             let llvm_name = scoped_method_name(class_prefix, mangle_class_name, &m.name);
             method_names.insert((c.name.clone(), m.name.clone()), llvm_name.clone());
@@ -1584,6 +1721,41 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             for alias in &c.aliases {
                 method_names
                     .entry((alias.clone(), m.name.clone()))
+                    .or_insert_with(|| llvm_name.clone());
+            }
+        }
+        for member in &c.computed_members {
+            let llvm_name = if member.is_static {
+                scoped_static_method_name(
+                    class_prefix,
+                    class_symbol_id,
+                    mangle_class_name,
+                    &member.function.name,
+                )
+            } else {
+                scoped_method_name(class_prefix, mangle_class_name, &member.function.name)
+            };
+            method_names.insert(
+                (
+                    c.name.clone(),
+                    if member.is_static {
+                        static_method_registry_key(&member.function.name)
+                    } else {
+                        member.function.name.clone()
+                    },
+                ),
+                llvm_name.clone(),
+            );
+            for alias in &c.aliases {
+                method_names
+                    .entry((
+                        alias.clone(),
+                        if member.is_static {
+                            static_method_registry_key(&member.function.name)
+                        } else {
+                            member.function.name.clone()
+                        },
+                    ))
                     .or_insert_with(|| llvm_name.clone());
             }
         }
@@ -1621,20 +1793,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ),
             );
         }
-        // Static methods. Registered under their plain method name
-        // so `Counter.increment()` (StaticMethodCall) can look them
-        // up the same way as instance methods, but emitted as
-        // `perry_static_<modprefix>__<class>__<method>` (no `this`).
-        // The class/method names are sanitized so private methods
-        // (`#helper`) produce a valid LLVM identifier.
+        // Static methods. Registered under a static-only key so they do not
+        // collide with instance methods of the same class and name, and emitted
+        // with the class id so duplicate text class names stay distinct.
         for sm in &c.static_methods {
             method_names.insert(
-                (c.name.clone(), sm.name.clone()),
-                format!(
-                    "perry_static_{}__{}__{}",
+                (c.name.clone(), static_method_registry_key(&sm.name)),
+                scoped_static_method_name(
                     class_prefix,
-                    sanitize(mangle_class_name),
-                    sanitize(&sm.name),
+                    class_symbol_id,
+                    mangle_class_name,
+                    &sm.name,
                 ),
             );
         }
@@ -1659,8 +1828,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let llvm_fn = format!(
                 "perry_method_{}__{}__{}",
                 sanitize(src),
-                sanitize(&ic.name),
-                sanitize(method_name),
+                sanitize_member(&ic.name),
+                sanitize_member(method_name),
             );
             method_names
                 .entry((effective_name.to_string(), method_name.clone()))
@@ -1737,19 +1906,22 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         llmod.declare_function(&ctor_fn, VOID, &ctor_params);
 
-        // Cross-module static methods. Source module emits these as
-        // `perry_static_<source_prefix>__<class>__<method>` (no `this`
-        // receiver). Register them in `method_names` under the same
-        // (class, method) key the StaticMethodCall lowering looks up.
+        // Cross-module static methods. Source modules emit these as static
+        // functions with no `this` receiver, normally qualified by the source
+        // class id. Register them under the static-only key the lowering uses.
         for sm in &ic.static_method_names {
-            let llvm_fn = format!(
-                "perry_static_{}__{}__{}",
-                sanitize(src),
-                sanitize(&ic.name),
-                sanitize(sm),
-            );
+            let llvm_fn = if let Some(source_class_id) = ic.source_class_id {
+                scoped_static_method_name(&sanitize(src), source_class_id, &ic.name, sm)
+            } else {
+                format!(
+                    "perry_static_{}__{}__{}",
+                    sanitize(src),
+                    sanitize_member(&ic.name),
+                    sanitize_member(sm),
+                )
+            };
             method_names
-                .entry((effective_name.to_string(), sm.clone()))
+                .entry((effective_name.to_string(), static_method_registry_key(sm)))
                 .or_insert_with(|| llvm_fn.clone());
             // Declare conservatively with 6 double params; LLVM's direct-call
             // resolution doesn't require an exact arity match for declarations.
@@ -1762,15 +1934,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // forward/recursive calls without worrying about emission order.
     // Names are scoped by module prefix to avoid cross-module collisions.
     let mut func_names: HashMap<u32, String> = HashMap::new();
-    let mut func_signatures: HashMap<u32, (usize, bool, bool)> = HashMap::new();
+    let mut func_signatures: HashMap<u32, (usize, bool, bool, bool)> = HashMap::new();
     let mut func_synthetic_arguments: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
     for f in &hir.functions {
         func_names.insert(f.id, scoped_fn_name(&module_prefix, &f.name));
         let has_rest = f.params.iter().any(|p| p.is_rest);
+        let synthetic_is_rest = f
+            .params
+            .last()
+            .map(|p| p.arguments_object.is_some() && p.is_rest)
+            .unwrap_or(false);
         if f.params
             .last()
-            .map(|p| p.is_rest && p.name == "arguments")
+            .map(|p| p.arguments_object.is_some())
             .unwrap_or(false)
         {
             func_synthetic_arguments.insert(f.id);
@@ -1779,7 +1956,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             f.return_type,
             perry_types::Type::Number | perry_types::Type::Int32
         );
-        func_signatures.insert(f.id, (f.params.len(), has_rest, returns_number));
+        func_signatures.insert(
+            f.id,
+            (f.params.len(), has_rest, returns_number, synthetic_is_rest),
+        );
     }
 
     // Module-level boxed_vars: union of every per-function/method/
@@ -1806,6 +1986,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         for sm in &c.static_methods {
             module_boxed_vars.extend(collect_boxed_vars(&sm.body));
+        }
+        for member in &c.computed_members {
+            module_boxed_vars.extend(collect_boxed_vars(&member.function.body));
         }
         if let Some(ctor) = &c.constructor {
             module_boxed_vars.extend(collect_boxed_vars(&ctor.body));
@@ -1856,6 +2039,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             collect_let_types_in_stmts(&sm.body, &mut module_local_types);
         }
+        for member in &c.computed_members {
+            for p in &member.function.params {
+                module_local_types.insert(p.id, p.ty.clone());
+            }
+            collect_let_types_in_stmts(&member.function.body, &mut module_local_types);
+        }
     }
 
     // Cross-module function declares are emitted lazily by `lower_call`
@@ -1898,6 +2087,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             for sm in &c.static_methods {
                 collect_closures_in_stmts(&sm.body, &mut seen, &mut closures);
+            }
+            for member in &c.computed_members {
+                collect_closures_in_stmts(&member.function.body, &mut seen, &mut closures);
             }
             if let Some(ctor) = &c.constructor {
                 collect_closures_in_stmts(&ctor.body, &mut seen, &mut closures);
@@ -1966,9 +2158,34 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             if let perry_hir::Expr::Closure { params, .. } = expr {
                 let last_is_synth_args = params
                     .last()
-                    .map(|p| p.is_rest && p.name == "arguments")
+                    .map(|p| p.arguments_object.is_some())
                     .unwrap_or(false);
-                if last_is_synth_args {
+                let has_user_rest = params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none());
+                if last_is_synth_args && !has_user_rest {
+                    Some(*fid)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let closure_rest_and_arguments: std::collections::HashSet<u32> = closures
+        .iter()
+        .filter_map(|(fid, expr)| {
+            if let perry_hir::Expr::Closure { params, .. } = expr {
+                let last_is_synth_args = params
+                    .last()
+                    .map(|p| p.arguments_object.is_some())
+                    .unwrap_or(false);
+                let has_user_rest = params
+                    .iter()
+                    .any(|p| p.is_rest && p.arguments_object.is_none());
+                if last_is_synth_args && has_user_rest {
                     Some(*fid)
                 } else {
                     None
@@ -2005,6 +2222,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         })
         .collect();
+    let closure_arrow_functions: std::collections::HashSet<u32> = closures
+        .iter()
+        .filter_map(|(fid, expr)| {
+            if let perry_hir::Expr::Closure { is_arrow, .. } = expr {
+                is_arrow.then_some(*fid)
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Integer specialization: for pure numeric recursive functions (like
     // fibonacci), emit an i64 variant that uses integer registers and
@@ -2027,7 +2254,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             walks(s, &module_globals)
         });
-        if crate::collectors::is_integer_specializable(f) && !uses_module_globals {
+        // Skip clamp-shaped functions: their FuncRef call sites with provably
+        // i32 arguments are intrinsified to smax/smin and never call this
+        // symbol, so the only remaining callers are exactly the ones whose
+        // arguments are NOT integers (fractional doubles, NaN-boxed pointers)
+        // — and clamp3 returns an argument verbatim, so the wrapper's
+        // unconditional `fptosi` miscompiles every one of them (#4785 bug
+        // class: `(number).method is not a function`). Those callers need
+        // the real f64 body.
+        let is_clamp_shape =
+            crate::collectors::detect_clamp3(f).is_some() || crate::collectors::detect_clamp_u8(f);
+        if crate::collectors::is_integer_specializable(f) && !uses_module_globals && !is_clamp_shape
+        {
             if let Some(llvm_name) = func_names.get(&f.id) {
                 let i64_name = format!("{}_i64", llvm_name);
                 crate::collectors::emit_i64_function(&mut llmod, f, &i64_name);
@@ -2206,8 +2444,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         module_local_types: &module_local_types,
         closure_rest_params: &closure_rest_params,
         closure_synthetic_arguments: &closure_synthetic_arguments,
+        closure_rest_and_arguments: &closure_rest_and_arguments,
         closure_arities: &closure_arities,
         closure_lengths: &closure_lengths,
+        closure_arrow_functions: &closure_arrow_functions,
         closures: &closures,
         class_keys_init_data: &class_keys_init_data,
         imported_class_stubs: &imported_class_stubs,

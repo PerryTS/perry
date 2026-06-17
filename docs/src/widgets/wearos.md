@@ -2,6 +2,8 @@
 
 Perry widgets can compile to Wear OS Tiles using `--target wearos-tile`. Tiles are glanceable surfaces in the Wear OS tile carousel and watch face complications.
 
+For full **Wear OS apps** (not glanceable Tiles), see [Wear OS](../platforms/wearos.md).
+
 > **Status:** the snippet on this page compile-links cleanly on the host LLVM
 > target via [`docs/examples/widgets/snippets.ts`](https://github.com/PerryTS/perry/blob/main/docs/examples/widgets/snippets.ts), so the
 > `Widget({...})` shape is verified against the codegen.

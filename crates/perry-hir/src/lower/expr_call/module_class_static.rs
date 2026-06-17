@@ -64,11 +64,18 @@ pub(super) fn try_module_class_static(
                                 // `module.builtinModules.slice` class static.
                                 | ("module", "builtinModules")
                                 | ("node:module", "builtinModules")
+                                | ("repl", "builtinModules")
+                                | ("node:repl", "builtinModules")
                                 // `process.version` is a string value. Let
                                 // String.prototype methods dispatch through
                                 // the normal value-method path instead of
                                 // building NativeMethodCall(class="version").
                                 | ("process", "version")
+                                | ("process.namespace", "version")
+                                | ("process.default", "version")
+                                | ("node:process", "version")
+                                | ("node:process.namespace", "version")
+                                | ("node:process.default", "version")
                                 // `os.EOL` / `os.devNull` are string-valued
                                 // module properties, so `os.devNull.includes(x)`
                                 // is a String method on the property value.
@@ -82,10 +89,7 @@ pub(super) fn try_module_class_static(
                         // `NativeMethodCall` without recursing through
                         // lower_member. Without this, `crypto.subtle.encrypt(...)`
                         // built cleanly and silently returned undefined.
-                        let allow_unimplemented =
-                            std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
                         if !is_sub_namespace
-                            && !allow_unimplemented
                             && perry_api_manifest::module_has_any_entries(module_name)
                             && perry_api_manifest::module_has_symbol(module_name, &class_name)
                                 .is_none()
@@ -103,15 +107,74 @@ pub(super) fn try_module_class_static(
                                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
                                 module_name, class_name, hint,
                             );
-                            // #2309: defer under tree-shaking; re-raised only
-                            // if the module survives pruning.
-                            if !crate::try_defer_refusal(msg.clone(), outer_member.span.lo.0) {
-                                crate::lower_bail!(outer_member.span, "{}", msg);
+                            // #5245: default → throw-on-reach + notice; strict →
+                            // hard #463 refusal. #2309 tree-shake handled inside.
+                            let api = format!("{module_name}.{class_name}");
+                            let location = crate::eval_classifier::location_string(
+                                &ctx.source_file_path,
+                                outer_member.span.lo.0,
+                            );
+                            match crate::check_unimplemented_api(
+                                &msg,
+                                &api,
+                                &location,
+                                outer_member.span.lo.0,
+                            ) {
+                                crate::UnimplementedDecision::Refuse => {
+                                    crate::lower_bail!(outer_member.span, "{}", msg);
+                                }
+                                crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                    return Ok(Ok(
+                                        super::super::const_fold_fn::synth_deferred_throw_value(
+                                            ctx,
+                                            &runtime_msg,
+                                            outer_member.span,
+                                        )?,
+                                    ));
+                                }
                             }
                         }
                         if !is_sub_namespace {
                             if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
                                 let method_name = method_ident.sym.to_string();
+                                // #4973: util.inherits-era subclassing —
+                                // `http.Server.call(this, handler)` inside a
+                                // function constructor. The generic
+                                // NativeMethodCall arm below loses `this`
+                                // (the dispatcher just constructs a server
+                                // from the args), so the instance never
+                                // becomes server-backed. Route to a dedicated
+                                // runtime extern that constructs the server
+                                // AND aliases `this` to the handle.
+                                let normalized =
+                                    module_name.strip_prefix("node:").unwrap_or(module_name);
+                                if matches!(normalized, "http" | "https")
+                                    && class_name == "Server"
+                                    && method_name == "call"
+                                    && !args.is_empty()
+                                {
+                                    let mut it = args.into_iter();
+                                    let this_arg = it.next().unwrap();
+                                    let mut rest: Vec<Expr> = it.collect();
+                                    rest.resize(2, Expr::Undefined);
+                                    let mut call_args = vec![this_arg];
+                                    call_args.extend(rest);
+                                    let extern_name = if normalized == "https" {
+                                        "js_https_server_construct_with_this"
+                                    } else {
+                                        "js_http_server_construct_with_this"
+                                    };
+                                    return Ok(Ok(Expr::Call {
+                                        callee: Box::new(Expr::ExternFuncRef {
+                                            name: extern_name.to_string(),
+                                            param_types: Vec::new(),
+                                            return_type: Type::Any,
+                                        }),
+                                        args: call_args,
+                                        type_args: Vec::new(),
+                                        byte_offset: 0,
+                                    }));
+                                }
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: module_name.to_string(),
                                     class_name: Some(class_name),

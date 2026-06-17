@@ -42,7 +42,7 @@ const FS_PROMISES_EXPORTS: &[&str] = &[
 
 #[test]
 fn known_submodules_have_at_least_one_export() {
-    for s in SUBMODULES {
+    for s in super::ALL_SUBMODULE_SPECS {
         assert!(
             !s.exports.is_empty(),
             "submodule {} has zero exports",
@@ -55,6 +55,7 @@ fn known_submodules_have_at_least_one_export() {
 fn find_submodule_for_known_keys() {
     for key in [
         "timers_promises",
+        "vm",
         "readline_promises",
         "fs_promises",
         "stream_promises",
@@ -94,6 +95,36 @@ fn diagnostics_channel_exposes_tracingChannel_export() {
             required
         );
     }
+}
+
+#[test]
+fn http_outgoing_message_export_is_callable() {
+    let value = unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"http".as_ptr(),
+            "http".len(),
+            b"OutgoingMessage".as_ptr(),
+            "OutgoingMessage".len(),
+        )
+    };
+    assert_ne!(value.to_bits(), crate::value::TAG_UNDEFINED);
+    assert_eq!(
+        unsafe { crate::object::bound_native_callable_value_arity(value) },
+        Some(1)
+    );
+
+    let namespace =
+        crate::object::js_create_native_module_namespace(b"http".as_ptr(), "http".len());
+    let keys = crate::object::js_object_keys_value(namespace);
+    let mut found = false;
+    for i in 0..crate::array::js_array_length(keys) {
+        let key = crate::array::js_array_get(keys, i);
+        if string_from_value(f64::from_bits(key.bits())).as_deref() == Some("OutgoingMessage") {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "http namespace keys should include OutgoingMessage");
 }
 
 fn boxed_ptr(ptr: *const u8) -> f64 {
@@ -316,6 +347,14 @@ fn zlib_codes_export_resolves_to_return_code_map() {
     );
     assert_eq!(
         string_from_value(get_object_property(codes, b"-6").unwrap()).as_deref(),
+        Some("Z_VERSION_ERROR")
+    );
+    assert_eq!(
+        string_from_value(crate::value::js_dyn_index_get(codes, -1.0)).as_deref(),
+        Some("Z_ERRNO")
+    );
+    assert_eq!(
+        string_from_value(crate::value::js_dyn_index_get(codes, -6.0)).as_deref(),
         Some("Z_VERSION_ERROR")
     );
 }

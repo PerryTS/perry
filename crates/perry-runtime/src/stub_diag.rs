@@ -78,6 +78,74 @@ pub fn perry_stub_warn(name: &'static str, reason: &'static str, issue: Option<&
     }
 }
 
+/// Whether `PERRY_STRICT_STUBS=1` (or `on`/`true`) is set — the opt-in
+/// strictness mode from the stub-elimination epic (#4918/#4919). When
+/// on, a runtime stub that would otherwise return a fake/no-op result
+/// instead throws `ERR_PERRY_UNIMPLEMENTED`, turning silent lies into
+/// measurable failures for package-compat work. Read once and cached.
+pub fn strict_stubs_enabled() -> bool {
+    static STRICT: OnceLock<bool> = OnceLock::new();
+    *STRICT.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_STRICT_STUBS").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
+/// Whether `PERRY_DETERMINISTIC_NET=1` (or `on`/`true`/`yes`) is set — the
+/// parity-CI mode for the now-real `node:dns` / `node:dgram` network stack
+/// (#4911). When on, `dns` resolution and `dgram` sockets fall back to the
+/// in-process deterministic loopback answers (no external name resolution,
+/// no host UDP sockets) so byte-for-byte parity fixtures stay reproducible
+/// on machines without network access. Unset (the default), the modules do
+/// real `getaddrinfo`/DNS/UDP I/O. Read once and cached.
+pub fn deterministic_net_enabled() -> bool {
+    static DETERMINISTIC: OnceLock<bool> = OnceLock::new();
+    *DETERMINISTIC.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_DETERMINISTIC_NET").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
+/// First-call diagnostic for a *runtime* API stub (dns/dgram loopback
+/// fakes, v8 heap snapshots, stdlib-adapter no-ops, …) — the
+/// manifest-flagged clusters from the
+/// stub-elimination epic (#4919). Unlike [`perry_stub_warn`], whose
+/// message says "on this platform" (for the harmonyos UI stubs), this
+/// says the API itself is registered-but-fake regardless of target.
+///
+/// `name` is the JS-facing API (e.g. `"dns.resolve4"`), `reason` a
+/// one-liner, `issue` the tracking tag. Honors the same `PERRY_STUB_DIAG`
+/// modes (first-call / off / verbose) as [`perry_stub_warn`].
+pub fn perry_runtime_stub(name: &'static str, reason: &'static str, issue: Option<&'static str>) {
+    let m = mode();
+    if m == DiagMode::Off {
+        return;
+    }
+    if m == DiagMode::FirstCall {
+        let mut s = match seen().lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if !s.insert(name) {
+            return;
+        }
+    }
+    match issue {
+        Some(tag) => eprintln!(
+            "[perry] warning: `{}` is a stub (registered but not real) — {} (tracking: {})",
+            name, reason, tag
+        ),
+        None => eprintln!(
+            "[perry] warning: `{}` is a stub (registered but not real) — {}",
+            name, reason
+        ),
+    }
+}
+
 /// C-ABI shim around [`perry_stub_warn`] for FFI crates that link
 /// perry-runtime as a Cargo dependency but must reach it through a
 /// stable, feature-set-independent symbol rather than the hash-mangled

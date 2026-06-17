@@ -181,6 +181,15 @@ pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
     })
 }
 
+/// Issue #3621 — horizontal text alignment (TextView.setGravity).
+/// `alignment`: 0=left, 1=right, 2=center, 3=justified, 4=natural.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) {
+    catch_panic_void("perry_ui_text_set_text_alignment", || {
+        widgets::text::set_text_alignment(handle, alignment)
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_bordered(handle: i64, bordered: f64) {
     widgets::button::set_bordered(handle, bordered != 0.0);

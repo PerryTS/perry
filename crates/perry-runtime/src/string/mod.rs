@@ -25,13 +25,17 @@ mod char_ops;
 mod compare;
 mod concat;
 mod format;
+mod html;
 mod intern;
 mod io;
+mod iter_object;
 mod locale;
 mod pad;
 mod raw;
 mod slice_ops;
 mod split;
+#[cfg(feature = "regex-engine")]
+pub(crate) use split::spec_regex_split;
 
 #[cfg(test)]
 mod tests;
@@ -47,13 +51,15 @@ pub use append::js_string_append;
 pub use base64_codec::{js_atob, js_btoa};
 pub use char_ops::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
-    js_string_from_char_code, js_string_from_code_point, js_string_to_char_array,
+    js_string_end_index_to_i32, js_string_from_char_code, js_string_from_char_code_array,
+    js_string_from_code_point, js_string_from_code_point_array, js_string_index_get,
+    js_string_index_to_i32, js_string_to_char_array,
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
-    js_string_is_well_formed, js_string_locale_compare, js_string_normalize,
-    js_string_search_value_to_string, js_string_starts_with, js_string_starts_with_at,
-    js_string_to_well_formed,
+    js_string_is_well_formed, js_string_locale_compare, js_string_locale_compare_opts,
+    js_string_normalize, js_string_search_value_to_string, js_string_starts_with,
+    js_string_starts_with_at, js_string_to_well_formed,
 };
 // #1781: SSO-aware key lookup helpers, used to retire the
 // `is_string() && js_string_equals(key, key_val.as_string_ptr())` shape
@@ -69,13 +75,22 @@ pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
     scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
 };
+pub use html::{
+    js_string_anchor, js_string_big, js_string_blink, js_string_bold, js_string_fixed,
+    js_string_fontcolor, js_string_fontsize, js_string_italics, js_string_link, js_string_small,
+    js_string_strike, js_string_sub, js_string_sup,
+};
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 pub use io::{js_string_error, js_string_print, js_string_warn};
+pub use iter_object::{
+    dispatch_string_iterator_method, string_values_iter, STRING_ITERATOR_CLASS_ID,
+};
 pub use locale::{
     js_string_to_locale_lower_case, js_string_to_locale_upper_case, js_string_validate_locales,
 };
 pub use pad::{js_string_alloc_space, js_string_pad_end, js_string_pad_start, js_string_repeat};
 pub use raw::js_string_raw;
+pub(crate) use slice_ops::is_js_whitespace;
 pub use slice_ops::{
     js_string_index_of, js_string_index_of_from, js_string_last_index_of,
     js_string_last_index_of_from, js_string_slice, js_string_substr, js_string_substring,
@@ -334,6 +349,45 @@ pub(crate) fn js_string_alloc_ascii_uninit(len: u32) -> (*mut StringHeader, *mut
         init_string_header(ptr, len, len, len, 0, 0);
     }
     (ptr, data_ptr)
+}
+
+/// GC-safe copy of `byte_len` bytes starting at `byte_start` of source string
+/// `s` into a freshly allocated `StringHeader`.
+///
+/// Why this exists (issue #5062): the normal `js_string_from_bytes` family
+/// allocates the destination *before* copying, and `string_storage_alloc` can
+/// trip a moving/sweeping GC. Slice/substring fast paths hand it a raw pointer
+/// derived from a GC-managed source string (`string_data(s) + offset`), so if a
+/// collection relocates or sweeps `s` during the destination allocation, the
+/// subsequent copy reads from a dangling buffer. Under sustained server GC
+/// pressure this surfaced as a chunked `String.prototype.slice` loop stamping
+/// the new slice's own length word over the first bytes of the payload.
+///
+/// Rooting `s` in a `RuntimeHandleScope` keeps it alive across the allocation
+/// AND refreshes its address if the GC moves it, so the copy always reads from
+/// the live source. `byte_start`/`byte_len` are byte offsets into the source
+/// payload (callers translate UTF-16 indices first); `utf16_len`/`flags` become
+/// the new header's fields.
+pub(crate) fn string_copy_range(
+    s: *const StringHeader,
+    byte_start: usize,
+    byte_len: u32,
+    utf16_len: u32,
+    flags: u32,
+) -> *mut StringHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_string_ptr(s);
+    let (ptr, data_ptr) = string_storage_alloc(byte_len);
+    unsafe {
+        init_string_header(ptr, utf16_len, byte_len, byte_len, 0, flags);
+        if byte_len > 0 {
+            // Re-read the (possibly relocated) source AFTER the allocation.
+            let s_now = handle.get_raw_const_ptr::<StringHeader>();
+            let src = string_data(s_now).add(byte_start);
+            ptr::copy_nonoverlapping(src, data_ptr, byte_len as usize);
+        }
+    }
+    ptr
 }
 
 /// Count UTF-16 code units for a WTF-8 byte slice without using from_utf8.

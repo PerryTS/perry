@@ -1,28 +1,14 @@
 use super::*;
 
-fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
-    let ast::Stmt::Expr(expr_stmt) = stmt else {
-        return None;
-    };
-    let mut expr = expr_stmt.expr.as_ref();
-    while let ast::Expr::Paren(paren) = expr {
-        expr = paren.expr.as_ref();
-    }
-    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
-        return None;
-    };
-    s.value.as_str()
-}
-
 fn function_has_use_strict(func: &ast::Function) -> bool {
     let Some(block) = func.body.as_ref() else {
         return false;
     };
     for stmt in &block.stmts {
-        let Some(directive) = stmt_is_string_directive(stmt) else {
+        let Some(directive) = crate::lower::string_directive_stmt_lit(stmt) else {
             break;
         };
-        if directive == "use strict" {
+        if crate::lower::is_raw_use_strict_directive(directive) {
             return true;
         }
     }
@@ -52,37 +38,44 @@ pub(super) fn lower_nested_fn_decl(
 
     let scope_mark = ctx.enter_scope();
 
-    // Track outer locals for capture detection
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
-
     // Lower parameters. Skip the TypeScript `this:` annotation —
     // it has no runtime existence (see the sibling site above for
     // the full rationale).
     let mut params = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &fn_decl.function.params {
         let param_name = get_pat_name(&param.pat)?;
         if param_name == "this" {
             continue;
         }
-        let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), Type::Any);
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: Type::Any,
-            default: param_default,
+            default: None,
             decorators: Vec::new(),
             is_rest,
+            arguments_object: None,
         });
-        if is_destructuring_pattern(&param.pat) {
-            destructuring_params.push((param_id, param.pat.clone()));
+        default_param_pats.push(param.pat.clone());
+        // Unwrap a `Pat::Assign` (destructured param with a default, e.g.
+        // `function f([x, y] = [1, 2]) {}`) so the destructuring binding is
+        // still emitted; the default is applied via `get_param_default`.
+        // Mirrors `lower_fn_decl`.
+        let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
+            assign.left.as_ref()
+        } else {
+            &param.pat
+        };
+        if is_destructuring_pattern(inner_pat) {
+            destructuring_params.push((param_id, inner_pat.clone()));
         }
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // #677: synthesize `arguments` for nested function decls.
@@ -91,13 +84,10 @@ pub(super) fn lower_nested_fn_decl(
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = fn_decl
-        .function
-        .params
-        .iter()
-        .any(|p| is_rest_param(&p.pat));
+    let outer_strict = ctx.current_strict;
+    let is_strict = outer_strict || function_has_use_strict(&fn_decl.function);
+    let simple_parameters = params_are_simple_arguments_list(&fn_decl.function.params);
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && fn_decl
             .function
             .body
@@ -105,7 +95,20 @@ pub(super) fn lower_nested_fn_decl(
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        let mapped = !is_strict && simple_parameters;
+        let mapped_parameter_ids = if mapped {
+            mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            is_strict,
+            simple_parameters,
+            !mapped,
+            mapped_parameter_ids,
+        );
     }
 
     // Generate destructuring stmts
@@ -115,8 +118,6 @@ pub(super) fn lower_nested_fn_decl(
         destructuring_stmts.extend(stmts);
     }
 
-    let outer_strict = ctx.current_strict;
-    let is_strict = outer_strict || function_has_use_strict(&fn_decl.function);
     ctx.current_strict = is_strict;
 
     // Lower body — see issue #569; hoist nested function-decl
@@ -135,6 +136,24 @@ pub(super) fn lower_nested_fn_decl(
         body = new_body;
     }
 
+    // Prepend defaulted-parameter application (`if (p === undefined) p =
+    // <default>`). Mirrors `lower_fn_decl` (fn_decl.rs) — without it, a
+    // `function f(a, opts = {})` nested in a block (which is what EVERY
+    // top-level function becomes once cjs_wrap wraps the module body in an
+    // IIFE) records `param.default` but never materializes the guard, so a
+    // caller that omits the arg (or pads it with TAG_UNDEFINED) reads the
+    // param as `undefined` instead of its default. This broke Next.js
+    // `recursiveReadDir(dir)` → `setupFsCheck` → the whole server boot
+    // (`Cannot convert undefined or null to object` destructuring the
+    // dropped `options = {}`). Defaults run before any destructuring, so
+    // prepend after the destructuring block (ending up first in the body).
+    let default_stmts = build_default_param_stmts(&params);
+    if !default_stmts.is_empty() {
+        let mut new_body = default_stmts;
+        new_body.append(&mut body);
+        body = new_body;
+    }
+
     ctx.exit_scope(scope_mark);
 
     // Detect captured variables
@@ -144,8 +163,13 @@ pub(super) fn lower_nested_fn_decl(
         collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
     }
 
-    let outer_local_ids: std::collections::HashSet<LocalId> =
-        outer_locals.iter().map(|(_, id)| *id).collect();
+    // The function's own scope has been popped (`exit_scope` above), so the
+    // live `ctx.locals.id_set()` is exactly the enclosing scope's locals — the
+    // membership view capture detection needs. Previously this was rebuilt into
+    // a fresh `HashSet` from a per-closure cloned snapshot of `ctx.locals`,
+    // which made capture analysis O(scope) per nested function = O(n²) over a
+    // scope of n sibling functions (the perf bug behind this change).
+    let outer_local_ids = ctx.locals.id_set();
     let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
 
     // dayjs (issue: format() returned `292278994-08`): local
@@ -205,7 +229,9 @@ pub(super) fn lower_nested_fn_decl(
         captures,
         mutable_captures,
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: fn_decl.function.is_async,
         is_generator: false,
         is_strict,

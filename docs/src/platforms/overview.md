@@ -1,6 +1,6 @@
 # Platform Overview
 
-Perry compiles TypeScript to native executables for 9 platform families from the same source code.
+Perry compiles TypeScript to native executables for 10 platform families from the same source code.
 
 ## Supported Platforms
 
@@ -12,6 +12,7 @@ Perry compiles TypeScript to native executables for 9 platform families from the
 | tvOS | `--target tvos` / `--target tvos-simulator` | UIKit | Full support (focus engine + game controllers) |
 | watchOS | `--target watchos` / `--target watchos-simulator` | SwiftUI (data-driven) | Core support (15 widgets) |
 | Android | `--target android` | JNI/Android SDK | Full support (112/112) |
+| Wear OS | `--target wearos` | JNI/Android SDK (shared) | Android backend on a watch |
 | Windows | `--target windows` | Win32 | Full support (112/112) |
 | Linux | `--target linux` | GTK4 | Full support (112/112) |
 | Web / WebAssembly | `--target web` *(alias `--target wasm`)* | DOM/CSS via WASM bridge | Full support (168 widgets) |
@@ -31,6 +32,7 @@ perry app.ts -o app --target web   # alias: --target wasm
 perry app.ts -o app --target windows
 perry app.ts -o app --target linux
 perry app.ts -o app --target android
+perry app.ts -o app --target wearos   # Wear OS — Android on a watch
 ```
 
 ## Platform Detection
@@ -64,6 +66,7 @@ Use the `__platform__` compile-time constant to branch by platform:
 - [tvOS](tvos.md)
 - [watchOS](watchos.md)
 - [Android](android.md)
+- [Wear OS](wearos.md)
 - [Windows](windows.md)
 - [Linux (GTK4)](linux.md)
 - [Web](web.md)

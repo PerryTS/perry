@@ -65,6 +65,10 @@ unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
     js_object_set_field(obj, 1, JSValue::number(0.0));
     // Field 2: iterator kind.
     js_object_set_field(obj, 2, JSValue::number(kind as f64));
+    // Link `[[Prototype]]` to the shared `%MapIteratorPrototype%` /
+    // `%SetIteratorPrototype%` singleton so `Object.getPrototypeOf(it)` and the
+    // inherited `.next` read resolve.
+    crate::object::attach_iterator_prototype(obj, class_id);
     js_nanbox_pointer(obj as i64)
 }
 

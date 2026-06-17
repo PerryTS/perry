@@ -16,6 +16,16 @@
 use crate::JsValue;
 
 extern "C" {
+    /// Runtime entry: build an Error subclass with a `.code`.
+    /// `kind`: 0 = Error, 1 = TypeError, 2 = RangeError.
+    fn js_error_value_with_code(
+        msg_ptr: *const u8,
+        msg_len: usize,
+        code_ptr: *const u8,
+        code_len: usize,
+        kind: i32,
+    ) -> f64;
+
     /// Runtime entry: build an Error subclass with a `.code`, then throw.
     /// `kind`: 0 = Error, 1 = TypeError, 2 = RangeError. Diverges.
     fn js_throw_error_with_code(
@@ -29,6 +39,18 @@ extern "C" {
     /// Runtime entry: pointer to a Buffer/TypedArray value's bytes (with
     /// length via `out_len`), or null for any other value.
     fn js_value_buffer_or_typedarray_data(bits: f64, out_len: *mut u32) -> *const u8;
+
+    /// Runtime entry: build a Node-style system Error with `.message`,
+    /// `.code`, `.syscall` and `.errno`.
+    fn js_node_system_error_value(
+        msg_ptr: *const u8,
+        msg_len: usize,
+        code_ptr: *const u8,
+        code_len: usize,
+        syscall_ptr: *const u8,
+        syscall_len: usize,
+        errno: f64,
+    ) -> f64;
 }
 
 /// Which JS Error subclass [`throw_with_code`] raises.
@@ -60,6 +82,47 @@ pub fn throw_with_code(msg: &str, code: &str, kind: ErrorKind) -> ! {
     // SAFETY: both slices are valid for their lengths; the runtime copies
     // the bytes into arena-owned storage before diverging.
     unsafe { js_throw_error_with_code(msg.as_ptr(), msg.len(), code.as_ptr(), code.len(), k) }
+}
+
+/// Build a JS Error subclass whose `.message` is `msg` and whose `.code` is
+/// `code` (a Node `ERR_*` string), without throwing it.
+///
+/// This is the non-throwing twin of [`throw_with_code`], used by APIs such as
+/// `events.once()` that must return a Promise and reject it with a coded error
+/// instead of throwing synchronously.
+pub fn error_value_with_code(msg: &str, code: &str, kind: ErrorKind) -> JsValue {
+    let k = match kind {
+        ErrorKind::Error => 0,
+        ErrorKind::TypeError => 1,
+        ErrorKind::RangeError => 2,
+    };
+    // SAFETY: both slices are valid for their lengths; the runtime copies
+    // the bytes into arena-owned storage before returning the error value.
+    let value =
+        unsafe { js_error_value_with_code(msg.as_ptr(), msg.len(), code.as_ptr(), code.len(), k) };
+    JsValue::from_bits(value.to_bits())
+}
+
+/// Build a Node-style system `Error` value carrying `.message`, `.code`
+/// (a Node `E*` string), `.syscall` (the failing syscall, e.g. `"connect"`
+/// or `"getaddrinfo"`) and `.errno` (the libuv-negative number). This is the
+/// shape Node hands to `socket`/`request` `'error'` listeners for transport
+/// failures, so consumers branching on `err.code === 'ECONNREFUSED'` work.
+pub fn system_error_value(msg: &str, code: &str, syscall: &str, errno: i64) -> JsValue {
+    // SAFETY: all three slices are valid for their lengths; the runtime copies
+    // the bytes into arena-owned storage before returning the error value.
+    let value = unsafe {
+        js_node_system_error_value(
+            msg.as_ptr(),
+            msg.len(),
+            code.as_ptr(),
+            code.len(),
+            syscall.as_ptr(),
+            syscall.len(),
+            errno as f64,
+        )
+    };
+    JsValue::from_bits(value.to_bits())
 }
 
 /// Borrow the raw bytes of a `Buffer` or `TypedArray` value. Returns

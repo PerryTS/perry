@@ -53,6 +53,49 @@ pub use agent::*;
 mod client_overload;
 use client_overload::{merge_url_and_options, method_for_overload, parse_client_args};
 
+mod client_request_surface;
+
+// Client-side TLS options (rejectUnauthorized / ca / checkServerIdentity)
+// for `https.request` / `https.get` (#4906) — kept out of this file to
+// stay under the 2000-line lint cap.
+mod tls_client;
+
+// Raw-socket trailer-aware HTTP/1.1 client (`TE: trailers` bypass) +
+// response parser, extracted to keep `lib.rs` under the 2000-line lint cap.
+mod plain_client;
+use plain_client::{dispatch_plain_http_request, parse_http_response};
+
+// Raw-socket `Expect: 100-continue` client path (#5080) — flushes the head,
+// observes the interim `100 Continue`, emits `'continue'`, then sends the
+// withheld body. reqwest swallows the interim response, so this bypass is
+// needed to surface it.
+mod continue_client;
+
+// Async reqwest dispatch (`dispatch_request` + TLS-client selection),
+// extracted to keep `lib.rs` under the 2000-line lint cap.
+mod client_dispatch;
+use client_dispatch::dispatch_request;
+
+// Client-request event drain helpers (#4905) — extracted from this file
+// to stay under the 2000-line lint cap.
+mod client_events;
+
+// Client OutgoingMessage write/end callback + backpressure + setTimeout
+// surface (#4909) — extracted to stay under the 2000-line lint cap.
+mod client_outgoing;
+
+// Node-compatible argument/header/URL validation for the client factories
+// (#4907) — throws `ERR_*`-coded errors on bad input.
+mod validation;
+use validation::{validate_client_options, validate_client_url_string};
+
+// Classifies transport-layer client failures (connect refused, DNS lookup
+// failure, …) into the Node `Error` shape (`.code`/`.syscall`/`.errno`).
+mod transport_error;
+
+mod response_headers;
+use response_headers::build_response_headers_object;
+
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -69,13 +112,15 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 // ------------------------------------------------------------------
 // Pending event queue + GC scanner
 // ------------------------------------------------------------------
 
 /// Events queued by the tokio blocking-pool worker for the main thread.
-enum PendingHttpEvent {
+pub(crate) enum PendingHttpEvent {
     Response {
         request_handle: Handle,
         status: u16,
@@ -84,10 +129,58 @@ enum PendingHttpEvent {
         trailers: Vec<(String, String)>,
         body: Vec<u8>,
     },
+    /// Streaming delivery (reqwest path): the response head arrived — fire
+    /// the `http.request` callback / `'response'` listeners now; body
+    /// chunks follow as [`PendingHttpEvent::ResponseChunk`]s. This is what
+    /// lets client code observe headers (and start timers / destroy the
+    /// request) while the server is still writing.
+    ResponseHead {
+        request_handle: Handle,
+        status: u16,
+        status_message: String,
+        headers: Vec<(String, String)>,
+    },
+    /// One streamed body chunk following a `ResponseHead`.
+    ResponseChunk {
+        request_handle: Handle,
+        chunk: Vec<u8>,
+    },
+    /// The streamed body finished — `'end'` on the message, `'close'` on
+    /// the request.
+    ResponseEnd { request_handle: Handle },
     Error {
         request_handle: Handle,
         error_message: String,
     },
+    /// A classified transport failure (connect refused, DNS lookup failure,
+    /// connection reset, …). Unlike [`PendingHttpEvent::Error`] — which hands
+    /// listeners a bare string — this carries the Node error shape so the
+    /// drain builds a real coded `Error` with `.code`/`.syscall`/`.errno`,
+    /// matching what Node passes to `request.on('error')`.
+    TransportError {
+        request_handle: Handle,
+        message: String,
+        code: String,
+        syscall: String,
+        errno: i64,
+    },
+    /// #4905 — the transport deadline from `req.setTimeout(ms)` /
+    /// `options.timeout` fired. Drains to the request's `'timeout'`
+    /// listeners when any exist; falls back to the Error surface
+    /// otherwise.
+    Timeout { request_handle: Handle },
+    /// #4909 — the request body was handed to the transport at `end()`.
+    /// Drains the queued `write(chunk, cb)` callbacks, then `'finish'`,
+    /// then the `end(..., cb)` callback — Node's flush ordering.
+    Flushed { request_handle: Handle },
+    /// #5080 — the server answered an `Expect: 100-continue` request with
+    /// an interim `100 Continue`. Drains to the request's `'continue'`
+    /// listeners; the canonical handler then sends the withheld body.
+    Continue { request_handle: Handle },
+    /// #5080 — arm the `Expect: 100-continue` head flush on the next event-loop
+    /// tick (Node's nextTick), so post-construction `setHeader(...)` — including
+    /// a late `Expect` — reaches the wire. No-op for non-continue/sent requests.
+    DeferredArmContinue { request_handle: Handle },
 }
 
 lazy_static! {
@@ -95,8 +188,7 @@ lazy_static! {
     /// Shared HTTP client — reuses connection pool, DNS cache, TLS
     /// session cache. Without this each request allocs a fresh
     /// reqwest::Client (~250 KB) and the memory never gets reused.
-    static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
-        .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
+    pub(crate) static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(16)
         .tcp_keepalive(std::time::Duration::from_secs(60))
@@ -138,6 +230,10 @@ pub(crate) fn ensure_gc_scanner_registered() {
 fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
         visitor.visit_i64_slot(&mut req.response_callback);
+        visitor.visit_i64_slot(&mut req.end_callback);
+        for cb in &mut req.pending_write_callbacks {
+            visitor.visit_i64_slot(cb);
+        }
         for cbs in req.listeners.values_mut() {
             for cb in cbs {
                 visitor.visit_i64_slot(cb);
@@ -155,9 +251,10 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
 
     // #2154: stored `agent.createConnection` / `.createSocket` closures.
     agent::scan_agent_roots(visitor);
+    client_request_surface::scan_roots(visitor);
 }
 
-fn push_event(ev: PendingHttpEvent) {
+pub(crate) fn push_event(ev: PendingHttpEvent) {
     if let Ok(mut q) = HTTP_PENDING_EVENTS.lock() {
         q.push(ev);
     }
@@ -188,213 +285,6 @@ fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
     out
 }
 
-fn expects_response_trailers(headers: &HashMap<String, String>) -> bool {
-    headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("te")
-            && value
-                .split(',')
-                .any(|part| part.trim().eq_ignore_ascii_case("trailers"))
-    })
-}
-
-async fn dispatch_plain_http_request(
-    request_handle: Handle,
-    method: &str,
-    url: &str,
-    headers: &HashMap<String, String>,
-    body: &[u8],
-    timeout_ms: Option<u64>,
-) -> Option<Result<(), String>> {
-    if !expects_response_trailers(headers) {
-        return None;
-    }
-    let parsed = match reqwest::Url::parse(url) {
-        Ok(u) if u.scheme() == "http" => u,
-        _ => return None,
-    };
-    let host = match parsed.host_str() {
-        Some(h) => h.to_string(),
-        None => return Some(Err("missing host".to_string())),
-    };
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    let mut path = parsed.path().to_string();
-    if path.is_empty() {
-        path.push('/');
-    }
-    if let Some(q) = parsed.query() {
-        path.push('?');
-        path.push_str(q);
-    }
-
-    let fut = async {
-        let mut stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
-        let host_header = if parsed.port().is_some() {
-            format!("{}:{}", host, port)
-        } else {
-            host.clone()
-        };
-        let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, host_header);
-        let mut has_content_length = false;
-        for (k, v) in headers {
-            if k.eq_ignore_ascii_case("content-length") {
-                has_content_length = true;
-            }
-            if k.eq_ignore_ascii_case("connection") {
-                // The raw trailer-aware path reads until EOF after the final
-                // chunk/trailer block. Force close here so an explicit
-                // `Connection: keep-alive` cannot hang until timeout.
-                continue;
-            }
-            req.push_str(k);
-            req.push_str(": ");
-            req.push_str(v);
-            req.push_str("\r\n");
-        }
-        req.push_str("Connection: close\r\n");
-        if !body.is_empty() && !has_content_length {
-            req.push_str(&format!("Content-Length: {}\r\n", body.len()));
-        }
-        req.push_str("\r\n");
-        stream.write_all(req.as_bytes()).await?;
-        if !body.is_empty() {
-            stream.write_all(body).await?;
-        }
-
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).await?;
-        Ok::<Vec<u8>, std::io::Error>(raw)
-    };
-
-    let raw = match timeout_ms {
-        Some(ms) => match tokio::time::timeout(std::time::Duration::from_millis(ms), fut).await {
-            Ok(r) => r,
-            Err(_) => return Some(Err("request timed out".to_string())),
-        },
-        None => match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
-            Ok(r) => r,
-            Err(_) => return Some(Err("request timed out".to_string())),
-        },
-    };
-    let raw = match raw {
-        Ok(r) => r,
-        Err(e) => return Some(Err(e.to_string())),
-    };
-
-    match parse_http_response(&raw) {
-        Ok(parsed) => {
-            push_event(PendingHttpEvent::Response {
-                request_handle,
-                status: parsed.status,
-                status_message: parsed.status_message,
-                headers: parsed.headers,
-                trailers: parsed.trailers,
-                body: parsed.body,
-            });
-            Some(Ok(()))
-        }
-        Err(e) => Some(Err(e)),
-    }
-}
-
-/// A parsed HTTP/1.1 response message (status line + headers + decoded body
-/// + trailers). Produced by [`parse_http_response`].
-struct ParsedHttpResponse {
-    status: u16,
-    status_message: String,
-    headers: Vec<(String, String)>,
-    trailers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
-/// Parse a raw HTTP/1.1 response (the bytes read off a socket) into status /
-/// headers / decoded body / trailers. Decodes `Transfer-Encoding: chunked`
-/// (including a trailer block) and honors `Content-Length`; with neither it
-/// treats the remainder as the body (read-until-EOF transports). Shared by
-/// the trailer-aware reqwest-bypass path ([`dispatch_plain_http_request`])
-/// and the #2154 `agent.createConnection` socket path
-/// ([`dispatch_request_over_socket`]).
-fn parse_http_response(raw: &[u8]) -> Result<ParsedHttpResponse, String> {
-    let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
-        return Err("invalid HTTP response".to_string());
-    };
-    let head = String::from_utf8_lossy(&raw[..header_end]);
-    let mut lines = head.split("\r\n");
-    let status_line = lines.next().unwrap_or_default();
-    let mut status_parts = status_line.splitn(3, ' ');
-    let _version = status_parts.next();
-    let status = status_parts
-        .next()
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(0);
-    let status_message = status_parts.next().unwrap_or("").to_string();
-    let mut hdrs = Vec::new();
-    let mut is_chunked = false;
-    let mut content_length: Option<usize> = None;
-    for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            let name = name.trim().to_ascii_lowercase();
-            let value = value.trim().to_string();
-            if name == "transfer-encoding" && value.to_ascii_lowercase().contains("chunked") {
-                is_chunked = true;
-            }
-            if name == "content-length" {
-                content_length = value.parse::<usize>().ok();
-            }
-            hdrs.push((name, value));
-        }
-    }
-    let payload = &raw[header_end + 4..];
-    let mut decoded = Vec::new();
-    let mut trailers = Vec::new();
-    if is_chunked {
-        let mut pos = 0;
-        while pos < payload.len() {
-            let Some(line_end_rel) = payload[pos..].windows(2).position(|w| w == b"\r\n") else {
-                break;
-            };
-            let line_end = pos + line_end_rel;
-            let size_line = String::from_utf8_lossy(&payload[pos..line_end]);
-            let size_hex = size_line.split(';').next().unwrap_or("").trim();
-            let size = usize::from_str_radix(size_hex, 16).unwrap_or(0);
-            pos = line_end + 2;
-            if size == 0 {
-                if pos <= payload.len() {
-                    let rest = &payload[pos..];
-                    let trailer_end = rest
-                        .windows(4)
-                        .position(|w| w == b"\r\n\r\n")
-                        .unwrap_or(rest.len());
-                    let trailer_text = String::from_utf8_lossy(&rest[..trailer_end]);
-                    for line in trailer_text.split("\r\n") {
-                        if let Some((name, value)) = line.split_once(':') {
-                            trailers
-                                .push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
-                        }
-                    }
-                }
-                break;
-            }
-            if pos + size > payload.len() {
-                break;
-            }
-            decoded.extend_from_slice(&payload[pos..pos + size]);
-            pos += size + 2;
-        }
-    } else if let Some(len) = content_length {
-        decoded.extend_from_slice(&payload[..payload.len().min(len)]);
-    } else {
-        decoded.extend_from_slice(payload);
-    }
-
-    Ok(ParsedHttpResponse {
-        status,
-        status_message,
-        headers: hdrs,
-        trailers,
-        body: decoded,
-    })
-}
-
 // ------------------------------------------------------------------
 // Handle types
 // ------------------------------------------------------------------
@@ -405,10 +295,30 @@ pub struct ClientRequestHandle {
     headers: HashMap<String, String>,
     body: Vec<u8>,
     response_callback: i64,
-    /// `'error'` is the only event ClientRequest emits today.
+    /// `.on(event, cb)` listeners (`'response'` / `'error'` / `'timeout'`
+    /// / `'finish'` / `'close'`).
     listeners: HashMap<String, Vec<i64>>,
     timeout_ms: Option<u64>,
     ended: bool,
+    /// `flushHeaders()` dispatched the exchange before `end()` was called;
+    /// the eventual `end()` still owes the write/finish/end callback
+    /// ordering exactly once.
+    flushed_early: bool,
+    /// #4909 — `write(chunk, cb)` callbacks queued until the body is
+    /// flushed at `end()` (Node fires them once the chunk hits the
+    /// transport; our buffered MVP flushes everything at `end()`).
+    pending_write_callbacks: Vec<i64>,
+    /// #4909 — the `end(..., cb)` callback; fires after the queued write
+    /// callbacks and the `'finish'` listeners.
+    end_callback: i64,
+    /// #4909 — set once the response/error was delivered (or the request
+    /// destroyed); suppresses late `'timeout'` timers and stale events.
+    completed: bool,
+    /// #4909 — `'timeout'` fires at most once per request, no matter how
+    /// many timers (`options.timeout` + `setTimeout()` reschedules) land.
+    timeout_fired: bool,
+    /// #4909 — `'close'` fires at most once per request.
+    close_emitted: bool,
     /// `options.agent` handle id when the caller supplied an Agent
     /// (#2154). `0` = use the global `HTTP_CLIENT` (no pooling
     /// distinction). When set, `dispatch_request` calls
@@ -416,6 +326,23 @@ pub struct ClientRequestHandle {
     /// connection pool whose `keepAlive` / `maxFreeSockets` /
     /// `keepAliveMsecs` come from the Agent's stored options.
     agent_handle: Handle,
+    /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
+    /// `checkServerIdentity`. Default = no customization (pooled client).
+    tls: tls_client::TlsOptions,
+    /// The IncomingMessage handle created when a streamed `ResponseHead`
+    /// arrived; later `ResponseChunk` / `ResponseEnd` events route to it.
+    /// `0` until the head is delivered (and always for the full-buffer
+    /// delivery paths).
+    incoming_handle: Handle,
+    /// #5080 — the request carries `Expect: 100-continue`, so its head was
+    /// flushed up front by the raw-socket continue path and the body is
+    /// withheld until the server's interim `100 Continue` arrives. `end()`
+    /// hands the (now-known) body over the `continue_body_tx` channel
+    /// instead of dispatching a fresh exchange.
+    expects_continue: bool,
+    /// #5080 — set while the continue exchange task is waiting for the
+    /// deferred body; `end()` sends the buffered body here (once).
+    continue_body_tx: Option<tokio::sync::oneshot::Sender<Vec<u8>>>,
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -426,7 +353,12 @@ unsafe impl Sync for ClientRequestHandle {}
 pub struct IncomingMessageHandle {
     pub status_code: u16,
     pub status_message: String,
-    pub headers: HashMap<String, String>,
+    /// Raw `(name, value)` header pairs in arrival order, multiplicity
+    /// preserved. The combined `res.headers` view (Node's
+    /// `matchKnownFields` rules: `set-cookie` → array, single-value
+    /// fields keep-first, everything else joined with `, `) is built
+    /// lazily in [`build_response_headers_object`] (#5079).
+    pub headers: Vec<(String, String)>,
     pub trailers: HashMap<String, String>,
     pub body: Vec<u8>,
     pub listeners: HashMap<String, Vec<i64>>,
@@ -545,8 +477,11 @@ fn timeout_from_options(opts: &serde_json::Value) -> Option<u64> {
 }
 
 fn method_from_options(opts: &serde_json::Value) -> String {
+    // Node defaults any falsy `options.method` (absent, `''`, `null`,
+    // `undefined`) to `'GET'` — only a truthy string is used (#4970).
     opts.get("method")
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_uppercase())
         .unwrap_or_else(|| "GET".to_string())
 }
@@ -563,7 +498,7 @@ fn make_request_handle(
     callback: i64,
     agent_handle: Handle,
 ) -> Handle {
-    register_handle(ClientRequestHandle {
+    let handle = register_handle(ClientRequestHandle {
         method,
         url,
         headers,
@@ -572,129 +507,37 @@ fn make_request_handle(
         listeners: HashMap::new(),
         timeout_ms,
         ended: false,
+        flushed_early: false,
+        pending_write_callbacks: Vec::new(),
+        end_callback: 0,
+        completed: false,
+        timeout_fired: false,
+        close_emitted: false,
         agent_handle,
-    })
+        tls: tls_client::TlsOptions::default(),
+        incoming_handle: 0,
+        expects_continue: false,
+        continue_body_tx: None,
+    });
+    // #4909 — `options.timeout` arms the inactivity timer as soon as the
+    // socket exists in Node, not at `end()`; a request that is never
+    // dispatched (or whose server never answers) still gets `'timeout'`.
+    if let Some(ms) = timeout_ms {
+        if ms > 0 {
+            client_outgoing::arm_client_timeout(handle, ms);
+        }
+    }
+    handle
 }
 
-/// Spawn the actual reqwest send. The `spawn_blocking_with_reactor`
-/// shim runs the closure inside `runtime().spawn(async { ... })`, so
-/// we're already in an async context — `Handle::current().block_on`
-/// from here would panic with "Cannot start a runtime from within a
-/// runtime" (issue #769). Instead, spawn the request future as a
-/// fresh detached task on the same multi-thread runtime; it drives
-/// itself via `await` chains while we return immediately. Mirrors
-/// the `spawn_socket_runner` pattern in `perry-ext-net`.
-fn dispatch_request(
-    request_handle: Handle,
-    method: String,
-    url: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
-    timeout_ms: Option<u64>,
-    agent_handle: Handle,
-) {
-    // #2154: pick the per-Agent reqwest client when one was supplied, so
-    // the request honors the Agent's keepAlive/maxFreeSockets/keepAliveMsecs
-    // pool config rather than always using the global HTTP_CLIENT. The
-    // global is still the fallback for `http.request(opts)` without an
-    // `agent` field.
-    let client: reqwest::Client = if agent_handle != 0 {
-        agent::client_for_agent(agent_handle)
-    } else {
-        HTTP_CLIENT.clone()
-    };
-    spawn_blocking(move || {
-        // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
-        // workaround perry-ext-net needs (see spawn_socket_runner).
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-http] BUG: dispatch_request Handle::try_current returned Err — \
-                 LTO has likely dead-stripped tokio's CONTEXT statics."
-            );
-            return;
-        }
-        let handle = tokio::runtime::Handle::current();
-        let jh = handle.spawn(async move {
-            if let Some(result) = dispatch_plain_http_request(
-                request_handle,
-                method.as_str(),
-                &url,
-                &headers,
-                &body,
-                timeout_ms,
-            )
-            .await
-            {
-                if let Err(error_message) = result {
-                    push_event(PendingHttpEvent::Error {
-                        request_handle,
-                        error_message,
-                    });
-                }
-                return;
-            }
-
-            let mut req = match method.as_str() {
-                "POST" => client.post(&url),
-                "PUT" => client.put(&url),
-                "DELETE" => client.delete(&url),
-                "PATCH" => client.patch(&url),
-                "HEAD" => client.head(&url),
-                "OPTIONS" => client.request(reqwest::Method::OPTIONS, &url),
-                _ => client.get(&url),
-            };
-            for (k, v) in &headers {
-                req = req.header(k.as_str(), v.as_str());
-            }
-            if let Some(ms) = timeout_ms {
-                req = req.timeout(std::time::Duration::from_millis(ms));
-            } else {
-                req = req.timeout(std::time::Duration::from_secs(30));
-            }
-            if !body.is_empty() {
-                req = req.body(body);
-            }
-            match req.send().await {
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    let status_message = response
-                        .status()
-                        .canonical_reason()
-                        .unwrap_or("")
-                        .to_string();
-                    let mut hdrs = Vec::new();
-                    for (k, v) in response.headers() {
-                        if let Ok(s) = v.to_str() {
-                            hdrs.push((k.to_string(), s.to_string()));
-                        }
-                    }
-                    let body = response
-                        .bytes()
-                        .await
-                        .map(|b| b.to_vec())
-                        .unwrap_or_default();
-                    push_event(PendingHttpEvent::Response {
-                        request_handle,
-                        status,
-                        status_message,
-                        headers: hdrs,
-                        trailers: Vec::new(),
-                        body,
-                    });
-                }
-                Err(e) => {
-                    push_event(PendingHttpEvent::Error {
-                        request_handle,
-                        error_message: e.to_string(),
-                    });
-                }
-            }
-        });
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
-    });
+/// Parse the client-side TLS options (#4906) off a request options value
+/// and store them on the freshly-built request handle. A no-op for
+/// string-URL requests / plain http (parse yields the default).
+unsafe fn attach_tls_options(handle: Handle, opts_f64: f64) {
+    let tls = tls_client::parse_tls_options(opts_f64);
+    if tls.needs_custom_client() {
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.tls = tls);
+    }
 }
 
 /// Serialize an HTTP/1.1 request (request line + headers + body) into the
@@ -783,10 +626,10 @@ fn dispatch_request_over_socket(
         let try_h = tokio::runtime::Handle::try_current();
         std::hint::black_box(&try_h);
         if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-http] BUG: dispatch_request_over_socket Handle::try_current returned \
-                 Err — LTO has likely dead-stripped tokio's CONTEXT statics."
-            );
+            push_event(PendingHttpEvent::Error {
+                request_handle,
+                error_message: "http client runtime unavailable".to_string(),
+            });
             return;
         }
         let handle = tokio::runtime::Handle::current();
@@ -825,10 +668,7 @@ fn dispatch_request_over_socket(
                 } else {
                     if start.elapsed() >= deadline {
                         (vtable.close)(socket_id);
-                        push_event(PendingHttpEvent::Error {
-                            request_handle,
-                            error_message: "request timed out".to_string(),
-                        });
+                        push_event(PendingHttpEvent::Timeout { request_handle });
                         return;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -1001,6 +841,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
     // the same as `http.request({ host, port, path }, cb)`.
     let (method, url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
+        validate_client_url_string(&raw); // #4907
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
         } else if !raw.is_empty() {
@@ -1011,6 +852,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         ("GET".to_string(), url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
+        validate_client_options(&opts, default_protocol); // #4907
         let method = method_from_options(&opts);
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
@@ -1021,12 +863,26 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
         (method, url, headers, timeout, agent_handle)
     };
-    make_request_handle(method, url, headers, timeout, callback, agent_handle)
+    let handle = make_request_handle(method, url, headers, timeout, callback, agent_handle);
+    attach_tls_options(handle, arg_f64); // #4906
+    continue_client::defer_arm(handle); // #5080 (next-tick head flush)
+    handle
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_http_request(opts_f64: f64, callback_i64: i64) -> Handle {
     request_common(opts_f64, callback_i64, "http")
+}
+
+/// `new http.ClientRequest(options)` (#4904). Perry's client model defers
+/// the actual send to `.end()`, so constructing is exactly `http.request`
+/// without a response callback. Node coerces a falsy `options.method` /
+/// `options.path` to the `GET` / `/` defaults — `method_from_options`
+/// handles the method side (#4970) and the empty path already reads back
+/// as `/` through the surface.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_client_request_standalone_new(opts_f64: f64) -> Handle {
+    request_common(opts_f64, 0, "http")
 }
 
 #[no_mangle]
@@ -1038,6 +894,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
     ensure_gc_scanner_registered();
     let (url, headers, timeout, agent_handle) = if is_string_value(arg_f64) {
         let raw = extract_string_value(arg_f64).unwrap_or_default();
+        validate_client_url_string(&raw); // #4907
         let url = if raw.starts_with("http://") || raw.starts_with("https://") {
             raw
         } else if !raw.is_empty() {
@@ -1048,6 +905,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         (url, HashMap::new(), None, 0)
     } else {
         let opts = parse_options_object(arg_f64).unwrap_or(serde_json::Value::Null);
+        validate_client_options(&opts, default_protocol); // #4907
         let url = url_from_options(&opts, default_protocol);
         let headers = headers_from_options(&opts);
         let timeout = timeout_from_options(&opts);
@@ -1063,7 +921,8 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         callback,
         agent_handle,
     );
-    // GET auto-`end()`s, kicking off the request.
+    attach_tls_options(handle, arg_f64); // #4906
+                                         // GET auto-`end()`s, kicking off the request.
     js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
     handle
 }
@@ -1094,13 +953,26 @@ pub unsafe extern "C" fn js_https_get(arg_f64: f64, callback_i64: i64) -> Handle
 unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: bool) -> Handle {
     ensure_gc_scanner_registered();
     let parsed = parse_client_args(args_array);
+    // #4907 — validate before building the request handle. A string URL
+    // argument is validated as a WHATWG URL; the options bag is validated for
+    // method / path / headers / protocol / option types.
+    if is_string_value(parsed.url) {
+        let raw = extract_string_value(parsed.url).unwrap_or_default();
+        validate_client_url_string(&raw);
+    }
+    if let Some(opts) = parse_options_object(parsed.opts) {
+        validate_client_options(&opts, default_protocol);
+    }
     let method = method_for_overload(parsed.opts);
     let (url, headers, timeout, agent_handle) =
         merge_url_and_options(parsed.url, parsed.opts, default_protocol);
     let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    attach_tls_options(handle, parsed.opts); // #4906 — TLS options ride on the options bag
     if force_get {
         // `get()` auto-`end()`s, kicking off the request.
         js_http_client_request_end(handle, f64::from_bits(TAG_UNDEFINED));
+    } else {
+        continue_client::defer_arm(handle); // #5080 (next-tick head flush)
     }
     handle
 }
@@ -1134,9 +1006,15 @@ pub unsafe extern "C" fn js_https_get_overload(args_array: i64) -> Handle {
 /// `req.write(chunk)` — append data to the request body.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_client_request_write(handle: Handle, body_f64: f64) -> Handle {
-    if let Some(body) = extract_string_value(body_f64) {
+    client_request_write_impl(handle, body_f64)
+}
+
+unsafe fn client_request_write_impl(handle: Handle, body_f64: f64) -> Handle {
+    // #4909 — Buffer chunks used to be misread as StringHeaders (and
+    // dropped); route through the buffer-aware chunk reader.
+    if let Some(body) = client_outgoing::chunk_to_bytes(body_f64) {
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-            req.body.extend_from_slice(body.as_bytes());
+            req.body.extend_from_slice(&body);
         });
     }
     handle
@@ -1147,33 +1025,158 @@ pub unsafe extern "C" fn js_http_client_request_write(handle: Handle, body_f64: 
 /// second call after `ended=true` is a no-op.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f64) -> Handle {
-    if let Some(body) = extract_string_value(body_f64) {
+    client_request_end_impl(handle, body_f64)
+}
+
+pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> Handle {
+    // An aborted/destroyed request never dispatches — Node's `abort()`
+    // before `end()` means the server must not see the request and no
+    // `'error'` fires (test-http-abort-before-end).
+    if client_request_surface::request_destroyed(handle) {
+        return handle;
+    }
+    if let Some(body) = client_outgoing::chunk_to_bytes(body_f64) {
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-            req.body.extend_from_slice(body.as_bytes());
+            req.body.extend_from_slice(&body);
         });
+    }
+
+    // #5080 — `end()` is a send boundary: arm the continue path now if it
+    // carries `Expect: 100-continue` and the next-tick arm hasn't run yet.
+    continue_client::arm_expect_continue(handle);
+
+    // #5080 — an `Expect: 100-continue` request flushed its head up front;
+    // this `end()` just hands the (now-known) body to the in-flight continue
+    // exchange over the oneshot. The first call fires the flush ordering
+    // (write/finish/end callbacks); a later one is an idempotent no-op.
+    let (is_continue, first_end) = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if !req.expects_continue {
+            return (false, false);
+        }
+        if let Some(tx) = req.continue_body_tx.take() {
+            let body = std::mem::take(&mut req.body);
+            let _ = tx.send(body);
+            req.ended = true;
+            (true, true)
+        } else {
+            (true, false)
+        }
+    })
+    .unwrap_or((false, false));
+    if is_continue {
+        if first_end {
+            push_event(PendingHttpEvent::Flushed {
+                request_handle: handle,
+            });
+        }
+        return handle;
     }
 
     let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         if req.ended {
-            return None;
+            // Already dispatched by `flushHeaders()` — the exchange is in
+            // flight, but this `end()` still owes its write/finish/end
+            // callback ordering (once).
+            if req.flushed_early {
+                req.flushed_early = false;
+                return Err(true);
+            }
+            return Err(false);
         }
         req.ended = true;
-        Some((
+        Ok((
             req.method.clone(),
             req.url.clone(),
             req.headers.clone(),
             req.body.clone(),
             req.timeout_ms,
             req.agent_handle,
+            req.tls.clone(),
         ))
     });
 
-    let snapshot = match snapshot.flatten() {
-        Some(s) => s,
+    let snapshot = match snapshot {
+        Some(Ok(s)) => s,
+        Some(Err(owes_flush)) => {
+            if owes_flush {
+                push_event(PendingHttpEvent::Flushed {
+                    request_handle: handle,
+                });
+            }
+            return handle;
+        }
         None => return handle,
     };
 
-    let (method, url, headers, body, timeout_ms, agent_handle) = snapshot;
+    // #4909 — queue the flush notification before dispatching so the
+    // write/end callbacks and `'finish'` drain ahead of any `'response'`.
+    push_event(PendingHttpEvent::Flushed {
+        request_handle: handle,
+    });
+
+    dispatch_request_snapshot(handle, snapshot);
+    handle
+}
+
+/// `req.flushHeaders()` — Node opens the connection and puts the request
+/// head on the wire immediately. Our transport sends a complete request in
+/// one shot, so for a request with no buffered body (and a method that
+/// doesn't usually carry one) this dispatches the exchange now; a later
+/// `end()` only drains the callback ordering. Requests that already
+/// buffered body bytes (or use body-carrying methods) keep the
+/// dispatch-at-`end()` behavior, since the head can't go out alone.
+pub(crate) unsafe fn client_request_flush_headers(handle: Handle) {
+    if client_request_surface::request_destroyed(handle) {
+        return;
+    }
+    // #5080 — `flushHeaders()` is a send boundary; when it arms the continue
+    // path, that exchange owns the head, so don't also dispatch via reqwest.
+    continue_client::arm_expect_continue(handle);
+    if with_handle_mut::<ClientRequestHandle, _, _>(handle, |r| r.expects_continue).unwrap_or(false)
+    {
+        return;
+    }
+    let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if req.ended || !req.body.is_empty() {
+            return None;
+        }
+        let method = req.method.to_ascii_uppercase();
+        if !matches!(method.as_str(), "GET" | "HEAD" | "DELETE" | "OPTIONS") {
+            return None;
+        }
+        req.ended = true;
+        req.flushed_early = true;
+        Some((
+            req.method.clone(),
+            req.url.clone(),
+            req.headers.clone(),
+            Vec::new(),
+            req.timeout_ms,
+            req.agent_handle,
+            req.tls.clone(),
+        ))
+    })
+    .flatten();
+    if let Some(snapshot) = snapshot {
+        dispatch_request_snapshot(handle, snapshot);
+    }
+}
+
+type RequestSnapshot = (
+    String,
+    String,
+    HashMap<String, String>,
+    Vec<u8>,
+    Option<u64>,
+    Handle,
+    tls_client::TlsOptions,
+);
+
+/// The shared dispatch tail of `end()` / `flushHeaders()`: route through the
+/// agent's `createConnection` / `createSocket` override when present, else
+/// the reqwest path.
+unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
+    let (method, url, headers, body, timeout_ms, agent_handle, tls) = snapshot;
 
     // #2154 — if the agent supplied a `createConnection` / `createSocket`
     // override, invoke it here on the main thread (JS closure calls must not
@@ -1190,7 +1193,7 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
             // fall through to reqwest after dispatching it.
             if agent::create_socket_override(agent_handle) != 0 {
                 invoke_create_socket(handle, agent_handle, &host, port, &path);
-                return handle;
+                return;
             }
             if let Some(socket_id) =
                 agent::try_create_connection_socket(agent_handle, &host, port, &path)
@@ -1203,13 +1206,21 @@ pub unsafe extern "C" fn js_http_client_request_end(handle: Handle, body_f64: f6
                 dispatch_request_over_socket(
                     handle, method, url, headers, body, timeout_ms, socket_id,
                 );
-                return handle;
+                return;
             }
         }
     }
 
-    dispatch_request(handle, method, url, headers, body, timeout_ms, agent_handle);
-    handle
+    dispatch_request(
+        handle,
+        method,
+        url,
+        headers,
+        body,
+        timeout_ms,
+        agent_handle,
+        tls,
+    );
 }
 
 /// Parse a request URL into the `(host, port, path)` an
@@ -1239,6 +1250,10 @@ pub unsafe extern "C" fn js_http_on(
     event_ptr: *const StringHeader,
     callback: i64,
 ) -> Handle {
+    http_on_impl(handle, event_ptr, callback)
+}
+
+unsafe fn http_on_impl(handle: Handle, event_ptr: *const StringHeader, callback: i64) -> Handle {
     ensure_gc_scanner_registered();
     let event = match read_str(event_ptr) {
         Some(e) => e,
@@ -1280,19 +1295,65 @@ pub unsafe extern "C" fn js_http_set_header(
         Some(v) => v,
         None => return handle,
     };
-    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        req.headers.insert(name, value);
-    });
+    client_request_surface::set_header(handle, &name, value);
     handle
 }
 
 /// `req.setTimeout(ms)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_http_set_timeout(handle: Handle, ms: f64) -> Handle {
+    client_request_set_timeout_impl(handle, ms)
+}
+
+pub(crate) unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) -> Handle {
+    // Node's `socket.setTimeout` (which backs `ClientRequest.setTimeout`)
+    // routes the delay through validateTimerDuration → enroll: an out-of-range
+    // (> 2**31-1) delay is clamped to TIMEOUT_MAX and a `TimeoutOverflowWarning`
+    // is emitted. Mirror that so `req.setTimeout(0xffffffff)` parity-matches
+    // Node instead of silently storing the raw value. (#4910)
+    const TIMEOUT_MAX: f64 = 2_147_483_647.0;
+    let effective = if ms > TIMEOUT_MAX {
+        emit_socket_timeout_overflow_warning(ms);
+        TIMEOUT_MAX
+    } else {
+        ms
+    };
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        req.timeout_ms = Some(ms.max(0.0) as u64);
+        // Node: `setTimeout(0)` clears the inactivity timer.
+        req.timeout_ms = if effective > 0.0 {
+            Some(effective as u64)
+        } else {
+            None
+        };
     });
     handle
+}
+
+/// Emit Node's `TimeoutOverflowWarning` for an out-of-range socket timeout.
+/// The net/timers path warns with a message distinct from the global timer
+/// path ("Timer duration was truncated to 2147483647." rather than "Timeout
+/// duration was set to 1.") because the socket timeout clamps to TIMEOUT_MAX,
+/// not 1. (#4910)
+unsafe fn emit_socket_timeout_overflow_warning(ms: f64) {
+    let value_text = if ms.is_finite() && ms.fract() == 0.0 {
+        format!("{}", ms as i64)
+    } else {
+        format!("{ms}")
+    };
+    let message = format!(
+        "{value_text} does not fit into a 32-bit signed integer.\n\
+         Timer duration was truncated to 2147483647."
+    );
+    let msg_ptr = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let label = "TimeoutOverflowWarning";
+    let label_ptr = perry_runtime::js_string_from_bytes(label.as_ptr(), label.len() as u32);
+    let msg_value = f64::from_bits(perry_runtime::JSValue::string_ptr(msg_ptr).bits());
+    let label_value = f64::from_bits(perry_runtime::JSValue::string_ptr(label_ptr).bits());
+    perry_runtime::process::js_process_emit_warning(
+        msg_value,
+        label_value,
+        f64::from_bits(TAG_UNDEFINED),
+    );
 }
 
 /// `IncomingMessage.setEncoding(encoding)` for client responses. The same
@@ -1462,7 +1523,7 @@ pub extern "C" fn js_http_status_message(handle: Handle) -> *mut StringHeader {
 pub extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
     let mut out = f64::from_bits(TAG_UNDEFINED);
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        out = map_to_js_object(&res.headers);
+        out = build_response_headers_object(&res.headers);
     });
     if out.to_bits() == TAG_UNDEFINED {
         if let Some(server_out) = server_incoming_property(handle, "headers") {
@@ -1479,6 +1540,11 @@ pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = map_to_js_object(&res.trailers);
     });
+    if out.to_bits() == TAG_UNDEFINED {
+        if let Some(server_out) = server_incoming_property(handle, "trailers") {
+            return server_out;
+        }
+    }
     out
 }
 
@@ -1503,7 +1569,7 @@ fn server_incoming_property(handle: Handle, property_name: &str) -> Option<f64> 
     }
 }
 
-fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
+pub(crate) fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
     match encoding {
         Some(_) => {
             let s = String::from_utf8_lossy(body).into_owned();
@@ -1528,6 +1594,15 @@ fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
 /// Number of pending events the main loop should drain.
 #[no_mangle]
 pub extern "C" fn js_http_has_pending() -> i32 {
+    let has_events = HTTP_PENDING_EVENTS
+        .lock()
+        .map(|q| !q.is_empty())
+        .unwrap_or(false);
+    if has_events {
+        unsafe {
+            js_http_process_pending();
+        }
+    }
     HTTP_PENDING_EVENTS
         .lock()
         .map(|q| if q.is_empty() { 0 } else { 1 })
@@ -1555,109 +1630,73 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 trailers,
                 body,
             } => {
-                let response_callback = get_handle_mut::<ClientRequestHandle>(request_handle)
-                    .map(|r| r.response_callback)
-                    .unwrap_or(0);
-
-                let mut headers_map = HashMap::new();
-                for (k, v) in headers {
-                    headers_map.insert(k, v);
-                }
-                let mut trailers_map = HashMap::new();
-                for (k, v) in trailers {
-                    trailers_map.insert(k, v);
-                }
-
-                let body_clone = body.clone();
-                let incoming = register_handle(IncomingMessageHandle {
-                    status_code: status,
+                client_events::handle_response_event(
+                    request_handle,
+                    status,
                     status_message,
-                    headers: headers_map,
-                    trailers: trailers_map,
+                    headers,
+                    trailers,
                     body,
-                    listeners: HashMap::new(),
-                    encoding: None,
-                });
-
-                if response_callback != 0 {
-                    // Hand the IncomingMessage handle to the user's
-                    // `(res) => { ... }` callback. POINTER_TAG so the
-                    // closure-arg unboxer extracts the i64.
-                    let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
-                    let closure = JsClosure::from_raw(response_callback as *const RawClosureHeader);
-                    let _ = closure.call1(arg);
-                }
-
-                // `'data'` listeners — body is delivered as a single chunk.
-                // True streaming requires a cooperative spawn_async
-                // perry-ffi surface (v0.6.0 followup).
-                //
-                // Issue #1124 followup: pre-fix this allocated a JS
-                // string via `alloc_string(str::from_utf8(&body).unwrap_or(""))`,
-                // which silently collapsed any non-UTF-8 byte sequence
-                // (PNG file-magic, gzip frames, binary protocols, …) to
-                // the empty string before user code ever saw a byte.
-                // The mirror of the #1124 server-side fix (where the
-                // request body went the OTHER direction through a
-                // wrongly-shaped StringHeader): allocate a JS Buffer
-                // via `alloc_buffer(&bytes)` so the bytes survive the
-                // FFI boundary intact. The Buffer registers itself
-                // through perry-runtime's `is_registered_buffer` path
-                // so the `chunk.toString(enc)` / `chunk.length` /
-                // `Buffer.concat(...)` surface lights up on the
-                // returned value.
-                //
-                // When `res.setEncoding(enc)` was called in the response
-                // callback, mirror Readable's string-chunk behavior. Without
-                // an encoding, preserve Node's default Buffer chunks.
-                let (data_listeners, encoding) = get_handle_mut::<IncomingMessageHandle>(incoming)
-                    .map(|r| {
-                        (
-                            r.listeners.get("data").cloned().unwrap_or_default(),
-                            r.encoding.clone(),
-                        )
-                    })
-                    .unwrap_or_default();
-                if !data_listeners.is_empty() && !body_clone.is_empty() {
-                    let arg = body_chunk_value(&body_clone, encoding.as_deref());
-                    if arg.to_bits() != TAG_UNDEFINED {
-                        for cb in data_listeners {
-                            if cb != 0 {
-                                let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                                let _ = closure.call1(arg);
-                            }
-                        }
-                    }
-                }
-
-                // `'end'` listeners — fire after data.
-                let end_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
-                    .and_then(|r| r.listeners.get("end").cloned())
-                    .unwrap_or_default();
-                for cb in end_listeners {
-                    if cb != 0 {
-                        let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                        let _ = closure.call0();
-                    }
-                }
+                );
+            }
+            PendingHttpEvent::ResponseHead {
+                request_handle,
+                status,
+                status_message,
+                headers,
+            } => {
+                client_events::handle_response_head_event(
+                    request_handle,
+                    status,
+                    status_message,
+                    headers,
+                );
+            }
+            PendingHttpEvent::ResponseChunk {
+                request_handle,
+                chunk,
+            } => {
+                client_events::handle_response_chunk_event(request_handle, chunk);
+            }
+            PendingHttpEvent::ResponseEnd { request_handle } => {
+                client_events::handle_response_end_event(request_handle);
             }
             PendingHttpEvent::Error {
                 request_handle,
                 error_message,
             } => {
-                let error_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-                    .and_then(|r| r.listeners.get("error").cloned())
-                    .unwrap_or_default();
-                if !error_listeners.is_empty() {
-                    let s = alloc_string(&error_message);
-                    let arg = f64::from_bits(STRING_TAG | (s.as_raw() as u64 & PTR_MASK));
-                    for cb in error_listeners {
-                        if cb != 0 {
-                            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                            let _ = closure.call1(arg);
-                        }
-                    }
-                }
+                client_events::handle_error_event(request_handle, &error_message);
+            }
+            PendingHttpEvent::TransportError {
+                request_handle,
+                message,
+                code,
+                syscall,
+                errno,
+            } => {
+                client_events::handle_transport_error_event(
+                    request_handle,
+                    &message,
+                    &code,
+                    &syscall,
+                    errno,
+                );
+            }
+            PendingHttpEvent::Timeout { request_handle } => {
+                client_events::handle_timeout_event(request_handle);
+            }
+            PendingHttpEvent::Flushed { request_handle } => {
+                client_events::handle_flushed_event(request_handle);
+            }
+            PendingHttpEvent::Continue { request_handle } => {
+                // #5080 — the server sent an interim `100 Continue`; fire the
+                // request's `'continue'` listeners (the canonical handler then
+                // sends the withheld body via `req.end(...)`).
+                client_events::fire_request_event_listeners(request_handle, "continue");
+            }
+            PendingHttpEvent::DeferredArmContinue { request_handle } => {
+                // #5080 — next-tick arming (see the enum variant docs).
+                continue_client::arm_expect_continue(request_handle);
             }
         }
     }
@@ -1671,6 +1710,10 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
 
 #[cfg(test)]
 mod tests;
+// Test-only `perry_ffi_*` async-bridge shims so the lib test links without the
+// host stdlib archive (mirrors perry-ext-net / perry-ext-http-server).
+#[cfg(test)]
+mod test_async_shims;
 
 // Suppress unused-import warnings for FFI-only types.
 #[allow(dead_code)]
@@ -1678,194 +1721,6 @@ fn _force_link() -> Option<*mut ArrayHeader> {
     None
 }
 
-// #1652: force the linker to retain perry-ext-http-server's `#[no_mangle]`
-// FFI symbols. The `extern crate perry_ext_http_server as _server_link`
-// at the top of this file pulls the rlib into the dependency graph, but
-// the server functions are referenced only by codegen-generated callsites
-// in the *user* program — never by this crate's Rust. Under LTO / staticlib
-// emission they can therefore be dead-stripped, and the final link then
-// fails with `Undefined symbols: _js_node_http_create_server` for any
-// program that does `import { createServer } from 'node:http'` (the failure
-// originally tracked at #589, reopened as #1652). Anchoring their addresses
-// in a `#[used]` table makes the retention explicit so it can't silently
-// regress when nobody's npm import happens to reference a given symbol.
-//
-// Resolution is by symbol name (C ABI): the `()` signatures below are only
-// ever used to take the function's address, never to call it, so they need
-// not match the real definitions — the linker keys off the `#[no_mangle]`
-// symbol name alone.
-//
-// `cfg(not(test))`: the anchor must NOT fire in `cargo test -p perry-ext-http`.
-// Forcing the server functions into the unit-test binary drags in their
-// transitive `perry_ffi_spawn_blocking*` references, which only the host
-// (perry-stdlib) provides at the final perry-compile link — the test binary
-// has no host, so it fails with `undefined symbol: perry_ffi_spawn_blocking`.
-// The staticlib (the real perry-compile artifact) is built without `test`,
-// so retention there is unaffected. Nothing cargo-depends on this crate, so
-// gating on `test` is sufficient.
-#[cfg(not(test))]
-#[allow(dead_code)]
-mod force_link_http_server {
-    extern "C" {
-        // http server + IncomingMessage + ServerResponse entry points.
-        pub fn js_node_http_create_server();
-        pub fn js_node_http_server_listen();
-        pub fn js_node_http_server_listening();
-        pub fn js_node_http_server_close();
-        pub fn js_node_http_server_on();
-        pub fn js_node_http_server_address_json();
-        pub fn js_node_http_server_process_pending();
-        pub fn js_node_http_server_has_active();
-        pub fn js_node_http_server_close_all_connections();
-        pub fn js_node_http_server_close_idle_connections();
-        pub fn js_node_http_res_end();
-        pub fn js_node_http_res_write();
-        pub fn js_node_http_res_write_head();
-        pub fn js_node_http_res_set_header();
-        pub fn js_node_http_res_get_header();
-        pub fn js_node_http_res_get_header_names_json();
-        pub fn js_node_http_res_get_headers_json();
-        pub fn js_node_http_res_has_header();
-        pub fn js_node_http_res_remove_header();
-        pub fn js_node_http_res_set_status();
-        pub fn js_node_http_res_get_status();
-        pub fn js_node_http_res_set_status_message();
-        pub fn js_node_http_res_headers_sent();
-        pub fn js_node_http_res_writable_ended();
-        pub fn js_node_http_res_writable_finished();
-        pub fn js_node_http_res_flush_headers();
-        pub fn js_node_http_res_write_continue();
-        pub fn js_node_http_res_write_processing();
-        pub fn js_node_http_res_on();
-        pub fn js_node_http_im_method();
-        pub fn js_node_http_im_url();
-        pub fn js_node_http_im_http_version();
-        pub fn js_node_http_im_headers_json();
-        pub fn js_node_http_im_raw_headers_json();
-        pub fn js_node_http_im_remote_address();
-        pub fn js_node_http_im_remote_port();
-        pub fn js_node_http_im_on();
-        pub fn js_node_http_im_read();
-        pub fn js_node_http_im_pause();
-        pub fn js_node_http_im_resume();
-        pub fn js_node_http_im_aborted();
-        pub fn js_node_http_im_complete();
-        pub fn js_node_http_im_destroy();
-        pub fn js_node_http_im_destroyed();
-        // https server.
-        pub fn js_node_https_create_server();
-        pub fn js_node_https_server_listen();
-        pub fn js_node_https_server_close();
-        pub fn js_node_https_server_close_all_connections();
-        pub fn js_node_https_server_close_idle_connections();
-        pub fn js_node_https_server_on();
-        pub fn js_node_https_server_address_json();
-        pub fn js_node_https_server_headers_timeout();
-        pub fn js_node_https_server_set_headers_timeout();
-        pub fn js_node_https_server_keep_alive_timeout();
-        pub fn js_node_https_server_set_keep_alive_timeout();
-        pub fn js_node_https_server_request_timeout();
-        pub fn js_node_https_server_set_request_timeout();
-        pub fn js_node_https_server_idle_timeout();
-        pub fn js_node_https_server_set_idle_timeout();
-        pub fn js_node_https_server_max_headers_count();
-        pub fn js_node_https_server_set_max_headers_count();
-        pub fn js_node_https_server_max_requests_per_socket();
-        pub fn js_node_https_server_set_max_requests_per_socket();
-        pub fn js_node_https_server_set_timeout_method();
-        // http2 secure server.
-        pub fn js_node_http2_create_secure_server();
-        pub fn js_node_http2_server_listen();
-        pub fn js_node_http2_server_close();
-        pub fn js_node_http2_server_on();
-        pub fn js_node_http2_server_address_json();
-        // http2 settings helpers (#3168).
-        pub fn js_node_http2_get_default_settings();
-        pub fn js_node_http2_get_packed_settings();
-        pub fn js_node_http2_get_unpacked_settings();
-    }
-}
-
-/// `#[used]` anchor table referencing every server FFI entry point so the
-/// linker keeps them in `libperry_ext_http.a`. See the module above (#1652).
-/// Gated with the module on `not(test)` so the unit-test binary doesn't drag
-/// in the server's host-provided `perry_ffi_*` symbols.
-#[cfg(not(test))]
-#[used]
-static FORCE_LINK_HTTP_SERVER: &[unsafe extern "C" fn()] = {
-    use force_link_http_server::*;
-    &[
-        js_node_http_create_server,
-        js_node_http_server_listen,
-        js_node_http_server_listening,
-        js_node_http_server_close,
-        js_node_http_server_on,
-        js_node_http_server_address_json,
-        js_node_http_server_process_pending,
-        js_node_http_server_has_active,
-        js_node_http_server_close_all_connections,
-        js_node_http_server_close_idle_connections,
-        js_node_http_res_end,
-        js_node_http_res_write,
-        js_node_http_res_write_head,
-        js_node_http_res_set_header,
-        js_node_http_res_get_header,
-        js_node_http_res_get_header_names_json,
-        js_node_http_res_get_headers_json,
-        js_node_http_res_has_header,
-        js_node_http_res_remove_header,
-        js_node_http_res_set_status,
-        js_node_http_res_get_status,
-        js_node_http_res_set_status_message,
-        js_node_http_res_headers_sent,
-        js_node_http_res_writable_ended,
-        js_node_http_res_writable_finished,
-        js_node_http_res_flush_headers,
-        js_node_http_res_write_continue,
-        js_node_http_res_write_processing,
-        js_node_http_res_on,
-        js_node_http_im_method,
-        js_node_http_im_url,
-        js_node_http_im_http_version,
-        js_node_http_im_headers_json,
-        js_node_http_im_raw_headers_json,
-        js_node_http_im_remote_address,
-        js_node_http_im_remote_port,
-        js_node_http_im_on,
-        js_node_http_im_read,
-        js_node_http_im_pause,
-        js_node_http_im_resume,
-        js_node_http_im_aborted,
-        js_node_http_im_complete,
-        js_node_http_im_destroy,
-        js_node_http_im_destroyed,
-        js_node_https_create_server,
-        js_node_https_server_listen,
-        js_node_https_server_close,
-        js_node_https_server_close_all_connections,
-        js_node_https_server_close_idle_connections,
-        js_node_https_server_on,
-        js_node_https_server_address_json,
-        js_node_https_server_headers_timeout,
-        js_node_https_server_set_headers_timeout,
-        js_node_https_server_keep_alive_timeout,
-        js_node_https_server_set_keep_alive_timeout,
-        js_node_https_server_request_timeout,
-        js_node_https_server_set_request_timeout,
-        js_node_https_server_idle_timeout,
-        js_node_https_server_set_idle_timeout,
-        js_node_https_server_max_headers_count,
-        js_node_https_server_set_max_headers_count,
-        js_node_https_server_max_requests_per_socket,
-        js_node_https_server_set_max_requests_per_socket,
-        js_node_https_server_set_timeout_method,
-        js_node_http2_create_secure_server,
-        js_node_http2_server_listen,
-        js_node_http2_server_close,
-        js_node_http2_server_on,
-        js_node_http2_server_address_json,
-        js_node_http2_get_default_settings,
-        js_node_http2_get_packed_settings,
-        js_node_http2_get_unpacked_settings,
-    ]
-};
+// #1652 / #4975: linker-retention anchors for the server FFI symbols live
+// in force_link.rs (extracted to keep this file under the 2000-line cap).
+mod force_link;

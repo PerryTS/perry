@@ -40,6 +40,31 @@ fn is_stream_class_ref(expr: &ast::Expr) -> bool {
     matches!(name, "Readable" | "Duplex" | "Transform" | "PassThrough")
 }
 
+fn is_node_readable_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Ident(ident) = unwrap_transparent_expr(expr) else {
+        return false;
+    };
+    let name = ident.sym.as_ref();
+    ctx.lookup_native_instance(name)
+        .is_some_and(|(module, class_name)| {
+            matches!(module, "stream" | "node:stream")
+                && matches!(
+                    class_name,
+                    "Readable" | "Duplex" | "Transform" | "PassThrough"
+                )
+        })
+        || ctx.lookup_local_type(name).is_some_and(|ty| {
+            matches!(
+                ty,
+                Type::Named(class_name)
+                    if matches!(
+                        class_name.as_str(),
+                        "Readable" | "Duplex" | "Transform" | "PassThrough"
+                    )
+            )
+        })
+}
+
 fn is_module_builtin_modules_expr(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     let ast::Expr::Member(member) = unwrap_transparent_expr(expr) else {
         return false;
@@ -125,22 +150,37 @@ fn is_util_mime_params_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool
     }
 }
 
+fn is_fs_dir_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Ident(ident) = unwrap_transparent_expr(expr) else {
+        return false;
+    };
+    ctx.lookup_local_type(ident.sym.as_ref())
+        .is_some_and(|ty| matches!(ty, Type::Named(name) if name == "Dir" || name == "fs.Dir"))
+        || ctx
+            .lookup_native_instance(ident.sym.as_ref())
+            .is_some_and(|(module, class_name)| {
+                module.strip_prefix("node:").unwrap_or(module) == "fs" && class_name == "Dir"
+            })
+}
+
 /// Does this expression's method chain originate from a node:stream
-/// source — `Readable.from(...)` / `Readable.of(...)`, `new Transform()`,
-/// or a chain of lazy iterator helpers (`map`/`filter`/`flatMap`/`take`/
-/// `drop`) on top of one? (#1558)
+/// source — `Readable.from(...)` / `Readable.of(...)`, a local already tagged
+/// as a readable stream, `new Transform()`, or a chain of lazy iterator helpers
+/// (`map`/`filter`/`flatMap`/`take`/`drop`) on top of one? (#1558)
 ///
 /// The lazy stream helpers return another Readable, not an array, so a
 /// chain like `Readable.from(x).map(f).filter(g)` must NOT be folded
 /// into `Expr::Array<Method>` ops — `js_array_map` would read garbage
 /// out of the stream object's header. Detecting the stream root here
 /// keeps such chains on dynamic dispatch so the runtime's stream
-/// iterator-helper stubs run. AST-only (no type info) so it catches the
-/// common inline-chain form without depending on receiver inference.
-fn chain_roots_at_stream(expr: &ast::Expr) -> bool {
+/// iterator-helper stubs run.
+fn chain_roots_at_stream(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     let expr = unwrap_transparent_expr(expr);
+    if is_node_readable_receiver(ctx, expr) {
+        return true;
+    }
     match expr {
-        ast::Expr::Await(a) => chain_roots_at_stream(&a.arg),
+        ast::Expr::Await(a) => chain_roots_at_stream(ctx, &a.arg),
         ast::Expr::New(new) => is_stream_class_ref(&new.callee),
         ast::Expr::Call(call) => {
             let ast::Callee::Expr(callee) = &call.callee else {
@@ -156,7 +196,9 @@ fn chain_roots_at_stream(expr: &ast::Expr) -> bool {
                 // Static factories that produce a Readable.
                 "from" | "of" => is_stream_class_ref(&m.obj),
                 // Lazy helpers preserve the stream — recurse into the receiver.
-                "map" | "filter" | "flatMap" | "take" | "drop" => chain_roots_at_stream(&m.obj),
+                "map" | "filter" | "flatMap" | "take" | "drop" => {
+                    chain_roots_at_stream(ctx, &m.obj)
+                }
                 _ => false,
             }
         }
@@ -461,9 +503,103 @@ pub(super) fn try_array_only_methods(
                 // would read garbage out of the stream object's header. Bail to
                 // dynamic dispatch so the runtime's iterator-helper stubs run.
                 let recv_is_class = recv_is_class
-                    || chain_roots_at_stream(member_obj)
+                    || chain_roots_at_stream(ctx, member_obj)
                     || chain_roots_at_iterator_from(member_obj)
                     || is_util_mime_params_receiver(ctx, member_obj);
+                // thisArg routing: the dense `Expr::Array<Method>` fast paths
+                // carry only the callback and silently drop a 2nd positional
+                // `thisArg` argument, so `[x].every(cb, thisArg)` ran the
+                // callback with `this === undefined` (test262 §15.4.4.* `-5-*`
+                // / `-7-*`). The generic `Expr::ArrayLikeMethod` lowering binds
+                // the callback `this` via the spec-complete `js_arraylike_*`
+                // runtime entry points (ToObject + LengthOfArrayLike + a
+                // ThisGuard around each invocation), so when an explicit thisArg
+                // is supplied route the callback iterators through it. Gated on
+                // `!recv_is_class` (which already excludes Map/Set/class
+                // receivers — those keep their own forEach contract) and on the
+                // 2nd argument being a plain positional (no spread).
+                // `recv_is_class` does NOT cover Map/Set/URLSearchParams locals,
+                // which keep their own `forEach` contract (callback signature +
+                // thisArg binding via `js_{map,set}_foreach`). Folding a 2-arg
+                // `set.forEach(cb, thisArg)` into the array-like path here ran the
+                // callback against an array view → zero iterations (test262
+                // Set/Map forEach this-arg-explicit). Exclude them explicitly.
+                let recv_is_non_array_collection = {
+                    let is_nac = |ty: &Type| {
+                        matches!(ty, Type::Generic { base, .. } if base == "Map" || base == "Set")
+                            || matches!(ty, Type::Named(n) if n == "URLSearchParams")
+                    };
+                    match member.obj.as_ref() {
+                        ast::Expr::Ident(ident) => {
+                            match ctx.lookup_local_type(ident.sym.as_ref()) {
+                                Some(ty) if is_nac(ty) => true,
+                                Some(Type::Union(variants)) => variants.iter().any(is_nac),
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    }
+                };
+                if !recv_is_class
+                    && !recv_is_non_array_collection
+                    && matches!(
+                        method_name,
+                        "map"
+                            | "filter"
+                            | "forEach"
+                            | "find"
+                            | "findIndex"
+                            | "findLast"
+                            | "findLastIndex"
+                            | "some"
+                            | "every"
+                    )
+                    && call.args.len() >= 2
+                    && call.args.iter().all(|a| a.spread.is_none())
+                {
+                    let receiver = Box::new(lower_expr(ctx, &member.obj)?);
+                    return Ok(Ok(Expr::ArrayLikeMethod {
+                        method: method_name.to_string(),
+                        receiver,
+                        args,
+                    }));
+                }
+                // #5139: an Array-mutator name that a plain object can also own
+                // as a closure-valued property (`{ push(c) {…} }` passed as
+                // `any` — react-dom/server's SSR `destination`). When the bare-
+                // ident receiver's static type is unknown we cannot tell a real
+                // array from such an object, so committing to `Expr::ArraySort` /
+                // the `array.push_single` native arm here reads the object's
+                // header as an `ArrayHeader` and corrupts it. Defer to the
+                // runtime `js_native_call_method` dispatch, which selects by the
+                // receiver's runtime shape (real array → dense helper; plain
+                // object with an own callable of this name → that method). The
+                // GC_TYPE_ARRAY arms in `js_native_call_method` keep real arrays
+                // correct, so any-typed arrays still work (growth resolves via
+                // the #233 forwarding pointer). Mirrors the same deferral in
+                // `local_array_methods.rs` and the method set in
+                // `array::try_object_arraylike_mutator`.
+                if let ast::Expr::Ident(ident) = unwrap_transparent_expr(member.obj.as_ref()) {
+                    let unknown_recv = matches!(
+                        ctx.lookup_local_type(ident.sym.as_ref()),
+                        None | Some(Type::Any) | Some(Type::Unknown)
+                    );
+                    if unknown_recv
+                        && matches!(
+                            method_name,
+                            "push"
+                                | "pop"
+                                | "shift"
+                                | "unshift"
+                                | "reverse"
+                                | "splice"
+                                | "sort"
+                                | "concat"
+                        )
+                    {
+                        return Ok(Err(args));
+                    }
+                }
                 match method_name {
                     "reduce" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
@@ -570,7 +706,11 @@ pub(super) fn try_array_only_methods(
                     // `for (const [valueIndex, value] of values.entries())`
                     // where `values` arrives via destructuring of an
                     // any-typed function param.
-                    "entries" if args.is_empty() && !recv_is_class => {
+                    "entries"
+                        if args.is_empty()
+                            && !recv_is_class
+                            && !is_fs_dir_receiver(ctx, &member.obj) =>
+                    {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayEntries(Box::new(array_expr))));
                     }
@@ -644,7 +784,8 @@ pub(super) fn try_array_only_methods(
                             &array_expr,
                             Expr::ArrayMap { .. } | Expr::ArrayFilter { .. } | Expr::ArraySort { .. } |
                                     Expr::ArraySlice { .. } | Expr::Array(_) | Expr::ArraySpread(_) |
-                                    Expr::ArrayFrom(_) | Expr::ArrayFromMapped { .. } |
+                                    Expr::ArrayFrom(_) | Expr::ArrayFromArrayLikeHoley(_) |
+                                    Expr::ArrayFromMapped { .. } |
                                     Expr::ArrayFlat { .. } | Expr::StringSplit(_, _) |
                                     Expr::ArrayToReversed { .. } | Expr::ArrayToSorted { .. } |
                                     Expr::ArrayToSpliced { .. } | Expr::ArrayWith { .. } |
@@ -691,6 +832,7 @@ pub(super) fn try_array_only_methods(
                                 | Expr::ArraySlice { .. }
                                 | Expr::ArraySpread(_)
                                 | Expr::ArrayFrom(_)
+                                | Expr::ArrayFromArrayLikeHoley(_)
                                 | Expr::ArrayFromMapped { .. }
                                 | Expr::ArrayFlat { .. }
                                 | Expr::StringSplit(_, _)
@@ -751,6 +893,7 @@ pub(super) fn try_array_only_methods(
                                         | Expr::ArraySlice { .. }
                                         | Expr::Array(_)
                                         | Expr::ArrayFrom(_)
+                                        | Expr::ArrayFromArrayLikeHoley(_)
                                         | Expr::StringSplit(_, _)
                                         | Expr::ObjectKeys(_)
                                         | Expr::ObjectValues(_)
@@ -790,6 +933,7 @@ pub(super) fn try_array_only_methods(
                                         | Expr::ArraySlice { .. }
                                         | Expr::Array(_)
                                         | Expr::ArrayFrom(_)
+                                        | Expr::ArrayFromArrayLikeHoley(_)
                                         | Expr::StringSplit(_, _)
                                         | Expr::ObjectKeys(_)
                                         | Expr::ObjectValues(_)
@@ -931,15 +1075,10 @@ pub(super) fn try_array_only_methods(
                         };
                         if !is_user_class_receiver {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            if call.args.first().is_some_and(|arg| arg.spread.is_some()) {
-                                return Ok(Ok(Expr::NativeMethodCall {
-                                    module: "array".to_string(),
-                                    method: "push_spread".to_string(),
-                                    class_name: None,
-                                    object: Some(Box::new(array_expr)),
-                                    args,
-                                }));
-                            } else {
+                            let any_spread = call.args.iter().any(|a| a.spread.is_some());
+                            if !any_spread {
+                                // No spreads — `push_single` loops over every
+                                // arg, so a single native call handles N values.
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: "array".to_string(),
                                     method: "push_single".to_string(),
@@ -948,6 +1087,47 @@ pub(super) fn try_array_only_methods(
                                     args,
                                 }));
                             }
+                            if args.len() == 1 {
+                                // Exactly one spread arg — the `push_spread`
+                                // native arm packs the source as `args[0]`.
+                                return Ok(Ok(Expr::NativeMethodCall {
+                                    module: "array".to_string(),
+                                    method: "push_spread".to_string(),
+                                    class_name: None,
+                                    object: Some(Box::new(array_expr)),
+                                    args,
+                                }));
+                            }
+                            // Mixed/multiple args with at least one spread
+                            // (e.g. `arr.push(...a, ...b)` or `arr.push(...a, x)`
+                            // inside a method/getter body). The single-arg
+                            // `push_spread`/`push_single` native arms each
+                            // expect exactly one arg; the previous code passed
+                            // all of them to one `push_spread`, which bailed at
+                            // codegen ("expects exactly 1 arg"). Decompose into a
+                            // `Sequence` of single-arg native calls, choosing the
+                            // helper per-arg from the original AST spread flag.
+                            // Each native arm re-reads the receiver and writes
+                            // back the (possibly realloc'd) handle, so chaining
+                            // threads the array correctly; JS `push` returns the
+                            // final length, which is exactly what the last
+                            // element of the `Sequence` yields. (#4508)
+                            let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
+                            for (ast_arg, arg) in call.args.iter().zip(args.into_iter()) {
+                                let method = if ast_arg.spread.is_some() {
+                                    "push_spread"
+                                } else {
+                                    "push_single"
+                                };
+                                stmts.push(Expr::NativeMethodCall {
+                                    module: "array".to_string(),
+                                    method: method.to_string(),
+                                    class_name: None,
+                                    object: Some(Box::new(array_expr.clone())),
+                                    args: vec![arg],
+                                });
+                            }
+                            return Ok(Ok(Expr::Sequence(stmts)));
                         }
                     }
                     _ => {} // Fall through - ambiguous methods on non-array expressions use generic dispatch

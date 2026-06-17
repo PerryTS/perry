@@ -2,6 +2,7 @@ import { File as BufferFile } from "node:buffer";
 
 console.log("typeof File:", typeof File);
 console.log("File.name:", File.name);
+console.log("File.length:", File.length);
 console.log("typeof globalThis.File:", typeof globalThis.File);
 console.log("global File identity:", globalThis.File === File);
 console.log("buffer File identity:", BufferFile === File, BufferFile === globalThis.File);
@@ -20,3 +21,10 @@ const rebound = new FileCtor(["xy"], "y.txt", {
 });
 console.log("rebound fields:", rebound.name, rebound.type, rebound.size, rebound.lastModified);
 console.log("rebound text:", await rebound.text());
+
+const dynamic = new ([globalThis.File][0])(["zz"], "z.txt", {
+  type: "text/dynamic",
+  lastModified: 789,
+});
+console.log("dynamic fields:", dynamic.name, dynamic.type, dynamic.size, dynamic.lastModified);
+console.log("dynamic text:", await dynamic.text());

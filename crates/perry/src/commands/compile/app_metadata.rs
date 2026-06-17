@@ -16,9 +16,16 @@ pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str
         Some("watchos") | Some("watchos-simulator") => Some("watchos"),
         Some("tvos") | Some("tvos-simulator") => Some("tvos"),
         Some("android") => Some("android"),
+        // Wear OS reuses the [android] perry.toml section (bundle_id, etc.).
+        Some("wearos") => Some("android"),
         Some("macos") => Some("macos"),
-        Some("windows") => Some("windows"),
-        Some("linux") => Some("linux"),
+        // WinUI shares the [windows] perry.toml section (#4680).
+        Some("windows") | Some("windows-winui") => Some("windows"),
+        // musl variants share the [linux] perry.toml section (#4826).
+        Some("linux")
+        | Some("linux-musl")
+        | Some("linux-x86_64-musl")
+        | Some("linux-aarch64-musl") => Some("linux"),
         None if cfg!(target_os = "macos") => Some("macos"),
         None if cfg!(target_os = "windows") => Some("windows"),
         None if cfg!(target_os = "linux") => Some("linux"),
@@ -153,14 +160,28 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("visionos-simulator") => Some("aarch64-apple-visionos-sim"),
         Some("visionos") => Some("aarch64-apple-visionos"),
         Some("watchos-simulator") => Some("aarch64-apple-watchos-sim"),
-        Some("watchos") => Some("arm64_32-apple-watchos"),
+        // arm64_32 watchOS (Series 4-8 / SE) when opted in; otherwise arm64
+        // (S9+). Governs the rust target used for the auto-optimize runtime
+        // rebuild and for building/resolving native libraries, so all three
+        // must agree with the link triple in platform_cmd.rs / link/mod.rs.
+        Some("watchos") if std::env::var("PERRY_WATCHOS_ARM64_32").is_ok() => {
+            Some("arm64_32-apple-watchos")
+        }
+        Some("watchos") => Some("aarch64-apple-watchos"),
         Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
         Some("tvos") => Some("aarch64-apple-tvos"),
         Some("harmonyos") => Some("aarch64-unknown-linux-ohos"),
         Some("harmonyos-simulator") => Some("x86_64-unknown-linux-ohos"),
         Some("android") => Some("aarch64-linux-android"),
-        Some("linux") => Some("x86_64-unknown-linux-gnu"),
-        Some("windows") => Some("x86_64-pc-windows-msvc"),
+        // Wear OS is Android-on-a-watch: same arm64 Android .so + toolchain.
+        Some("wearos") => Some("aarch64-linux-android"),
+        Some("linux") | Some("linux-x86_64") => Some("x86_64-unknown-linux-gnu"),
+        Some("linux-arm64") | Some("linux-aarch64") => Some("aarch64-unknown-linux-gnu"),
+        // Fully-static musl targets (#4826). The perry-runtime / perry-stdlib
+        // .a files for these triples are built by release-packages.yml.
+        Some("linux-musl") | Some("linux-x86_64-musl") => Some("x86_64-unknown-linux-musl"),
+        Some("linux-aarch64-musl") => Some("aarch64-unknown-linux-musl"),
+        Some("windows") | Some("windows-winui") => Some("x86_64-pc-windows-msvc"),
         Some("macos") => Some("aarch64-apple-darwin"),
         _ => None,
     }
@@ -287,5 +308,67 @@ app_group = "group.com.example.fallback"
         assert_eq!(metadata.version, "1.0.0");
         assert_eq!(metadata.build_number, 1);
         assert_eq!(metadata.bundle_id, "com.example.pkg");
+    }
+
+    #[test]
+    fn musl_targets_resolve_consistently() {
+        // #4826: the musl target names must map to the musl rustc triple,
+        // share the [linux] perry.toml section, and agree with the codegen
+        // LLVM-triple resolver — otherwise library_search / codegen / link
+        // disagree about which target/<triple>/release dir to use.
+        for t in ["linux-musl", "linux-x86_64-musl"] {
+            assert_eq!(
+                super::rust_target_triple(Some(t)),
+                Some("x86_64-unknown-linux-musl"),
+                "rust_target_triple({t})"
+            );
+            assert_eq!(
+                perry_codegen::resolve_target_triple(t).as_deref(),
+                Some("x86_64-unknown-linux-musl"),
+                "resolve_target_triple({t})"
+            );
+            assert_eq!(super::target_bundle_section(Some(t)), Some("linux"));
+        }
+        assert_eq!(
+            super::rust_target_triple(Some("linux-aarch64-musl")),
+            Some("aarch64-unknown-linux-musl")
+        );
+        assert_eq!(
+            perry_codegen::resolve_target_triple("linux-aarch64-musl").as_deref(),
+            Some("aarch64-unknown-linux-musl")
+        );
+        assert_eq!(
+            super::target_bundle_section(Some("linux-aarch64-musl")),
+            Some("linux")
+        );
+    }
+
+    #[test]
+    fn libc_flag_upgrades_linux_targets_to_musl() {
+        use crate::commands::compile::apply_libc_to_target;
+        let m = |t: Option<&str>, libc: Option<&str>| {
+            apply_libc_to_target(t.map(str::to_string), libc).unwrap()
+        };
+        // No flag / glibc → unchanged.
+        assert_eq!(m(Some("linux"), None), Some("linux".to_string()));
+        assert_eq!(m(Some("linux"), Some("glibc")), Some("linux".to_string()));
+        // musl upgrades the Linux variants.
+        assert_eq!(m(None, Some("musl")), Some("linux-musl".to_string()));
+        assert_eq!(
+            m(Some("linux"), Some("musl")),
+            Some("linux-musl".to_string())
+        );
+        assert_eq!(
+            m(Some("linux-aarch64"), Some("musl")),
+            Some("linux-aarch64-musl".to_string())
+        );
+        // Idempotent.
+        assert_eq!(
+            m(Some("linux-musl"), Some("musl")),
+            Some("linux-musl".to_string())
+        );
+        // Non-Linux target + musl, and unknown libc, are hard errors.
+        assert!(apply_libc_to_target(Some("windows".into()), Some("musl")).is_err());
+        assert!(apply_libc_to_target(Some("linux".into()), Some("uclibc")).is_err());
     }
 }

@@ -31,12 +31,12 @@
 
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::closure::{
-    js_closure_alloc, js_closure_call0, js_closure_get_capture_ptr, js_closure_set_capture_ptr,
-    js_register_closure_arity, ClosureHeader,
+    is_closure_ptr, js_closure_alloc, js_closure_call0, js_closure_get_capture_ptr,
+    js_closure_set_capture_ptr, js_native_call_value, js_register_closure_arity, ClosureHeader,
 };
 use crate::object::{
-    js_object_alloc, js_object_get_field_f64, js_object_set_field_by_name, js_object_set_field_f64,
-    js_register_class_extends_error,
+    js_implicit_this_set, js_object_alloc, js_object_get_field_f64, js_object_set_field_by_name,
+    js_object_set_field_f64, js_register_class_extends_error,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::{
@@ -44,6 +44,82 @@ use crate::value::{
     TAG_TRUE, TAG_UNDEFINED,
 };
 use crate::{ArrayHeader, ObjectHeader};
+
+/// Is `value` a callable closure value?
+fn is_callable_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = (jv.bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    is_closure_ptr(ptr)
+}
+
+/// Throw a `TypeError` with the given message. Never returns.
+fn throw_type_error(msg: &str) -> ! {
+    let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err = crate::error::js_typeerror_new(s);
+    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+}
+
+/// GetDisposeMethod(V, hint) — read the disposer method off a resource value.
+///
+/// For `async` hint, prefer `[Symbol.asyncDispose]` and fall back to
+/// `[Symbol.dispose]` (which the spec wraps so its result is awaited). For the
+/// sync hint, read `[Symbol.dispose]`. Returns `undefined` when no callable
+/// disposer is present. `resource` must be non-null/undefined.
+fn resolve_dispose_method(resource: f64, want_async: bool) -> f64 {
+    let undef = undefined();
+    let read_sym = |short: &str| -> f64 {
+        let sym = crate::symbol::well_known_symbol(short);
+        if sym.is_null() {
+            return undef;
+        }
+        let sym_f64 = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
+        unsafe { crate::symbol::js_object_get_symbol_property(resource, sym_f64) }
+    };
+    if want_async {
+        let m = read_sym("asyncDispose");
+        if m.to_bits() != TAG_UNDEFINED && !JSValue::from_bits(m.to_bits()).is_null() {
+            return m;
+        }
+    }
+    let m = read_sym("dispose");
+    if m.to_bits() != TAG_UNDEFINED && !JSValue::from_bits(m.to_bits()).is_null() {
+        return m;
+    }
+    undef
+}
+
+// ---------------------------------------------------------------------------
+// Bound dispose thunk: captures (method, resource) and invokes
+// `method.call(resource)` at dispose time so `[Symbol.dispose]` bodies that
+// read `this` observe the resource. Used by `stack.use(resource)`.
+// ---------------------------------------------------------------------------
+
+extern "C" fn bound_dispose_thunk(closure: *const ClosureHeader) -> f64 {
+    let method = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let resource = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    if !is_callable_value(method) {
+        return undefined();
+    }
+    let prev = js_implicit_this_set(resource);
+    let result = unsafe { js_native_call_value(method, std::ptr::null(), 0) };
+    js_implicit_this_set(prev);
+    result
+}
+
+fn make_bound_dispose_thunk(method: f64, resource: f64) -> f64 {
+    let func = bound_dispose_thunk as *const u8;
+    js_register_closure_arity(func, 0);
+    let closure = js_closure_alloc(func, 2);
+    if closure.is_null() {
+        return undefined();
+    }
+    js_closure_set_capture_ptr(closure, 0, method.to_bits() as i64);
+    js_closure_set_capture_ptr(closure, 1, resource.to_bits() as i64);
+    js_nanbox_pointer(closure as i64)
+}
 
 /// Reserved class id for a `DisposableStack` instance (`typeof` of the
 /// instance is "object"; the constructor's "function" typeof comes from
@@ -67,12 +143,6 @@ fn undefined() -> f64 {
 #[inline]
 fn bool_f64(b: bool) -> f64 {
     f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE })
-}
-
-#[inline]
-fn string_f64(s: &str) -> f64 {
-    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-    js_nanbox_string(ptr as i64)
 }
 
 /// Allocate an empty stack instance with the given class id.
@@ -215,23 +285,28 @@ pub extern "C" fn js_disposable_stack_disposed(stack: *mut ObjectHeader) -> f64 
 }
 
 /// `stack.defer(onDispose)` → undefined. Stores the callback to run at
-/// dispose time. Throws ReferenceError if the stack is already disposed.
+/// dispose time. Throws ReferenceError if the stack is already disposed and
+/// TypeError if `onDispose` is not callable.
 #[no_mangle]
 pub extern "C" fn js_disposable_stack_defer(stack: *mut ObjectHeader, on_dispose: f64) -> f64 {
     let obj = receiver_obj(stack);
     if stack_is_disposed(obj) {
         throw_disposed();
     }
+    if !is_callable_value(on_dispose) {
+        throw_type_error("DisposableStack.prototype.defer requires a callable argument");
+    }
     push_disposer(obj, on_dispose);
     undefined()
 }
 
-/// `stack.use(resource)` → resource. Stores `resource[Symbol.dispose]` and
-/// returns the resource unchanged. `null` / `undefined` resources are
-/// accepted and add no disposer (matching the spec). Throws ReferenceError
-/// if the stack is already disposed.
-#[no_mangle]
-pub extern "C" fn js_disposable_stack_use(stack: *mut ObjectHeader, resource: f64) -> f64 {
+/// Shared `use(resource)` implementation for both sync and async stacks.
+/// `want_async` selects `[Symbol.asyncDispose]` (with sync fallback) vs the
+/// plain `[Symbol.dispose]`. Stores a bound disposer so the disposer method
+/// runs with `this === resource`. Returns the resource unchanged. `null` /
+/// `undefined` resources add no disposer (per spec). Throws TypeError when the
+/// resource is a non-nullish value with no callable disposer.
+fn disposable_stack_use_impl(stack: *mut ObjectHeader, resource: f64, want_async: bool) -> f64 {
     let obj = receiver_obj(stack);
     if stack_is_disposed(obj) {
         throw_disposed();
@@ -240,19 +315,41 @@ pub extern "C" fn js_disposable_stack_use(stack: *mut ObjectHeader, resource: f6
     if jsv.is_null() || jsv.is_undefined() {
         return resource;
     }
-    let dispose_sym = crate::symbol::well_known_symbol("dispose");
-    if !dispose_sym.is_null() {
-        let sym_f64 = f64::from_bits(JSValue::pointer(dispose_sym as *const u8).bits());
-        let method = unsafe { crate::symbol::js_object_get_symbol_property(resource, sym_f64) };
-        if method.to_bits() != TAG_UNDEFINED {
-            push_disposer(obj, method);
-        }
+    let method = resolve_dispose_method(resource, want_async);
+    if method.to_bits() == TAG_UNDEFINED {
+        let sym = if want_async {
+            "Symbol.asyncDispose"
+        } else {
+            "Symbol.dispose"
+        };
+        throw_type_error(&format!(
+            "The value used with `using` must have a {sym} method"
+        ));
     }
+    if !is_callable_value(method) {
+        throw_type_error("The Symbol.dispose / Symbol.asyncDispose property must be callable");
+    }
+    let disposer = make_bound_dispose_thunk(method, resource);
+    push_disposer(obj, disposer);
     resource
 }
 
+/// `stack.use(resource)` → resource (DisposableStack — sync hint).
+#[no_mangle]
+pub extern "C" fn js_disposable_stack_use(stack: *mut ObjectHeader, resource: f64) -> f64 {
+    disposable_stack_use_impl(stack, resource, false)
+}
+
+/// `asyncStack.use(resource)` → resource (AsyncDisposableStack — async hint,
+/// falling back to `[Symbol.dispose]`).
+#[no_mangle]
+pub extern "C" fn js_async_disposable_stack_use(stack: *mut ObjectHeader, resource: f64) -> f64 {
+    disposable_stack_use_impl(stack, resource, true)
+}
+
 /// `stack.adopt(value, onDispose)` → value. Stores a disposer that calls
-/// `onDispose(value)`. Throws ReferenceError if already disposed.
+/// `onDispose(value)`. Throws ReferenceError if already disposed and TypeError
+/// if `onDispose` is not callable.
 #[no_mangle]
 pub extern "C" fn js_disposable_stack_adopt(
     stack: *mut ObjectHeader,
@@ -262,6 +359,9 @@ pub extern "C" fn js_disposable_stack_adopt(
     let obj = receiver_obj(stack);
     if stack_is_disposed(obj) {
         throw_disposed();
+    }
+    if !is_callable_value(on_dispose) {
+        throw_type_error("DisposableStack.prototype.adopt requires a callable second argument");
     }
     let disposer = make_adopt_disposer(value, on_dispose);
     push_disposer(obj, disposer);
@@ -350,26 +450,41 @@ pub extern "C" fn js_suppressed_error_new(error: f64, suppressed: f64, message: 
     if obj.is_null() {
         return undefined();
     }
-    let set = |key: &str, value: f64| {
+    // Spec: `error` / `suppressed` / `message` are non-enumerable own data
+    // properties { writable:true, enumerable:false, configurable:true }. The
+    // `name` default ("SuppressedError") lives on `SuppressedError.prototype`,
+    // so it is *not* set as an own property here.
+    let set_nonenum = |key: &str, value: f64| {
         let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
         js_object_set_field_by_name(obj, key_ptr, value);
+        crate::object::set_property_attrs(
+            obj as usize,
+            key.to_string(),
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
     };
-    set("name", string_f64("SuppressedError"));
-    // Node coerces a non-string message via ToString; undefined → "".
+    set_nonenum("error", error);
+    set_nonenum("suppressed", suppressed);
+    // `message` is only installed when the argument is not `undefined`; an
+    // absent message falls through to `SuppressedError.prototype.message` ("").
     let msg_jsv = JSValue::from_bits(message.to_bits());
-    let message_val = if msg_jsv.is_undefined() {
-        string_f64("")
-    } else if msg_jsv.is_any_string() {
-        message
-    } else {
-        let coerced = crate::builtins::js_string_coerce(message);
-        js_nanbox_string(coerced as i64)
-    };
-    set("message", message_val);
-    set("error", error);
-    set("suppressed", suppressed);
-    set("stack", string_f64("SuppressedError"));
-    js_nanbox_pointer(obj as i64)
+    if !msg_jsv.is_undefined() {
+        let message_val = if msg_jsv.is_any_string() {
+            message
+        } else {
+            let coerced = crate::builtins::js_string_coerce(message);
+            js_nanbox_string(coerced as i64)
+        };
+        set_nonenum("message", message_val);
+    }
+    let result = js_nanbox_pointer(obj as i64);
+    // Link the instance to `SuppressedError.prototype` so `name`/`message`
+    // defaults and `instanceof SuppressedError` resolve through the chain.
+    let proto = crate::object::builtin_prototype_value("SuppressedError");
+    if proto.to_bits() != TAG_UNDEFINED && js_nanbox_get_pointer(proto) != 0 {
+        crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +509,9 @@ static KEEP_DISPOSABLE_STACK_DEFER: extern "C" fn(*mut ObjectHeader, f64) -> f64
 #[used]
 static KEEP_DISPOSABLE_STACK_USE: extern "C" fn(*mut ObjectHeader, f64) -> f64 =
     js_disposable_stack_use;
+#[used]
+static KEEP_ASYNC_DISPOSABLE_STACK_USE: extern "C" fn(*mut ObjectHeader, f64) -> f64 =
+    js_async_disposable_stack_use;
 #[used]
 static KEEP_DISPOSABLE_STACK_ADOPT: extern "C" fn(*mut ObjectHeader, f64, f64) -> f64 =
     js_disposable_stack_adopt;

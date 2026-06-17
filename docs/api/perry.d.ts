@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1734 entries across 102 modules
+// Coverage: 1943 entries across 113 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -75,6 +75,8 @@ declare module "argon2" {
 
 declare module "assert" {
   /** stdlib */
+  export class Assert { [key: string]: any; }
+  /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
   export const strict: any;
@@ -121,6 +123,8 @@ declare module "assert" {
 }
 
 declare module "assert/strict" {
+  /** stdlib */
+  export class Assert { [key: string]: any; }
   /** stdlib */
   export class AssertionError { [key: string]: any; }
   /** stdlib */
@@ -173,12 +177,16 @@ declare module "async_hooks" {
   /** stdlib */
   export class AsyncResource { [key: string]: any; }
   /** stdlib */
+  export const asyncWrapProviders: any;
+  /** stdlib */
   const _default: any;
   export default _default;
   /** stdlib */
   export function createHook(...args: any[]): any;
   /** stdlib */
   export function executionAsyncId(...args: any[]): any;
+  /** stdlib */
+  export function executionAsyncResource(...args: any[]): any;
   /** stdlib */
   export function triggerAsyncId(...args: any[]): any;
 }
@@ -267,6 +275,8 @@ declare module "child_process" {
   const _default: any;
   export default _default;
   /** stdlib */
+  export function _forkChild(...args: any[]): any;
+  /** stdlib */
   export function exec(...args: any[]): any;
   /** stdlib */
   export function execFile(...args: any[]): any;
@@ -290,6 +300,9 @@ declare module "cluster" {
   /** stdlib */
   export const SCHED_RR: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
   export const isMaster: any;
   /** stdlib */
   export const isPrimary: any;
@@ -311,6 +324,11 @@ declare module "cluster" {
   export function setupPrimary(...args: any[]): any;
 }
 
+declare module "commander" {
+  /** stdlib */
+  export const args: any;
+}
+
 declare module "console" {
   /** stdlib */
   export class Console { [key: string]: any; }
@@ -319,9 +337,13 @@ declare module "console" {
   /** stdlib */
   export function clear(...args: any[]): any;
   /** stdlib */
+  export function context(...args: any[]): any;
+  /** stdlib */
   export function count(...args: any[]): any;
   /** stdlib */
   export function countReset(...args: any[]): any;
+  /** stdlib */
+  export function createTask(...args: any[]): any;
   /** stdlib */
   export function debug(...args: any[]): any;
   /** stdlib */
@@ -853,7 +875,13 @@ declare module "crypto" {
   /** stdlib */
   export class Decipheriv { [key: string]: any; }
   /** stdlib */
+  export class DiffieHellman { [key: string]: any; }
+  /** stdlib */
+  export class DiffieHellmanGroup { [key: string]: any; }
+  /** stdlib */
   export class ECDH { [key: string]: any; }
+  /** stdlib */
+  export class KeyObject { [key: string]: any; }
   /** stdlib */
   export class X509Certificate { [key: string]: any; }
   /** stdlib */
@@ -872,6 +900,14 @@ declare module "crypto" {
   export function Sign(...args: any[]): any;
   /** stdlib */
   export function Verify(...args: any[]): any;
+  /** stdlib */
+  export function argon2(...args: any[]): any;
+  /** stdlib */
+  export function argon2Sync(...args: any[]): any;
+  /** stdlib */
+  export function checkPrime(...args: any[]): any;
+  /** stdlib */
+  export function checkPrimeSync(...args: any[]): any;
   /** stdlib */
   export function createCipheriv(...args: any[]): any;
   /** stdlib */
@@ -897,9 +933,25 @@ declare module "crypto" {
   /** stdlib */
   export function createVerify(...args: any[]): any;
   /** stdlib */
+  export function decapsulate(...args: any[]): any;
+  /** stdlib */
+  export function diffieHellman(...args: any[]): any;
+  /** stdlib */
+  export function encapsulate(...args: any[]): any;
+  /** stdlib */
+  export function generateKey(...args: any[]): any;
+  /** stdlib */
+  export function generateKeyPair(...args: any[]): any;
+  /** stdlib */
   export function generateKeyPairSync(...args: any[]): any;
   /** stdlib */
   export function generateKeySync(...args: any[]): any;
+  /** stdlib */
+  export function generatePrime(...args: any[]): any;
+  /** stdlib */
+  export function generatePrimeSync(...args: any[]): any;
+  /** stdlib */
+  export function getCipherInfo(...args: any[]): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
@@ -914,6 +966,8 @@ declare module "crypto" {
   export function getRandomValues(...args: any[]): any;
   /** stdlib */
   export function hash(...args: any[]): any;
+  /** stdlib */
+  export function hkdf(...args: any[]): any;
   /** stdlib */
   export function hkdfSync(...args: any[]): any;
   /** stdlib */
@@ -939,7 +993,13 @@ declare module "crypto" {
   /** stdlib */
   export function randomUUID(...args: any[]): any;
   /** stdlib */
+  export function scrypt(...args: any[]): any;
+  /** stdlib */
   export function scryptSync(...args: any[]): any;
+  /** stdlib */
+  export function secureHeapUsed(...args: any[]): any;
+  /** stdlib */
+  export function setFips(...args: any[]): any;
   /** stdlib */
   export function sign(...args: any[]): any;
   /** stdlib */
@@ -985,6 +1045,9 @@ declare module "dayjs" {
 declare module "dgram" {
   /** stdlib */
   export class Socket { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
   /** stdlib */
   export function Socket(...args: any[]): any;
   /** stdlib */
@@ -1668,6 +1731,10 @@ declare module "http" {
   /** stdlib */
   export class IncomingMessage { [key: string]: any; }
   /** stdlib */
+  export class OutgoingMessage { [key: string]: any; }
+  /** stdlib */
+  export class OutgoingMessage { [key: string]: any; }
+  /** stdlib */
   export class Server { [key: string]: any; }
   /** stdlib */
   export class Server { [key: string]: any; }
@@ -1675,6 +1742,8 @@ declare module "http" {
   export class ServerResponse { [key: string]: any; }
   /** stdlib */
   export class ServerResponse { [key: string]: any; }
+  /** stdlib */
+  export class WebSocket { [key: string]: any; }
   /** stdlib */
   export const METHODS: any;
   /** stdlib */
@@ -1682,11 +1751,15 @@ declare module "http" {
   /** stdlib */
   export const globalAgent: any;
   /** stdlib */
+  export const kConnectionsCheckingInterval: any;
+  /** stdlib */
   export const maxHeaderSize: any;
   /** stdlib */
   export function Agent(...args: any[]): any;
   /** stdlib */
   export function Server(...args: any[]): any;
+  /** stdlib */
+  export function _connectionListener(...args: any[]): any;
   /** stdlib */
   export function createServer(...args: any[]): any;
   /** stdlib */
@@ -1750,6 +1823,38 @@ declare module "https" {
   export function get(...args: any[]): any;
   /** stdlib */
   export function request(...args: any[]): any;
+}
+
+declare module "inspector" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  export const Network: any;
+  /** stdlib */
+  export const console: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
+  /** stdlib */
+  export function close(...args: any[]): any;
+  /** stdlib @perryStub accepts port/host but binds no real WebSocket inspector endpoint; sessions are in-process fakes (#4916) */
+  export function open(...args: any[]): any;
+  /** stdlib @perryStub always undefined: Perry never exposes a real inspector endpoint (#4916) */
+  export function url(...args: any[]): any;
+  /** stdlib @perryStub returns immediately after open(); there is no debugger to wait for (#4916) */
+  export function waitForDebugger(...args: any[]): any;
+}
+
+declare module "inspector/promises" {
+  /** stdlib */
+  export class Session { [key: string]: any; }
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function Session(...args: any[]): any;
 }
 
 declare module "ioredis" {
@@ -1839,13 +1944,44 @@ declare module "lru-cache" {
 
 declare module "module" {
   /** stdlib */
+  export class Module { [key: string]: any; }
+  /** stdlib */
   export class SourceMap { [key: string]: any; }
+  /** stdlib */
+  export const Module: any;
+  /** stdlib */
+  export const _cache: any;
+  /** stdlib */
+  export const _extensions: any;
+  /** stdlib */
+  export const _pathCache: any;
   /** stdlib */
   export const builtinModules: any;
   /** stdlib */
   export const constants: any;
   /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export const globalPaths: any;
+  /** stdlib */
+  export function Module(...args: any[]): any;
+  /** stdlib */
   export function SourceMap(...args: any[]): any;
+  /** stdlib */
+  export function _findPath(...args: any[]): any;
+  /** stdlib */
+  export function _initPaths(...args: any[]): any;
+  /** stdlib */
+  export function _load(...args: any[]): any;
+  /** stdlib */
+  export function _nodeModulePaths(...args: any[]): any;
+  /** stdlib */
+  export function _preloadModules(...args: any[]): any;
+  /** stdlib */
+  export function _resolveFilename(...args: any[]): any;
+  /** stdlib */
+  export function _resolveLookupPaths(...args: any[]): any;
   /** stdlib */
   export function createRequire(...args: any[]): any;
   /** stdlib */
@@ -1913,15 +2049,23 @@ declare module "nanoid" {
 
 declare module "net" {
   /** stdlib */
+  export class BlockList { [key: string]: any; }
+  /** stdlib */
   export class Server { [key: string]: any; }
   /** stdlib */
   export class Socket { [key: string]: any; }
   /** stdlib */
+  export class SocketAddress { [key: string]: any; }
+  /** stdlib */
   export class Stream { [key: string]: any; }
+  /** stdlib */
+  export function BlockList(...args: any[]): any;
   /** stdlib */
   export function Server(p0: any, p1: any): any;
   /** stdlib */
   export function Socket(...args: any[]): any;
+  /** stdlib */
+  export function SocketAddress(options: any): any;
   /** stdlib */
   export function Stream(...args: any[]): any;
   /** stdlib */
@@ -2251,6 +2395,97 @@ declare module "perry/background" {
   export function schedule(...args: any[]): any;
 }
 
+declare module "perry/compose" {
+  /** stdlib */
+  export function config(...args: any[]): any;
+  /** stdlib */
+  export function down(...args: any[]): any;
+  /** stdlib */
+  export function exec(...args: any[]): any;
+  /** stdlib */
+  export function logs(...args: any[]): any;
+  /** stdlib */
+  export function ps(...args: any[]): any;
+  /** stdlib */
+  export function restart(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+  /** stdlib */
+  export function up(...args: any[]): any;
+}
+
+declare module "perry/container" {
+  /** stdlib */
+  export function composeUp(...args: any[]): any;
+  /** stdlib */
+  export function create(...args: any[]): any;
+  /** stdlib */
+  export function detectBackend(...args: any[]): any;
+  /** stdlib */
+  export function downAll(...args: any[]): any;
+  /** stdlib */
+  export function downByProject(...args: any[]): any;
+  /** stdlib */
+  export function exec(...args: any[]): any;
+  /** stdlib */
+  export function getAvailableBackends(...args: any[]): any;
+  /** stdlib */
+  export function getBackend(...args: any[]): any;
+  /** stdlib */
+  export function getBackendPriority(...args: any[]): any;
+  /** stdlib */
+  export function inspect(...args: any[]): any;
+  /** stdlib */
+  export function list(...args: any[]): any;
+  /** stdlib */
+  export function listImages(...args: any[]): any;
+  /** stdlib */
+  export function logs(...args: any[]): any;
+  /** stdlib */
+  export function pullImage(...args: any[]): any;
+  /** stdlib */
+  export function remove(...args: any[]): any;
+  /** stdlib */
+  export function removeIfExists(...args: any[]): any;
+  /** stdlib */
+  export function removeImage(...args: any[]): any;
+  /** stdlib */
+  export function run(...args: any[]): any;
+  /** stdlib */
+  export function selectBackendFor(...args: any[]): any;
+  /** stdlib */
+  export function setBackend(...args: any[]): any;
+  /** stdlib */
+  export function setBackends(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+}
+
+declare module "perry/container-compose" {
+  /** stdlib */
+  export function config(...args: any[]): any;
+  /** stdlib */
+  export function down(...args: any[]): any;
+  /** stdlib */
+  export function exec(...args: any[]): any;
+  /** stdlib */
+  export function logs(...args: any[]): any;
+  /** stdlib */
+  export function ps(...args: any[]): any;
+  /** stdlib */
+  export function restart(...args: any[]): any;
+  /** stdlib */
+  export function start(...args: any[]): any;
+  /** stdlib */
+  export function stop(...args: any[]): any;
+  /** stdlib */
+  export function up(...args: any[]): any;
+}
+
 declare module "perry/i18n" {
   /** stdlib */
   export function Currency(...args: any[]): any;
@@ -2437,7 +2672,7 @@ declare module "perry/thread" {
   /** stdlib */
   export function parallelMap(p0: any, p1: any): any;
   /** stdlib */
-  export function spawn(p0: any): any;
+  export function spawn(p0: any): Promise<any>;
 }
 
 declare module "perry/tui" {
@@ -2810,6 +3045,52 @@ declare module "perry/widget" {
   export function Widget(...args: any[]): any;
 }
 
+declare module "perry/workloads" {
+  /** stdlib */
+  export const policy: any;
+  /** stdlib */
+  export const runtime: any;
+  /** stdlib */
+  export function graph(...args: any[]): any;
+  /** stdlib */
+  export function inspectGraph(...args: any[]): any;
+  /** stdlib */
+  export function node(...args: any[]): any;
+  /** stdlib */
+  export function runGraph(...args: any[]): any;
+}
+
+declare module "perry/yoga" {
+  /** stdlib */
+  export function calculateLayout(...args: any[]): any;
+  /** stdlib */
+  export function childCount(...args: any[]): any;
+  /** stdlib */
+  export function getComputed(...args: any[]): any;
+  /** stdlib */
+  export function getComputedEdge(...args: any[]): any;
+  /** stdlib */
+  export function insertChild(...args: any[]): any;
+  /** stdlib */
+  export function nodeFree(...args: any[]): any;
+  /** stdlib */
+  export function nodeNew(...args: any[]): any;
+  /** stdlib */
+  export function removeChild(...args: any[]): any;
+  /** stdlib */
+  export function setEdge(...args: any[]): any;
+  /** stdlib */
+  export function setEnum(...args: any[]): any;
+  /** stdlib */
+  export function setGap(...args: any[]): any;
+  /** stdlib */
+  export function setMeasureFunc(...args: any[]): any;
+  /** stdlib */
+  export function setNumber(...args: any[]): any;
+  /** stdlib */
+  export function unsetMeasureFunc(...args: any[]): any;
+}
+
 declare module "pg" {
   /** stdlib */
   export class Client { [key: string]: any; }
@@ -2823,11 +3104,45 @@ declare module "pg" {
 
 declare module "process" {
   /** stdlib */
+  export const _eval: any;
+  /** stdlib */
+  export const _events: any;
+  /** stdlib */
+  export const _eventsCount: any;
+  /** stdlib */
+  export const _exiting: any;
+  /** stdlib */
+  export const _maxListeners: any;
+  /** stdlib */
+  export const _preload_modules: any;
+  /** stdlib */
+  export const allowedNodeEnvironmentFlags: any;
+  /** stdlib */
   export const arch: any;
   /** stdlib */
   export const argv: any;
   /** stdlib */
+  export const argv0: any;
+  /** stdlib */
+  export const config: any;
+  /** stdlib */
+  export const debugPort: any;
+  /** stdlib */
+  export const domain: any;
+  /** stdlib */
   export const env: any;
+  /** stdlib */
+  export const execArgv: any;
+  /** stdlib */
+  export const execPath: any;
+  /** stdlib */
+  export const features: any;
+  /** stdlib */
+  export const finalization: any;
+  /** stdlib */
+  export const moduleLoadList: any;
+  /** stdlib */
+  export const permission: any;
   /** stdlib */
   export const pid: any;
   /** stdlib */
@@ -2835,21 +3150,51 @@ declare module "process" {
   /** stdlib */
   export const ppid: any;
   /** stdlib */
+  export const release: any;
+  /** stdlib */
+  export const report: any;
+  /** stdlib */
   export const stderr: any;
   /** stdlib */
   export const stdin: any;
   /** stdlib */
   export const stdout: any;
   /** stdlib */
+  export const title: any;
+  /** stdlib */
   export const version: any;
   /** stdlib */
   export const versions: any;
+  /** stdlib */
+  export function _debugEnd(...args: any[]): any;
+  /** stdlib */
+  export function _debugProcess(...args: any[]): any;
+  /** stdlib */
+  export function _fatalException(...args: any[]): any;
+  /** stdlib */
+  export function _getActiveHandles(...args: any[]): any;
+  /** stdlib */
+  export function _getActiveRequests(...args: any[]): any;
+  /** stdlib */
+  export function _kill(...args: any[]): any;
+  /** stdlib */
+  export function _linkedBinding(...args: any[]): any;
+  /** stdlib */
+  export function _rawDebug(...args: any[]): any;
+  /** stdlib */
+  export function _startProfilerIdleNotifier(...args: any[]): any;
+  /** stdlib */
+  export function _stopProfilerIdleNotifier(...args: any[]): any;
+  /** stdlib */
+  export function _tickCallback(...args: any[]): any;
   /** stdlib */
   export function abort(...args: any[]): any;
   /** stdlib */
   export function addUncaughtExceptionCaptureCallback(...args: any[]): any;
   /** stdlib */
   export function availableMemory(...args: any[]): any;
+  /** stdlib */
+  export function binding(...args: any[]): any;
   /** stdlib */
   export function chdir(...args: any[]): any;
   /** stdlib */
@@ -2859,7 +3204,11 @@ declare module "process" {
   /** stdlib */
   export function cwd(...args: any[]): any;
   /** stdlib */
+  export function dlopen(...args: any[]): any;
+  /** stdlib */
   export function emitWarning(...args: any[]): any;
+  /** stdlib */
+  export function execve(...args: any[]): any;
   /** stdlib */
   export function exit(...args: any[]): any;
   /** stdlib */
@@ -2891,6 +3240,12 @@ declare module "process" {
   /** stdlib */
   export function nextTick(...args: any[]): any;
   /** stdlib */
+  export function openStdin(...args: any[]): any;
+  /** stdlib */
+  export function reallyExit(...args: any[]): any;
+  /** stdlib */
+  export function ref(...args: any[]): any;
+  /** stdlib */
   export function resourceUsage(...args: any[]): any;
   /** stdlib */
   export function setSourceMapsEnabled(...args: any[]): any;
@@ -2912,6 +3267,8 @@ declare module "process" {
   export function threadCpuUsage(...args: any[]): any;
   /** stdlib */
   export function umask(...args: any[]): any;
+  /** stdlib */
+  export function unref(...args: any[]): any;
   /** stdlib */
   export function uptime(...args: any[]): any;
 }
@@ -2992,6 +3349,44 @@ declare module "redis" {
   export function createClient(...args: any[]): any;
 }
 
+declare module "repl" {
+  /** stdlib */
+  export class REPLServer { [key: string]: any; }
+  /** stdlib */
+  export class Recoverable { [key: string]: any; }
+  /** stdlib */
+  export const REPL_MODE_SLOPPY: any;
+  /** stdlib */
+  export const REPL_MODE_STRICT: any;
+  /** stdlib */
+  export const builtinModules: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib @perryStub REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916) */
+  export function REPLServer(...args: any[]): any;
+  /** stdlib */
+  export function Recoverable(...args: any[]): any;
+  /** stdlib @perryStub REPLServer shape only: never reads the input stream, and .write() evaluates just numeric literals, context lookups, and a single '+'; no real JS eval loop (#4916) */
+  export function start(...args: any[]): any;
+}
+
+declare module "sea" {
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function getAsset(...args: any[]): any;
+  /** stdlib */
+  export function getAssetAsBlob(...args: any[]): any;
+  /** stdlib */
+  export function getAssetKeys(...args: any[]): any;
+  /** stdlib */
+  export function getRawAsset(...args: any[]): any;
+  /** stdlib */
+  export function isSea(...args: any[]): any;
+}
+
 declare module "sharp" {
   /** stdlib */
   export default function (p0: string): any;
@@ -3045,6 +3440,12 @@ declare module "stream" {
   /** stdlib */
   export const promises: any;
   /** stdlib */
+  export function _isArrayBufferView(...args: any[]): any;
+  /** stdlib */
+  export function _isUint8Array(...args: any[]): any;
+  /** stdlib */
+  export function _uint8ArrayToBuffer(...args: any[]): any;
+  /** stdlib */
   export function addAbortSignal(...args: any[]): any;
   /** stdlib */
   export function compose(...args: any[]): any;
@@ -3056,6 +3457,8 @@ declare module "stream" {
   export function finished(...args: any[]): any;
   /** stdlib */
   export function getDefaultHighWaterMark(...args: any[]): any;
+  /** stdlib */
+  export function isDestroyed(...args: any[]): any;
   /** stdlib */
   export function isDisturbed(...args: any[]): any;
   /** stdlib */
@@ -3336,19 +3739,25 @@ declare module "tls" {
   /** stdlib */
   export const rootCertificates: any;
   /** stdlib */
-  export function SecureContext(...args: any[]): any;
+  export function SecureContext(options: any): any;
   /** stdlib */
-  export function checkServerIdentity(...args: any[]): any;
+  export function Server(options: any, secureConnectionListener: any): any;
   /** stdlib */
-  export function connect(p0: string, p1: any, p2: string, p3: any): any;
+  export function TLSSocket(socket: any, options: any): any;
   /** stdlib */
-  export function createSecureContext(...args: any[]): any;
+  export function checkServerIdentity(hostname: any, cert: any): any;
   /** stdlib */
-  export function getCACertificates(...args: any[]): any;
+  export function connect(p0: any, p1: any, p2: any, p3: any): any;
+  /** stdlib */
+  export function createSecureContext(options: any): any;
+  /** stdlib */
+  export function createServer(options: any, secureConnectionListener: any): any;
+  /** stdlib */
+  export function getCACertificates(type: any): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */
-  export function setDefaultCACertificates(...args: any[]): any;
+  export function setDefaultCACertificates(certs: any): any;
 }
 
 declare module "tty" {
@@ -3372,6 +3781,8 @@ declare module "tursodb" {
 declare module "url" {
   /** stdlib */
   export class URL { [key: string]: any; }
+  /** stdlib */
+  export class URLPattern { [key: string]: any; }
   /** stdlib */
   export class URLSearchParams { [key: string]: any; }
   /** stdlib */
@@ -3574,11 +3985,17 @@ declare module "uuid" {
   /** stdlib */
   export function v1(): string;
   /** stdlib */
+  export function v3(name: string, namespace: string): string;
+  /** stdlib */
   export function v4(): string;
+  /** stdlib */
+  export function v5(name: string, namespace: string): string;
   /** stdlib */
   export function v7(): string;
   /** stdlib */
   export function validate(id: string): boolean;
+  /** stdlib */
+  export function version(id: string): number;
 }
 
 declare module "v8" {
@@ -3602,13 +4019,13 @@ declare module "v8" {
   export function deserialize(...args: any[]): any;
   /** stdlib */
   export function getCppHeapStatistics(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub all fields 0; Perry compiles AOT, there is no JIT code heap (#4916) */
   export function getHeapCodeStatistics(...args: any[]): any;
   /** stdlib */
   export function getHeapSnapshot(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916) */
   export function getHeapSpaceStatistics(...args: any[]): any;
-  /** stdlib */
+  /** stdlib @perryStub Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916) */
   export function getHeapStatistics(...args: any[]): any;
   /** stdlib */
   export function isStringOneByteRepresentation(...args: any[]): any;
@@ -3641,6 +4058,32 @@ declare module "validator" {
   export function isURL(s: string): boolean;
   /** stdlib */
   export function isUUID(s: string): boolean;
+}
+
+declare module "vm" {
+  /** stdlib */
+  export class Script { [key: string]: any; }
+  /** stdlib */
+  export const constants: any;
+  /** stdlib */
+  const _default: any;
+  export default _default;
+  /** stdlib */
+  export function compileFunction(...args: any[]): any;
+  /** stdlib */
+  export function createContext(p0: any): any;
+  /** stdlib */
+  export function createScript(...args: any[]): any;
+  /** stdlib */
+  export function isContext(...args: any[]): any;
+  /** stdlib */
+  export function measureMemory(...args: any[]): any;
+  /** stdlib */
+  export function runInContext(...args: any[]): any;
+  /** stdlib */
+  export function runInNewContext(...args: any[]): any;
+  /** stdlib */
+  export function runInThisContext(...args: any[]): any;
 }
 
 declare module "wasi" {
@@ -3709,6 +4152,14 @@ declare module "ws" {
   /** stdlib */
   export class WebSocketServer { [key: string]: any; }
   /** stdlib */
+  export const CLOSED: any;
+  /** stdlib */
+  export const CLOSING: any;
+  /** stdlib */
+  export const CONNECTING: any;
+  /** stdlib */
+  export const OPEN: any;
+  /** stdlib */
   export function Server(p0: any): any;
   /** stdlib */
   export function WebSocket(p0: string): any;
@@ -3766,24 +4217,24 @@ declare module "zlib" {
   /** stdlib */
   export function brotliCompress(buffer: any, callback: any): void;
   /** stdlib */
-  export function brotliCompressSync(p0: string): string;
+  export function brotliCompressSync(p0: string): Buffer;
   /** stdlib */
   export function brotliDecompress(buffer: any, callback: any): void;
   /** stdlib */
-  export function brotliDecompressSync(p0: string): string;
+  export function brotliDecompressSync(p0: string): Buffer;
   /** stdlib */
   export function crc32(p0: string, seed?: number): number;
-  /** stdlib */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createBrotliCompress(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createBrotliDecompress(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createDeflate(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createDeflateRaw(options?: any): any;
   /** stdlib */
   export function createGunzip(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub level honored; strategy/memLevel validated but not applied (#4917) */
   export function createGzip(options?: any): any;
   /** stdlib */
   export function createInflate(options?: any): any;
@@ -3791,36 +4242,44 @@ declare module "zlib" {
   export function createInflateRaw(options?: any): any;
   /** stdlib */
   export function createUnzip(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createZstdCompress(options?: any): any;
-  /** stdlib */
+  /** stdlib @perryStub params/quality options accepted but ignored, warns once (#4917) */
   export function createZstdDecompress(options?: any): any;
   /** stdlib */
   export function deflate(buffer: any, callback: any): void;
   /** stdlib */
   export function deflateRaw(buffer: any, callback: any): void;
   /** stdlib */
-  export function deflateRawSync(p0: string): any;
+  export function deflateRawSync(p0: any, options?: any): Buffer;
   /** stdlib */
-  export function deflateSync(p0: any, options?: any): string;
+  export function deflateSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function gunzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gunzipSync(p0: any): string;
+  export function gunzipSync(p0: any): Buffer;
   /** stdlib */
   export function gzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function gzipSync(p0: any, options?: any): string;
+  export function gzipSync(p0: any, options?: any): Buffer;
   /** stdlib */
   export function inflate(buffer: any, callback: any): void;
   /** stdlib */
   export function inflateRaw(buffer: any, callback: any): void;
   /** stdlib */
-  export function inflateRawSync(p0: string): any;
+  export function inflateRawSync(p0: string): Buffer;
   /** stdlib */
-  export function inflateSync(p0: any): string;
+  export function inflateSync(p0: any): Buffer;
   /** stdlib */
   export function unzip(buffer: any, callback: any): void;
   /** stdlib */
-  export function unzipSync(p0: string): any;
+  export function unzipSync(p0: string): Buffer;
+  /** stdlib */
+  export function zstdCompress(buffer: any, callback: any): void;
+  /** stdlib */
+  export function zstdCompressSync(p0: any, options?: any): Buffer;
+  /** stdlib */
+  export function zstdDecompress(buffer: any, callback: any): void;
+  /** stdlib */
+  export function zstdDecompressSync(p0: any, options?: any): Buffer;
 }

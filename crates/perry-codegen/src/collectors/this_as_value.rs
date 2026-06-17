@@ -34,7 +34,13 @@ pub fn class_uses_this_as_value(
     let mut field_names: HashSet<String> = HashSet::new();
     field_names.extend(class.fields.iter().map(|f| f.name.clone()));
     let mut parent = class.extends_name.as_deref();
+    let mut seen_parent_names: HashSet<&str> = HashSet::new();
+    let mut parent_depth = 0usize;
     while let Some(p) = parent {
+        if !seen_parent_names.insert(p) || parent_depth > 64 {
+            break;
+        }
+        parent_depth += 1;
         if let Some(pc) = classes.get(p) {
             field_names.extend(pc.fields.iter().map(|f| f.name.clone()));
             parent = pc.extends_name.as_deref();
@@ -57,7 +63,13 @@ pub fn class_uses_this_as_value(
     // Parent fields are initialized via apply_field_initializers_recursive
     // in scalar replacement; check their initializers too.
     let mut parent = class.extends_name.as_deref();
+    let mut seen_parent_names: HashSet<&str> = HashSet::new();
+    let mut parent_depth = 0usize;
     while let Some(p) = parent {
+        if !seen_parent_names.insert(p) || parent_depth > 64 {
+            break;
+        }
+        parent_depth += 1;
         if let Some(pc) = classes.get(p) {
             for f in &pc.fields {
                 if let Some(init) = &f.init {
@@ -86,8 +98,12 @@ pub fn class_chain_extends_builtin_error(
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
 ) -> bool {
     let mut cur = class.extends_name.as_deref().map(|s| s.to_string());
+    let mut seen_parent_names: HashSet<String> = HashSet::new();
     let mut depth = 0usize;
     while let Some(name) = cur {
+        if !seen_parent_names.insert(name.clone()) {
+            break;
+        }
         if matches!(
             name.as_str(),
             "Error"
@@ -201,7 +217,12 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             captures_this: true,
             ..
         } => true,
-        Expr::SuperCall(_) | Expr::SuperMethodCall { .. } => true,
+        Expr::SuperCall(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::SuperPropertySet { .. }
+        | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperPropertySet { .. }
+        | Expr::ObjectSuperMethodCall { .. } => true,
         // PropertyGet/Set/Update with `this.<field>` is the safe pattern —
         // scalar replacement intercepts it. With `this.<method>` it falls
         // through to the heap-dispatch path which materializes `this`.
@@ -222,6 +243,41 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
                 expr_uses_this_as_value(object, fields)
             };
             obj_unsafe || expr_uses_this_as_value(value, fields)
+        }
+        // #4126 lowers `this.field = x` ctor stores as `PutValueSet` (with
+        // `target` and `receiver` both `Expr::This`) instead of `PropertySet`.
+        // Mirror the `PropertySet { object: This }` rule: a plain field store
+        // is the safe, scalar-replaceable pattern — only a `this.<method>`
+        // write or a `this` materialized in the value counts as this-as-value.
+        // Without this, every field-assigning constructor marks its class as
+        // using `this` as a value, forcing all instances onto the heap path
+        // (regressed scalar replacement / #945).
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            let target_unsafe = if matches!(target.as_ref(), Expr::This) {
+                match key.as_ref() {
+                    Expr::String(property) => !fields.contains(property),
+                    // Computed/dynamic key — can't prove it's a plain field.
+                    _ => true,
+                }
+            } else {
+                expr_uses_this_as_value(target, fields)
+            };
+            // For an ordinary `this.f = v` store the receiver mirrors the
+            // (safe) `This` target; don't double-count it as this-as-value.
+            let receiver_unsafe = if matches!(target.as_ref(), Expr::This)
+                && matches!(receiver.as_ref(), Expr::This)
+            {
+                false
+            } else {
+                expr_uses_this_as_value(receiver, fields)
+            };
+            target_unsafe || receiver_unsafe || expr_uses_this_as_value(value, fields)
         }
         Expr::PropertyUpdate {
             object, property, ..
@@ -294,6 +350,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Array(elements) => elements.iter().any(|e| expr_uses_this_as_value(e, fields)),
         Expr::ArraySpread(elements) => elements.iter().any(|el| match el {
             ArrayElement::Expr(e) | ArrayElement::Spread(e) => expr_uses_this_as_value(e, fields),
+            ArrayElement::Hole => false,
         }),
         Expr::Object(props) => props
             .iter()
@@ -302,7 +359,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             .iter()
             .any(|(_, e)| expr_uses_this_as_value(e, fields)),
         Expr::New { args, .. } => args.iter().any(|a| expr_uses_this_as_value(a, fields)),
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             expr_uses_this_as_value(callee, fields)
                 || args.iter().any(|a| expr_uses_this_as_value(a, fields))
         }
@@ -334,5 +391,102 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         // `this`. Disabling scalar replacement is always safe; the cost is
         // missing the optimization on whatever pattern this turns out to be.
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::{Class, ClassField, Expr, Function, Stmt};
+    use perry_types::Type;
+    use std::collections::HashMap;
+
+    fn function(name: &str, body: Vec<Stmt>) -> Function {
+        Function {
+            id: 0,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    fn field(name: &str) -> ClassField {
+        ClassField {
+            name: name.to_string(),
+            key_expr: None,
+            ty: Type::Any,
+            init: None,
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        }
+    }
+
+    fn class(name: &str, extends_name: Option<&str>) -> Class {
+        Class {
+            id: 0,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: extends_name.map(str::to_string),
+            native_extends: None,
+            extends_expr: None,
+            fields: Vec::new(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn this_as_value_parent_walk_stops_on_cyclic_parent_chain() {
+        let mut child = class("A", Some("B"));
+        child.constructor = Some(function(
+            "constructor",
+            vec![Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::This),
+                property: "value".to_string(),
+            }))],
+        ));
+
+        let mut parent = class("B", Some("A"));
+        parent.fields.push(field("value"));
+
+        let mut classes = HashMap::new();
+        classes.insert(child.name.clone(), &child);
+        classes.insert(parent.name.clone(), &parent);
+
+        assert!(!class_uses_this_as_value(&child, &classes));
+    }
+
+    #[test]
+    fn builtin_error_parent_walk_stops_on_cyclic_parent_chain() {
+        let child = class("A", Some("B"));
+        let parent = class("B", Some("A"));
+
+        let mut classes = HashMap::new();
+        classes.insert(child.name.clone(), &child);
+        classes.insert(parent.name.clone(), &parent);
+
+        assert!(!class_chain_extends_builtin_error(&child, &classes));
     }
 }

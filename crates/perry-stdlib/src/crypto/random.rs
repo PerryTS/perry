@@ -274,14 +274,79 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             perry_runtime::js_nanbox_get_pointer(v)
         }
     };
+    let pointer_value = |ptr: *mut u8| -> f64 {
+        if ptr.is_null() {
+            undefined
+        } else {
+            f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
+        }
+    };
     match method {
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         "createHmac" => js_crypto_create_hmac(str_ptr(0), bytes_ptr(1)),
+        "createDiffieHellman" | "DiffieHellman" => {
+            js_crypto_create_diffie_hellman(arg(0), arg(1), arg(2))
+        }
+        "createDiffieHellmanGroup" | "getDiffieHellman" | "DiffieHellmanGroup" => {
+            js_crypto_get_diffie_hellman(arg(0))
+        }
+        "diffieHellman" => pointer_value(js_crypto_diffie_hellman(arg(0)) as *mut u8),
+        "encapsulate" if args_len >= 2 => js_crypto_encapsulate_async(arg(0), arg(1)),
+        "encapsulate" => pointer_value(js_crypto_encapsulate(arg(0)) as *mut u8),
+        "decapsulate" if args_len >= 3 => js_crypto_decapsulate_async(arg(0), arg(1), arg(2)),
+        "decapsulate" => pointer_value(js_crypto_decapsulate(arg(0), arg(1)) as *mut u8),
         "randomUUID" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuid(arg(0))).bits()),
         "randomUUIDv7" => f64::from_bits(JSValue::string_ptr(js_crypto_random_uuidv7()).bits()),
         "randomBytes" => {
             let buf = js_crypto_random_bytes_buffer(arg(0));
             f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+        }
+        "generateKeyPair" => js_crypto_generate_key_pair_async(str_ptr(0), arg(1), arg(2)),
+        "generateKeyPairSync" => {
+            let alg = bytes_from_ptr(str_ptr(0));
+            let pair = match alg.as_slice() {
+                b"ec" => js_crypto_generate_key_pair_sync_ec_p256(arg(1)),
+                b"ed25519" => js_crypto_generate_key_pair_sync_ed25519(arg(1)),
+                b"x25519" => js_crypto_generate_key_pair_sync_x25519(arg(1)),
+                _ => js_crypto_generate_key_pair_sync_rsa(arg(1)),
+            };
+            pointer_value(pair as *mut u8)
+        }
+        "generateKey" => js_crypto_generate_key_async(str_ptr(0), arg(1), arg(2)),
+        "generateKeySync" => {
+            pointer_value(js_crypto_generate_key_sync(str_ptr(0), arg(1)) as *mut u8)
+        }
+        "generatePrime" if args_len >= 3 => js_crypto_generate_prime_async(arg(0), arg(1), arg(2)),
+        "generatePrime" | "generatePrimeSync" => js_crypto_generate_prime_sync(arg(0), arg(1)),
+        "checkPrime" if args_len >= 3 => js_crypto_check_prime_async(arg(0), arg(1), arg(2)),
+        "checkPrime" | "checkPrimeSync" => js_crypto_check_prime_sync(arg(0), arg(1)),
+        "getFips" => 0.0,
+        "setFips" => undefined,
+        "secureHeapUsed" => pointer_value(js_crypto_secure_heap_used() as *mut u8),
+        "hkdf" => js_crypto_hkdf_async_alg(
+            str_ptr(0),
+            bytes_ptr(1),
+            bytes_ptr(2),
+            bytes_ptr(3),
+            arg(4),
+            arg(5),
+        ),
+        "hkdfSync" => pointer_value(js_crypto_hkdf_bytes_alg(
+            str_ptr(0),
+            bytes_ptr(1),
+            bytes_ptr(2),
+            bytes_ptr(3),
+            arg(4),
+        ) as *mut u8),
+        "scrypt" => {
+            let callback = if args_len >= 5 { arg(4) } else { arg(3) };
+            js_crypto_scrypt_async(bytes_ptr(0), bytes_ptr(1), arg(2), callback)
+        }
+        "scryptSync" => {
+            let options_ptr = if args_len >= 4 { bytes_ptr(3) } else { 0 };
+            pointer_value(
+                js_crypto_scrypt_bytes(bytes_ptr(0), bytes_ptr(1), arg(2), options_ptr) as *mut u8,
+            )
         }
         // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
         "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),
@@ -479,21 +544,6 @@ pub(super) fn nanboxed_to_usize(bits: f64) -> Option<usize> {
     Some(bits as usize)
 }
 
-pub(super) fn nanboxed_to_i64(bits: f64) -> Option<i64> {
-    let raw = bits.to_bits();
-    let top16 = (raw >> 48) as u16;
-    if matches!(raw, 0x7FFC_0000_0000_0001 | 0x7FFC_0000_0000_0002) {
-        return None;
-    }
-    if top16 == 0x7FFE {
-        return Some((raw & 0xFFFF_FFFF) as u32 as i32 as i64);
-    }
-    if bits.is_nan() || bits.is_infinite() {
-        return None;
-    }
-    Some(bits as i64)
-}
-
 pub(super) unsafe fn crypto_value_bytes(bits: f64) -> Vec<u8> {
     let raw = bits.to_bits();
     let top16 = (raw >> 48) as u16;
@@ -528,71 +578,16 @@ pub(super) fn bytes_to_u128(bytes: &[u8]) -> Option<u128> {
     Some(n)
 }
 
-pub(super) fn mod_pow_u128(mut base: u128, mut exp: u128, modu: u128) -> u128 {
-    if modu == 1 {
-        return 0;
-    }
-    let mut acc = 1u128;
-    base %= modu;
-    while exp > 0 {
-        if exp & 1 == 1 {
-            acc = acc.wrapping_mul(base) % modu;
-        }
-        base = base.wrapping_mul(base) % modu;
-        exp >>= 1;
-    }
-    acc
-}
-
-pub(super) fn is_prime_u128(n: u128) -> bool {
-    if n < 2 {
-        return false;
-    }
-    for p in [2u128, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
-        if n == p {
-            return true;
-        }
-        if n % p == 0 {
-            return false;
-        }
-    }
-    let mut d = n - 1;
-    let mut s = 0u32;
-    while d % 2 == 0 {
-        d /= 2;
-        s += 1;
-    }
-    for a in [2u128, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37] {
-        if a >= n - 2 {
-            continue;
-        }
-        let mut x = mod_pow_u128(a, d, n);
-        if x == 1 || x == n - 1 {
-            continue;
-        }
-        let mut composite = true;
-        for _ in 1..s {
-            x = x.wrapping_mul(x) % n;
-            if x == n - 1 {
-                composite = false;
-                break;
-            }
-        }
-        if composite {
-            return false;
-        }
-    }
-    true
-}
-
-pub(super) fn prime_to_be_bytes(n: u128, bits: usize) -> Vec<u8> {
-    let len = ((bits.max(1) + 7) / 8).max(1);
-    let all = n.to_be_bytes();
-    all[all.len() - len..].to_vec()
-}
-
 pub(super) unsafe fn object_field_bool(obj_bits: u64, name: &[u8]) -> Option<bool> {
-    match object_field_bits(obj_bits, name)? {
+    if (obj_bits >> 48) as u16 != 0x7FFD {
+        return None;
+    }
+    let obj_ptr = (obj_bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+    if (obj_ptr as usize) < 0x1000 {
+        return None;
+    }
+    let key_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    match js_object_get_field_by_name(obj_ptr, key_ptr).bits() {
         0x7FFC_0000_0000_0004 => Some(true),
         0x7FFC_0000_0000_0003 => Some(false),
         _ => None,
@@ -607,44 +602,6 @@ pub(super) unsafe fn object_field_u128(obj_bits: u64, name: &[u8]) -> Option<u12
         return (i >= 0).then_some(i as u128);
     }
     bytes_to_u128(&crypto_value_bytes(f64::from_bits(bits)))
-}
-
-pub(super) fn generate_prime_u128(
-    bits: usize,
-    safe: bool,
-    add: Option<u128>,
-    rem: Option<u128>,
-) -> Option<u128> {
-    if bits == 0 || bits > 64 {
-        return None;
-    }
-    let high_bit = 1u128 << (bits - 1);
-    let mask = (1u128 << bits) - 1;
-    let mut rng = rand::thread_rng();
-    for _ in 0..1_000_000 {
-        let mut n = (rng.next_u64() as u128) & mask;
-        n |= high_bit;
-        n |= 1;
-        if let Some(add) = add {
-            if add == 0 {
-                return None;
-            }
-            let rem = rem.unwrap_or(if safe { 3 } else { 1 });
-            let cur = n % add;
-            n = n.wrapping_add((rem + add - cur) % add);
-            if n > mask || n < high_bit {
-                continue;
-            }
-        }
-        if !is_prime_u128(n) {
-            continue;
-        }
-        if safe && !is_prime_u128((n - 1) / 2) {
-            continue;
-        }
-        return Some(n);
-    }
-    None
 }
 
 #[cfg(test)]
@@ -672,6 +629,15 @@ mod tests {
             perry_runtime::exception::js_clear_exception();
             true
         }
+    }
+
+    #[test]
+    fn crypto_native_dispatch_get_fips_matches_default_node_mode() {
+        let method = b"getFips";
+        let result = unsafe {
+            js_crypto_native_dispatch(method.as_ptr(), method.len(), std::ptr::null(), 0)
+        };
+        assert_eq!(result.to_bits(), 0.0f64.to_bits());
     }
 
     #[test]

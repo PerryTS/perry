@@ -55,7 +55,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             captures,
             mutable_captures,
             captures_this,
+            captures_new_target,
             is_async,
+            is_arrow,
             ..
         } => {
             // captures_this used to be a hard error here. Phase H.3
@@ -157,17 +159,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // mutable block borrow.
             let func_name = format!("perry_closure_{}__{}", ctx.strings.module_prefix(), func_id);
 
+            // Closures may reserve extra lexical slots after ordinary
+            // captures. Keep `this` last because the runtime's
+            // CAPTURES_THIS_FLAG helpers rebind/unbind the last slot.
+            let new_target_capture_idx = auto_captures.len();
+            let this_capture_idx = auto_captures.len() + usize::from(*captures_new_target);
+
             // Closures with `captures_this` reserve one extra capture
-            // slot (at index `auto_captures.len()`) for the receiver.
+            // slot for the receiver.
             // `lower_object_literal` patches that slot with the
             // containing object pointer AFTER the closure is built.
             // Arrow-in-class closures leave it at 0.0, the existing
             // non-crashing fallback.
-            let total_caps = if *captures_this {
-                auto_captures.len() + 1
-            } else {
-                auto_captures.len()
-            };
+            let total_caps = auto_captures.len()
+                + usize::from(*captures_new_target)
+                + usize::from(*captures_this);
 
             let func_ref = format!("@{}", func_name);
             // Issue #450: when `captures_this`, OR in the runtime's
@@ -235,19 +241,75 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // work even though the box pointers are stable across
             // call sites. The relaxed gate plus the multi-slot LRU
             // backing reclaims that overhead.
-            let no_capture_singleton = total_caps == 0;
+            //
+            // IDENTITY CAVEAT (#4831 follow-up — Stripe `protoExtend`):
+            // the singleton-sharing paths (`js_closure_alloc_singleton` /
+            // `js_closure_alloc_with_captures_singleton`) return ONE cached
+            // `ClosureHeader` for a given (func_ptr[, capture-bits]) key, so two
+            // evaluations of the same closure literal observe the SAME function
+            // object — and therefore the SAME `.prototype`. A non-arrow
+            // `function` expression that is used as a CONSTRUCTOR must instead
+            // follow JS identity semantics: every evaluation yields a fresh
+            // function object with its own fresh `.prototype`. Stripe builds
+            // each resource via
+            //   `const Constructor = function (...a) { Super.apply(this, a); };
+            //    Constructor.prototype = Object.create(Super.prototype);
+            //    Object.assign(Constructor.prototype, sub); return Constructor;`
+            // `Constructor` captures only the constant `Super`, so the
+            // (func_ptr, Super-bits) cache key was identical for every resource
+            // and they all shared ONE `Constructor`/`prototype`. Each
+            // `Object.assign(Constructor.prototype, methods)` then clobbered the
+            // previous resource's methods, so every `stripe.<resource>.<method>`
+            // resolved to the last-registered resource (e.g. `products.create`
+            // ran webhook_endpoints' method) — the `replace is not a function`
+            // symptom.
+            //
+            // To preserve the hot-path optimizations while restoring identity,
+            // a closure is singleton-eligible only when sharing one instance is
+            // observationally safe:
+            //   - arrow functions: no own `.prototype`, not constructable, the
+            //     `.map`/ECS callbacks the cache targets; OR
+            //   - non-arrow closures all of whose captures are BOXED (mutable)
+            //     locals: the compiler-synthesized async-step `cb_v`/`cb_e`
+            //     per-await callbacks capture the boxed `__async_step` self-ref
+            //     and are never used as constructors — keeping them cached
+            //     avoids 2 `gc_malloc`s per `await`.
+            // A non-arrow closure capturing an UNBOXED value (Stripe's `Super`,
+            // or no captures at all) is treated as a potential constructor and
+            // always gets a fresh instance.
             let mut write_ids = std::collections::HashSet::new();
             crate::boxed_vars::collect_write_ids_in_stmts(body, &mut write_ids);
             let writes_unboxed_capture = auto_captures
                 .iter()
                 .any(|cap_id| !ctx.boxed_vars.contains(cap_id) && write_ids.contains(cap_id));
-            let captured_singleton = !no_capture_singleton && !writes_unboxed_capture;
+            // All captures boxed (and at least one), with no reserved `this` /
+            // `new.target` slot: the compiler-synthesized async-callback shape.
+            let captures_all_boxed = !*captures_this
+                && !*captures_new_target
+                && !auto_captures.is_empty()
+                && auto_captures
+                    .iter()
+                    .all(|cap_id| ctx.boxed_vars.contains(cap_id));
+            let singleton_identity_safe = *is_arrow || captures_all_boxed;
+            let no_capture_singleton = *is_arrow && total_caps == 0;
+            let captured_singleton =
+                singleton_identity_safe && !no_capture_singleton && !writes_unboxed_capture;
 
-            // For captures_this, the cache buffer needs an extra slot
-            // for the `this` value so the cache key distinguishes
-            // closures with different receivers. We load `this` here
-            // (mirroring the post-create patch site below) when we're
-            // taking the captured-singleton path.
+            let new_target_value_for_cache = if captured_singleton && *captures_new_target {
+                Some(if let Some(slot) = ctx.new_target_stack.last().cloned() {
+                    ctx.block().load(DOUBLE, &slot)
+                } else {
+                    ctx.block().call(DOUBLE, "js_new_target_get", &[])
+                })
+            } else {
+                None
+            };
+
+            // For captures_this, the cache buffer needs an extra slot for
+            // the `this` value so the cache key distinguishes closures with
+            // different receivers. We load `this` here (mirroring the
+            // post-create patch site below) when we're taking the
+            // captured-singleton path.
             let this_value_for_cache = if captured_singleton && *captures_this {
                 let this_slot = ctx.this_stack.last().cloned();
                 Some(if let Some(slot) = this_slot {
@@ -281,9 +343,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let v_bits = blk.bitcast_double_to_i64(v);
                         blk.store(I64, &v_bits, &slot);
                     }
+                    if let Some(new_target_v) = &new_target_value_for_cache {
+                        let slot =
+                            blk.gep(I64, &buf, &[(I64, &format!("{}", new_target_capture_idx))]);
+                        let v_bits = blk.bitcast_double_to_i64(new_target_v);
+                        blk.store(I64, &v_bits, &slot);
+                    }
                     if let Some(this_v) = &this_value_for_cache {
-                        let this_idx = auto_captures.len();
-                        let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", this_idx))]);
+                        let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", this_capture_idx))]);
                         let v_bits = blk.bitcast_double_to_i64(this_v);
                         blk.store(I64, &v_bits, &slot);
                     }
@@ -302,6 +369,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(PTR, &func_ref), (I32, &cap_count)],
                 )
             };
+
+            // Register an `async function(){}` *expression* closure (one with
+            // no `await` — bodies that await are rewritten to a state machine
+            // upstream and arrive with `is_async: false`) in the async-function
+            // registry so `IsConstructor`/`util.types.isAsyncFunction` recognize
+            // it. Generators are hoisted to top-level and registered elsewhere.
+            // (Test262 subclass/superclass-async-function.)
+            if *is_async {
+                ctx.block()
+                    .call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
+            }
 
             // The captured-singleton helper writes captures internally
             // (so the cached layout matches a fresh allocation). The
@@ -343,7 +421,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // that legitimately have no `this` see `undefined` (the
             // `IMPLICIT_THIS` default), not 0.0 — both are non-crashing.
             if *captures_this {
-                let this_idx = auto_captures.len().to_string();
+                let this_idx = this_capture_idx.to_string();
                 let this_slot = ctx.this_stack.last().cloned();
                 let this_value = if let Some(slot) = this_slot {
                     ctx.block().load(DOUBLE, &slot)
@@ -357,6 +435,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (I64, &closure_handle),
                         (I32, &this_idx),
                         (DOUBLE, &this_value),
+                    ],
+                );
+            }
+            if *captures_new_target {
+                let new_target_idx = new_target_capture_idx.to_string();
+                let new_target_value = if let Some(slot) = ctx.new_target_stack.last().cloned() {
+                    ctx.block().load(DOUBLE, &slot)
+                } else {
+                    ctx.block().call(DOUBLE, "js_new_target_get", &[])
+                };
+                let blk = ctx.block();
+                blk.call_void(
+                    "js_closure_set_capture_f64",
+                    &[
+                        (I64, &closure_handle),
+                        (I32, &new_target_idx),
+                        (DOUBLE, &new_target_value),
                     ],
                 );
             }

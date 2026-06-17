@@ -51,9 +51,9 @@ pub(crate) use escape_objects::{
 pub(crate) use hir_facts::{collect_hir_facts, collect_native_region_fact_graph};
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_expr_filtered, collect_localset_ids_in_stmts,
-    collect_localset_ids_in_stmts_filtered, collect_non_int_localset_ids_in_stmts,
-    collect_strictly_i32_bounded_locals, collect_unsigned_i32_locals, is_bitwise_expr,
-    is_flat_const_indexget, is_strictly_i32_bounded_expr, is_ushr_zero, walk_writes_for_strict,
+    collect_localset_ids_in_stmts_filtered, collect_strictly_i32_bounded_locals,
+    collect_unsigned_i32_locals, is_bitwise_expr, is_flat_const_indexget,
+    is_strictly_i32_bounded_expr, is_ushr_zero, walk_writes_for_strict,
     walk_writes_in_expr_for_strict,
 };
 pub(crate) use i64_emit::{i64_body, i64_cond, i64_val};

@@ -31,6 +31,7 @@ pub(crate) fn mangle_type(ty: &Type) -> String {
         Type::Int32 => "i32".to_string(),
         Type::BigInt => "bigint".to_string(),
         Type::String => "str".to_string(),
+        Type::StringLiteral(_) => "str".to_string(),
         Type::Symbol => "sym".to_string(),
         Type::Array(elem) => format!("arr_{}", mangle_type(elem)),
         Type::Tuple(elems) => {

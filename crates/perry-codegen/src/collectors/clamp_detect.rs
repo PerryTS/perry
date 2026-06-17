@@ -76,6 +76,13 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
 }
 
 /// Detect a 1-param clampU8 pattern: `if (v < 0) return 0; if (v > 255) return 255; return v|0;`
+///
+/// The third statement must actually coerce (`v | 0`, another bitwise op, or
+/// an integer literal). A body ending in bare `return v;` passes a fractional
+/// in-range `v` through unchanged, so treating its callers' results as
+/// int-producing (clamp_u8_functions feeds `clamp_fn_ids` as an
+/// argument-INdependent admission in `collect_integer_locals`) would put a
+/// truncating i32 shadow slot on a non-integer value.
 pub fn detect_clamp_u8(f: &Function) -> bool {
     if f.is_async || f.is_generator || f.params.len() != 1 {
         return false;
@@ -136,7 +143,8 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
     } else {
         return false;
     }
-    true
+    // [2] Return of an int-coercing expression (`v | 0`, bitwise, Integer).
+    matches!(&f.body[2], Stmt::Return(Some(e)) if returns_int_expr(e))
 }
 
 /// A function is i64-specializable if it's a pure numeric recursive fn.

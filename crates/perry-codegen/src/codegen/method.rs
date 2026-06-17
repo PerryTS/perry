@@ -12,7 +12,7 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I64};
 
-use super::helpers::sanitize;
+use super::helpers::scoped_static_method_name;
 use super::opts::CrossModuleCtx;
 
 fn node_stream_parent_kind(
@@ -59,7 +59,7 @@ pub(super) fn compile_method(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
@@ -88,6 +88,9 @@ pub(super) fn compile_method(
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     let _ = lf.create_block("entry");
 
+    let mut method_boxed_vars = module_boxed_vars.clone();
+    super::arguments::add_arguments_mapped_boxes(&method.params, &mut method_boxed_vars);
+
     // Allocate slots for `this` and each parameter; pre-populate with
     // the incoming values.
     let (this_slot, locals): (String, HashMap<u32, String>) = {
@@ -96,8 +99,8 @@ pub(super) fn compile_method(
         blk.store(DOUBLE, "%this_arg", &this_slot);
         let mut map = HashMap::new();
         for p in &method.params {
-            let slot = blk.alloca(DOUBLE);
-            blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            let arg_name = format!("%arg{}", p.id);
+            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &arg_name);
             map.insert(p.id, slot);
         }
         (this_slot, map)
@@ -111,8 +114,6 @@ pub(super) fn compile_method(
         local_types.insert(p.id, p.ty.clone());
     }
 
-    let method_boxed_vars = module_boxed_vars.clone();
-
     let clamp_fn_ids: std::collections::HashSet<u32> = cross_module
         .clamp3_functions
         .union(&cross_module.clamp_u8_functions)
@@ -125,6 +126,7 @@ pub(super) fn compile_method(
         &method.body,
         &flat_const_ids,
         &clamp_fn_ids,
+        &cross_module.clamp3_functions,
         &method_boxed_vars,
         module_globals,
         classes,
@@ -151,6 +153,8 @@ pub(super) fn compile_method(
         pending_label: None,
         classes,
         this_stack: vec![this_slot],
+        inline_ctor_return: Vec::new(),
+        new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
         methods,
         module_globals,
@@ -181,11 +185,14 @@ pub(super) fn compile_method(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         option_object_locals: HashMap::new(),
+        object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
+        local_generator_funcs: &cross_module.local_generator_funcs,
+        funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
         imported_func_has_rest: &cross_module.imported_func_has_rest,
@@ -257,6 +264,12 @@ pub(super) fn compile_method(
         buffer_alias_base,
     };
 
+    super::arguments::materialize_arguments_object(
+        &mut ctx,
+        &method.params,
+        super::arguments::ArgumentsCallee::Undefined,
+    );
+
     // Constructors emitted as standalone cross-module LLVM functions (named
     // `<prefix>__<class>_constructor`) must bake the field initializers into
     // their body. At the `new ImportedClass(...)` call site, `lower_new`
@@ -309,7 +322,11 @@ pub(super) fn compile_method(
                     break;
                 };
                 let has_local_body = pc.constructor.is_some();
-                let has_imported_ctor = ctx.imported_class_ctors.contains_key(pname);
+                let has_imported_ctor = ctx
+                    .imported_class_ctors
+                    .get(pname)
+                    .map(|ctor| ctor.stops_constructor_walk())
+                    .unwrap_or(false);
                 if has_local_body || has_imported_ctor {
                     break;
                 }
@@ -364,10 +381,10 @@ pub(super) fn compile_method(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0);
                             (sym, pcount)
-                        } else if let Some((sym, n)) =
+                        } else if let Some(ctor) =
                             ctx.imported_class_ctors.get(&pname_owned).cloned()
                         {
-                            (sym, n)
+                            (ctor.symbol, ctor.param_count)
                         } else {
                             // No callable ctor symbol — bail.
                             stmt::lower_stmts(&mut ctx, &method.body).with_context(|| {
@@ -385,10 +402,8 @@ pub(super) fn compile_method(
                             let _ = std::mem::take(&mut ctx.pending_declares);
                             return Ok(());
                         }
-                    } else if let Some((sym, n)) =
-                        ctx.imported_class_ctors.get(&pname_owned).cloned()
-                    {
-                        (sym, n)
+                    } else if let Some(ctor) = ctx.imported_class_ctors.get(&pname_owned).cloned() {
+                        (ctor.symbol, ctor.param_count)
                     } else {
                         ("".to_string(), 0)
                     };
@@ -527,12 +542,12 @@ pub(super) fn compile_method(
 
 /// Compile a static class method as a top-level LLVM function with
 /// no `this` parameter. Mostly identical to `compile_function` but
-/// the LLVM symbol name is `perry_static_<modprefix>__<class>__<method>`
-/// instead of `perry_fn_<modprefix>__<name>`.
+/// the LLVM symbol name is scoped by module, class id, class name, and
+/// method name instead of `perry_fn_<modprefix>__<name>`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_static_method(
     llmod: &mut LlModule,
-    class_name: &str,
+    class: &perry_hir::Class,
     f: &Function,
     func_names: &HashMap<u32, String>,
     strings: &mut StringPool,
@@ -543,19 +558,14 @@ pub(super) fn compile_static_method(
     enums: &HashMap<(String, String), perry_hir::EnumValue>,
     static_field_globals: &HashMap<(String, String), String>,
     class_ids: &HashMap<String, u32>,
-    func_signatures: &HashMap<u32, (usize, bool, bool)>,
+    func_signatures: &HashMap<u32, (usize, bool, bool, bool)>,
     func_synthetic_arguments: &std::collections::HashSet<u32>,
     module_prefix: &str,
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
 ) -> Result<()> {
-    let llvm_name = format!(
-        "perry_static_{}__{}__{}",
-        module_prefix,
-        sanitize(class_name),
-        sanitize(&f.name),
-    );
+    let llvm_name = scoped_static_method_name(module_prefix, class.id, &class.name, &f.name);
 
     let params: Vec<(LlvmType, String)> = f
         .params
@@ -568,15 +578,43 @@ pub(super) fn compile_static_method(
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     let _ = lf.create_block("entry");
 
-    let locals: HashMap<u32, String> = {
+    let mut static_boxed_vars = module_boxed_vars.clone();
+    super::arguments::add_arguments_mapped_boxes(&f.params, &mut static_boxed_vars);
+
+    // A static method invoked as `C.m()` binds `this` to the class
+    // constructor `C`. Represent that as the class-ref NaN-box (the same
+    // INT32-tagged class-id value `Expr::ClassRef` lowers to) stored in a
+    // `this` slot so `this.x` / `this.#x()` / `this[k]` inside the body
+    // resolve against the class object via the normal dynamic-dispatch
+    // path. (Previously `this` fell through to `js_implicit_this_get` and
+    // read back `undefined`.)
+    let class_ref_cid = class_ids.get(&class.name).copied().unwrap_or(class.id);
+    let class_ref_lit = {
+        let bits = crate::nanbox::INT32_TAG | (class_ref_cid as u64 & 0xFFFF_FFFF);
+        crate::nanbox::double_literal(f64::from_bits(bits))
+    };
+    let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
+        let this_slot = blk.alloca(DOUBLE);
+        // Receiver-sensitive `this`: dynamic dispatch paths (inherited
+        // `D.m()`, `C.m.call(x)` / `.apply(x)`) arm a one-shot override that
+        // this prologue call consumes; direct calls fall back to the lexical
+        // class-ref, preserving the prior `this === C` behavior. Needed so
+        // static private brand checks (`this.#x` in a static method) see the
+        // real receiver (test262 class/elements static-private-*).
+        let resolved_this = blk.call(
+            DOUBLE,
+            "js_static_this_resolve",
+            &[(DOUBLE, &class_ref_lit)],
+        );
+        blk.store(DOUBLE, &resolved_this, &this_slot);
         let mut map = HashMap::new();
         for p in &f.params {
-            let slot = blk.alloca(DOUBLE);
-            blk.store(DOUBLE, &format!("%arg{}", p.id), &slot);
+            let arg_name = format!("%arg{}", p.id);
+            let slot = super::arguments::store_param_slot(blk, p, &static_boxed_vars, &arg_name);
             map.insert(p.id, slot);
         }
-        map
+        (this_slot, map)
     };
 
     let local_types: HashMap<u32, perry_types::Type> =
@@ -590,11 +628,11 @@ pub(super) fn compile_static_method(
         .collect();
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
-    let static_boxed_vars = module_boxed_vars.clone();
     let native_facts = crate::collectors::collect_native_region_fact_graph(
         &f.body,
         &flat_const_ids,
         &clamp_fn_ids,
+        &cross_module.clamp3_functions,
         &static_boxed_vars,
         module_globals,
         classes,
@@ -604,10 +642,10 @@ pub(super) fn compile_static_method(
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
-        source_function: format!("{}.{}", class_name, f.name),
+        source_function: format!("{}.{}", class.name, f.name),
         source_function_slug: crate::expr::native_region_slug(&format!(
             "{}.{}",
-            class_name, f.name
+            class.name, f.name
         )),
         active_region_id: None,
         locals,
@@ -620,12 +658,14 @@ pub(super) fn compile_static_method(
         label_targets: HashMap::new(),
         pending_label: None,
         classes,
-        this_stack: Vec::new(),
-        // Static methods have no `this` but they CAN reference
-        // sibling static methods/fields via the class name (which
-        // they handle via StaticFieldGet/StaticMethodCall, not via
-        // `this`). The class_stack is empty here.
-        class_stack: Vec::new(),
+        this_stack: vec![this_slot],
+        inline_ctor_return: Vec::new(),
+        new_target_stack: Vec::new(),
+        // A static method's `this` is the class constructor (bound above to
+        // the class-ref slot). `class_stack` carries the class name so
+        // `super.x` in a static method resolves against the parent's static
+        // side, mirroring instance-method setup.
+        class_stack: vec![class.name.clone()],
         methods,
         module_globals,
         import_function_prefixes,
@@ -655,11 +695,14 @@ pub(super) fn compile_static_method(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         option_object_locals: HashMap::new(),
+        object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         imported_async_funcs: &cross_module.imported_async_funcs,
         local_async_funcs: &cross_module.local_async_funcs,
+        local_generator_funcs: &cross_module.local_generator_funcs,
+        funcs_reading_dynamic_this: &cross_module.funcs_reading_dynamic_this,
         type_aliases: &cross_module.type_aliases,
         imported_func_param_counts: &cross_module.imported_func_param_counts,
         imported_func_has_rest: &cross_module.imported_func_has_rest,
@@ -730,13 +773,18 @@ pub(super) fn compile_static_method(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
     };
+    super::arguments::materialize_arguments_object(
+        &mut ctx,
+        &f.params,
+        super::arguments::ArgumentsCallee::Undefined,
+    );
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
-            format!("lowering async body of static '{}::{}'", class_name, f.name)
+            format!("lowering async body of static '{}::{}'", class.name, f.name)
         })?;
     } else {
         stmt::lower_stmts(&mut ctx, &f.body)
-            .with_context(|| format!("lowering body of static '{}::{}'", class_name, f.name))?;
+            .with_context(|| format!("lowering body of static '{}::{}'", class.name, f.name))?;
     }
 
     if !ctx.block().is_terminated() {

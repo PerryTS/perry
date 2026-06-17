@@ -31,9 +31,106 @@ unsafe fn pack_args_array(args: &[f64]) -> *mut perry_runtime::ArrayHeader {
     arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>()
 }
 
-#[cfg(feature = "bundled-events")]
+/// Dynamic dispatch for `AsyncLocalStorage` receivers whose static type the
+/// codegen lost (`any`-typed bindings, closure captures). Gated on registry
+/// type membership so no other subsystem's handle is claimed (#788).
+unsafe fn dispatch_async_local_storage_method(
+    handle: i64,
+    method: &str,
+    args: &[f64],
+) -> Option<f64> {
+    if !matches!(
+        method,
+        "run" | "getStore" | "enterWith" | "exit" | "disable"
+    ) {
+        return None;
+    }
+    if get_handle_mut::<crate::async_local_storage::AsyncLocalStorageHandle>(handle).is_none() {
+        return None;
+    }
+    Some(match method {
+        "getStore" => crate::async_local_storage::js_async_local_storage_get_store(handle),
+        "run" if args.len() >= 2 => {
+            let rest = if args.len() > 2 { &args[2..] } else { &[] };
+            let rest_array = if rest.is_empty() {
+                0
+            } else {
+                pack_args_array(rest) as i64
+            };
+            crate::async_local_storage::js_async_local_storage_run(
+                handle, args[0], args[1], rest_array,
+            )
+        }
+        "enterWith" => {
+            let store = args.first().copied().unwrap_or(TAG_UNDEFINED_F64);
+            crate::async_local_storage::js_async_local_storage_enter_with(handle, store);
+            TAG_UNDEFINED_F64
+        }
+        "exit" if !args.is_empty() => {
+            let rest = if args.len() > 1 { &args[1..] } else { &[] };
+            let rest_array = if rest.is_empty() {
+                0
+            } else {
+                pack_args_array(rest) as i64
+            };
+            crate::async_local_storage::js_async_local_storage_exit(handle, args[0], rest_array)
+        }
+        "disable" => {
+            crate::async_local_storage::js_async_local_storage_disable(handle);
+            TAG_UNDEFINED_F64
+        }
+        _ => return None,
+    })
+}
+
+/// Shared `extern "C"` surface of the EventEmitter implementation. Both
+/// perry-stdlib (`bundled-events`) and perry-ext-events export these exact
+/// symbols, kept byte-identical per #3072. The dispatch arms below call
+/// through the linker-resolved symbol instead of `crate::events::*` so that
+/// when the well-known flip links perry-ext-events, dynamic dispatch
+/// consults the SAME handle registry the constructors used. An in-crate call
+/// always hit perry-stdlib's registry and returned `None` for ext-events
+/// handles — every dynamic `.on`/`.emit`/`.setMaxListeners` on an emitter
+/// silently no-op'd and method-value reads came back `undefined` (#4995).
+/// Mirrors the sqlite duplicate-symbol contract noted in
+/// `compile/optimized_libs.rs` (#643).
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+extern "C" {
+    fn js_event_emitter_is_handle(handle: i64) -> bool;
+    fn js_event_emitter_on(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_once(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_prepend_listener(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_prepend_once_listener(
+        handle: i64,
+        event_bits: i64,
+        listener_bits: i64,
+    ) -> i64;
+    fn js_event_emitter_remove_listener(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
+    fn js_event_emitter_remove_all_listeners(
+        handle: i64,
+        args_ptr: *const perry_runtime::ArrayHeader,
+    ) -> i64;
+    fn js_event_emitter_emit(
+        handle: i64,
+        event_bits: i64,
+        args_ptr: *mut perry_runtime::ArrayHeader,
+    ) -> f64;
+    fn js_event_emitter_listener_count(handle: i64, event_bits: i64, listener_bits: i64) -> f64;
+    fn js_event_emitter_listeners(handle: i64, event_bits: i64) -> *mut perry_runtime::ArrayHeader;
+    fn js_event_emitter_raw_listeners(
+        handle: i64,
+        event_bits: i64,
+    ) -> *mut perry_runtime::ArrayHeader;
+    fn js_event_emitter_event_names(handle: i64) -> *mut perry_runtime::ArrayHeader;
+    fn js_event_emitter_set_max_listeners(handle: i64, n: f64) -> i64;
+    fn js_event_emitter_get_max_listeners(handle: i64) -> f64;
+    fn js_event_emitter_domain_value(handle: i64) -> f64;
+    fn js_event_emitter_new_with_options(options: f64) -> i64;
+}
+
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
 unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> {
-    if !crate::events::is_event_emitter_handle(handle) {
+    if !js_event_emitter_is_handle(handle) {
         return None;
     }
 
@@ -47,40 +144,64 @@ unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64])
         f64::from_bits(POINTER_TAG_BITS | (ptr as u64 & POINTER_MASK_BITS))
     };
 
+    // EventEmitterAsyncResource extras exist only in the bundled impl;
+    // perry-ext-events has no async-resource constructor, so its handles
+    // never satisfy this probe.
+    #[cfg(feature = "bundled-events")]
+    if crate::events::is_event_emitter_async_resource_handle(handle) {
+        match method {
+            "asyncId" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_id(
+                    handle,
+                ));
+            }
+            "triggerAsyncId" => {
+                return Some(
+                    crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
+                );
+            }
+            "asyncResource" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_resource(handle));
+            }
+            "emitDestroy" => {
+                return Some(crate::events::js_event_emitter_async_resource_emit_destroy(
+                    handle,
+                ));
+            }
+            _ => {}
+        }
+    }
+
     let value = match method {
         "on" | "addListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_on(handle, event_bits(0), event_bits(1));
+            js_event_emitter_on(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "once" if args.len() >= 2 => {
-            crate::events::js_event_emitter_once(handle, event_bits(0), event_bits(1));
+            js_event_emitter_once(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "prependListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_prepend_listener(handle, event_bits(0), event_bits(1));
+            js_event_emitter_prepend_listener(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "prependOnceListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_prepend_once_listener(
-                handle,
-                event_bits(0),
-                event_bits(1),
-            );
+            js_event_emitter_prepend_once_listener(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {
-            crate::events::js_event_emitter_remove_listener(handle, event_bits(0), event_bits(1));
+            js_event_emitter_remove_listener(handle, event_bits(0), event_bits(1));
             nanbox_handle_value(handle)
         }
         "removeAllListeners" => {
-            crate::events::js_event_emitter_remove_all_listeners(handle, pack_args_array(args));
+            js_event_emitter_remove_all_listeners(handle, pack_args_array(args));
             nanbox_handle_value(handle)
         }
         "emit" => {
             let rest = if args.len() > 1 { &args[1..] } else { &[] };
-            crate::events::js_event_emitter_emit(handle, event_bits(0), pack_args_array(rest))
+            js_event_emitter_emit(handle, event_bits(0), pack_args_array(rest))
         }
-        "listenerCount" if !args.is_empty() => crate::events::js_event_emitter_listener_count(
+        "listenerCount" if !args.is_empty() => js_event_emitter_listener_count(
             handle,
             event_bits(0),
             args.get(1)
@@ -88,40 +209,27 @@ unsafe fn dispatch_event_emitter_method(handle: i64, method: &str, args: &[f64])
                 .map(|value| value.to_bits() as i64)
                 .unwrap_or(TAG_UNDEFINED_BITS),
         ),
-        "listeners" if !args.is_empty() => nanbox_array(crate::events::js_event_emitter_listeners(
-            handle,
-            event_bits(0),
-        )),
-        "rawListeners" if !args.is_empty() => nanbox_array(
-            crate::events::js_event_emitter_raw_listeners(handle, event_bits(0)),
-        ),
-        "eventNames" => nanbox_array(crate::events::js_event_emitter_event_names(handle)),
+        "listeners" if !args.is_empty() => {
+            nanbox_array(js_event_emitter_listeners(handle, event_bits(0)))
+        }
+        "rawListeners" if !args.is_empty() => {
+            nanbox_array(js_event_emitter_raw_listeners(handle, event_bits(0)))
+        }
+        "eventNames" => nanbox_array(js_event_emitter_event_names(handle)),
         "setMaxListeners" if !args.is_empty() => {
-            crate::events::js_event_emitter_set_max_listeners(handle, args[0]);
+            js_event_emitter_set_max_listeners(handle, args[0]);
             nanbox_handle_value(handle)
         }
-        "getMaxListeners" => crate::events::js_event_emitter_get_max_listeners(handle),
-        "domain" => crate::events::js_event_emitter_domain_value(handle),
-        "asyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_async_id(handle)
-        }
-        "triggerAsyncId" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_trigger_async_id(handle)
-        }
-        "asyncResource" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_async_resource(handle)
-        }
-        "emitDestroy" if crate::events::is_event_emitter_async_resource_handle(handle) => {
-            crate::events::js_event_emitter_async_resource_emit_destroy(handle)
-        }
+        "getMaxListeners" => js_event_emitter_get_max_listeners(handle),
+        "domain" => js_event_emitter_domain_value(handle),
         _ => return None,
     };
     Some(value)
 }
 
-#[cfg(feature = "bundled-events")]
+#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
 unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option<f64> {
-    if !crate::events::is_event_emitter_handle(handle) {
+    if !js_event_emitter_is_handle(handle) {
         return None;
     }
 
@@ -136,6 +244,7 @@ unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option
         js_class_method_bind(nanbox_handle_value(handle), method.as_ptr(), method.len())
     };
 
+    #[cfg(feature = "bundled-events")]
     if crate::events::is_event_emitter_async_resource_handle(handle) {
         match property {
             "asyncId" => {
@@ -223,8 +332,55 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
 
-    #[cfg(feature = "bundled-events")]
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
+        return value;
+    }
+
+    if let Some(value) = dispatch_async_local_storage_method(handle, method_name, &args) {
+        return value;
+    }
+
+    #[cfg(feature = "http-client")]
+    if let Some(value) = unsafe { crate::http::dispatch_agent_method(handle, method_name, &args) } {
+        return value;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+            fn js_ext_http_agent_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+        }
+
+        if matches!(
+            method_name,
+            "getName" | "destroy" | "keepSocketAlive" | "reuseSocket"
+        ) && js_ext_http_agent_is_handle(handle) != 0
+        {
+            let args_ptr = if args.is_empty() {
+                std::ptr::null()
+            } else {
+                args.as_ptr()
+            };
+            return js_ext_http_agent_dispatch_method(
+                handle,
+                method_name.as_ptr(),
+                method_name.len(),
+                args_ptr,
+                args.len(),
+            );
+        }
+    }
+
+    #[cfg(feature = "http-client")]
+    if let Some(value) = crate::http::dispatch_client_request_method(handle, method_name, &args) {
         return value;
     }
 
@@ -376,8 +532,21 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // keep hash before net to avoid changing the priority of in-registry
     // matches relative to the v0.5.98/#88 ordering.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest" | "copy")
-        && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        method_name,
+        "update"
+            | "digest"
+            | "copy"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hash(handle, method_name, &args);
     }
@@ -386,8 +555,20 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // the runtime path the codegen falls back to whenever `alg` isn't a
     // literal `"sha256"`. See #1076 for the silent-empty bug this closes.
     #[cfg(feature = "crypto")]
-    if matches!(method_name, "update" | "digest")
-        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        method_name,
+        "update"
+            | "digest"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hmac(handle, method_name, &args);
     }
@@ -446,6 +627,23 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_diffie_hellman(handle, method_name, &args);
     }
 
+    #[cfg(feature = "crypto")]
+    if matches!(
+        method_name,
+        "toString"
+            | "toJSON"
+            | "toLegacyObject"
+            | "checkHost"
+            | "checkEmail"
+            | "checkIP"
+            | "verify"
+            | "checkPrivateKey"
+            | "checkIssued"
+    ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
+    {
+        return crate::crypto::dispatch_x509_method(handle, method_name, &args);
+    }
+
     // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
     // followed by .update(...).final() / .getAuthTag() / .setAuthTag() —
     // issue #1075. Method-gated like the Hash handle above so handle id
@@ -469,6 +667,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_sign(handle, method_name, &args);
+    }
+
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if crate::tls::should_dispatch_tls_handle(handle, method_name) {
+        return crate::tls::dispatch_tls_handle(handle, method_name, &args);
     }
 
     // SQLite Statement handle: stmt.raw() / .all() / .get() / .run() —
@@ -561,10 +764,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     // External zlib path (#1843): when the well-known flip routes `node:zlib`
-    // to perry-ext-zlib and strips `compression`, the stream handle + dispatch
-    // live in perry-ext-zlib. Same registry-gated contract; the per-method
-    // match runs inside `js_ext_zlib_dispatch_method`.
-    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    // to perry-ext-zlib, the stream handle + dispatch live in perry-ext-zlib.
+    // Same registry-gated contract; the per-method match runs inside
+    // `js_ext_zlib_dispatch_method`. This may coexist with `compression` in
+    // no-auto test builds that use the full stdlib plus external archives.
+    #[cfg(feature = "external-zlib-pump")]
     if matches!(
         method_name,
         "write"
@@ -606,6 +810,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_request_method(handle, method_name, &args) }
+    {
+        return value;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    if let Some(value) =
         unsafe { super::dispatch_http::dispatch_client_incoming_method(handle, method_name, &args) }
     {
         return value;
@@ -632,6 +843,8 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_dispatch_method(
                 handle: i64,
                 method_ptr: *const u8,
@@ -653,13 +866,34 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                 args_ptr: *const f64,
                 args_len: usize,
             ) -> f64;
+            fn js_ext_http2_session_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+            fn js_ext_http2_stream_dispatch_method(
+                handle: i64,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
         }
 
-        let is_http_server_method =
-            matches!(
-                method_name,
-                "listen" | "close" | "address" | "on" | "addListener"
-            ) || matches!(method_name, "closeAllConnections" | "closeIdleConnections");
+        let is_http_server_method = matches!(
+            method_name,
+            "listen" | "close" | "address" | "on" | "addListener" | "setTimeout"
+        ) || matches!(
+            method_name,
+            "closeAllConnections"
+                | "closeIdleConnections"
+                | "removeAllListeners"
+                | "removeListener"
+                | "off"
+                | "@@__perry_wk_asyncDispose"
+        );
         if is_http_server_method && unsafe { js_ext_http_server_is_handle(handle) } != 0 {
             return unsafe {
                 js_ext_http_server_dispatch_method(
@@ -674,16 +908,53 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_incoming_message_method = matches!(
             method_name,
-            "on" | "addListener" | "setEncoding" | "pause" | "resume" | "destroy" | "read"
+            "on" | "addListener"
+                | "setEncoding"
+                | "setTimeout"
+                | "pause"
+                | "resume"
+                | "destroy"
+                | "read"
+                | "_addHeaderLine"
+                | "__set_socket"
+                | "__set_connection"
         ) || matches!(
             method_name,
-            "method" | "url" | "httpVersion" | "headers" | "rawHeaders"
+            "method"
+                | "url"
+                | "httpVersion"
+                | "headers"
+                | "rawHeaders"
+                | "headersDistinct"
+                | "trailers"
+                | "rawTrailers"
+                | "trailersDistinct"
+                | "socket"
+                | "connection"
+                | "signal"
+                | "remoteAddress"
+                | "remotePort"
         ) || matches!(
             method_name,
-            "__get_method" | "__get_url" | "__get_httpVersion" | "__get_headers"
+            "__get_method"
+                | "__get_url"
+                | "__get_httpVersion"
+                | "__get_headers"
+                | "__get_headersDistinct"
+                | "__get_trailers"
         ) || matches!(
             method_name,
-            "__get_rawHeaders" | "__get_complete" | "__get_aborted" | "__get_destroyed"
+            "__get_rawHeaders"
+                | "__get_rawTrailers"
+                | "__get_trailersDistinct"
+                | "__get_complete"
+                | "__get_aborted"
+                | "__get_destroyed"
+                | "__get_socket"
+                | "__get_connection"
+                | "__get_signal"
+                | "__get_remoteAddress"
+                | "__get_remotePort"
         );
         if is_incoming_message_method
             && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
@@ -701,19 +972,50 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
         let is_server_response_method = matches!(
             method_name,
-            "setHeader" | "getHeader" | "removeHeader" | "hasHeader" | "writeHead" | "write"
+            "setHeader"
+                | "getHeader"
+                | "removeHeader"
+                | "hasHeader"
+                | "getHeaders"
+                | "getHeaderNames"
+                | "appendHeader"
+                | "setHeaders"
+                | "writeHead"
+                | "write"
         ) || matches!(
             method_name,
-            "addTrailers" | "end" | "flushHeaders" | "writeContinue" | "writeProcessing"
+            "addTrailers"
+                | "end"
+                | "flushHeaders"
+                | "cork"
+                | "uncork"
+                | "destroy"
+                | "pipe"
+                | "setTimeout"
+                | "writeEarlyHints"
+                | "writeContinue"
+                | "writeProcessing"
+                | "assignSocket"
+                | "detachSocket"
         ) || matches!(
             method_name,
             "on" | "addListener" | "setStatus" | "getStatus"
         ) || matches!(
             method_name,
-            "__get_statusCode" | "__set_statusCode" | "__set_statusMessage"
+            "__get_statusCode" | "__get_statusMessage" | "__set_statusCode" | "__set_statusMessage"
         ) || matches!(
             method_name,
-            "__get_headersSent" | "__get_writableEnded" | "__get_writableFinished"
+            "__get_headersSent"
+                | "__get_writableEnded"
+                | "__get_writableFinished"
+                | "__get_finished"
+                | "__get_sendDate"
+                | "__set_sendDate"
+                | "__get_strictContentLength"
+                | "__set_strictContentLength"
+                | "__get_req"
+                | "__get_socket"
+                | "__get_connection"
         );
         if is_server_response_method
             && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
@@ -727,6 +1029,84 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
                     args.len(),
                 )
             };
+        }
+
+        let is_h2_session_method = matches!(
+            method_name,
+            "request"
+                | "on"
+                | "addListener"
+                | "close"
+                | "destroy"
+                | "ref"
+                | "unref"
+                | "setTimeout"
+                | "setLocalWindowSize"
+                | "ping"
+                | "settings"
+                | "goaway"
+        );
+        if is_h2_session_method && unsafe { js_ext_http2_session_is_handle(handle) } != 0 {
+            return unsafe {
+                js_ext_http2_session_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+
+        let is_h2_stream_method = matches!(
+            method_name,
+            "on" | "addListener"
+                | "setEncoding"
+                | "respond"
+                | "end"
+                | "close"
+                | "setTimeout"
+                | "priority"
+                | "additionalHeaders"
+                | "pushStream"
+                | "respondWithFD"
+                | "respondWithFile"
+                | "sendTrailers"
+        );
+        if is_h2_stream_method && unsafe { js_ext_http2_stream_is_handle(handle) } != 0 {
+            return unsafe {
+                js_ext_http2_stream_dispatch_method(
+                    handle,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args.as_ptr(),
+                    args.len(),
+                )
+            };
+        }
+    }
+
+    // #4975: client-side response (`http.get`/`ClientRequest` `'response'`
+    // callback) is a *distinct* IncomingMessage handle from the server's, and
+    // is registered as an EventEmitter — so `res.on(...)` already routes
+    // through the EventEmitter arm above. But `Readable.pause()`/`.resume()`
+    // aren't EventEmitter methods, the server-IM check above rejects the
+    // client handle, and they fell through to the unknown-handle catch-all
+    // which returns a NaN (`typeof` number). That broke the canonical
+    // `res.resume().on('end', …)` body-drain chain with
+    // `(number).on is not a function` (test-http-write-head-2). Node's
+    // `Readable.pause()/resume()` return `this`; the buffered body already
+    // drains when an `'end'`/`'data'` listener attaches, so returning the
+    // receiver is the whole fix here.
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_ext_http_client_incoming_message_is_handle(handle: i64) -> i32;
+        }
+        if matches!(method_name, "pause" | "resume")
+            && unsafe { js_ext_http_client_incoming_message_is_handle(handle) } != 0
+        {
+            return nanbox_handle_value(handle);
         }
     }
 
@@ -753,6 +1133,13 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         ) {
             return v;
         }
+        if let Some(v) = crate::common::net_method_values::dispatch_external_block_list_method(
+            handle,
+            method_name,
+            &args,
+        ) {
+            return v;
+        }
     }
 
     // Web Fetch method dispatch (refs #421 — Phase 1 of the handle-NaN-boxing
@@ -763,7 +1150,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // `js_native_call_method` → small-handle range check → here. Each helper
     // does its own registry-membership + property-name gate; `None` means
     // "not us, try the next dispatcher or return undefined".
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     {
         // #1698: Request body methods (`req.json()`/`.text()`/`.arrayBuffer()`)
         // on an any-typed / computed-key receiver. Hono's `HonoRequest.#cachedBody`
@@ -1104,6 +1491,15 @@ unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
             crate::net::js_net_socket_destroy(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
+        "getTypeOfService" => crate::net::js_net_socket_get_type_of_service(handle),
+        "setTypeOfService" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            crate::net::js_net_socket_set_type_of_service(handle, value);
+            f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
+        }
         "on" if args.len() >= 2 => {
             let event_ptr = unbox_to_i64(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
@@ -1228,11 +1624,19 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         f64::from_bits(0x7FFD_0000_0000_0000u64 | (h as u64 & 0x0000_FFFF_FFFF_FFFF))
     }
     extern "C" {
-        fn js_net_socket_write(handle: i64, buf_ptr: i64);
-        // Issue #1852 — `js_net_socket_end` now takes the optional final
+        // #5021 — route write/end/destroy through perry-ext-net's DISTINCT
+        // `js_ext_net_*` symbols, NOT the shared `js_net_socket_*` names. The
+        // bundled stdlib net exports same-named twins, so in a workspace /
+        // jsruntime build the shared names bind to the bundled twin's EMPTY
+        // socket registry and the command (write bytes / FIN / teardown) is
+        // silently dropped — no `write()` syscall ever fires. The distinct
+        // symbols have no twin and always reach ext-net's own registry.
+        // Mirrors how `js_ext_net_destroy_socket` was already split out (#5010).
+        fn js_ext_net_socket_write(handle: i64, buf_ptr: i64);
+        // Issue #1852 — `js_ext_net_socket_end` takes the optional final
         // chunk (NA_JSV bits) so `socket.end(data)` writes before FIN.
-        fn js_net_socket_end(handle: i64, chunk_bits: i64);
-        fn js_net_socket_destroy(handle: i64);
+        fn js_ext_net_socket_end(handle: i64, chunk_bits: i64);
+        fn js_ext_net_destroy_socket(handle: i64);
         fn js_net_socket_on(handle: i64, event_ptr: i64, cb_ptr: i64);
         fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64);
         fn js_net_socket_upgrade_tls(
@@ -1256,6 +1660,8 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
         // cast to i64; NaN-box with POINTER_TAG to surface as a real JS array.
         fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64) -> i64;
+        fn js_net_socket_get_type_of_service(handle: i64) -> f64;
+        fn js_net_socket_set_type_of_service(handle: i64, value: f64) -> i64;
     }
 
     // Parse a runtime StringHeader pointer (`address` / `eventNames`
@@ -1272,9 +1678,10 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
     match method {
         "write" if !args.is_empty() => {
             // Issue #1131 — pass the full NaN-box bits, not the
-            // pre-stripped pointer. perry-ext-net's js_net_socket_write
-            // now probes Buffer-vs-string itself.
-            js_net_socket_write(handle, args[0].to_bits() as i64);
+            // pre-stripped pointer. ext-net's write probes Buffer-vs-string
+            // itself. #5021 — distinct symbol so the bytes can't be dropped
+            // into the bundled twin's empty registry.
+            js_ext_net_socket_write(handle, args[0].to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "end" => {
@@ -1284,11 +1691,11 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
                 .first()
                 .copied()
                 .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
-            js_net_socket_end(handle, chunk.to_bits() as i64);
+            js_ext_net_socket_end(handle, chunk.to_bits() as i64);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "destroy" | "destroySoon" => {
-            js_net_socket_destroy(handle);
+            js_ext_net_destroy_socket(handle);
             f64::from_bits(0x7FFC_0000_0000_0001)
         }
         "on" | "addListener" if args.len() >= 2 => {
@@ -1352,6 +1759,15 @@ unsafe fn dispatch_external_net_socket(handle: i64, method: &str, args: &[f64]) 
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         "address" => json_str_to_value(js_net_socket_address(handle)),
+        "getTypeOfService" => js_net_socket_get_type_of_service(handle),
+        "setTypeOfService" => {
+            let value = args
+                .first()
+                .copied()
+                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
+            js_net_socket_set_type_of_service(handle, value);
+            nanbox_handle(handle)
+        }
         "resetAndDestroy" => {
             js_net_socket_reset_and_destroy(handle);
             nanbox_handle(handle)
@@ -1392,8 +1808,23 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return v;
     }
 
-    #[cfg(feature = "bundled-events")]
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
+        return value;
+    }
+
+    #[cfg(feature = "http-client")]
+    if let Some(value) = crate::http::dispatch_agent_property(handle, property_name) {
+        return value;
+    }
+
+    #[cfg(feature = "http-client")]
+    if let Some(value) = crate::http::dispatch_client_request_property(handle, property_name) {
+        return value;
+    }
+
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    if let Some(value) = crate::tls::dispatch_tls_property(handle, property_name) {
         return value;
     }
 
@@ -1449,7 +1880,51 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                     method_name_len: usize,
                 ) -> f64;
             }
-            return js_class_method_bind(handle as f64, name_bytes.as_ptr(), name_bytes.len());
+            return js_class_method_bind(
+                f64::from_bits(handle as u64),
+                name_bytes.as_ptr(),
+                name_bytes.len(),
+            );
+        }
+    }
+
+    #[cfg(feature = "external-zlib-pump")]
+    {
+        extern "C" {
+            fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
+            fn js_ext_zlib_stream_bytes_written(handle: i64) -> f64;
+            fn js_class_method_bind(
+                instance: f64,
+                method_name_ptr: *const u8,
+                method_name_len: usize,
+            ) -> f64;
+        }
+
+        if js_ext_zlib_is_stream_handle(handle) != 0 {
+            if property_name == "bytesWritten" {
+                return js_ext_zlib_stream_bytes_written(handle);
+            }
+            let method: Option<&'static [u8]> = match property_name {
+                "write" => Some(b"write"),
+                "end" => Some(b"end"),
+                "on" => Some(b"on"),
+                "once" => Some(b"once"),
+                "addListener" => Some(b"addListener"),
+                "pipe" => Some(b"pipe"),
+                "flush" => Some(b"flush"),
+                "close" => Some(b"close"),
+                "destroy" => Some(b"destroy"),
+                "params" => Some(b"params"),
+                "reset" => Some(b"reset"),
+                _ => None,
+            };
+            if let Some(name_bytes) = method {
+                return js_class_method_bind(
+                    f64::from_bits(handle as u64),
+                    name_bytes.as_ptr(),
+                    name_bytes.len(),
+                );
+            }
         }
     }
 
@@ -1472,7 +1947,17 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "reuseSocket"
                 | "getName"
                 | "destroy"
-                | "close"
+                | "maxSockets"
+                | "maxFreeSockets"
+                | "maxTotalSockets"
+                | "keepAliveMsecs"
+                | "keepAlive"
+                | "destroyed"
+                | "defaultPort"
+                | "protocol"
+                | "sockets"
+                | "freeSockets"
+                | "requests"
         ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
         {
             return unsafe {
@@ -1524,6 +2009,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             fn js_ext_http_server_is_handle(handle: i64) -> i32;
             fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_session_is_handle(handle: i64) -> i32;
+            fn js_ext_http2_stream_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
@@ -1535,6 +2022,16 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 property_len: usize,
             ) -> f64;
             fn js_ext_http_server_response_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+            fn js_ext_http2_session_dispatch_property(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+            ) -> f64;
+            fn js_ext_http2_stream_dispatch_property(
                 handle: i64,
                 property_ptr: *const u8,
                 property_len: usize,
@@ -1551,6 +2048,16 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "on"
                 | "addListener"
                 | "setTimeout"
+                | "@@__perry_wk_asyncDispose"
+                | "@@kConnectionsCheckingInterval"
+                | "listening"
+                | "headersTimeout"
+                | "keepAliveTimeout"
+                | "keepAliveTimeoutBuffer"
+                | "requestTimeout"
+                | "timeout"
+                | "maxHeadersCount"
+                | "maxRequestsPerSocket"
         ) && unsafe { js_ext_http_server_is_handle(handle) } != 0
         {
             return unsafe {
@@ -1566,19 +2073,33 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
             property_name,
             "method"
                 | "url"
+                | "rawBody"
                 | "httpVersion"
+                | "httpVersionMajor"
+                | "httpVersionMinor"
                 | "headers"
                 | "rawHeaders"
+                | "headersDistinct"
+                | "trailers"
+                | "rawTrailers"
+                | "trailersDistinct"
                 | "complete"
                 | "aborted"
                 | "destroyed"
+                | "socket"
+                | "connection"
+                | "signal"
+                | "remoteAddress"
+                | "remotePort"
                 | "on"
                 | "addListener"
                 | "setEncoding"
+                | "setTimeout"
                 | "pause"
                 | "resume"
                 | "destroy"
                 | "read"
+                | "constructor"
         ) && unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0
         {
             return unsafe {
@@ -1593,26 +2114,122 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         if matches!(
             property_name,
             "statusCode"
+                | "statusMessage"
                 | "headersSent"
                 | "writableEnded"
                 | "writableFinished"
+                | "finished"
+                | "writableCorked"
+                | "writableHighWaterMark"
+                | "writableLength"
+                | "writableObjectMode"
+                | "writableNeedDrain"
+                | "sendDate"
+                | "strictContentLength"
+                | "req"
+                | "socket"
+                | "connection"
                 | "setHeader"
                 | "getHeader"
                 | "removeHeader"
                 | "hasHeader"
+                | "getHeaders"
+                | "getHeaderNames"
+                | "appendHeader"
+                | "setHeaders"
                 | "writeHead"
                 | "write"
                 | "addTrailers"
                 | "end"
                 | "flushHeaders"
+                | "cork"
+                | "uncork"
+                | "destroy"
+                | "pipe"
+                | "setTimeout"
+                | "writeEarlyHints"
                 | "writeContinue"
                 | "writeProcessing"
                 | "on"
                 | "addListener"
+                | "constructor"
         ) && unsafe { js_ext_http_server_response_is_handle(handle) } != 0
         {
             return unsafe {
                 js_ext_http_server_response_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
+            "request"
+                | "on"
+                | "addListener"
+                | "close"
+                | "destroy"
+                | "ref"
+                | "unref"
+                | "setTimeout"
+                | "setLocalWindowSize"
+                | "ping"
+                | "settings"
+                | "goaway"
+                | "type"
+                | "encrypted"
+                | "connecting"
+                | "closed"
+                | "destroyed"
+                | "alpnProtocol"
+                | "pendingSettingsAck"
+                | "localSettings"
+                | "remoteSettings"
+                | "state"
+                | "socket"
+        ) && unsafe { js_ext_http2_session_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http2_session_dispatch_property(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                )
+            };
+        }
+
+        if matches!(
+            property_name,
+            "on" | "addListener"
+                | "setEncoding"
+                | "respond"
+                | "end"
+                | "close"
+                | "setTimeout"
+                | "priority"
+                | "additionalHeaders"
+                | "pushStream"
+                | "respondWithFD"
+                | "respondWithFile"
+                | "sendTrailers"
+                | "id"
+                | "pending"
+                | "closed"
+                | "destroyed"
+                | "aborted"
+                | "rstCode"
+                | "headersSent"
+                | "sentHeaders"
+                | "session"
+                | "state"
+                | "bufferSize"
+                | "endAfterHeaders"
+        ) && unsafe { js_ext_http2_stream_is_handle(handle) } != 0
+        {
+            return unsafe {
+                js_ext_http2_stream_dispatch_property(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
@@ -1689,6 +2306,75 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         };
     }
 
+    // #5037 — external-fastify variant of the request/reply property
+    // dispatch above. When the well-known flip routes `fastify` to
+    // perry-ext-fastify (auto-optimize / `--no-default-features`),
+    // `bundled-fastify`/`http-server` are stripped and the bundled
+    // arm above is compiled out. A `request`/`reply` handle that
+    // escaped into a user helper — its static type erased, so codegen
+    // emitted a generic dynamic property read here rather than a
+    // `NativeMethodCall` — then had no dispatch path and read
+    // `undefined` (inline reads in the handler still worked because
+    // codegen recognised the receiver and called `js_fastify_req_*`
+    // directly). The handle lives in perry-ext-fastify's perry-ffi
+    // registry, not perry-stdlib's, so probe membership via the
+    // external `js_ext_fastify_is_context_handle` symbol (resolved at
+    // link time) and forward to the same `js_fastify_req_*` exports
+    // the bundled arm uses. Mirrors the `external-fastify-pump` pump
+    // wiring in `async_bridge.rs`.
+    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    {
+        extern "C" {
+            fn js_ext_fastify_is_context_handle(handle: i64) -> i32;
+            fn js_fastify_req_query_object(handle: i64) -> f64;
+            fn js_fastify_req_params_object(handle: i64) -> f64;
+            fn js_fastify_req_json(handle: i64) -> f64;
+            fn js_fastify_req_body(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_headers(handle: i64) -> i64;
+            fn js_fastify_req_method(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_url(handle: i64) -> *mut perry_runtime::StringHeader;
+            fn js_fastify_req_get_user_data(handle: i64) -> f64;
+        }
+        if js_ext_fastify_is_context_handle(handle) != 0 {
+            return match property_name {
+                "query" => js_fastify_req_query_object(handle),
+                "params" => js_fastify_req_params_object(handle),
+                "body" => js_fastify_req_json(handle),
+                "rawBody" | "text" => {
+                    let ptr = js_fastify_req_body(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "headers" => {
+                    // Returns NaN-boxed JS object bits — use directly.
+                    let bits = js_fastify_req_headers(handle);
+                    f64::from_bits(bits as u64)
+                }
+                "method" => {
+                    let ptr = js_fastify_req_method(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "url" => {
+                    let ptr = js_fastify_req_url(handle);
+                    if ptr.is_null() {
+                        f64::from_bits(0x7FFC_0000_0000_0001)
+                    } else {
+                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
+                    }
+                }
+                "user" => js_fastify_req_get_user_data(handle),
+                _ => f64::from_bits(0x7FFC_0000_0000_0001), // undefined
+            };
+        }
+    }
+
     // Issue #340: axios response — dispatch `r.status` / `r.data` /
     // `r.statusText` / `r.headers` to the AxiosResponseHandle accessor
     // shims. The handle id is registered in the common HANDLES
@@ -1730,6 +2416,13 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
+        unsafe { super::dispatch_http::dispatch_client_request_property(handle, property_name) }
+    {
+        return value;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    if let Some(value) =
         unsafe { super::dispatch_http::dispatch_client_incoming_property(handle, property_name) }
     {
         return value;
@@ -1744,8 +2437,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // Each helper does its own registry-membership check; the order matches the
     // observed property-name disjointness (`url` / `method` only on Request,
     // `status` / `ok` only on Response, etc.). First match wins.
-    // Gated on `http-client` because fetch.rs itself is gated on that feature.
-    #[cfg(feature = "http-client")]
+    // Gated on `web-fetch` because fetch.rs itself is gated on that feature (#5174).
+    #[cfg(feature = "web-fetch")]
     {
         if let Some(v) = crate::fetch::dispatch_request_property(handle as usize, property_name) {
             return v;
@@ -1787,15 +2480,40 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     }
 
     #[cfg(feature = "crypto")]
-    if matches!(property_name, "update" | "digest" | "copy")
-        && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        property_name,
+        "update"
+            | "digest"
+            | "copy"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hash_property(handle, property_name);
     }
 
     #[cfg(feature = "crypto")]
-    if matches!(property_name, "update" | "digest")
-        && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
+    if matches!(
+        property_name,
+        "update"
+            | "digest"
+            | "write"
+            | "end"
+            | "on"
+            | "once"
+            | "addListener"
+            | "pipe"
+            | "setEncoding"
+            | "destroy"
+            | "close"
+    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_hmac_property(handle, property_name);
     }
@@ -1846,20 +2564,39 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::crypto::dispatch_diffie_hellman_property(handle, property_name);
     }
 
-    // #1367: X509Certificate read-only properties (data values, not
-    // bound-method closures).
+    // #1367/#2563: X509Certificate data properties plus bound conversion
+    // methods.
     #[cfg(feature = "crypto")]
     if matches!(
         property_name,
         "subject"
             | "issuer"
             | "validFrom"
+            | "validFromDate"
             | "validTo"
+            | "validToDate"
             | "serialNumber"
+            | "signatureAlgorithm"
+            | "signatureAlgorithmOid"
             | "fingerprint"
             | "fingerprint256"
+            | "fingerprint512"
+            | "subjectAltName"
+            | "keyUsage"
+            | "infoAccess"
             | "ca"
             | "raw"
+            | "publicKey"
+            | "issuerCertificate"
+            | "toString"
+            | "toJSON"
+            | "toLegacyObject"
+            | "checkHost"
+            | "checkEmail"
+            | "checkIP"
+            | "verify"
+            | "checkPrivateKey"
+            | "checkIssued"
     ) && with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return crate::crypto::dispatch_x509_property(handle, property_name);
@@ -2077,6 +2814,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
         return;
     }
 
+    if crate::common::net_method_values::dispatch_property_set(handle, property_name, value) {
+        return;
+    }
+
     // Try Fastify context dispatch (request/reply properties)
     #[cfg(feature = "http-server")]
     if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
@@ -2086,7 +2827,10 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     }
 
     #[cfg(feature = "external-http-server-pump")]
-    if matches!(property_name, "statusCode" | "statusMessage") {
+    if matches!(
+        property_name,
+        "statusCode" | "statusMessage" | "sendDate" | "strictContentLength"
+    ) {
         extern "C" {
             fn js_ext_http_server_response_is_handle(handle: i64) -> i32;
             fn js_ext_http_server_response_dispatch_property_set(
@@ -2100,6 +2844,71 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
         if unsafe { js_ext_http_server_response_is_handle(handle) } != 0 {
             unsafe {
                 js_ext_http_server_response_dispatch_property_set(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                    value,
+                );
+            }
+        }
+    }
+
+    // #4904: Agent tunables (`agent.maxSockets = 4`) and the
+    // `agent.createConnection = fn` monkeypatch pattern Node's tests use.
+    #[cfg(feature = "http-client")]
+    if crate::http::dispatch_agent_property_set(handle, property_name, value) {
+        return;
+    }
+    #[cfg(feature = "external-http-client-pump")]
+    if matches!(
+        property_name,
+        "maxSockets"
+            | "maxFreeSockets"
+            | "maxTotalSockets"
+            | "keepAliveMsecs"
+            | "keepAlive"
+            | "createConnection"
+            | "createSocket"
+    ) {
+        extern "C" {
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+            fn js_ext_http_agent_dispatch_property_set(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+                value: f64,
+            ) -> i32;
+        }
+        if unsafe { js_ext_http_agent_is_handle(handle) } != 0 {
+            unsafe {
+                js_ext_http_agent_dispatch_property_set(
+                    handle,
+                    property_name.as_ptr(),
+                    property_name.len(),
+                    value,
+                );
+            }
+            return;
+        }
+    }
+
+    // #4904: `req.connection = v` / `req.socket = v` on an IncomingMessage —
+    // Node's `connection` accessor writes `this.socket`.
+    #[cfg(feature = "external-http-server-pump")]
+    if matches!(property_name, "socket" | "connection") {
+        extern "C" {
+            fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
+            fn js_ext_http_incoming_message_dispatch_property_set(
+                handle: i64,
+                property_ptr: *const u8,
+                property_len: usize,
+                value: f64,
+            ) -> i32;
+        }
+
+        if unsafe { js_ext_http_incoming_message_is_handle(handle) } != 0 {
+            unsafe {
+                js_ext_http_incoming_message_dispatch_property_set(
                     handle,
                     property_name.as_ptr(),
                     property_name.len(),
@@ -2146,15 +2955,17 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
 unsafe extern "C" fn js_node_http_native_dispatch(
     module_ptr: *const u8,
     module_len: usize,
-    _method_ptr: *const u8,
-    _method_len: usize,
+    method_ptr: *const u8,
+    method_len: usize,
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
     use perry_runtime::JSValue;
     extern "C" {
-        fn js_node_http_create_server_with_options(handler: i64, options_f64: f64) -> i64;
+        fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
+        fn js_node_http_outgoing_message_new() -> i64;
         fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
+        fn js_node_http2_create_server(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
         fn js_value_is_closure(value_bits: i64) -> i32;
     }
@@ -2164,6 +2975,11 @@ unsafe extern "C" fn js_node_http_native_dispatch(
     } else {
         std::str::from_utf8(std::slice::from_raw_parts(module_ptr, module_len)).unwrap_or("")
     };
+    let method = if method_ptr.is_null() || method_len == 0 {
+        ""
+    } else {
+        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
+    };
     let arg = |n: usize| -> f64 {
         if n < args_len && !args_ptr.is_null() {
             *args_ptr.add(n)
@@ -2171,6 +2987,101 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             undefined
         }
     };
+    if module == "http" && method == "OutgoingMessage" {
+        let handle = js_node_http_outgoing_message_new();
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
+    // #4904: Node exposes Agent / ClientRequest / IncomingMessage /
+    // ServerResponse as constructable classes. Construction through any
+    // value/aliasing path (`const { Agent } = require('http')`,
+    // `new http.IncomingMessage(socket)`, …) lands here via the
+    // class_registry http construct arm.
+    if module == "http" && method == "IncomingMessage" {
+        extern "C" {
+            fn js_node_http_incoming_message_standalone_new(socket: f64) -> i64;
+        }
+        let handle = js_node_http_incoming_message_standalone_new(arg(0));
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
+    if module == "http" && method == "ServerResponse" {
+        extern "C" {
+            fn js_node_http_server_response_standalone_new(req: f64) -> i64;
+        }
+        let handle = js_node_http_server_response_standalone_new(arg(0));
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_http_agent_new(options_f64: f64) -> i64;
+            fn js_https_agent_new(options_f64: f64) -> i64;
+            fn js_http_client_request_standalone_new(options_f64: f64) -> i64;
+            fn js_http_get(arg_f64: f64, callback_i64: i64) -> i64;
+            fn js_https_get(arg_f64: f64, callback_i64: i64) -> i64;
+            fn js_http_request(opts_f64: f64, callback_i64: i64) -> i64;
+            fn js_https_request(opts_f64: f64, callback_i64: i64) -> i64;
+        }
+        // #4904: captured / aliased `get` / `request` (`const { get } =
+        // require('http')`). The first non-closure arg is the options/url,
+        // the first closure-valued arg is the response callback.
+        if matches!(method, "get" | "request") && matches!(module, "http" | "https") {
+            let mut options = undefined;
+            let mut callback: i64 = 0;
+            for n in 0..args_len.min(3) {
+                let a = arg(n);
+                if callback == 0 && js_value_is_closure(a.to_bits() as i64) != 0 {
+                    callback = perry_runtime::js_nanbox_get_pointer(a);
+                } else if JSValue::from_bits(a.to_bits()).is_undefined() {
+                    continue;
+                } else if options.to_bits() == undefined.to_bits() {
+                    options = a;
+                }
+            }
+            let handle = match (module, method) {
+                ("http", "get") => js_http_get(options, callback),
+                ("http", "request") => js_http_request(options, callback),
+                ("https", "get") => js_https_get(options, callback),
+                _ => js_https_request(options, callback),
+            };
+            return if handle == 0 {
+                undefined
+            } else {
+                perry_runtime::js_nanbox_pointer(handle)
+            };
+        }
+        if method == "Agent" && (module == "http" || module == "https") {
+            let handle = if module == "https" {
+                js_https_agent_new(arg(0))
+            } else {
+                js_http_agent_new(arg(0))
+            };
+            return if handle == 0 {
+                undefined
+            } else {
+                perry_runtime::js_nanbox_pointer(handle)
+            };
+        }
+        if module == "http" && method == "ClientRequest" {
+            let handle = js_http_client_request_standalone_new(arg(0));
+            return if handle == 0 {
+                undefined
+            } else {
+                perry_runtime::js_nanbox_pointer(handle)
+            };
+        }
+    }
     // Disambiguate handler (function/closure) from options (object),
     // independent of argument order.
     let mut handler_ptr: i64 = 0;
@@ -2183,10 +3094,18 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             options_f64 = a;
         }
     }
+    let handler_f64 = if handler_ptr == 0 {
+        undefined
+    } else {
+        perry_runtime::js_nanbox_pointer(handler_ptr)
+    };
     let handle = match module {
-        "http" => js_node_http_create_server_with_options(handler_ptr, options_f64),
+        "http" => js_node_http_create_server_with_options(options_f64, handler_f64),
         "https" => js_node_https_create_server(options_f64, handler_ptr),
-        "http2" => js_node_http2_create_secure_server(options_f64, handler_ptr),
+        "http2" if method == "createSecureServer" => {
+            js_node_http2_create_secure_server(options_f64, handler_ptr)
+        }
+        "http2" => js_node_http2_create_server(options_f64, handler_f64),
         _ => return undefined,
     };
     if handle == 0 {
@@ -2218,7 +3137,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             f: unsafe extern "C" fn(i64) -> bool,
         );
         fn js_register_event_emitter_on(f: EventEmitterOn);
-        #[cfg(feature = "http-client")]
+        #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_with_options(
             f: unsafe extern "C" fn(
                 *const perry_runtime::StringHeader,
@@ -2227,10 +3146,63 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 *const perry_runtime::StringHeader,
             ) -> *mut perry_runtime::Promise,
         );
+        #[cfg(feature = "web-fetch")]
+        fn js_register_global_fetch_constructors(
+            blob_new: unsafe extern "C" fn(f64, f64) -> f64,
+            file_new: unsafe extern "C" fn(f64, f64, f64, f64) -> f64,
+            headers_new: extern "C" fn() -> f64,
+            headers_init_from_value: unsafe extern "C" fn(f64, f64) -> f64,
+            request_new: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_new: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_json: unsafe extern "C" fn(
+                f64,
+                f64,
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_redirect: unsafe extern "C" fn(
+                *const perry_runtime::StringHeader,
+                f64,
+            ) -> f64,
+            response_static_error: extern "C" fn() -> f64,
+        );
+        #[cfg(feature = "web-fetch")]
+        fn js_register_global_fetch_body_init_ptr(f: extern "C" fn(f64) -> i64);
+        // #4965: Headers → `res.setHeaders` entries-JSON producer.
+        #[cfg(feature = "http-client")]
+        fn js_register_global_headers_entries_json(
+            f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
+        );
         fn js_register_worker_threads_namespace_getters(
             worker_data: extern "C" fn() -> f64,
             is_main_thread: extern "C" fn() -> f64,
             parent_port: extern "C" fn() -> f64,
+            thread_name: extern "C" fn() -> f64,
+            resource_limits: extern "C" fn() -> f64,
+        );
+        fn js_register_worker_threads_messaging_constructors(
+            message_channel: extern "C" fn() -> f64,
+            broadcast_channel: extern "C" fn(f64) -> f64,
         );
     }
     js_register_handle_method_dispatch(js_handle_method_dispatch);
@@ -2239,13 +3211,38 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     js_register_handle_own_property_names_dispatch(js_handle_own_property_names_dispatch);
     js_register_handle_prototype_dispatch(js_handle_prototype_dispatch);
     crate::string_decoder::string_decoder_prototype_value();
-    #[cfg(feature = "http-client")]
+    #[cfg(feature = "web-fetch")]
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
-    #[cfg(feature = "bundled-events")]
+    #[cfg(feature = "web-fetch")]
+    js_register_global_fetch_constructors(
+        crate::fetch_blob::js_blob_new,
+        crate::fetch_blob::js_file_new,
+        crate::fetch::js_headers_new,
+        crate::fetch::js_headers_init_from_value,
+        crate::fetch::js_request_new,
+        crate::fetch::js_response_new,
+        crate::fetch::js_response_static_json,
+        crate::fetch::js_response_static_redirect,
+        crate::fetch::js_response_static_error,
+    );
+    #[cfg(feature = "web-fetch")]
+    js_register_global_fetch_body_init_ptr(crate::fetch::js_response_body_init_ptr);
+    #[cfg(feature = "http-client")]
+    js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
+    // Probe / `on` hook / constructor all route through the shared
+    // `extern "C"` events surface declared above dispatch_event_emitter_method
+    // (#4995): the linker resolves them to whichever EventEmitter impl is in
+    // the binary (perry-stdlib `bundled-events` or perry-ext-events under the
+    // well-known flip), so the registry these consult is always the one the
+    // constructors used. Registered eagerly at startup — perry-ext-events
+    // alone only registers its hooks lazily on the first *static* emitter
+    // construction, which a dynamic-first program (signal-exit's
+    // `new (require('events'))()`) never performs.
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     unsafe extern "C" fn event_emitter_probe(handle: i64) -> bool {
-        crate::events::is_event_emitter_handle(handle)
+        js_event_emitter_is_handle(handle)
     }
-    #[cfg(feature = "bundled-events")]
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     js_register_event_emitter_handle_probe(event_emitter_probe);
     #[cfg(feature = "bundled-events")]
     unsafe extern "C" fn event_emitter_async_resource_probe(handle: i64) -> bool {
@@ -2253,13 +3250,59 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     }
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_async_resource_handle_probe(event_emitter_async_resource_probe);
-    #[cfg(feature = "bundled-events")]
-    js_register_event_emitter_on(crate::events::js_event_emitter_on);
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    unsafe extern "C" fn event_emitter_on_hook(
+        handle: i64,
+        event_bits: i64,
+        listener_bits: i64,
+    ) -> i64 {
+        js_event_emitter_on(handle, event_bits, listener_bits)
+    }
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    js_register_event_emitter_on(event_emitter_on_hook);
+    // #4995: serve dynamic `new` on the bound `events.EventEmitter` /
+    // `events.EventEmitterAsyncResource` export values (`require('events')`,
+    // default import, namespace property read) with the same constructors the
+    // named-import codegen path calls. Without this the runtime's
+    // `js_new_function_construct` fell through to the generic empty-object
+    // path and the instance had no `.on`/`.emit`/`.setMaxListeners`.
+    // EventEmitterAsyncResource exists only in the bundled impl.
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    unsafe extern "C" fn events_native_construct(
+        class_name_ptr: *const u8,
+        class_name_len: usize,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64 {
+        let class_name = std::slice::from_raw_parts(class_name_ptr, class_name_len);
+        let options = if !args_ptr.is_null() && args_len > 0 {
+            *args_ptr
+        } else {
+            TAG_UNDEFINED_F64
+        };
+        let handle = match class_name {
+            b"EventEmitter" => js_event_emitter_new_with_options(options),
+            #[cfg(feature = "bundled-events")]
+            b"EventEmitterAsyncResource" => {
+                crate::events::js_event_emitter_async_resource_new(options)
+            }
+            _ => return TAG_UNDEFINED_F64,
+        };
+        perry_runtime::js_nanbox_pointer(handle)
+    }
+    #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+    perry_runtime::js_set_native_events_construct(events_native_construct);
     super::net_socket_bridge::register_net_socket_handle_probe();
     js_register_worker_threads_namespace_getters(
         crate::worker_threads::js_worker_threads_get_worker_data,
         crate::worker_threads::js_worker_threads_is_main_thread,
         crate::worker_threads::js_worker_threads_parent_port,
+        crate::worker_threads::js_worker_threads_thread_name,
+        crate::worker_threads::js_worker_threads_resource_limits,
+    );
+    js_register_worker_threads_messaging_constructors(
+        crate::worker_threads::js_worker_threads_message_channel_new,
+        crate::worker_threads::js_worker_threads_broadcast_channel_new,
     );
     // #1577: route captured-then-called `crypto.*` methods (which reach the
     // runtime's native-module dispatch) back to the stdlib crypto impls.
@@ -2275,6 +3318,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to
     // the perry-ext-http-server factories. Only registered when the http ext
@@ -2307,6 +3352,19 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         );
         perry_runtime::fs::js_register_filehandle_readable_web_stream_factory(
             crate::streams::js_readable_stream_deferred_byte_source,
+        );
+        perry_runtime::node_stream::js_register_node_stream_web_adapter_callbacks(
+            crate::streams::js_readable_stream_new,
+            crate::streams::js_readable_stream_controller_enqueue,
+            crate::streams::js_readable_stream_controller_close,
+            crate::streams::js_readable_stream_controller_error,
+            crate::streams::js_writable_stream_new,
+            crate::streams::js_readable_stream_get_reader,
+            crate::streams::js_reader_read,
+            crate::streams::js_writable_stream_get_writer,
+            crate::streams::js_writer_write,
+            crate::streams::js_writer_close,
+            crate::streams::js_writer_abort,
         );
     }
 

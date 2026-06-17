@@ -353,6 +353,7 @@ impl WasmModuleEmitter {
                 method,
                 body,
                 headers,
+                headers_dynamic,
             } => {
                 let url_js = self.emit_js_expr(url, locals);
                 let method_js = self.emit_js_expr(method, locals);
@@ -362,7 +363,12 @@ impl WasmModuleEmitter {
                 if !matches!(body.as_ref(), Expr::Undefined) {
                     opts.push_str(&format!(", body: getString({})", body_js));
                 }
-                if !headers.is_empty() {
+                if let Some(hexpr) = headers_dynamic {
+                    // Dynamically-built headers: pass the JS object through so
+                    // fetch enumerates every property (#4932).
+                    let h = self.emit_js_expr(hexpr, locals);
+                    opts.push_str(&format!(", headers: toJsValue({})", h));
+                } else if !headers.is_empty() {
                     opts.push_str(", headers: {");
                     for (i, (key, val)) in headers.iter().enumerate() {
                         if i > 0 {
@@ -593,6 +599,19 @@ impl WasmModuleEmitter {
                     obj, idx, val, val
                 )
             }
+            // #5016: `obj.prop = v` / `obj[i] = v` lower to PutValueSet. In the
+            // JS fallback both are plain `obj[key] = val`; return the RHS value.
+            Expr::PutValueSet {
+                target, key, value, ..
+            } => {
+                let obj = self.emit_js_expr(target, locals);
+                let k = self.emit_js_expr(key, locals);
+                let val = self.emit_js_expr(value, locals);
+                format!(
+                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
+                    obj, k, val, val
+                )
+            }
             Expr::ArrayPush { array_id, value } => {
                 let arr = locals
                     .get(array_id)
@@ -620,6 +639,14 @@ impl WasmModuleEmitter {
             Expr::MathRound(x) => {
                 let v = self.emit_js_expr(x, locals);
                 format!("Math.round({})", v)
+            }
+            Expr::MathTrunc(x) => {
+                let v = self.emit_js_expr(x, locals);
+                format!("Math.trunc({})", v)
+            }
+            Expr::MathSign(x) => {
+                let v = self.emit_js_expr(x, locals);
+                format!("Math.sign({})", v)
             }
             Expr::MathAbs(x) => {
                 let v = self.emit_js_expr(x, locals);

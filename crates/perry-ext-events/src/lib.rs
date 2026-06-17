@@ -20,16 +20,43 @@
 //! `events.getMaxListeners` / `events.setMaxListeners` helpers.
 
 use perry_ffi::{
-    gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut, js_array_alloc,
-    js_array_get, js_array_push, js_array_set, nanbox_string_bits, read_string, register_handle,
-    ArrayHeader, GcRootVisitor, Handle, JsClosure, JsPromise, JsString, JsValue, ObjectHeader,
-    Promise, RawClosureHeader, StringHeader,
+    error_value_with_code, js_array_alloc, js_array_get, js_array_push, js_array_set,
+    nanbox_string_bits, read_string, throw_with_code, ArrayHeader, ErrorKind, Handle, JsPromise,
+    JsString, JsValue, ObjectHeader, Promise, RawClosureHeader, StringHeader,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::c_void;
+use std::sync::{Mutex, MutexGuard, Once, OnceLock};
+
+mod error_monitor;
+use error_monitor::dispatch_error_monitor;
+mod max_listeners;
+mod messages;
+mod target_helpers;
+
+#[cfg(test)]
+mod test_async_shims;
+
+use messages::{
+    invalid_arg_type_error, invalid_instance_arg_message, invalid_instance_property_message,
+    invalid_type_arg_message, throw_invalid_arg_type, throw_invalid_emitter,
+};
+
+use max_listeners::{emit_max_listeners_warning, validate_max_listeners};
+use target_helpers::{
+    event_helper_target, event_target_array_len, stream_array_len, EventHelperTarget,
+};
+mod module_iterators;
+use module_iterators::{
+    events_on_abort_listener, events_on_queue_listener, events_once_abort_listener,
+    events_once_event_target_listener, events_once_stream_reject_listener,
+    events_once_stream_resolve_listener,
+};
 
 const MIN_HEAP_POINTER: u64 = 0x1000;
 const EVENT_TARGET_MIN_HEAP_POINTER: u64 = 0x10000;
 const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
+const ABORT_SIGNAL_CLASS_ID: u32 = 0xFFFF_2402;
 
 // Direct hook into perry-runtime's sync Promise resolve.
 //
@@ -47,8 +74,28 @@ const MAX_HEAP_POINTER: u64 = 0x0000_FFFF_FFFF_FFFF;
 // matches the `then`/`await` ordering Node expects, and sidesteps the
 // pump-registration coupling entirely.
 extern "C" {
+    fn perry_ffi_gc_register_mutable_root_scanner_named(
+        source_ptr: *const u8,
+        source_len: usize,
+        scanner_id: usize,
+        scanner: PerryFfiNamedMutableRootScanner,
+    );
     fn js_promise_resolve(promise: *mut Promise, value: f64);
     fn js_promise_reject(promise: *mut Promise, reason: f64);
+    // events.once allocates its Promise via perry-ffi's `JsPromise::new()`
+    // (→ `perry_ffi_promise_new` → a registered native-async token that pins
+    // the Promise and reports the event loop as "busy"). Because we settle
+    // synchronously through `js_promise_resolve`/`js_promise_reject` above —
+    // bypassing the deferred completion machinery that would normally retire
+    // the token — the token leaks and `js_native_async_has_active()` keeps the
+    // loop alive forever (the `events.once(em, name)` + `emit` hang). Drop the
+    // orphaned token right after each synchronous settle.
+    fn js_native_async_drop_promise_token(promise: *mut Promise);
+    fn js_promise_then(
+        promise: *mut Promise,
+        on_fulfilled: *mut RawClosureHeader,
+        on_rejected: *mut RawClosureHeader,
+    ) -> *mut Promise;
     // #1557: closure allocation hooks needed by events.on's queue-listener.
     // Mirrors perry-runtime::closure exports; declared here because perry-ffi
     // doesn't yet expose them and perry-ext-events deliberately avoids a
@@ -59,9 +106,26 @@ extern "C" {
     fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader;
     // #1557: AbortSignal listener attachment for events.addAbortListener.
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
+    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
+    fn js_error_new_with_message(message: *mut StringHeader) -> *mut ObjectHeader;
     fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+    fn js_object_set_field_by_name(obj: *mut ObjectHeader, key: *const StringHeader, value: f64);
+    fn js_symbol_for(key_f64: f64) -> f64;
+    fn js_object_set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64;
+    fn js_get_global_this() -> f64;
+    fn js_array_is_array(value: f64) -> f64;
     fn js_abort_signal_add_listener(signal: *mut u8, event: f64, listener: f64);
     fn js_event_target_is_event_target(target: *const u8) -> i32;
+    fn js_event_target_add_event_listener(
+        target: *mut u8,
+        event: *const StringHeader,
+        listener: i64,
+    );
+    fn js_event_target_remove_event_listener(
+        target: *mut u8,
+        event: *const StringHeader,
+        listener: i64,
+    );
     fn js_event_target_get_event_listeners(
         target: *mut u8,
         event: *const StringHeader,
@@ -69,16 +133,40 @@ extern "C" {
     fn js_event_target_get_max_listeners(target: *mut u8) -> f64;
     fn js_event_target_set_max_listeners(target: *mut u8, n: f64) -> i32;
     fn js_node_stream_method_listeners(stream_handle: i64, event: f64) -> i64;
+    fn js_node_stream_method_get_max_listeners(stream_handle: i64) -> f64;
+    fn js_node_stream_method_set_max_listeners(stream_handle: i64, value: f64) -> f64;
+    fn js_node_stream_method_on(stream_handle: i64, event: f64, cb: f64) -> f64;
+    fn js_node_stream_method_once(stream_handle: i64, event: f64, cb: f64) -> f64;
+    fn js_node_stream_method_remove_listener(stream_handle: i64, event: f64, cb: f64) -> f64;
+    fn js_node_stream_is_readable(stream: f64) -> f64;
+    fn js_node_stream_is_writable(stream: f64) -> f64;
     fn js_abort_signal_remove_listener(signal: *mut u8, event: f64, listener: f64);
     fn js_abort_signal_is_aborted(signal: *mut u8) -> i32;
     fn js_abort_error_value() -> f64;
     fn js_throw(value: f64) -> !;
+    fn js_domain_emit_error(handle: Handle, error: f64, emitter: f64, domain_thrown: bool) -> bool;
+    fn js_implicit_this_set(value: f64) -> f64;
+    fn js_jsvalue_to_string(value: f64) -> *mut StringHeader;
+    fn js_native_call_value(func_value: f64, args_ptr: *const f64, args_len: usize) -> f64;
+    fn js_value_is_promise(value: f64) -> i32;
+    fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+    fn js_register_event_emitter_get_domain(f: unsafe extern "C" fn(i64) -> i64);
+    fn js_register_event_emitter_set_domain(f: unsafe extern "C" fn(i64, i64) -> i32);
+    fn js_register_event_emitter_on(f: unsafe extern "C" fn(i64, i64, i64) -> i64);
+    // #4995: serve dynamic `new` on the bound `events.EventEmitter` export
+    // value (`require('events')`, default import, namespace property read)
+    // so the runtime's `js_dynamic_new` constructs a real emitter instead of
+    // falling through to the generic empty-object path.
+    fn js_set_native_events_construct(
+        f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
+    );
     // #3072: shared listener validator. Takes the raw NaN-box bits of the
     // listener arg (codegen routes these methods through NA_JSV) and the arg
     // name; returns the closure pointer when callable, else throws
     // TypeError [ERR_INVALID_ARG_TYPE]. Centralized in perry-runtime so the
     // stdlib and ext-events EventEmitter implementations stay byte-identical.
     fn js_validate_event_listener(listener_bits: i64, name_ptr: *const u8, name_len: u32) -> i64;
+    fn js_register_closure_rest(fn_ptr: *const u8, fixed_arity: u32);
 }
 
 /// #3072: validate an EventEmitter listener argument, returning the closure
@@ -90,20 +178,63 @@ unsafe fn validate_event_listener(listener_bits: i64) -> i64 {
 }
 
 const TAG_UNDEFINED_F64_BITS: u64 = 0x7FFC_0000_0000_0001;
+const TAG_NULL_F64_BITS: u64 = 0x7FFC_0000_0000_0002;
+const TAG_TRUE_F64_BITS: u64 = 0x7FFC_0000_0000_0004;
+const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+const EVENT_EMITTER_HANDLE_ID_START: Handle = 0x38000;
+const EVENT_EMITTER_HANDLE_ID_END: Handle = 0x40000;
+const FFI_ROOT_SLOT_I64: u32 = 1;
+const FFI_ROOT_SLOT_RAW_MUT_PTR: u32 = 3;
+const FFI_ROOT_SLOT_NANBOX_F64: u32 = 4;
+
+type PerryFfiMutableRootVisitor =
+    extern "C" fn(kind: u32, slot: *mut c_void, ctx: *mut c_void) -> bool;
+type PerryFfiNamedMutableRootScanner =
+    extern "C" fn(scanner_id: usize, visit: PerryFfiMutableRootVisitor, ctx: *mut c_void);
+
+struct EventsRootVisitor {
+    visit: PerryFfiMutableRootVisitor,
+    ctx: *mut c_void,
+}
+
+impl EventsRootVisitor {
+    fn visit_i64_slot(&mut self, slot: &mut i64) -> bool {
+        (self.visit)(FFI_ROOT_SLOT_I64, slot as *mut i64 as *mut c_void, self.ctx)
+    }
+
+    fn visit_raw_mut_ptr_slot<T>(&mut self, slot: &mut *mut T) -> bool {
+        (self.visit)(
+            FFI_ROOT_SLOT_RAW_MUT_PTR,
+            slot as *mut *mut T as *mut c_void,
+            self.ctx,
+        )
+    }
+
+    fn visit_nanbox_f64_slot(&mut self, slot: &mut f64) -> bool {
+        (self.visit)(
+            FFI_ROOT_SLOT_NANBOX_F64,
+            slot as *mut f64 as *mut c_void,
+            self.ctx,
+        )
+    }
+}
 
 #[inline]
 fn nanbox_pointer_bits(ptr: i64) -> f64 {
     f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK))
 }
 
-/// One registered listener: a raw closure pointer (i64 to satisfy
-/// Send + Sync — the underlying ClosureHeader is GC-managed) plus a
-/// `once` flag.
+/// One registered listener: the original raw closure pointer plus an optional
+/// raw once-wrapper closure exposed by `rawListeners()`.
 #[derive(Copy, Clone)]
 struct Listener {
     callback: i64,
+    raw_wrapper: i64,
     once: bool,
 }
 
@@ -120,7 +251,10 @@ pub struct EventEmitterHandle {
     events: HashMap<String, Vec<Listener>>,
     event_order: Vec<String>,
     pending_once_promises: HashMap<String, Vec<PendingOnce>>,
-    max_listeners: i32,
+    warned_events: HashSet<String>,
+    max_listeners: f64,
+    capture_rejections: bool,
+    domain_handle: Option<Handle>,
 }
 
 // SAFETY: `*mut Promise` is not Send/Sync by default, but the registry's
@@ -141,9 +275,12 @@ impl EventEmitterHandle {
             events: HashMap::new(),
             event_order: Vec::new(),
             pending_once_promises: HashMap::new(),
+            warned_events: HashSet::new(),
             // Node's default — `getMaxListeners()` on a fresh emitter
             // returns 10.
-            max_listeners: 10,
+            max_listeners: 10.0,
+            capture_rejections: false,
+            domain_handle: None,
         }
     }
 
@@ -160,40 +297,235 @@ impl EventEmitterHandle {
         };
         if drop_it {
             self.events.remove(name);
+            self.warned_events.remove(name);
             if let Some(pos) = self.event_order.iter().position(|s| s == name) {
                 self.event_order.remove(pos);
             }
         }
     }
 
-    fn add_listener(&mut self, name: &str, callback: i64, once: bool, prepend: bool) {
+    fn emit_meta_event(
+        &self,
+        handle: Handle,
+        meta_name: &str,
+        event_name: &str,
+        listener_arg: i64,
+    ) {
+        let snapshot = match self.events.get(meta_name) {
+            Some(v) if !v.is_empty() => v.clone(),
+            _ => return,
+        };
+        let event_ptr =
+            unsafe { js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32) };
+        let event_arg = f64::from_bits(nanbox_string_bits(event_ptr));
+        let listener_arg = nanbox_pointer_bits(listener_arg);
+        let args = [event_arg, listener_arg];
+        for listener in snapshot {
+            if listener.callback != 0 {
+                unsafe {
+                    call_emitter_listener(handle, listener.callback, &args);
+                }
+            }
+        }
+    }
+
+    fn add_listener(
+        &mut self,
+        handle: Handle,
+        name: &str,
+        callback: i64,
+        once: bool,
+        prepend: bool,
+    ) {
+        self.emit_meta_event(handle, "newListener", name, callback);
         self.note_event(name);
-        let vec = self.events.entry(name.to_string()).or_default();
-        let listener = Listener { callback, once };
-        if prepend {
-            vec.insert(0, listener);
+        let raw_wrapper = if once {
+            unsafe { create_once_raw_wrapper(handle, name, callback) }
         } else {
-            vec.push(listener);
+            0
+        };
+        let count = {
+            let vec = self.events.entry(name.to_string()).or_default();
+            let listener = Listener {
+                callback,
+                raw_wrapper,
+                once,
+            };
+            if prepend {
+                vec.insert(0, listener);
+            } else {
+                vec.push(listener);
+            }
+            vec.len()
+        };
+        if self.max_listeners > 0.0
+            && (count as f64) > self.max_listeners
+            && self.warned_events.insert(name.to_string())
+        {
+            unsafe { emit_max_listeners_warning(handle, name, count, self.max_listeners) };
         }
     }
 }
 
-static EVENTS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+type EventEmitterRegistry = Vec<Option<Box<EventEmitterHandle>>>;
+
+static EVENT_EMITTERS: OnceLock<Mutex<EventEmitterRegistry>> = OnceLock::new();
+static EVENTS_RUNTIME_HOOKS_REGISTERED: Once = Once::new();
+
+thread_local! {
+    static EVENTS_GC_REGISTERED: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
+fn event_emitters() -> &'static Mutex<EventEmitterRegistry> {
+    EVENT_EMITTERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn lock_event_emitters() -> MutexGuard<'static, EventEmitterRegistry> {
+    event_emitters()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn handle_index(handle: Handle) -> Option<usize> {
+    if !(EVENT_EMITTER_HANDLE_ID_START..EVENT_EMITTER_HANDLE_ID_END).contains(&handle) {
+        return None;
+    }
+    Some((handle - EVENT_EMITTER_HANDLE_ID_START) as usize)
+}
+
+fn register_event_emitter_handle(value: EventEmitterHandle) -> Handle {
+    let mut registry = lock_event_emitters();
+    if let Some((idx, slot)) = registry
+        .iter_mut()
+        .enumerate()
+        .find(|(_, slot)| slot.is_none())
+    {
+        *slot = Some(Box::new(value));
+        return EVENT_EMITTER_HANDLE_ID_START + idx as Handle;
+    }
+    let handle = EVENT_EMITTER_HANDLE_ID_START + registry.len() as Handle;
+    if handle >= EVENT_EMITTER_HANDLE_ID_END {
+        panic!("perry-ext-events handle id range exhausted");
+    }
+    registry.push(Some(Box::new(value)));
+    handle
+}
+
+fn event_emitter_ptr(handle: Handle) -> Option<*mut EventEmitterHandle> {
+    let idx = handle_index(handle)?;
+    let mut registry = lock_event_emitters();
+    let slot = registry.get_mut(idx)?.as_mut()?;
+    Some(&mut **slot as *mut EventEmitterHandle)
+}
+
+fn get_event_emitter_mut(handle: Handle) -> Option<&'static mut EventEmitterHandle> {
+    let ptr = event_emitter_ptr(handle)?;
+    Some(unsafe { &mut *ptr })
+}
+
+fn is_local_event_emitter_handle(handle: Handle) -> bool {
+    let Some(idx) = handle_index(handle) else {
+        return false;
+    };
+    let registry = lock_event_emitters();
+    registry.get(idx).is_some_and(|slot| slot.is_some())
+}
+
+#[cfg(test)]
+fn drop_event_emitter_handle(handle: Handle) -> bool {
+    let Some(idx) = handle_index(handle) else {
+        return false;
+    };
+    let mut registry = lock_event_emitters();
+    let Some(slot) = registry.get_mut(idx) else {
+        return false;
+    };
+    slot.take().is_some()
+}
+
+unsafe extern "C" fn event_emitter_handle_probe(handle: i64) -> bool {
+    is_local_event_emitter_handle(handle)
+}
+
+unsafe extern "C" fn event_emitter_on_hook(
+    handle: i64,
+    event_bits: i64,
+    listener_bits: i64,
+) -> i64 {
+    js_event_emitter_on(handle, event_bits, listener_bits)
+}
+
+/// #4995: construct `new events.EventEmitter(...)` reached through a
+/// value-aliasing path (`require('events')`, default import, namespace
+/// property read). Registered with the runtime's `js_dynamic_new` so the
+/// instance is a real emitter handle instead of an empty object.
+unsafe extern "C" fn events_native_construct(
+    class_name_ptr: *const u8,
+    class_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let class_name = std::slice::from_raw_parts(class_name_ptr, class_name_len);
+    if class_name != b"EventEmitter" {
+        return f64::from_bits(TAG_UNDEFINED_F64_BITS);
+    }
+    let options = if !args_ptr.is_null() && args_len > 0 {
+        *args_ptr
+    } else {
+        f64::from_bits(TAG_UNDEFINED_F64_BITS)
+    };
+    nanbox_pointer_bits(js_event_emitter_new_with_options(options))
+}
+
+fn ensure_runtime_hooks_registered() {
+    EVENTS_RUNTIME_HOOKS_REGISTERED.call_once(|| unsafe {
+        js_register_event_emitter_handle_probe(event_emitter_handle_probe);
+        js_register_event_emitter_get_domain(js_event_emitter_get_domain);
+        js_register_event_emitter_set_domain(js_event_emitter_set_domain);
+        js_register_event_emitter_on(event_emitter_on_hook);
+        js_set_native_events_construct(events_native_construct);
+    });
+}
 
 fn ensure_gc_scanner_registered() {
-    EVENTS_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named("perry-ext-events", scan_events_roots);
+    EVENTS_GC_REGISTERED.with(|registered| {
+        if registered.get() {
+            return;
+        }
+        unsafe {
+            const SOURCE: &str = "perry-ext-events";
+            perry_ffi_gc_register_mutable_root_scanner_named(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                0,
+                scan_events_roots_trampoline,
+            );
+        }
+        registered.set(true);
     });
+}
+
+extern "C" fn scan_events_roots_trampoline(
+    _scanner_id: usize,
+    visit: PerryFfiMutableRootVisitor,
+    ctx: *mut c_void,
+) {
+    let mut visitor = EventsRootVisitor { visit, ctx };
+    scan_events_roots(&mut visitor);
 }
 
 /// GC root scanner: visit every registered EventEmitterHandle,
 /// and expose every listener closure pointer + pending Promise slot.
-fn scan_events_roots(visitor: &mut GcRootVisitor<'_>) {
-    iter_handles_of_mut::<EventEmitterHandle, _>(|emitter| {
+fn scan_events_roots(visitor: &mut EventsRootVisitor) {
+    let mut registry = lock_event_emitters();
+    for emitter in registry.iter_mut().filter_map(|slot| slot.as_deref_mut()) {
         for listeners in emitter.events.values_mut() {
             for l in listeners.iter_mut() {
                 if is_heap_pointer_candidate(l.callback) {
                     visitor.visit_i64_slot(&mut l.callback);
+                }
+                if is_heap_pointer_candidate(l.raw_wrapper) {
+                    visitor.visit_i64_slot(&mut l.raw_wrapper);
                 }
             }
         }
@@ -206,7 +538,7 @@ fn scan_events_roots(visitor: &mut GcRootVisitor<'_>) {
                 }
             }
         }
-    });
+    }
 }
 
 fn is_heap_pointer_candidate(callback: i64) -> bool {
@@ -234,6 +566,7 @@ unsafe fn stream_listeners_for_heap_object(
     handle: Handle,
     event_name_ptr: *const StringHeader,
 ) -> Option<*mut ArrayHeader> {
+    let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
     let addr = handle as u64;
     if event_name_ptr.is_null()
         || !(EVENT_TARGET_MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr)
@@ -245,17 +578,62 @@ unsafe fn stream_listeners_for_heap_object(
     Some(js_node_stream_method_listeners(handle, event) as *mut ArrayHeader)
 }
 
-fn handle_from_js_value_bits(bits: u64) -> Handle {
+unsafe fn stream_value_from_handle(handle: Handle) -> Option<f64> {
+    let addr = handle as u64;
+    if !(EVENT_TARGET_MIN_HEAP_POINTER..=MAX_HEAP_POINTER).contains(&addr) || addr & 0x7 != 0 {
+        return None;
+    }
+    let value = nanbox_pointer_bits(handle);
+    let readable = js_node_stream_is_readable(value);
+    let writable = js_node_stream_is_writable(value);
+    if readable.to_bits() == TAG_NULL_F64_BITS && writable.to_bits() == TAG_NULL_F64_BITS {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn handle_from_value(value: f64) -> Handle {
+    let bits = value.to_bits();
     if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
         (bits & POINTER_MASK) as Handle
+    } else if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
+        value as Handle
     } else {
         bits as Handle
     }
 }
 
-unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
+fn string_header_ptr_from_arg(ptr: *const StringHeader) -> *const StringHeader {
+    let raw = ptr as u64;
+    if (raw & 0xFFFF_0000_0000_0000) == STRING_TAG {
+        (raw & POINTER_MASK) as *const StringHeader
+    } else {
+        ptr
+    }
+}
+
+unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
+    let ptr = string_header_ptr_from_arg(ptr);
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return None;
+    }
     let handle = JsString::from_raw(ptr as *mut StringHeader);
     read_string(handle).map(String::from)
+}
+
+unsafe fn event_name_from_bits(event_bits: i64) -> Option<String> {
+    let raw = event_bits as u64;
+    if (0x10000..MAX_HEAP_POINTER).contains(&raw) && (raw & TAG_MASK) == 0 {
+        return string_from_header(raw as *const StringHeader);
+    }
+
+    let rendered = js_jsvalue_to_string(f64::from_bits(raw));
+    string_from_header(rendered as *const StringHeader)
+}
+
+fn event_bits_from_string_ptr(ptr: *const StringHeader) -> i64 {
+    f64::from_bits(nanbox_string_bits(ptr as *mut StringHeader)).to_bits() as i64
 }
 
 fn undefined_value() -> f64 {
@@ -275,6 +653,20 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     }
 }
 
+unsafe fn is_abort_signal_value(value: f64) -> bool {
+    let Some(ptr) = object_ptr_from_value(value) else {
+        return false;
+    };
+    (*ptr).class_id == ABORT_SIGNAL_CLASS_ID
+}
+
+unsafe fn validate_abort_signal_arg(value: f64, name: &str) -> f64 {
+    if is_abort_signal_value(value) {
+        return value;
+    }
+    throw_invalid_arg_type(&invalid_instance_arg_message(name, "AbortSignal", value))
+}
+
 unsafe fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
     let obj = object_ptr_from_value(value)?;
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -286,13 +678,48 @@ unsafe fn get_object_property(value: f64, name: &[u8]) -> Option<f64> {
     }
 }
 
-unsafe fn options_signal(options: f64) -> Option<f64> {
+unsafe fn options_signal_result(options: f64) -> Result<Option<f64>, f64> {
+    let jsval = JsValue::from_bits(options.to_bits());
+    if jsval.is_undefined() {
+        return Ok(None);
+    }
+    if object_ptr_from_value(options).is_none() {
+        return Err(invalid_arg_type_error(&invalid_type_arg_message(
+            "options", "object", options,
+        )));
+    }
+    let Some(signal) = get_object_property(options, b"signal") else {
+        return Ok(None);
+    };
+    if is_abort_signal_value(signal) {
+        Ok(Some(signal))
+    } else {
+        Err(invalid_arg_type_error(&invalid_instance_property_message(
+            "options.signal",
+            "AbortSignal",
+            signal,
+        )))
+    }
+}
+
+unsafe fn options_signal_or_throw(options: f64) -> Option<f64> {
+    match options_signal_result(options) {
+        Ok(signal) => signal,
+        Err(error) => js_throw(error),
+    }
+}
+
+unsafe fn options_capture_rejections(options: f64) -> bool {
     let jsval = JsValue::from_bits(options.to_bits());
     if jsval.is_undefined() || jsval.is_null() {
-        return None;
+        return false;
     }
-    get_object_property(options, b"signal")
-        .filter(|signal| object_ptr_from_value(*signal).is_some())
+    get_object_property(options, b"captureRejections")
+        .map(|value| {
+            let jsval = JsValue::from_bits(value.to_bits());
+            jsval.is_bool() && jsval.to_bool()
+        })
+        .unwrap_or(false)
 }
 
 fn signal_is_aborted(signal: f64) -> bool {
@@ -348,6 +775,27 @@ fn remove_pending_once_promise(
     None
 }
 
+fn listener_matches(listener: &Listener, candidate: i64) -> bool {
+    candidate != 0 && (listener.callback == candidate || listener.raw_wrapper == candidate)
+}
+
+fn remove_one_matching_listener(
+    emitter: &mut EventEmitterHandle,
+    event_name: &str,
+    candidate: i64,
+) -> Option<i64> {
+    let removed = emitter.events.get_mut(event_name).and_then(|listeners| {
+        let pos = listeners
+            .iter()
+            .rposition(|listener| listener_matches(listener, candidate))?;
+        Some(listeners.remove(pos).callback)
+    });
+    if removed.is_some() {
+        emitter.prune_event_if_empty(event_name);
+    }
+    removed
+}
+
 fn remove_listener_by_callback(emitter: &mut EventEmitterHandle, callback: i64) {
     if callback == 0 {
         return;
@@ -356,7 +804,7 @@ fn remove_listener_by_callback(emitter: &mut EventEmitterHandle, callback: i64) 
     for event_name in event_names {
         let removed = if let Some(listeners) = emitter.events.get_mut(&event_name) {
             let before = listeners.len();
-            listeners.retain(|listener| listener.callback != callback);
+            listeners.retain(|listener| !listener_matches(listener, callback));
             before != listeners.len()
         } else {
             false
@@ -367,11 +815,82 @@ fn remove_listener_by_callback(emitter: &mut EventEmitterHandle, callback: i64) 
     }
 }
 
+static RAW_ONCE_WRAPPER_REST_REGISTERED: Once = Once::new();
+
+fn ensure_raw_once_wrapper_rest_registered() {
+    RAW_ONCE_WRAPPER_REST_REGISTERED.call_once(|| unsafe {
+        js_register_closure_rest(event_emitter_once_wrapper as *const u8, 0);
+    });
+}
+
+unsafe fn set_closure_dynamic_prop(closure: *mut RawClosureHeader, name: &[u8], value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(closure as *mut ObjectHeader, key, value);
+}
+
+unsafe fn create_once_raw_wrapper(handle: Handle, event_name: &str, callback: i64) -> i64 {
+    if callback == 0 {
+        return 0;
+    }
+    ensure_raw_once_wrapper_rest_registered();
+
+    let wrapper = js_closure_alloc(event_emitter_once_wrapper as *const u8, 4);
+    let event_ptr = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
+    js_closure_set_capture_ptr(wrapper, 0, handle);
+    js_closure_set_capture_ptr(wrapper, 1, event_ptr as i64);
+    js_closure_set_capture_ptr(wrapper, 2, callback);
+    js_closure_set_capture_ptr(wrapper, 3, wrapper as i64);
+
+    set_closure_dynamic_prop(wrapper, b"listener", nanbox_pointer_bits(callback));
+    let name_ptr = js_string_from_bytes(b"bound onceWrapper".as_ptr(), 17);
+    set_closure_dynamic_prop(
+        wrapper,
+        b"name",
+        f64::from_bits(nanbox_string_bits(name_ptr)),
+    );
+
+    wrapper as i64
+}
+
+extern "C" fn event_emitter_once_wrapper(closure: *const RawClosureHeader, rest: f64) -> f64 {
+    unsafe {
+        let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
+        let event_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const StringHeader;
+        let callback = js_closure_get_capture_ptr(closure, 2);
+        let wrapper = js_closure_get_capture_ptr(closure, 3);
+        if handle != 0 && callback != 0 {
+            if let Some(event_name) = string_from_header(event_name_ptr) {
+                let removed = get_event_emitter_mut(handle).and_then(|emitter| {
+                    remove_one_matching_listener(emitter, &event_name, wrapper)
+                });
+                if removed.is_some() {
+                    if let Some(emitter) = get_event_emitter_mut(handle) {
+                        emitter.emit_meta_event(handle, "removeListener", &event_name, callback);
+                    }
+                }
+            }
+        }
+
+        let args_ptr = if JsValue::from_bits(rest.to_bits()).is_pointer() {
+            (rest.to_bits() & POINTER_MASK) as *const ArrayHeader
+        } else {
+            std::ptr::null()
+        };
+        let args = collect_emit_args(args_ptr);
+        if callback == 0 {
+            undefined_value()
+        } else {
+            call_emitter_listener(handle, callback, &args)
+        }
+    }
+}
+
 /// `new EventEmitter()` — returns a handle to the emitter.
 #[no_mangle]
 pub extern "C" fn js_event_emitter_new() -> Handle {
+    ensure_runtime_hooks_registered();
     ensure_gc_scanner_registered();
-    register_handle(EventEmitterHandle::new())
+    register_event_emitter_handle(EventEmitterHandle::new())
 }
 
 /// `new EventEmitter(options?)` — the constructor shape codegen actually
@@ -381,17 +900,18 @@ pub extern "C" fn js_event_emitter_new() -> Handle {
 /// .toml), which previously only defined `js_event_emitter_new` — so any
 /// `new EventEmitter(...)` failed to link with
 /// `Undefined symbols: _js_event_emitter_new_with_options`. perry-ext-events
-/// does not model the `captureRejections` option, so the options object is
-/// accepted and ignored here; listener-argument validation (#3072) is the
-/// behavior this crate is concerned with.
+/// models Node's `captureRejections` option for listener promise rejections.
 ///
 /// # Safety
 ///
 /// `_options` is a NaN-boxed JS value; it is not dereferenced.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_new_with_options(_options: f64) -> Handle {
+    ensure_runtime_hooks_registered();
     ensure_gc_scanner_registered();
-    register_handle(EventEmitterHandle::new())
+    let mut emitter = EventEmitterHandle::new();
+    emitter.capture_rejections = options_capture_rejections(_options);
+    register_event_emitter_handle(emitter)
 }
 
 /// `emitter.on(eventName, listener)` — register a listener.
@@ -405,17 +925,17 @@ pub unsafe extern "C" fn js_event_emitter_new_with_options(_options: f64) -> Han
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_on(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
     // #3072: reject non-function listeners with TypeError [ERR_INVALID_ARG_TYPE].
     let callback_ptr = validate_event_listener(listener_bits);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return handle;
     };
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.add_listener(&event_name, callback_ptr, false, false);
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        emitter.add_listener(handle, &event_name, callback_ptr, false, false);
     }
     handle
 }
@@ -428,16 +948,16 @@ pub unsafe extern "C" fn js_event_emitter_on(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_once(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
     let callback_ptr = validate_event_listener(listener_bits);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return handle;
     };
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.add_listener(&event_name, callback_ptr, true, false);
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        emitter.add_listener(handle, &event_name, callback_ptr, true, false);
     }
     handle
 }
@@ -450,16 +970,16 @@ pub unsafe extern "C" fn js_event_emitter_once(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_prepend_listener(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
     let callback_ptr = validate_event_listener(listener_bits);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return handle;
     };
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.add_listener(&event_name, callback_ptr, false, true);
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        emitter.add_listener(handle, &event_name, callback_ptr, false, true);
     }
     handle
 }
@@ -472,29 +992,80 @@ pub unsafe extern "C" fn js_event_emitter_prepend_listener(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_prepend_once_listener(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
     ensure_gc_scanner_registered();
     let callback_ptr = validate_event_listener(listener_bits);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return handle;
     };
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.add_listener(&event_name, callback_ptr, true, true);
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        emitter.add_listener(handle, &event_name, callback_ptr, true, true);
     }
     handle
 }
 
-/// Read `args_ptr[0]` or return NaN-boxed `undefined` when args is
-/// null or empty. Mirrors `first_arg_or_undefined` in
-/// `perry-stdlib::events` so both implementations of
-/// `js_event_emitter_emit` use the same shape.
 unsafe fn first_arg_or_undefined(args_ptr: *const ArrayHeader) -> f64 {
     if args_ptr.is_null() || (*args_ptr).length == 0 {
         return f64::from_bits(JsValue::UNDEFINED.bits());
     }
     f64::from_bits(js_array_get(args_ptr, 0).bits())
+}
+
+unsafe fn collect_emit_args(args_ptr: *const ArrayHeader) -> Vec<f64> {
+    if args_ptr.is_null() {
+        return Vec::new();
+    }
+    let len = (*args_ptr).length as usize;
+    let mut args = Vec::with_capacity(len);
+    for index in 0..len {
+        args.push(f64::from_bits(js_array_get(args_ptr, index as u32).bits()));
+    }
+    args
+}
+
+unsafe fn call_emitter_listener(handle: Handle, callback: i64, args: &[f64]) -> f64 {
+    let receiver = nanbox_pointer_bits(handle);
+    let callback_value = nanbox_pointer_bits(callback);
+    let previous_this = js_implicit_this_set(receiver);
+    let result = if args.is_empty() {
+        js_native_call_value(callback_value, std::ptr::null(), 0)
+    } else {
+        js_native_call_value(callback_value, args.as_ptr(), args.len())
+    };
+    js_implicit_this_set(previous_this);
+    result
+}
+
+extern "C" fn events_capture_rejection_handler(
+    closure: *const RawClosureHeader,
+    reason: f64,
+) -> f64 {
+    unsafe {
+        let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
+        if handle != 0 {
+            let event_name = b"error";
+            let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
+            let mut args = js_array_alloc(0);
+            args = js_array_push_f64(args, reason);
+            js_event_emitter_emit(handle, event_bits_from_string_ptr(event_str), args);
+        }
+    }
+    undefined_value()
+}
+
+unsafe fn capture_listener_rejection(handle: Handle, result: f64) {
+    if js_value_is_promise(result) == 0 {
+        return;
+    }
+    let promise = (result.to_bits() & POINTER_MASK) as *mut Promise;
+    if promise.is_null() {
+        return;
+    }
+    let on_rejected = js_closure_alloc(events_capture_rejection_handler as *const u8, 1);
+    js_closure_set_capture_ptr(on_rejected, 0, handle);
+    js_promise_then(promise, std::ptr::null_mut(), on_rejected);
 }
 
 /// Drain pending `events.once` promises for `event_name` on the given
@@ -531,6 +1102,7 @@ unsafe fn drain_pending_once_promises(
         // Synchronous resolve — see the comment on the extern at the
         // top of this file for why we bypass `JsPromise::resolve`.
         js_promise_resolve(pending.promise, f64::from_bits(bits));
+        js_native_async_drop_promise_token(pending.promise);
     }
 }
 
@@ -553,6 +1125,7 @@ unsafe fn reject_pending_once_promises_for_error(
             cleanup_pending_abort_listener(&pending);
             if !pending.promise.is_null() {
                 js_promise_reject(pending.promise, error_value);
+                js_native_async_drop_promise_token(pending.promise);
                 rejected_any = true;
             }
         }
@@ -581,16 +1154,18 @@ unsafe fn reject_pending_once_promises_for_error(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_emit(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
     args_ptr: *mut ArrayHeader,
 ) -> f64 {
     const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
     const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return TAG_FALSE_F64;
     };
     let mut had_listeners = false;
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+    let mut domain_error: Option<(Handle, f64)> = None;
+    let mut throw_error: Option<f64> = None;
+    if let Some(emitter) = get_event_emitter_mut(handle) {
         let snapshot: Vec<Listener> = match emitter.events.get(&event_name) {
             Some(v) if !v.is_empty() => v.clone(),
             _ => Vec::new(),
@@ -606,7 +1181,9 @@ pub unsafe extern "C" fn js_event_emitter_emit(
         }
 
         let first_arg = first_arg_or_undefined(args_ptr);
+        let emitted_args = collect_emit_args(args_ptr);
         if event_name == "error" {
+            dispatch_error_monitor(emitter, handle, Some(first_arg));
             let has_error_once = emitter
                 .pending_once_promises
                 .get("error")
@@ -614,18 +1191,34 @@ pub unsafe extern "C" fn js_event_emitter_emit(
             let rejected_once = reject_pending_once_promises_for_error(emitter, first_arg);
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
-                js_throw(first_arg);
+                if let Some(domain) = emitter.domain_handle {
+                    domain_error = Some((domain, first_arg));
+                } else {
+                    throw_error = Some(first_arg);
+                }
             }
         }
 
-        drain_pending_once_promises(emitter, &event_name, args_ptr);
+        if domain_error.is_none() && throw_error.is_none() {
+            drain_pending_once_promises(emitter, &event_name, args_ptr);
 
-        for l in snapshot {
-            if l.callback != 0 {
-                let closure = JsClosure::from_raw(l.callback as *const RawClosureHeader);
-                let _ = closure.call1(first_arg);
+            let capture_rejections = emitter.capture_rejections && event_name != "error";
+            for l in snapshot {
+                if l.callback != 0 {
+                    let result = call_emitter_listener(handle, l.callback, &emitted_args);
+                    if capture_rejections {
+                        capture_listener_rejection(handle, result);
+                    }
+                }
             }
         }
+    }
+    if let Some((domain, error)) = domain_error {
+        let _ = js_domain_emit_error(domain, error, nanbox_pointer_bits(handle), false);
+        return TAG_FALSE_F64;
+    }
+    if let Some(error) = throw_error {
+        js_throw(error);
     }
     if had_listeners {
         TAG_TRUE_F64
@@ -644,17 +1237,16 @@ pub unsafe extern "C" fn js_event_emitter_emit(
 ///
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
-pub unsafe extern "C" fn js_event_emitter_emit0(
-    handle: Handle,
-    event_name_ptr: *const StringHeader,
-) -> f64 {
+pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64) -> f64 {
     const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
     const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return TAG_FALSE_F64;
     };
     let mut had_listeners = false;
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+    let mut domain_error: Option<(Handle, f64)> = None;
+    let mut throw_error: Option<f64> = None;
+    if let Some(emitter) = get_event_emitter_mut(handle) {
         let snapshot: Vec<Listener> = match emitter.events.get(&event_name) {
             Some(v) if !v.is_empty() => v.clone(),
             _ => Vec::new(),
@@ -672,6 +1264,7 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
         let empty_args = js_array_alloc(0);
         if event_name == "error" {
             let error_value = undefined_value();
+            dispatch_error_monitor(emitter, handle, None);
             let has_error_once = emitter
                 .pending_once_promises
                 .get("error")
@@ -679,17 +1272,33 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
             let rejected_once = reject_pending_once_promises_for_error(emitter, error_value);
             had_listeners = had_listeners || has_error_once || rejected_once;
             if snapshot.is_empty() && !has_error_once && !rejected_once {
-                js_throw(error_value);
+                if let Some(domain) = emitter.domain_handle {
+                    domain_error = Some((domain, error_value));
+                } else {
+                    throw_error = Some(error_value);
+                }
             }
         }
-        drain_pending_once_promises(emitter, &event_name, empty_args);
+        if domain_error.is_none() && throw_error.is_none() {
+            drain_pending_once_promises(emitter, &event_name, empty_args);
 
-        for l in snapshot {
-            if l.callback != 0 {
-                let closure = JsClosure::from_raw(l.callback as *const RawClosureHeader);
-                let _ = closure.call0();
+            let capture_rejections = emitter.capture_rejections && event_name != "error";
+            for l in snapshot {
+                if l.callback != 0 {
+                    let result = call_emitter_listener(handle, l.callback, &[]);
+                    if capture_rejections {
+                        capture_listener_rejection(handle, result);
+                    }
+                }
             }
         }
+    }
+    if let Some((domain, error)) = domain_error {
+        let _ = js_domain_emit_error(domain, error, nanbox_pointer_bits(handle), false);
+        return TAG_FALSE_F64;
+    }
+    if let Some(error) = throw_error {
+        js_throw(error);
     }
     if had_listeners {
         TAG_TRUE_F64
@@ -698,8 +1307,8 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
     }
 }
 
-/// `emitter.removeListener(event, listener)`. Removes the first
-/// matching listener only (matches Node).
+/// `emitter.removeListener(event, listener)`. Removes the most recently added
+/// matching listener, including once raw-wrapper aliases.
 ///
 /// # Safety
 ///
@@ -707,24 +1316,19 @@ pub unsafe extern "C" fn js_event_emitter_emit0(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_remove_listener(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
     // #3072: `removeListener`/`off` require a callable listener too.
     let callback_ptr = validate_event_listener(listener_bits);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return handle;
     };
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        let mut removed = false;
-        if let Some(listeners) = emitter.events.get_mut(&event_name) {
-            if let Some(pos) = listeners.iter().position(|l| l.callback == callback_ptr) {
-                listeners.remove(pos);
-                removed = true;
-            }
-        }
-        if removed {
-            emitter.prune_event_if_empty(&event_name);
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        if let Some(removed_callback) =
+            remove_one_matching_listener(emitter, &event_name, callback_ptr)
+        {
+            emitter.emit_meta_event(handle, "removeListener", &event_name, removed_callback);
         }
     }
     handle
@@ -738,23 +1342,63 @@ pub unsafe extern "C" fn js_event_emitter_remove_listener(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    args_ptr: *const ArrayHeader,
 ) -> Handle {
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        if event_name_ptr.is_null() {
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        if args_ptr.is_null() || (*args_ptr).length == 0 {
+            let removed: Vec<(String, i64)> = emitter
+                .event_order
+                .iter()
+                .filter(|name| name.as_str() != "removeListener")
+                .flat_map(|name| {
+                    emitter.events.get(name).into_iter().flat_map(|listeners| {
+                        listeners
+                            .iter()
+                            .map(|listener| (name.clone(), listener.callback))
+                    })
+                })
+                .collect();
             emitter.events.clear();
             emitter.event_order.clear();
-        } else if let Some(event_name) = read_str(event_name_ptr) {
+            emitter.warned_events.clear();
+            for (name, callback) in removed {
+                emitter.emit_meta_event(handle, "removeListener", &name, callback);
+            }
+        } else if let Some(event_name) =
+            event_name_from_bits(js_array_get(args_ptr, 0).bits() as i64)
+        {
+            let removed: Vec<i64> = emitter
+                .events
+                .get(&event_name)
+                .map(|listeners| listeners.iter().map(|listener| listener.callback).collect())
+                .unwrap_or_default();
             emitter.events.remove(&event_name);
+            emitter.warned_events.remove(&event_name);
             if let Some(pos) = emitter.event_order.iter().position(|s| s == &event_name) {
                 emitter.event_order.remove(pos);
+            }
+            if event_name != "removeListener" {
+                for callback in removed {
+                    emitter.emit_meta_event(handle, "removeListener", &event_name, callback);
+                }
             }
         }
     }
     handle
 }
 
-/// `emitter.listenerCount(eventName)`.
+fn listener_filter_from_bits(listener_bits: i64) -> Option<i64> {
+    let value = JsValue::from_bits(listener_bits as u64);
+    if value.is_undefined() || value.is_null() {
+        None
+    } else if value.is_pointer() {
+        Some((listener_bits as u64 & POINTER_MASK) as i64)
+    } else {
+        Some(0)
+    }
+}
+
+/// `emitter.listenerCount(eventName, listener?)`.
 ///
 /// # Safety
 ///
@@ -762,13 +1406,24 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_listener_count(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
+    listener_bits: i64,
 ) -> f64 {
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return 0.0;
     };
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+    let listener_filter = listener_filter_from_bits(listener_bits);
+    if let Some(emitter) = get_event_emitter_mut(handle) {
         if let Some(listeners) = emitter.events.get(&event_name) {
+            if let Some(callback_ptr) = listener_filter {
+                if callback_ptr == 0 {
+                    return 0.0;
+                }
+                return listeners
+                    .iter()
+                    .filter(|listener| listener_matches(listener, callback_ptr))
+                    .count() as f64;
+            }
             return listeners.len() as f64;
         }
     }
@@ -778,8 +1433,9 @@ pub unsafe extern "C" fn js_event_emitter_listener_count(
 /// `emitter.setMaxListeners(n)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f64) -> Handle {
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.max_listeners = n as i32;
+    let n = validate_max_listeners(n);
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        emitter.max_listeners = n;
     }
     handle
 }
@@ -787,10 +1443,42 @@ pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f
 /// `emitter.getMaxListeners()`.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_get_max_listeners(handle: Handle) -> f64 {
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        return emitter.max_listeners as f64;
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        return emitter.max_listeners;
     }
     10.0
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_emitter_is_handle(handle: Handle) -> bool {
+    is_local_event_emitter_handle(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_emitter_get_domain(handle: Handle) -> Handle {
+    get_event_emitter_mut(handle)
+        .and_then(|emitter| emitter.domain_handle)
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_emitter_set_domain(handle: Handle, domain: Handle) -> i32 {
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        emitter.domain_handle = if domain == 0 { None } else { Some(domain) };
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_event_emitter_domain_value(handle: Handle) -> f64 {
+    let domain = js_event_emitter_get_domain(handle);
+    if domain == 0 {
+        f64::from_bits(TAG_NULL_F64_BITS)
+    } else {
+        nanbox_pointer_bits(domain)
+    }
 }
 
 /// `emitter.eventNames()` — returns an array of strings in insertion
@@ -798,7 +1486,7 @@ pub unsafe extern "C" fn js_event_emitter_get_max_listeners(handle: Handle) -> f
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_event_names(handle: Handle) -> *mut ArrayHeader {
     let arr = js_array_alloc(0);
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+    if let Some(emitter) = get_event_emitter_mut(handle) {
         let mut result = arr;
         for name in emitter.event_order.iter() {
             let alive = emitter
@@ -827,13 +1515,13 @@ pub unsafe extern "C" fn js_event_emitter_event_names(handle: Handle) -> *mut Ar
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_listeners(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
 ) -> *mut ArrayHeader {
     let arr = js_array_alloc(0);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_bits) else {
         return arr;
     };
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+    if let Some(emitter) = get_event_emitter_mut(handle) {
         if let Some(listeners) = emitter.events.get(&event_name) {
             let mut result = arr;
             for l in listeners.iter() {
@@ -848,8 +1536,8 @@ pub unsafe extern "C" fn js_event_emitter_listeners(
     arr
 }
 
-/// `emitter.rawListeners(eventName)` — identical to `listeners` in our
-/// model (we don't wrap once-listeners at registration time).
+/// `emitter.rawListeners(eventName)` — returns once wrappers while
+/// `listeners()` exposes the original user closures.
 ///
 /// # Safety
 ///
@@ -857,57 +1545,90 @@ pub unsafe extern "C" fn js_event_emitter_listeners(
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_raw_listeners(
     handle: Handle,
-    event_name_ptr: *const StringHeader,
+    event_bits: i64,
 ) -> *mut ArrayHeader {
-    js_event_emitter_listeners(handle, event_name_ptr)
+    let arr = js_array_alloc(0);
+    let Some(event_name) = event_name_from_bits(event_bits) else {
+        return arr;
+    };
+    if let Some(emitter) = get_event_emitter_mut(handle) {
+        if let Some(listeners) = emitter.events.get(&event_name) {
+            let mut result = arr;
+            for listener in listeners.iter() {
+                let callback = if listener.once && listener.raw_wrapper != 0 {
+                    listener.raw_wrapper
+                } else {
+                    listener.callback
+                };
+                if callback != 0 {
+                    result = js_array_push(result, JsValue::from_object_ptr(callback as *mut u8));
+                }
+            }
+            return result;
+        }
+    }
+    arr
 }
 
 // ============================================================================
 // Module-level helpers — `events.once(em, name)` / `events.on(em, name)` /
 // `events.getEventListeners(em, name)` / `events.listenerCount(em, name)` /
 // `events.setMaxListeners(n, em)` / `events.getMaxListeners(em)`.
+// The `events.once` listener trampolines (abort / stream-resolve /
+// stream-reject) live in `module_iterators.rs` alongside
+// `events_once_event_target_listener`.
 // ============================================================================
 
-extern "C" fn events_once_abort_listener(closure: *const RawClosureHeader) -> f64 {
-    unsafe {
-        let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
-        let promise = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-        let pending = get_handle_mut::<EventEmitterHandle>(handle)
-            .and_then(|emitter| remove_pending_once_promise(emitter, promise));
-        if let Some(pending) = pending {
-            cleanup_pending_abort_listener(&pending);
-            if !pending.promise.is_null() {
-                js_promise_reject(pending.promise, js_abort_error_value());
-            }
-        }
-    }
-    undefined_value()
-}
-
 /// `events.once(emitter, eventName[, options])` — returns a Promise that resolves
-/// to a 1-element array `[arg]` on the next `emit(eventName, arg)`.
+/// to the args array from the next matching event.
 ///
 /// # Safety
 ///
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_once(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut Promise {
     ensure_gc_scanner_registered();
     let prom = JsPromise::new();
     let raw = prom.as_raw();
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let target = match event_helper_target(target_value) {
+        Some(target) => target,
+        None => {
+            js_promise_reject(
+                raw,
+                invalid_arg_type_error(&invalid_instance_arg_message(
+                    "emitter",
+                    "EventEmitter",
+                    target_value,
+                )),
+            );
+            js_native_async_drop_promise_token(raw);
+            return raw;
+        }
+    };
+    let Some(event_name) = event_name_from_bits(event_name_ptr as i64) else {
         return raw;
     };
-    let signal = options_signal(options);
+    let signal = match options_signal_result(options) {
+        Ok(signal) => signal,
+        Err(error) => {
+            js_promise_reject(raw, error);
+            js_native_async_drop_promise_token(raw);
+            return raw;
+        }
+    };
     if signal.is_some_and(signal_is_aborted) {
         js_promise_reject(raw, js_abort_error_value());
+        js_native_async_drop_promise_token(raw);
         return raw;
     }
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
+    if let EventHelperTarget::EventEmitter(handle) = target {
+        let Some(emitter) = get_event_emitter_mut(handle) else {
+            return raw;
+        };
         let mut pending = PendingOnce {
             promise: raw,
             signal: undefined_value(),
@@ -932,62 +1653,53 @@ pub unsafe extern "C" fn js_events_once(
             .entry(event_name)
             .or_default()
             .push(pending);
+        return raw;
+    }
+    if let EventHelperTarget::EventTarget(target) = target {
+        let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
+        if event_name_ptr.is_null() {
+            return raw;
+        }
+        let listener = js_closure_alloc(events_once_event_target_listener as *const u8, 3);
+        js_closure_set_capture_ptr(listener, 0, raw as i64);
+        js_closure_set_capture_ptr(listener, 1, target as i64);
+        js_closure_set_capture_ptr(listener, 2, event_name_ptr as i64);
+        js_event_target_add_event_listener(target, event_name_ptr, listener as i64);
+        return raw;
+    }
+    if let EventHelperTarget::Stream(handle) = target {
+        let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
+        if event_name_ptr.is_null() {
+            return raw;
+        }
+        js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
+        js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
+        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        js_closure_set_capture_ptr(listener, 0, raw as i64);
+        js_closure_set_capture_ptr(listener, 1, handle);
+        js_closure_set_capture_ptr(listener, 2, 0);
+        js_closure_set_capture_ptr(listener, 3, 0);
+        let event_value = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+        let listener_value = nanbox_pointer_bits(listener as i64);
+        if event_name != "error" {
+            let error_event_name = b"error";
+            let error_event_ptr =
+                js_string_from_bytes(error_event_name.as_ptr(), error_event_name.len() as u32);
+            let reject_listener =
+                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            js_closure_set_capture_ptr(reject_listener, 0, raw as i64);
+            js_closure_set_capture_ptr(reject_listener, 1, handle);
+            js_closure_set_capture_ptr(reject_listener, 2, event_name_ptr as i64);
+            js_closure_set_capture_ptr(reject_listener, 3, listener as i64);
+            js_closure_set_capture_ptr(listener, 2, reject_listener as i64);
+            js_closure_set_capture_ptr(listener, 3, error_event_ptr as i64);
+            let error_event = f64::from_bits(nanbox_string_bits(error_event_ptr));
+            let reject_listener_value = nanbox_pointer_bits(reject_listener as i64);
+            let _ = js_node_stream_method_once(handle, error_event, reject_listener_value);
+        }
+        let _ = js_node_stream_method_once(handle, event_value, listener_value);
     }
     raw
-}
-
-/// Queue listener for `events.on(...)` — captures the queue array in
-/// slot 0 and pushes `[arg]` onto it for each emitted event. The
-/// `for await (... of iter)` loop pulls items off the array as the
-/// stream produces them.
-extern "C" fn events_on_queue_listener(closure: *const RawClosureHeader, arg0: f64) -> f64 {
-    unsafe {
-        let queue = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
-        let abort_promise = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-        if !queue.is_null() {
-            let mut args = js_array_alloc(0);
-            args = js_array_push_f64(args, arg0);
-            let args_val = nanbox_pointer_bits(args as i64);
-            if abort_promise.is_null() {
-                let _ = js_array_push_f64(queue, args_val);
-            } else {
-                let abort_val = nanbox_pointer_bits(abort_promise as i64);
-                let len = (*queue).length;
-                if len == 0 {
-                    let _ = js_array_push_f64(queue, args_val);
-                    let _ = js_array_push_f64(queue, abort_val);
-                } else {
-                    js_array_set(queue, len - 1, JsValue::from_bits(args_val.to_bits()));
-                    let _ = js_array_push_f64(queue, abort_val);
-                }
-            }
-        }
-    }
-    f64::from_bits(TAG_UNDEFINED_F64_BITS)
-}
-
-extern "C" fn events_on_abort_listener(closure: *const RawClosureHeader) -> f64 {
-    unsafe {
-        let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
-        let data_listener = js_closure_get_capture_ptr(closure, 1);
-        let signal_ptr = js_closure_get_capture_ptr(closure, 2) as *mut u8;
-        let abort_promise = js_closure_get_capture_ptr(closure, 3) as *mut Promise;
-
-        if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-            remove_listener_by_callback(emitter, data_listener);
-        }
-        if !signal_ptr.is_null() {
-            js_abort_signal_remove_listener(
-                signal_ptr,
-                abort_event_value(),
-                nanbox_pointer_bits(closure as i64),
-            );
-        }
-        if !abort_promise.is_null() {
-            js_promise_reject(abort_promise, js_abort_error_value());
-        }
-    }
-    undefined_value()
 }
 
 /// `events.on(emitter, eventName)` — returns an async-iterable queue of
@@ -1001,16 +1713,19 @@ extern "C" fn events_on_abort_listener(closure: *const RawClosureHeader) -> f64 
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_on(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut ArrayHeader {
     ensure_gc_scanner_registered();
+    let target =
+        event_helper_target(target_value).unwrap_or_else(|| throw_invalid_emitter(target_value));
     let queue = js_array_alloc(0);
-    let Some(event_name) = read_str(event_name_ptr) else {
+    let Some(event_name) = event_name_from_bits(event_name_ptr as i64) else {
         return queue;
     };
-    let signal = options_signal(options);
+    let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
+    let signal = options_signal_or_throw(options);
     if signal.is_some_and(signal_is_aborted) {
         js_throw(js_abort_error_value());
     }
@@ -1027,53 +1742,97 @@ pub unsafe extern "C" fn js_events_on(
         let _ = js_array_push_f64(queue, nanbox_pointer_bits(abort_promise as i64));
     }
 
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        emitter.add_listener(&event_name, listener as i64, false, false);
-        if let Some(signal) = signal {
-            if let Some(signal_ptr) = object_ptr_from_value(signal) {
-                let abort_listener = js_closure_alloc(events_on_abort_listener as *const u8, 4);
-                js_closure_set_capture_ptr(abort_listener, 0, handle);
-                js_closure_set_capture_ptr(abort_listener, 1, listener as i64);
-                js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);
-                js_closure_set_capture_ptr(abort_listener, 3, abort_promise as i64);
-                js_abort_signal_add_listener(
-                    signal_ptr as *mut u8,
-                    abort_event_value(),
-                    nanbox_pointer_bits(abort_listener as i64),
-                );
+    let handle = match target {
+        EventHelperTarget::EventEmitter(handle) => {
+            if let Some(emitter) = get_event_emitter_mut(handle) {
+                emitter.add_listener(handle, &event_name, listener as i64, false, false);
             }
+            handle
+        }
+        EventHelperTarget::EventTarget(target) => {
+            if !event_name_ptr.is_null() {
+                js_event_target_add_event_listener(target, event_name_ptr, listener as i64);
+            }
+            target as Handle
+        }
+        EventHelperTarget::Stream(handle) => {
+            if !event_name_ptr.is_null() {
+                let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+                let listener_value = nanbox_pointer_bits(listener as i64);
+                let _ = js_node_stream_method_on(handle, event, listener_value);
+            }
+            handle
+        }
+    };
+
+    if let Some(signal) = signal {
+        if let Some(signal_ptr) = object_ptr_from_value(signal) {
+            let abort_listener = js_closure_alloc(events_on_abort_listener as *const u8, 5);
+            js_closure_set_capture_ptr(abort_listener, 0, handle);
+            js_closure_set_capture_ptr(abort_listener, 1, listener as i64);
+            js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);
+            js_closure_set_capture_ptr(abort_listener, 3, abort_promise as i64);
+            js_closure_set_capture_ptr(abort_listener, 4, event_name_ptr as i64);
+            js_abort_signal_add_listener(
+                signal_ptr as *mut u8,
+                abort_event_value(),
+                nanbox_pointer_bits(abort_listener as i64),
+            );
         }
     }
     queue
 }
 
+extern "C" fn events_abort_listener_dispose(closure: *const RawClosureHeader) -> f64 {
+    unsafe {
+        let signal_ptr = js_closure_get_capture_ptr(closure, 0);
+        let callback_ptr = js_closure_get_capture_ptr(closure, 1);
+        if signal_ptr != 0 && callback_ptr != 0 {
+            js_abort_signal_remove_listener(
+                signal_ptr as *mut u8,
+                abort_event_value(),
+                nanbox_pointer_bits(callback_ptr),
+            );
+        }
+    }
+    undefined_value()
+}
+
 /// `events.addAbortListener(signal, listener)` — attach `listener` to the
-/// AbortSignal's "abort" event and return a `Disposable`-shaped plain object
-/// (currently a function-shaped placeholder — listener removal can be
-/// tightened later). Ported from `perry-stdlib/src/events.rs` (#1557).
+/// AbortSignal's "abort" event and return a `Disposable`-shaped plain object.
 ///
 /// # Safety
 ///
-/// `signal_ptr` must be null or a Perry-runtime `ObjectHeader` (the
-/// AbortSignal instance); `callback_ptr` must be null or a closure pointer.
+/// `signal` and `listener` are NaN-boxed JS values, matching codegen's
+/// module-helper ABI.
 #[no_mangle]
-pub unsafe extern "C" fn js_events_add_abort_listener(signal_ptr: i64, callback_ptr: i64) -> i64 {
-    if signal_ptr == 0 || callback_ptr == 0 {
-        return 0;
-    }
-    let event_name = b"abort";
-    let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
-    let event_val = f64::from_bits(nanbox_string_bits(event_str));
+pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64) -> i64 {
+    let signal = validate_abort_signal_arg(signal, "signal");
+    let signal_ptr = object_ptr_from_value(signal).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "signal",
+            "AbortSignal",
+            signal,
+        ))
+    });
+    let callback_ptr = validate_event_listener(listener.to_bits() as i64);
+
     let listener_val = nanbox_pointer_bits(callback_ptr);
-    js_abort_signal_add_listener(signal_ptr as *mut u8, event_val, listener_val);
-    // Perry currently surfaces the disposable as the listener itself
-    // (matching node's `{ [Symbol.dispose]: () => signal.removeEventListener(...) }`
-    // shape requires symbol-property writes that this crate doesn't expose
-    // yet; perry-stdlib's version uses perry_runtime::symbol helpers). The
-    // returned pointer is callable, so `disposable[Symbol.dispose]?.()` won't
-    // crash — it just won't actually unsubscribe. Tightening this is tracked
-    // in #1557's follow-up bullet.
-    callback_ptr
+    js_abort_signal_add_listener(signal_ptr as *mut u8, abort_event_value(), listener_val);
+
+    let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
+    js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr as i64);
+    js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
+    let dispose_val = nanbox_pointer_bits(dispose_closure as i64);
+
+    let disposable = js_object_alloc(0, 0);
+    let disposable_val = nanbox_pointer_bits(disposable as i64);
+    let dispose_key = b"@@__perry_wk_dispose";
+    let dispose_key_ptr = js_string_from_bytes(dispose_key.as_ptr(), dispose_key.len() as u32);
+    let dispose_key_val = f64::from_bits(nanbox_string_bits(dispose_key_ptr));
+    let dispose_sym_val = js_symbol_for(dispose_key_val);
+    js_object_set_symbol_property(disposable_val, dispose_sym_val, dispose_val);
+    disposable as i64
 }
 
 /// `events.getEventListeners(emitter, eventName)` — alias for
@@ -1084,19 +1843,27 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal_ptr: i64, callback_
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_get_event_listeners(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> *mut ArrayHeader {
-    if get_handle_mut::<EventEmitterHandle>(handle).is_some() {
-        return js_event_emitter_listeners(handle, event_name_ptr);
+    match event_helper_target(target_value).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "emitter",
+            "EventEmitter or EventTarget",
+            target_value,
+        ))
+    }) {
+        EventHelperTarget::EventEmitter(handle) => {
+            js_event_emitter_listeners(handle, event_name_ptr as i64)
+        }
+        EventHelperTarget::EventTarget(target) => {
+            js_event_target_get_event_listeners(target, event_name_ptr)
+        }
+        EventHelperTarget::Stream(handle) => {
+            stream_listeners_for_heap_object(handle, event_name_ptr)
+                .unwrap_or_else(|| js_array_alloc(0))
+        }
     }
-    if let Some(target) = event_target_ptr(handle) {
-        return js_event_target_get_event_listeners(target, event_name_ptr);
-    }
-    if let Some(listeners) = stream_listeners_for_heap_object(handle, event_name_ptr) {
-        return listeners;
-    }
-    js_array_alloc(0)
 }
 
 /// `events.listenerCount(emitter, eventName)` — alias.
@@ -1106,22 +1873,42 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_listener_count(
-    handle: Handle,
+    target_value: f64,
     event_name_ptr: *const StringHeader,
 ) -> f64 {
-    js_event_emitter_listener_count(handle, event_name_ptr)
+    match event_helper_target(target_value).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "emitter",
+            "EventEmitter or EventTarget",
+            target_value,
+        ))
+    }) {
+        EventHelperTarget::EventEmitter(handle) => js_event_emitter_listener_count(
+            handle,
+            event_name_ptr as i64,
+            TAG_UNDEFINED_F64_BITS as i64,
+        ),
+        EventHelperTarget::EventTarget(target) => event_target_array_len(target, event_name_ptr),
+        EventHelperTarget::Stream(handle) => {
+            stream_array_len(handle, event_name_ptr).unwrap_or(0.0)
+        }
+    }
 }
 
 /// `events.getMaxListeners(emitter)` — alias.
 #[no_mangle]
-pub unsafe extern "C" fn js_events_get_max_listeners(handle: Handle) -> f64 {
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        return emitter.max_listeners as f64;
+pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
+    match event_helper_target(target_value).unwrap_or_else(|| {
+        throw_invalid_arg_type(&invalid_instance_arg_message(
+            "emitter",
+            "EventEmitter or EventTarget",
+            target_value,
+        ))
+    }) {
+        EventHelperTarget::EventEmitter(handle) => js_event_emitter_get_max_listeners(handle),
+        EventHelperTarget::EventTarget(target) => js_event_target_get_max_listeners(target),
+        EventHelperTarget::Stream(handle) => js_node_stream_method_get_max_listeners(handle),
     }
-    if let Some(target) = event_target_ptr(handle) {
-        return js_event_target_get_max_listeners(target);
-    }
-    10.0
 }
 
 /// `events.setMaxListeners(n, ...emitters)` — Perry FFI takes a single
@@ -1131,14 +1918,29 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
     n: f64,
     handles_ptr: *const ArrayHeader,
 ) -> f64 {
+    let n = validate_max_listeners(n);
     if !handles_ptr.is_null() {
         let len = (*handles_ptr).length;
         for i in 0..len {
-            let handle = handle_from_js_value_bits(js_array_get(handles_ptr, i).bits());
-            if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-                emitter.max_listeners = n as i32;
-            } else if let Some(target) = event_target_ptr(handle) {
-                let _ = js_event_target_set_max_listeners(target, n);
+            let value = f64::from_bits(js_array_get(handles_ptr, i).bits());
+            match event_helper_target(value).unwrap_or_else(|| {
+                throw_invalid_arg_type(&invalid_instance_arg_message(
+                    "eventTargets",
+                    "EventEmitter or EventTarget",
+                    value,
+                ))
+            }) {
+                EventHelperTarget::EventEmitter(handle) => {
+                    if let Some(emitter) = get_event_emitter_mut(handle) {
+                        emitter.max_listeners = n;
+                    }
+                }
+                EventHelperTarget::EventTarget(target) => {
+                    let _ = js_event_target_set_max_listeners(target, n);
+                }
+                EventHelperTarget::Stream(handle) => {
+                    let _ = js_node_stream_method_set_max_listeners(handle, n);
+                }
             }
         }
     }
@@ -1146,193 +1948,4 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use perry_ffi::{alloc_string, drop_handle, get_handle, register_handle};
-    use std::collections::HashMap;
-    use std::sync::{Mutex, MutexGuard};
-
-    static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    struct GcTestGuard {
-        frame: u64,
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl GcTestGuard {
-        fn new() -> Self {
-            let lock = GC_TEST_LOCK
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            perry_runtime::gc::js_gc_write_barriers_emitted(1);
-            let frame = perry_runtime::gc::js_shadow_frame_push(0);
-            Self { frame, _lock: lock }
-        }
-    }
-
-    impl Drop for GcTestGuard {
-        fn drop(&mut self) {
-            perry_runtime::gc::js_shadow_frame_pop(self.frame);
-            perry_runtime::gc::js_gc_write_barriers_emitted(0);
-        }
-    }
-
-    fn young_gc_root() -> i64 {
-        perry_runtime::arena::arena_alloc_gc(32, 8, perry_runtime::gc::GC_TYPE_STRING) as i64
-    }
-
-    fn young_promise_root() -> *mut Promise {
-        let ptr = perry_runtime::arena::arena_alloc_gc(
-            std::mem::size_of::<perry_runtime::Promise>(),
-            std::mem::align_of::<perry_runtime::Promise>(),
-            perry_runtime::gc::GC_TYPE_PROMISE,
-        );
-        unsafe {
-            std::ptr::write_bytes(ptr, 0, std::mem::size_of::<perry_runtime::Promise>());
-        }
-        ptr as *mut Promise
-    }
-
-    /// #3072: the listener-registration FFIs now take the raw NaN-box bits of
-    /// the listener and validate it is a closure. Allocate a real closure and
-    /// return its NaN-boxed bits (as i64) so the tests pass a value that the
-    /// shared validator accepts. `fn_ptr` is never invoked here (we never
-    /// `emit`), so a sentinel function pointer suffices.
-    extern "C" fn noop_listener(_c: *const RawClosureHeader) -> f64 {
-        f64::from_bits(TAG_UNDEFINED_F64_BITS)
-    }
-
-    fn fake_listener() -> i64 {
-        let closure = unsafe { js_closure_alloc(noop_listener as *const u8, 0) };
-        nanbox_pointer_bits(closure as i64).to_bits() as i64
-    }
-
-    fn assert_rewritten(before: usize, after: usize) {
-        assert_ne!(after, before);
-        assert!(perry_runtime::arena::pointer_in_nursery(after));
-    }
-
-    #[test]
-    fn new_emitter_starts_empty() {
-        let h = js_event_emitter_new();
-        let event_name = alloc_string("foo");
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
-        assert_eq!(count, 0.0);
-        drop_handle(h);
-    }
-
-    #[test]
-    fn add_then_count_listeners() {
-        let h = js_event_emitter_new();
-        let event_name = alloc_string("change");
-        // Real closures — we never emit so the bodies aren't invoked.
-        let _ = unsafe { js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener()) };
-        let _ = unsafe { js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener()) };
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
-        assert_eq!(count, 2.0);
-        drop_handle(h);
-    }
-
-    #[test]
-    fn remove_listener_drops_one() {
-        let h = js_event_emitter_new();
-        let event_name = alloc_string("data");
-        let a = fake_listener();
-        let b = fake_listener();
-        unsafe {
-            js_event_emitter_on(h, event_name.as_raw() as *const _, a);
-            js_event_emitter_on(h, event_name.as_raw() as *const _, b);
-            js_event_emitter_remove_listener(h, event_name.as_raw() as *const _, a);
-        }
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
-        assert_eq!(count, 1.0);
-        drop_handle(h);
-    }
-
-    #[test]
-    fn remove_all_clears() {
-        let h = js_event_emitter_new();
-        let event_name = alloc_string("x");
-        unsafe {
-            js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener());
-            js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener());
-            js_event_emitter_remove_all_listeners(h, std::ptr::null());
-        }
-        let count = unsafe { js_event_emitter_listener_count(h, event_name.as_raw() as *const _) };
-        assert_eq!(count, 0.0);
-        drop_handle(h);
-    }
-
-    #[test]
-    fn prepend_listener_inserts_at_front() {
-        let h = js_event_emitter_new();
-        let event_name = alloc_string("ord");
-        unsafe {
-            js_event_emitter_on(h, event_name.as_raw() as *const _, fake_listener());
-            js_event_emitter_prepend_listener(h, event_name.as_raw() as *const _, fake_listener());
-        }
-        let arr = unsafe { js_event_emitter_listeners(h, event_name.as_raw() as *const _) };
-        assert!(!arr.is_null());
-        drop_handle(h);
-    }
-
-    #[test]
-    fn max_listeners_round_trips() {
-        let h = js_event_emitter_new();
-        // Default = 10.
-        assert_eq!(unsafe { js_event_emitter_get_max_listeners(h) }, 10.0);
-        unsafe {
-            js_event_emitter_set_max_listeners(h, 42.0);
-        }
-        assert_eq!(unsafe { js_event_emitter_get_max_listeners(h) }, 42.0);
-        drop_handle(h);
-    }
-
-    #[test]
-    fn gc_mutable_scanner_rewrites_listener_and_pending_promise_roots() {
-        let _guard = GcTestGuard::new();
-        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-events", scan_events_roots);
-
-        let listener = young_gc_root();
-        let promise = young_promise_root();
-        let mut events = HashMap::new();
-        events.insert(
-            "ready".to_string(),
-            vec![Listener {
-                callback: listener,
-                once: false,
-            }],
-        );
-        let mut pending_once_promises = HashMap::new();
-        pending_once_promises.insert(
-            "ready".to_string(),
-            vec![PendingOnce {
-                promise,
-                signal: undefined_value(),
-                abort_listener: 0,
-            }],
-        );
-        let handle = register_handle(EventEmitterHandle {
-            events,
-            event_order: vec!["ready".to_string()],
-            pending_once_promises,
-            max_listeners: 10,
-        });
-
-        let _ = perry_runtime::gc::gc_collect_minor();
-
-        {
-            let emitter = get_handle::<EventEmitterHandle>(handle)
-                .expect("emitter handle should remain live");
-            assert_rewritten(
-                listener as usize,
-                emitter.events["ready"][0].callback as usize,
-            );
-            assert_rewritten(
-                promise as usize,
-                emitter.pending_once_promises["ready"][0].promise as usize,
-            );
-        }
-        drop_handle(handle);
-    }
-}
+mod tests;

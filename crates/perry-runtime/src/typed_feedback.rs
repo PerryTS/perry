@@ -5,10 +5,11 @@
 //! has actually seen at runtime.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    LazyLock, Mutex,
-};
+#[cfg(any(feature = "diagnostics", test))]
+use std::sync::atomic::AtomicBool;
+#[cfg(any(feature = "diagnostics", test))]
+use std::sync::atomic::Ordering;
+use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
@@ -21,7 +22,33 @@ const POLYMORPHIC_CAP: usize = 4;
 
 static REGISTRY: LazyLock<Mutex<TypedFeedbackRegistry>> =
     LazyLock::new(|| Mutex::new(TypedFeedbackRegistry::default()));
+#[cfg(any(feature = "diagnostics", test))]
 static TRACE_DUMPED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(not(test))]
+static TYPED_FEEDBACK_ENABLED: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var_os("PERRY_TYPED_FEEDBACK_TRACE").is_some()
+        || std::env::var_os("PERRY_TYPED_FEEDBACK").is_some()
+});
+
+#[inline]
+fn typed_feedback_enabled() -> bool {
+    #[cfg(test)]
+    {
+        true
+    }
+    #[cfg(not(test))]
+    {
+        *TYPED_FEEDBACK_ENABLED
+    }
+}
+
+/// #5093: whether typed-feedback tracing is active. Read once at `js_gc_init`
+/// to disable the codegen-inlined class-field fast path (which would skip the
+/// observation recording the guard does in this mode).
+pub(crate) fn typed_feedback_active() -> bool {
+    typed_feedback_enabled()
+}
 
 #[cfg(test)]
 pub(crate) static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -360,7 +387,7 @@ pub extern "C" fn js_typed_feedback_register_site(
     fallback_ptr: *const u8,
     fallback_len: usize,
 ) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let metadata = SiteMetadata {
@@ -653,7 +680,10 @@ fn normalize_raw_object_addr(bits: u64) -> usize {
     } else {
         bits
     } as usize;
-    if addr < 0x10000 || (addr as u64) >> 48 != 0 {
+    // Native module registry handles are carried as small raw values in several
+    // dispatch paths. They are not GC objects, and probing `addr - header_size`
+    // for them can fault before the generic native-handle dispatcher runs.
+    if crate::value::addr_class::is_handle_band(addr) || (addr as u64) >> 48 != 0 {
         0
     } else {
         addr
@@ -729,7 +759,7 @@ fn guard_observe(
     observation: Observation,
     contract_valid: bool,
 ) -> bool {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return contract_valid;
     }
     let mut reg = registry();
@@ -751,7 +781,7 @@ fn guard_observe(
 }
 
 fn record_guard_pass(site_id: u64) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let mut reg = registry();
@@ -761,7 +791,7 @@ fn record_guard_pass(site_id: u64) {
 }
 
 fn record_guard_fail(site_id: u64) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let mut reg = registry();
@@ -771,7 +801,7 @@ fn record_guard_fail(site_id: u64) {
 }
 
 fn record_fallback_call(site_id: u64) {
-    if site_id == 0 {
+    if site_id == 0 || !typed_feedback_enabled() {
         return;
     }
     let mut reg = registry();
@@ -940,9 +970,9 @@ pub use guards::{
 
 #[path = "typed_feedback/trace.rs"]
 mod trace;
-pub use trace::{
-    js_typed_feedback_maybe_dump_trace, typed_feedback_snapshot, typed_feedback_trace_json,
-};
+pub use trace::typed_feedback_snapshot;
+#[cfg(feature = "diagnostics")]
+pub use trace::{js_typed_feedback_maybe_dump_trace, typed_feedback_trace_json};
 
 fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
@@ -1023,6 +1053,24 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
     unsafe {
         if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return false;
+        }
+        // Index accessors / custom attribute descriptors divert element
+        // reads and writes through the descriptor tables; the inline
+        // raw-slot fast path the guard admits would bypass them (test262
+        // sort/precise-* read accessor indices after defineProperty).
+        if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+            return false;
+        }
+        // A polluted `Array.prototype[i]` (or custom array prototype) makes
+        // holes read through the chain — the raw slot load would return
+        // undefined instead (test262 concat/S15.4.4.4_A3_T2,
+        // copyWithin/coerced-values-start-change-*). Rare global flags;
+        // two relaxed atomic loads.
+        if crate::array::array_prototype_has_index_flag()
+            || crate::array::object_prototype_has_index_flag()
+            || crate::object::prototype_chain::array_static_proto_recorded()
         {
             return false;
         }
@@ -1165,6 +1213,15 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (is_plain_number_bits(index_value.to_bits())
+            && index >= 0
+            && plain_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1206,6 +1263,15 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (is_plain_number_bits(index_value.to_bits())
+            && index >= 0
+            && numeric_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1276,11 +1342,31 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
-                if !index.is_finite() || index < 0.0 {
-                    f64::from_bits(TAG_UNDEFINED)
-                } else {
-                    crate::array::js_array_get_f64(raw_addr as *const ArrayHeader, index as u32)
+                // Fast path: a plain non-negative integer double indexes
+                // element storage directly.
+                if is_plain_number_bits(index.to_bits())
+                    && index >= 0.0
+                    && index.fract() == 0.0
+                    && index < u32::MAX as f64
+                {
+                    return crate::array::js_array_get_f64(
+                        raw_addr as *const ArrayHeader,
+                        index as u32,
+                    );
                 }
+                // Everything else — a string key ("1" canonical index, or a
+                // "foo" / "-1" expando), or a negative / fractional / non-finite
+                // number — coerces to a property key and dispatches through the
+                // full array getter, which routes canonical indices to element
+                // storage and otherwise consults named props, `length`, and the
+                // Array prototype. Previously every such key returned
+                // `undefined`, so `a["1"]` / `a[k]` (k a numeric string) and the
+                // `a[-1]` expando read silently missed.
+                let key_ptr = index_value_to_property_key(index);
+                crate::object::js_object_get_field_by_name_f64(
+                    raw_addr as *const ObjectHeader,
+                    key_ptr,
+                )
             }
             crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_CLOSURE => {
                 let key_ptr = index_value_to_property_key(index);
@@ -1391,6 +1477,14 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (index >= 0
+            && plain_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1431,6 +1525,15 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_set_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return (index >= 0
+            && is_numeric_value_bits(value.to_bits())
+            && numeric_array_index_guard(
+                raw_addr as *const ArrayHeader,
+                index as u32,
+                require_in_bounds != 0,
+            )) as i32;
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1573,6 +1676,12 @@ pub extern "C" fn js_typed_feedback_array_set_string_key(
     key: *const crate::StringHeader,
     value: f64,
 ) -> *mut ArrayHeader {
+    // Class-ref receivers (INT32 tag 0x7FFE) are not arrays; skip the array
+    // shape observation (which would probe the GC header of a non-pointer) and
+    // route straight to the class-ref-aware string-key setter.
+    if (arr as u64) >> 48 == 0x7FFE {
+        return crate::array::js_array_set_string_key(arr, key, value);
+    }
     observe_array(site_id, arr, u32::MAX);
     record_guard_fail(site_id);
     record_fallback_call(site_id);

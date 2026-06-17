@@ -20,14 +20,86 @@ explicit `typeof` checks and `instanceof`.
 
 ## No eval() or Dynamic Code
 
-Perry compiles to native code ahead of time. Dynamic code execution is not possible:
+Perry compiles to native code ahead of time. It cannot evaluate a code string
+that is only known at runtime. A *constant* code string is the exception —
+`eval("1 + 1")` and `new Function("a", "b", "return a + b")` are compiled to
+real native functions (#1679). Only a body built from runtime data hits this
+limit:
 
-<!-- intentionally-rejects: this snippet documents code Perry refuses to compile -->
-```text
-// Not supported
-eval("console.log('hi')");
-new Function("return 42");
+```ts
+// Constant body → compiled natively (works)
+const add = new Function("a", "b", "return a + b");
+
+// Runtime-built body → cannot be compiled ahead of time
+function run(src: string) { return new Function(`return (${src})`)(); }
 ```
+
+### Default: deferred runtime error + compile-time notice (#5206)
+
+By default a runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site
+does **not** block the build. Perry compiles it to a value that throws a
+descriptive `Error` *only if it is actually reached* (an `eval(...)` throws when
+evaluated; a `new Function(...)` returns a function that throws when called),
+and prints a single end-of-compile notice listing every degraded site:
+
+```text
+notice: 3 ahead-of-time-unsupported site(s) compiled to a deferred runtime error (throws only if reached):
+  - eval(...)           src/foo.ts:12
+  - import(...)          src/plugins/loader.ts:88
+  - new Function(...)    src/cli/cmd/debug/agent.handler.ts:41
+  Pass --strict-eval/--strict-dynamic-import (or set perry.strict = true) to make these a compile-time error instead.
+```
+
+This lets a single such call in a cold path ship without aborting the whole
+build, while still failing loudly (and catchably) if that path runs.
+
+### Dynamic `import()` with a runtime-computed specifier (#5230)
+
+A dynamic `import(spec)` whose `spec` is only known at runtime (a plugin loader
+building a path from a variable) is subject to the **same defer/notice/strict
+policy** as `eval`. By default it compiles to a rejected `Promise` carrying a
+descriptive `Error` (so `await import(spec)` throws *only if reached*), is
+listed in the shared notice above under the `import(...)` kind, and does **not**
+abort the build. This lets an app with a plugin-loader path compile and run its
+core, with only the plugin-load path throwing if exercised.
+
+Resolvable specifiers are unaffected and still compile + load: string literals
+(`import("./mod.js")`), ternaries of resolvable arms, template literals over
+`const` locals (`` import(`./${KIND}.js`) ``), finite string-literal-union
+parameters, and directory globs.
+
+```ts
+// Resolvable → compiled + loaded as today.
+const real = await import("./real.js");
+
+// Runtime-computed → deferred (default): throws only if this line runs.
+async function loadPlugin(name: string) {
+  return await import(name + ".js");
+}
+```
+
+### Strict mode: refuse at compile time
+
+To make every runtime-unknown site a hard compile-time error instead, opt into
+strict-eval mode by any of:
+
+- the `--strict-eval` flag on `perry compile`,
+- `"perry": { "eval": "error" }` (or `"perry": { "strict": true }`) in
+  `package.json`, or
+- `[perry]` `eval = "error"` (or `strict = true`) in `perry.toml`.
+
+`perry.eval` accepts `"defer"` (the default) or `"error"`. Precedence is
+package.json/perry.toml config → `--strict-eval` (opts in). The legacy
+`PERRY_ALLOW_EVAL=1` environment variable still works: it forces non-strict
+(defer) mode for a one-off build, overriding any strict flag/config.
+
+The same strict controls apply to runtime-computed dynamic `import()` (#5230).
+The broad `perry.strict = true` covers both eval and dynamic import. For a knob
+scoped to dynamic imports only, use `--strict-dynamic-import` or
+`"perry": { "dynamicImport": "error" }` (accepts `"defer"` (default) or
+`"error"`); the dedicated knob overrides the broad `perry.strict` for import
+sites. `PERRY_ALLOW_EVAL=1` is the shared AOT escape hatch — it forces defer for
+both eval and dynamic import.
 
 Test262 rows that only observe parsing or executing a code string remain
 intentional AOT exclusions, not runtime dynamic-code work. This includes the
@@ -86,6 +158,13 @@ const mod = await import("./module");
 Perry has internal CommonJS compatibility paths for some npm package wrappers,
 but user-written modules should use static `import` declarations.
 
+> **JavaScript source compiles too.** Perry accepts `.js`, `.cjs`, `.mjs`, and
+> `.jsx` files as compiler input — they are parsed as JavaScript and lowered
+> through the same native pipeline as TypeScript, so no type annotations are
+> required. The limitations on this page still apply (no `eval`, no general
+> dynamic `require()`, etc.), but plain JavaScript projects compile and run in
+> most cases.
+
 ## Limited Prototype Manipulation
 
 Perry compiles classes to fixed structures. Dynamic prototype modification is not supported:
@@ -137,7 +216,16 @@ needs Perry's supported Proxy surface.
 
 Perry supports real multi-threading via `parallelMap` and `spawn` from `perry/thread`. See [Multi-Threading](../threading/overview.md).
 
-Threads do not share mutable state — closures passed to thread primitives cannot capture mutable variables (enforced at compile time). Values are deep-copied across thread boundaries. There is no `SharedArrayBuffer` or `Atomics`.
+Threads do not share mutable state by default — closures passed to thread
+primitives cannot capture mutable variables (enforced at compile time), and
+values are deep-copied across thread boundaries. The exception is
+`SharedArrayBuffer`: a SAB captured into a `spawn` / `parallelMap` closure now
+**aliases the same physical bytes** across agents, and `Atomics`
+(`add`/`load`/`store`/`compareExchange`/… plus a real blocking
+`wait`/`notify`/`waitAsync`) operate on it for genuine cross-thread coordination.
+Caveat: only the `SharedArrayBuffer` itself shares — a typed-array *view*
+captured directly still deep-copies, so build the view per-agent from the shared
+SAB.
 
 ## npm Package Compatibility
 

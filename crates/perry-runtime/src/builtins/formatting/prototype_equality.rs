@@ -69,7 +69,23 @@ pub(super) fn prototype_token(value: f64) -> Option<u64> {
             return Some(TAG_NULL);
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        Some(CLASS_PROTO_NAMESPACE | (*obj).class_id as u64)
+        // #4937: a non-zero class_id is only a constructor marker when it is
+        // registered in CLASS_NAMES (the same test class_decl_prototype_value
+        // uses). Object literals carry an unregistered layout-shape id there,
+        // while a `{}`-born object mutated afterwards keeps class_id 0 — both
+        // have Object.prototype, so normalize unregistered ids to 0 or the
+        // two would spuriously compare as prototype-different.
+        let class_id = (*obj).class_id;
+        let proto_class_id = if class_id != 0
+            && crate::object::class_name_for_id(class_id)
+                .filter(|name| !name.is_empty())
+                .is_none()
+        {
+            0
+        } else {
+            class_id
+        };
+        Some(CLASS_PROTO_NAMESPACE | proto_class_id as u64)
     }
 }
 
@@ -81,5 +97,53 @@ pub(super) fn prototypes_differ(left: f64, right: f64) -> bool {
     match (prototype_token(left), prototype_token(right)) {
         (Some(l), Some(r)) => l != r,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// #4937: codegen gives object literals an unregistered layout-shape id in
+    /// `class_id`, while a `{}`-born object mutated afterwards keeps 0. Both
+    /// have Object.prototype — the prototype gate must not separate them.
+    /// A class_id registered in CLASS_NAMES still marks a real constructor.
+    #[test]
+    fn unregistered_shape_id_normalizes_to_plain_object_prototype() {
+        unsafe {
+            let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+
+            // "literal": unregistered non-zero shape id.
+            let lit = crate::object::js_object_alloc(424_242, 1);
+            crate::object::js_object_set_field_by_name(lit, key, 1.0);
+            let lit_v = crate::value::js_nanbox_pointer(lit as i64);
+
+            // "{} then mutated": class_id 0.
+            let dyn_obj = crate::object::js_object_alloc(0, 0);
+            crate::object::js_object_set_field_by_name(dyn_obj, key, 1.0);
+            let dyn_v = crate::value::js_nanbox_pointer(dyn_obj as i64);
+
+            // registered class instance with the same body.
+            let name = b"ProtoEqTestClass4937";
+            crate::object::js_register_class_name(424_243, name.as_ptr(), name.len() as u32);
+            let inst = crate::object::js_object_alloc(424_243, 1);
+            crate::object::js_object_set_field_by_name(inst, key, 1.0);
+            let inst_v = crate::value::js_nanbox_pointer(inst as i64);
+
+            assert!(!super::prototypes_differ(lit_v, dyn_v));
+            assert!(super::prototypes_differ(inst_v, lit_v));
+            assert!(super::prototypes_differ(inst_v, dyn_v));
+
+            assert_eq!(
+                crate::value::js_is_truthy(crate::builtins::js_util_is_deep_strict_equal(
+                    lit_v, dyn_v
+                )),
+                1
+            );
+            assert_eq!(
+                crate::value::js_is_truthy(crate::builtins::js_util_is_deep_strict_equal(
+                    inst_v, dyn_v
+                )),
+                0
+            );
+        }
     }
 }

@@ -69,6 +69,143 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
     stmts.iter().any(check_stmt)
 }
 
+/// Returns true if the body references the dynamic `this` or `new.target`
+/// bindings — directly (`Expr::This` / `Expr::NewTarget`) or through a nested
+/// arrow that lexically captures them (`captures_this` / `captures_new_target`).
+///
+/// These bindings belong to the function's OWN invocation: spec
+/// `OrdinaryCallBindThis` binds `this` from the call's thisArgument (which for a
+/// plain `f()` call is `undefined` in strict code, the global object in sloppy
+/// code), and `new.target` from the construct. Substituting the body into the
+/// caller (what the inliner does) silently rebinds them to the CALLER's frame —
+/// a strict callee whose `this` is `undefined` would instead read the caller's
+/// `this` (e.g. the global object), and `typeof this` flips from `"undefined"`
+/// to `"object"`. Refs test262 language/function-code `10.4.3-1-*` strict-mode
+/// `this`. Reject inlining of any such function.
+pub fn body_references_dynamic_this(stmts: &[Stmt]) -> bool {
+    fn check_expr(expr: &Expr) -> bool {
+        if matches!(expr, Expr::This | Expr::NewTarget) {
+            return true;
+        }
+        // An arrow that lexically uses the enclosing `this`/`new.target` records
+        // it via these flags. We do NOT descend into the closure body for a bare
+        // `Expr::This` (that one is the closure's OWN binding when it isn't an
+        // arrow); `walk_expr_children` only yields a closure's param defaults,
+        // which DO execute in the enclosing frame, so those are still checked.
+        if let Expr::Closure {
+            captures_this,
+            captures_new_target,
+            ..
+        } = expr
+        {
+            if *captures_this || *captures_new_target {
+                return true;
+            }
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            if !found && check_expr(child) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    fn check_stmt(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
+            Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
+            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                check_expr(condition)
+                    || then_branch.iter().any(check_stmt)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|b| b.iter().any(check_stmt))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                check_expr(condition) || body.iter().any(check_stmt)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref().is_some_and(|i| check_stmt(i))
+                    || condition.as_ref().is_some_and(check_expr)
+                    || update.as_ref().is_some_and(check_expr)
+                    || body.iter().any(check_stmt)
+            }
+            _ => false,
+        }
+    }
+
+    stmts.iter().any(check_stmt)
+}
+
+/// Like `body_references_dynamic_this`, but tolerates a *direct* `Expr::This`,
+/// which the method-inliner rewrites to the concrete receiver via
+/// `substitute_this_in_stmts`. Returns true only for constructs the
+/// substitution can NOT safely rewrite, so the method must stay un-inlined:
+/// `new.target` (left untouched), and any nested closure (a regular function
+/// has its own `this`/`new.target`; an arrow captures the enclosing one —
+/// neither binding is rewritten here). Conservative: rejecting *all* nested
+/// closures keeps `this.field` accessors/mutators inlinable without risking a
+/// mis-bound `this` inside a nested function.
+pub fn method_body_blocks_this_substitution(stmts: &[Stmt]) -> bool {
+    fn check_expr(expr: &Expr) -> bool {
+        if matches!(expr, Expr::NewTarget | Expr::Closure { .. }) {
+            return true;
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            if !found && check_expr(child) {
+                found = true;
+            }
+        });
+        found
+    }
+    fn check_stmt(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
+            Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
+            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                check_expr(condition)
+                    || then_branch.iter().any(check_stmt)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|b| b.iter().any(check_stmt))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                check_expr(condition) || body.iter().any(check_stmt)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref().is_some_and(|i| check_stmt(i))
+                    || condition.as_ref().is_some_and(check_expr)
+                    || update.as_ref().is_some_and(check_expr)
+                    || body.iter().any(check_stmt)
+            }
+            _ => false,
+        }
+    }
+    stmts.iter().any(check_stmt)
+}
+
 /// Check if statements contain a closure that captures any of the given local IDs
 pub fn body_contains_closure_capturing(
     stmts: &[Stmt],
@@ -219,6 +356,117 @@ pub fn collect_closure_captured_local_ids(
         // Descend into immediate sub-expressions for non-Closure variants
         // (and into Param defaults for Closure). The walker is exhaustive,
         // so any new HIR variant carrying an Expr is automatically covered.
+        perry_hir::walker::walk_expr_children(e, &mut |sub| visit_expr(sub, out));
+    }
+
+    fn visit_stmt(s: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
+        match s {
+            Stmt::Let { init: Some(e), .. } => visit_expr(e, out),
+            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => visit_expr(e, out),
+            Stmt::Return(None) => {}
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                visit_expr(condition, out);
+                for s in then_branch {
+                    visit_stmt(s, out);
+                }
+                if let Some(eb) = else_branch {
+                    for s in eb {
+                        visit_stmt(s, out);
+                    }
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                visit_expr(condition, out);
+                for s in body {
+                    visit_stmt(s, out);
+                }
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    visit_stmt(i, out);
+                }
+                if let Some(c) = condition {
+                    visit_expr(c, out);
+                }
+                if let Some(u) = update {
+                    visit_expr(u, out);
+                }
+                for s in body {
+                    visit_stmt(s, out);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                visit_expr(discriminant, out);
+                for case in cases {
+                    if let Some(t) = &case.test {
+                        visit_expr(t, out);
+                    }
+                    for s in &case.body {
+                        visit_stmt(s, out);
+                    }
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                for s in body {
+                    visit_stmt(s, out);
+                }
+                if let Some(c) = catch {
+                    for s in &c.body {
+                        visit_stmt(s, out);
+                    }
+                }
+                if let Some(f) = finally {
+                    for s in f {
+                        visit_stmt(s, out);
+                    }
+                }
+            }
+            Stmt::Labeled { body, .. } => visit_stmt(body, out),
+            _ => {}
+        }
+    }
+
+    for s in stmts {
+        visit_stmt(s, out);
+    }
+}
+
+/// Collect every LocalId WRITTEN by the statements — `LocalSet` and
+/// `Update` (++/--) targets, including inside nested closure bodies.
+///
+/// Used by the inliner: a parameter the body mutates must be materialised
+/// as a fresh setup `Let` (a copy) rather than substituted with the caller's
+/// argument expression in place. Substituting a `LocalGet(x)` makes the
+/// body's `param++` rewrite into `x++` and MUTATE THE CALLER'S LOCAL —
+/// test262 S13.2.1_A6 (`function f(a){ a++ } var x=1; f(x)` left x===2).
+pub fn collect_mutated_local_ids(stmts: &[Stmt], out: &mut std::collections::HashSet<LocalId>) {
+    fn visit_expr(e: &Expr, out: &mut std::collections::HashSet<LocalId>) {
+        match e {
+            Expr::LocalSet(id, _) => {
+                out.insert(*id);
+            }
+            Expr::Update { id, .. } => {
+                out.insert(*id);
+            }
+            Expr::Closure { body, .. } => collect_mutated_local_ids(body, out),
+            _ => {}
+        }
         perry_hir::walker::walk_expr_children(e, &mut |sub| visit_expr(sub, out));
     }
 

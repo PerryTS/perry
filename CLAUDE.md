@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1092
+**Current Version:** 0.5.1175
 
 
 ## TypeScript Parity Status
@@ -18,7 +18,7 @@ Tracked via the gap test suite (`test-files/test_gap_*.ts`, 28 tests). Compared 
 **Last full sweep:** run `./run_parity_tests.sh` for the current snapshot. The umbrella tracker is #793 (Node.js + TypeScript compatibility roadmap); the previously-cited #447–#452 batch closed on 2026-05-04. Currently-open trackers worth knowing about:
 
 - **Effect framework end-to-end (#321)** — `#684` (Schema.ts ~310th-init `(number).slice` regression) and `#809` (object-literal computed-keys + cross-module spread) are the live HashRing/Schema blockers.
-- **Async context** — `#788` (real `AsyncLocalStorage` tracking across `await`/microtasks/timers) and `#789` (real `async_hooks.createHook` lifecycle + asyncId). Today these are name-only stubs.
+- **Async context** — `AsyncLocalStorage` (real tracking across `await`/microtasks/timers, `#788`) and `async_hooks.createHook` (real lifecycle + asyncId, `#789`) both landed (closed 2026-05-16); these are no longer stubs.
 - **Compile-as-package** — `#348` (ink TUI end-to-end), `#488/#489` (Drizzle + MySQL), `#678` (linker emits native callsites for V8-fallback modules).
 - **Test/CI mechanics** — `#794` (per-category parity thresholds), `#796` (gap-suite output truncation + O(n²) `normalize_output`), `#812` (42-module behavioral matrix), `#806/#807/#808` (test harnesses for mixins / async context / ≥300-init scale).
 - **Skip-list audit** — `#797` covers `test-parity/known_failures.json` provenance (issue # + date per entry).
@@ -130,7 +130,7 @@ First-resolved directory cached in `compile_package_dirs`; subsequent imports re
 ## Known Limitations
 
 - **No runtime type *validation***: declared TS types aren't enforced at runtime (a `string` param accepts a number, no throw). Annotations are mostly erased — the exception is `emitDecoratorMetadata`, which retains `design:type`/`design:paramtypes` from annotations on decorated members (see `docs/src/language/decorators.md`). Runtime type *discrimination* does exist: `typeof` via NaN-boxing tags, `instanceof` via class ID chain.
-- **No shared mutable state across threads**: No `SharedArrayBuffer` or `Atomics`.
+- **`SharedArrayBuffer` + `Atomics` cross-thread** (#4794 single-realm; #4913 Stage 2 cross-agent): the `Atomics` ops (`add`/`and`/`or`/`sub`/`xor`/`load`/`store`/`exchange`/`compareExchange`/`isLockFree`) match the spec on one thread. A `SharedArrayBuffer` captured into a `spawn`/`parallelMap` closure now **aliases the same physical bytes** across `perry/thread` agents (its backing is a process-global, never-freed allocation — `crate::shared_sab` — passed by reference, not deep-copied), and `Atomics.wait`/`notify`/`waitAsync` are **real**: `wait` parks the OS thread on a futex table keyed by the absolute slot address (`crate::atomics_futex`), `notify` wakes parked agents and returns the count, and `waitAsync` resolves its promise on a background thread when notified or on timeout. Caveat: only the `SharedArrayBuffer` itself shares — a typed-array *view* captured directly still deep-copies (build the view per-agent from the shared SAB). The agent-coordinated test262 cases (`$262.agent`) remain out of scope.
 
 ## Common Pitfalls & Patterns
 

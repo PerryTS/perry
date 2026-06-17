@@ -220,6 +220,20 @@ pub extern "C" fn perry_ui_calendar_get_selected_date(h: i64) -> f64 {
     widgets::calendar::get_selected_date(h)
 }
 
+// Issue #4772 — DatePicker widget (android.widget.DatePicker).
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_create(year: i64, month: i64, on_change: f64) -> i64 {
+    widgets::date_picker::create(year, month, on_change)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_set_date(h: i64, y: i64, m: i64, d: i64) {
+    widgets::date_picker::set_date(h, y, m, d);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_get_selected_date(h: i64) -> f64 {
+    widgets::date_picker::get_selected_date(h)
+}
+
 // Issue #473 — table sort/filter/multi-select stubs.
 #[no_mangle]
 pub extern "C" fn perry_ui_table_set_on_sort_change(_h: i64, _cb: f64) {}

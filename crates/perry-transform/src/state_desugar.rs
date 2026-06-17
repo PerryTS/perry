@@ -896,7 +896,9 @@ fn try_rewrite_foreach(
         captures: Vec::new(),
         mutable_captures: Vec::new(),
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_strict: false,
         is_async: false,
         is_generator: false,
@@ -905,6 +907,7 @@ fn try_rewrite_foreach(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     })
 }
 
@@ -1090,7 +1093,9 @@ fn try_rewrite_navstack(
         captures: Vec::new(),
         mutable_captures: Vec::new(),
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_strict: false,
         is_async: false,
         is_generator: false,
@@ -1099,6 +1104,7 @@ fn try_rewrite_navstack(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     })
 }
 
@@ -1327,7 +1333,9 @@ mod tests {
                     captures: vec![],
                     mutable_captures: vec![],
                     captures_this: false,
+                    captures_new_target: false,
                     enclosing_class: None,
+                    is_arrow: false,
                     is_strict: false,
                     is_async: false,
                     is_generator: false,

@@ -73,7 +73,7 @@ PLATFORMS=(
 # Unix libs shared across platforms (runtime + stdlib). The UI lib is
 # handled per-platform above. Windows equivalents are baked into the case
 # block further down.
-UNIX_CORE_LIBS=(libperry_runtime.a libperry_stdlib.a)
+UNIX_CORE_LIBS=(libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a)
 WIN_CORE_LIBS=(perry_runtime.lib perry_stdlib.lib)
 
 # -----------------------------------------------------------------------------
@@ -171,6 +171,28 @@ for entry in "${PLATFORMS[@]}"; do
     chmod +x "$pkg_dir/bin/perry"
     for lib in "${UNIX_CORE_LIBS[@]}" "$ui_lib"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
+    done
+  fi
+
+  # Compress the static archives so the published npm tarball stays under
+  # npm's registry upload limit (the raw archives total ~750 MB per platform;
+  # npm rejects the upload with HTTP 413). The perry binary decompresses them
+  # transparently on first use into a per-user cache (see compressed_libs.rs).
+  # The binary in bin/ is left raw — it is exec'd directly. Set
+  # PERRY_NPM_NO_COMPRESS=1 for local staging where uncompressed libs are handy.
+  if [ "${PERRY_NPM_NO_COMPRESS:-0}" != "1" ] && [ -d "$pkg_dir/lib" ]; then
+    if ! command -v zstd >/dev/null 2>&1; then
+      echo "  error: zstd not found but archive compression is required" >&2
+      echo "         install zstd or set PERRY_NPM_NO_COMPRESS=1" >&2
+      exit 1
+    fi
+    for f in "$pkg_dir"/lib/*; do
+      [ -f "$f" ] || continue
+      case "$f" in
+        *.zst) continue ;;
+      esac
+      zstd -19 -T0 -q -f --rm "$f"
+      echo "  compressed $(basename "$f") -> $(basename "$f").zst"
     done
   fi
 

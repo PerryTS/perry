@@ -13,7 +13,12 @@ pub fn is_strictly_i32_bounded_expr(
     use perry_hir::{BinaryOp, Expr};
     match e {
         Expr::Integer(_) => true,
-        Expr::Update { .. } => true,
+        // `x++`/`x--` is i32-bounded ONLY when the updated local is itself a
+        // known integer (a loop counter). The previous unconditional `true`
+        // truncated `var y = x++` to an i32 slot even when `x` held a
+        // fractional/non-number value — so `var x = 1.1; var y = x++` stored
+        // `y = (i32)1.1 = 1` instead of the spec's coerced old value `1.1`.
+        Expr::Update { id, .. } => known_int_locals.contains(id),
         // `expr | 0` / `expr >>> 0` ToInt32/ToUint32 idioms — explicit i32
         // coercion, hard-bounded.
         Expr::Binary { op, right, .. }
@@ -772,27 +777,6 @@ pub fn collect_integer_let_ids(
 /// `collect_ref_ids_in_expr`: any new HIR Expr variant must recurse into its
 /// sub-expressions here, or the walker may miss a LocalSet hidden inside it
 /// and wrongly mark its target as integer-valued.
-/// Walks the HIR and records LocalIds that have at least one LocalSet whose
-/// rhs is NOT int32-producing. `collect_integer_locals` uses this to remove
-/// locals that lose their integer invariant somewhere in the function.
-pub fn collect_non_int_localset_ids_in_stmts(
-    stmts: &[perry_hir::Stmt],
-    out: &mut HashSet<u32>,
-    known_int_locals: &HashSet<u32>,
-    flat_const_ids: &HashSet<u32>,
-    flat_row_alias_ids: &HashSet<u32>,
-    clamp_fn_ids: &HashSet<u32>,
-) {
-    collect_localset_ids_in_stmts_filtered(
-        stmts,
-        out,
-        Some(known_int_locals),
-        flat_const_ids,
-        flat_row_alias_ids,
-        clamp_fn_ids,
-    );
-}
-
 pub fn collect_localset_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     let empty = HashSet::new();
     collect_localset_ids_in_stmts_filtered(stmts, out, None, &empty, &empty, &empty);
@@ -1097,6 +1081,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::IsUndefinedOrBareNan(operand)
         | Expr::ParseFloat(operand)
         | Expr::ObjectKeys(operand)
+        | Expr::ForInKeys(operand)
         | Expr::ObjectValues(operand)
         | Expr::ObjectEntries(operand)
         | Expr::ObjectFromEntries(operand)
@@ -1108,11 +1093,14 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::SetSize(operand)
         | Expr::SetClear(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::GetAsyncIterator(operand)
         | Expr::ForOfToArray(operand)
+        | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::QueueMicrotask(operand)
@@ -1143,6 +1131,8 @@ pub fn collect_localset_ids_in_expr_filtered(
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)
         | Expr::MathRound(operand)
+        | Expr::MathTrunc(operand)
+        | Expr::MathSign(operand)
         | Expr::MathAbs(operand)
         | Expr::MathLog(operand)
         | Expr::MathLog2(operand)
@@ -1245,6 +1235,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => walk(e, out),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1396,6 +1387,43 @@ pub fn collect_localset_ids_in_expr_filtered(
         Expr::SuperCall(args)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
+            for a in args {
+                walk(a, out);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            walk(key, out);
+            walk(value, out);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(value, out);
+            walk(receiver, out);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            walk(home, out);
+            walk(key, out);
+            walk(receiver, out);
             for a in args {
                 walk(a, out);
             }

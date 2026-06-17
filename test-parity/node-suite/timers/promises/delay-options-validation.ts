@@ -27,5 +27,12 @@ await probe("setTimeout options undefined", () => timers.setTimeout(0, "v", unde
 await probe("setImmediate options primitive", () => timers.setImmediate("v", 1 as any));
 await probe("setImmediate options null", () => timers.setImmediate("v", null as any));
 await probe("setImmediate no options", () => timers.setImmediate("v"));
+await probe("setInterval string delay", () => timers.setInterval("x" as any, "v").next());
+await probe("setInterval options primitive", () =>
+  timers.setInterval(1, "v", 1 as any).next()
+);
+await probe("setInterval options array", () =>
+  timers.setInterval(1, "v", [] as any).next()
+);
 await probe("scheduler.wait string delay", () => timers.scheduler.wait("x" as any));
 await probe("scheduler.wait number", () => timers.scheduler.wait(0));

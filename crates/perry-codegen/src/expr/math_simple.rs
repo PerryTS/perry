@@ -38,8 +38,8 @@ use super::{
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
-    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    lower_index_set_fast, lower_js_args_array, lower_math_operand, lower_object_literal,
+    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
     try_lower_flat_const_index_get, try_match_channel_reduction, try_static_class_name,
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
@@ -55,37 +55,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.pow (special variant — separate from Binary::Pow) --------
         Expr::MathPow(base, exp) => {
-            let b = lower_expr(ctx, base)?;
-            let e = lower_expr(ctx, exp)?;
+            let b = lower_math_operand(ctx, base)?;
+            let e = lower_math_operand(ctx, exp)?;
             Ok(ctx
                 .block()
                 .call(DOUBLE, "js_math_pow", &[(DOUBLE, &b), (DOUBLE, &e)]))
         }
 
         // -------- Math.imul — 32-bit wrapping integer multiply --------
-        // ECMAScript: `Math.imul(a, b) = (ToInt32(a) * ToInt32(b)) | 0`.
-        // ToInt32 on a finite double is "truncate to i64 (wrapping), then
-        // take the low 32 bits", which is exactly what `fptosi f64 → i64`
-        // followed by `trunc i64 → i32` produces. LLVM `mul i32` wraps
-        // without `nsw`/`nuw`, giving the required 32-bit overflow. Result
-        // re-boxes via `sitofp` so the JS-visible value is a signed i32 in
-        // a double (e.g. -2110866647 for the FNV-1a constants in the #40
-        // repro). This unblocks every hash (FNV-1a-32, MurmurHash3, xxhash,
-        // CRC32) and PRNG (PCG, xorshift*) that uses the canonical
-        // 32-bit-wrap spelling instead of the 16-bit hi/lo workaround.
-        // NaN/Inf inputs coerce to 0 in spec JS; `fptosi` saturates instead,
-        // but no real hash/PRNG feeds those to imul, so we accept that minor
-        // divergence rather than adding a compare-and-select gate per call.
+        // Route through the runtime helper so non-finite inputs use JS
+        // ToInt32 semantics (`NaN`/±Infinity -> 0) instead of LLVM fptosi.
         Expr::MathImul(a, b) => {
             let av = lower_expr(ctx, a)?;
             let bv = lower_expr(ctx, b)?;
-            let blk = ctx.block();
-            let a_i64 = blk.fptosi(DOUBLE, &av, I64);
-            let b_i64 = blk.fptosi(DOUBLE, &bv, I64);
-            let a_i32 = blk.trunc(I64, &a_i64, I32);
-            let b_i32 = blk.trunc(I64, &b_i64, I32);
-            let prod = blk.mul(I32, &a_i32, &b_i32);
-            Ok(blk.sitofp(I32, &prod, DOUBLE))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_math_imul", &[(DOUBLE, &av), (DOUBLE, &bv)]))
         }
 
         // -------- new Error() / new Error(message) --------
@@ -93,8 +78,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(msg_expr) = opt_msg {
                 let msg = lower_expr(ctx, msg_expr)?;
                 let blk = ctx.block();
-                let msg_handle = unbox_to_i64(blk, &msg);
-                let err_handle = blk.call(I64, "js_error_new_with_message", &[(I64, &msg_handle)]);
+                let err_handle = blk.call(I64, "js_error_new_from_value", &[(DOUBLE, &msg)]);
                 Ok(nanbox_pointer_inline(blk, &err_handle))
             } else {
                 let err_handle = ctx.block().call(I64, "js_error_new", &[]);
@@ -126,7 +110,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            // `map` uses a receiver-aware validator (TypedArray.map renders its
+            // non-callable message differently than Array.prototype.map).
+            let cb_handle = blk.call(
+                I64,
+                "js_validate_array_map_callback",
+                &[(I64, &arr_handle), (DOUBLE, &cb_box)],
+            );
             let result = blk.call(
                 I64,
                 "js_array_map",
@@ -188,21 +179,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //
         // Uses LLVM intrinsics (llvm.sqrt.f64, llvm.floor.f64, etc.).
         Expr::MathSqrt(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "llvm.sqrt.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathFloor(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "llvm.floor.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathCeil(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "llvm.ceil.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathRound(operand) => {
             // JS Math.round: round-half-toward-positive-infinity. We
             // emulate via floor(x + 0.5) then fcopysign to preserve -0.
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             let blk = ctx.block();
             let half = blk.fadd(&v, "0.5");
             let floored = blk.call(DOUBLE, "llvm.floor.f64", &[(DOUBLE, &half)]);
@@ -212,24 +203,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &floored), (DOUBLE, &v)],
             ))
         }
-        Expr::MathAbs(operand) => {
+        Expr::MathTrunc(operand) => {
             let v = lower_expr(ctx, operand)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_trunc", &[(DOUBLE, &v)]))
+        }
+        Expr::MathSign(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            Ok(ctx.block().call(DOUBLE, "js_math_sign", &[(DOUBLE, &v)]))
+        }
+        Expr::MathAbs(operand) => {
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathLog(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "llvm.log.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathLog2(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "llvm.log2.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathLog10(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "llvm.log10.f64", &[(DOUBLE, &v)]))
         }
         Expr::MathLog1p(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let v = lower_math_operand(ctx, operand)?;
             Ok(ctx.block().call(DOUBLE, "js_math_log1p", &[(DOUBLE, &v)]))
         }
         // Math.random — return 0.5 sentinel. Real impl needs a PRNG

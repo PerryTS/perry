@@ -30,16 +30,25 @@ use std::process::Command;
 use crate::OutputFormat;
 
 use super::{
-    apple_sdk_version, build_geisterhand_libs, find_geisterhand_library, find_geisterhand_runtime,
+    apple_sdk_version, build_geisterhand_libs, dedup_native_lib_for_tier3, dedup_runtime_for_tier3,
+    dedup_stdlib_for_tier3, find_geisterhand_library, find_geisterhand_runtime,
     find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
     find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime, rust_target_triple,
-    strip_duplicate_objects_from_lib, windows_pe_subsystem_flag, CompilationContext,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
+    windows_pe_subsystem_flag, windows_subsystem_needs_ui, CompilationContext,
 };
 
+mod link_cache;
+mod native_features;
+mod pkg_config;
 mod platform_cmd;
+mod windows_link;
 
+use link_cache::prepare_link_cache_status;
+pub(super) use link_cache::{write_link_cache_manifest, LinkCacheStatus};
 pub use platform_cmd::select_linker_command;
+pub(super) use windows_link::WINDOWS_APP_MANIFEST; // guarded by windows_link_tests
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeBackendLinkMetadata {
@@ -222,6 +231,7 @@ pub(super) fn build_and_run_link(
     ctx: &CompilationContext,
     target: Option<&str>,
     obj_paths: &[PathBuf],
+    obj_fingerprints: &[Option<String>],
     compiled_features: &[String],
     runtime_lib: &Path,
     stdlib_lib: &Option<PathBuf>,
@@ -231,6 +241,11 @@ pub(super) fn build_and_run_link(
     // optimize rebuild, so the resulting link contains exactly one
     // copy of each `_js_<package>_*` symbol — no duplicates.
     well_known_libs: &[PathBuf],
+    // No-auto / auto-fallback keeps the full prebuilt stdlib, so the
+    // matching perry-stdlib feature was not stripped. Put wrappers first
+    // in that shape so wrapper-only handles keep using their own surface
+    // symbols instead of the bundled stdlib copies.
+    prefer_well_known_before_stdlib: bool,
     // Issue #76 — `libperry_wasm_host.a` (wasmi-backed WebAssembly host
     // runtime). Only `Some(...)` when the user passed `--enable-wasm-runtime`
     // and the archive was located. Appended to the link command after the
@@ -242,7 +257,7 @@ pub(super) fn build_and_run_link(
     // `--debug-symbols`: keep symbols / emit a PDB so RUST_BACKTRACE
     // panics in the compiled app symbolize. Windows-active today.
     debug_symbols: bool,
-) -> Result<()> {
+) -> Result<LinkCacheStatus> {
     // #498 - supply-chain gate. Before any prebuilt archive hits the
     // linker, hash it and compare against `perry.lock`. First build
     // writes the lockfile; subsequent builds verify. Mismatch fails
@@ -256,12 +271,34 @@ pub(super) fn build_and_run_link(
 
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
-    let is_android = matches!(target, Some("android"));
+    // Wear OS links exactly like Android (same triple, NDK, cdylib + TLS model).
+    let is_android = matches!(target, Some("android") | Some("wearos"));
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
-    let is_linux =
-        matches!(target, Some("linux")) || (target.is_none() && cfg!(target_os = "linux"));
-    let is_windows =
-        matches!(target, Some("windows")) || (target.is_none() && cfg!(target_os = "windows"));
+    let is_linux = matches!(target, Some(t) if t.starts_with("linux"))
+        || (target.is_none() && cfg!(target_os = "linux"));
+    // Fully-static musl Linux target (#4826) — a sub-case of is_linux. The
+    // link command itself is built in select_linker_command (musl driver +
+    // `-static`); here it only changes which system libs we request.
+    let is_musl = matches!(
+        target,
+        Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl")
+    );
+
+    // The musl target is meant for headless/serverless binaries (Lambda,
+    // scratch, distroless). The GTK4 UI backend (perry/ui) links the system
+    // GTK/glib/webkit stack, which is only shipped for glibc and cannot be
+    // statically linked into a musl binary. Fail fast with an actionable
+    // message rather than emitting cryptic undefined-symbol errors (#4826).
+    if is_musl && ctx.needs_ui {
+        anyhow::bail!(
+            "perry/ui is not supported with the static musl Linux target \
+             (--libc musl / [linux] libc = \"musl\"): the GTK4 UI backend \
+             requires dynamic glibc. Build the GUI app with the default \
+             (glibc) Linux target, or drop perry/ui for a headless musl build."
+        );
+    }
+    let is_windows = matches!(target, Some("windows") | Some("windows-winui"))
+        || (target.is_none() && cfg!(target_os = "windows"));
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
     let is_cross_ios = is_ios && !cfg!(target_os = "macos");
     let is_cross_visionos = is_visionos && !cfg!(target_os = "macos");
@@ -294,22 +331,30 @@ pub(super) fn build_and_run_link(
     // When ios-game-loop is enabled, rename _main to _perry_user_main in the
     // entry object file so the perry runtime's main() (from ios_game_loop.rs)
     // becomes the process entry point. It spawns _perry_user_main on a game thread.
-    if (is_ios || is_tvos) && compiled_features.iter().any(|f| f == "ios-game-loop") {
-        if let Some(entry_obj) = obj_paths
-            .iter()
-            .find(|f| f.to_string_lossy().contains("main_ts"))
-        {
-            // Try rust-objcopy first (newer Rust), then llvm-objcopy (older Rust)
-            let objcopy = std::env::var("HOME").ok()
-                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
-                .filter(|p| p.exists())
-                .or_else(|| std::env::var("HOME").ok()
-                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
-                    .filter(|p| p.exists()))
-                .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+    if (is_ios || is_tvos || is_visionos) && compiled_features.iter().any(|f| f == "ios-game-loop")
+    {
+        // Resolve an objcopy: rust-objcopy / llvm-objcopy from the host Rust
+        // toolchain (macOS), then llvm-objcopy on Linux builders, then PATH.
+        let objcopy = std::env::var("HOME").ok()
+            .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
+            .filter(|p| p.exists())
+            .or_else(|| std::env::var("HOME").ok()
+                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
+                .filter(|p| p.exists()))
+            .or_else(|| ["/usr/lib/llvm-18/bin/llvm-objcopy", "/usr/bin/llvm-objcopy-18", "/usr/bin/llvm-objcopy"]
+                .iter().map(PathBuf::from).find(|p| p.exists()))
+            .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+        // Rename _main -> __perry_user_main so the perry runtime's main()
+        // (ios_game_loop.rs) becomes the process entry point and spawns the
+        // user's main on a game thread. The entry object can't be located by
+        // filename — with the object cache on it's named by content hash, not
+        // "main_ts" — so apply the rename to every user object. objcopy
+        // --redefine-sym is a no-op on objects that don't define _main, so this
+        // only ever rewrites the single entry object regardless of its name.
+        for obj in obj_paths.iter() {
             let _ = Command::new(&objcopy)
                 .args(["--redefine-sym", "_main=__perry_user_main"])
-                .arg(entry_obj)
+                .arg(obj)
                 .status();
         }
     }
@@ -459,6 +504,16 @@ pub(super) fn build_and_run_link(
     let skip_runtime = (is_android || is_watchos || is_visionos)
         && (ctx.needs_ui || is_watchos)
         && find_ui_library(target).is_some();
+    let well_known_libs: Vec<PathBuf> = if prefer_well_known_before_stdlib {
+        well_known_libs
+            .iter()
+            .map(|wk| {
+                strip_duplicate_objects_from_well_known_lib(wk).unwrap_or_else(|_| wk.clone())
+            })
+            .collect()
+    } else {
+        well_known_libs.to_vec()
+    };
     if !skip_runtime {
         if ctx.needs_stdlib || is_windows {
             // On Windows/MSVC, always try to link stdlib because codegen unconditionally
@@ -483,19 +538,32 @@ pub(super) fn build_and_run_link(
                 if is_windows {
                     cmd.arg(runtime_lib);
                 }
-                cmd.arg(stdlib);
-                // #466 Phase 4 step 2: well-known bindings join the
-                // link line right after perry-stdlib so they cover
-                // the exact `_js_*` symbol gap that was just opened
-                // by stripping the corresponding feature from the
-                // perry-stdlib rebuild.
-                for wk in well_known_libs {
+                if prefer_well_known_before_stdlib {
+                    for wk in &well_known_libs {
+                        cmd.arg(wk);
+                    }
+                }
+                // Tier-3 (tvOS/watchOS) std-duplication dedup; no-op elsewhere.
+                cmd.arg(&dedup_stdlib_for_tier3(target, stdlib));
+                // #466 Phase 4 step 2: well-known bindings normally join the
+                // link line right after perry-stdlib so they cover the exact
+                // `_js_*` symbol gap that was just opened by stripping the
+                // corresponding feature from the perry-stdlib rebuild.
+                //
+                // In no-auto/fallback mode the full prebuilt stdlib may still
+                // contain method-value bridge objects that reference wrapper
+                // symbols (for example external net Socket helpers). Archives
+                // are scanned left-to-right, so repeat the well-known libs
+                // after stdlib as well: the first occurrence lets wrapper
+                // definitions win over duplicate bundled stdlib functions,
+                // and the second resolves stdlib bridge references.
+                for wk in &well_known_libs {
                     cmd.arg(wk);
                 }
-                // Also link runtime to supply symbols that may be DCE'd from stdlib's
-                // bundled perry-runtime (e.g. js_closure_unbind_this, js_string_addref)
+                // Also link runtime for symbols DCE'd from stdlib's bundled
+                // perry-runtime; on tier-3 it's first stripped of stdlib's objects.
                 if !is_android && !is_windows {
-                    cmd.arg(runtime_lib);
+                    cmd.arg(&dedup_runtime_for_tier3(target, runtime_lib, stdlib));
                 }
             } else {
                 if ctx.needs_stdlib {
@@ -518,10 +586,15 @@ pub(super) fn build_and_run_link(
         // Android + UI: runtime is provided by UI lib, but stdlib must still be linked
         // separately (UI lib does not bundle perry-stdlib).
         if let Some(ref stdlib) = stdlib_lib {
+            if prefer_well_known_before_stdlib {
+                for wk in &well_known_libs {
+                    cmd.arg(wk);
+                }
+            }
             cmd.arg(stdlib);
             // #466 Phase 4 step 2: see the parallel comment in the
             // non-Android branch above.
-            for wk in well_known_libs {
+            for wk in &well_known_libs {
                 cmd.arg(wk);
             }
         } else {
@@ -807,8 +880,14 @@ pub(super) fn build_and_run_link(
             "linux-x86_64"
         };
         let ndk_clang = format!(
-            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang",
-            ndk_home, host_tag
+            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang{}",
+            ndk_home,
+            host_tag,
+            if cfg!(target_os = "windows") {
+                ".cmd"
+            } else {
+                ""
+            }
         );
         let stub_ok = Command::new(&ndk_clang)
             .args(["-c", "-fPIC", "-target", "aarch64-linux-android24"])
@@ -831,48 +910,16 @@ pub(super) fn build_and_run_link(
             .arg("-lpthread")
             .arg("-ldl");
 
-        if ctx.needs_stdlib {
+        // -lssl/-lcrypto are vestigial — Perry's stdlib is rustls-only (no
+        // system OpenSSL). On glibc they happen to be present so the link
+        // tolerates them, but a static musl sysroot has no libssl.a/libcrypto.a
+        // and the link would fail. Skip them for musl (#4826).
+        if ctx.needs_stdlib && !is_musl {
             cmd.arg("-lssl").arg("-lcrypto");
         }
     } else if is_windows {
-        // Windows system libraries
-        cmd.arg("user32.lib")
-            .arg("gdi32.lib")
-            .arg("gdiplus.lib")
-            .arg("msimg32.lib")
-            .arg("kernel32.lib")
-            .arg("shell32.lib")
-            .arg("ole32.lib")
-            .arg("comctl32.lib")
-            .arg("advapi32.lib")
-            .arg("comdlg32.lib")
-            .arg("ws2_32.lib")
-            .arg("dwmapi.lib");
-        // MSVC CRT (dynamic) and additional Windows API libraries needed by the Rust runtime
-        cmd.arg("msvcrt.lib")
-            .arg("vcruntime.lib")
-            .arg("ucrt.lib")
-            .arg("bcrypt.lib")
-            .arg("ntdll.lib")
-            .arg("userenv.lib")
-            // secur32.lib exports `GetUserNameExW`, called by the `whoami`
-            // crate (transitively pulled in via `sqlx-mysql`/`sqlx-postgres`
-            // through `perry-stdlib`). Without it, every doc-test that
-            // touches stdlib fails on the Windows runner with
-            // `LNK2019: unresolved external symbol __imp_GetUserNameExW`.
-            // Closes #220.
-            .arg("secur32.lib")
-            .arg("oleaut32.lib")
-            .arg("propsys.lib")
-            .arg("runtimeobject.lib")
-            .arg("iphlpapi.lib")
-            // winhttp.lib — perry-ui-windows::widgets::image::fetch_url_blocking
-            // uses WinHttpOpen/Connect/OpenRequest/SendRequest/ReceiveResponse
-            // to fetch Image(url) bytes. The `windows` crate's `Win32_Networking_WinHttp`
-            // feature emits #[link] attrs in the rlib, but those don't propagate
-            // through perry-ui-windows's `staticlib` crate-type to perry's final
-            // link line. Closes #732.
-            .arg("winhttp.lib");
+        windows_link::add_system_libs(&mut cmd);
+        windows_link::embed_app_manifest(&mut cmd, ctx.needs_ui);
     } else {
         // macOS frameworks for runtime (sysinfo, etc.) and V8.
         // Gate on `!is_harmonyos` so the macOS host doesn't leak its
@@ -1210,7 +1257,7 @@ pub(super) fn build_and_run_link(
             let (lib_name, build_cmd) = if is_watchos {
                 (
                     "libperry_ui_watchos.a",
-                    "cargo build --release -p perry-ui-watchos --target arm64_32-apple-watchos",
+                    "cargo +nightly build -Z build-std=std,panic_abort --release -p perry-ui-watchos --target aarch64-apple-watchos (or --target aarch64-apple-watchos-sim for the simulator)",
                 )
             } else if is_tvos {
                 (
@@ -1228,12 +1275,19 @@ pub(super) fn build_and_run_link(
                 (
                     "libperry_ui_android.a",
                     // #1529 — TLS model must be global-dynamic for the dlopen'd cdylib.
-                    "RUSTFLAGS=\"-C tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
+                    // `tls-model` is `-Z`-gated on the toolchains we ship against, so
+                    // RUSTC_BOOTSTRAP=1 lets the gated flag through on a stable rustc.
+                    "RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
                 )
             } else if is_linux {
                 (
                     "libperry_ui_gtk4.a",
                     "cargo build --release -p perry-ui-gtk4 --target x86_64-unknown-linux-gnu",
+                )
+            } else if matches!(target, Some("windows-winui")) {
+                (
+                    "perry_ui_windows_winui.lib",
+                    "cargo build --release -p perry-ui-windows-winui --target x86_64-pc-windows-msvc",
                 )
             } else if is_windows {
                 (
@@ -1391,6 +1445,15 @@ pub(super) fn build_and_run_link(
                         .arg("--manifest-path")
                         .arg(&cargo_toml);
 
+                    // perry.toml `[native-library."<pkg>"]` feature
+                    // forwarding — see native_features.rs.
+                    native_features::apply_native_library_override(
+                        &mut cargo_cmd,
+                        &ctx.project_root,
+                        &native_lib.module,
+                        matches!(format, OutputFormat::Text),
+                    );
+
                     if let Some(triple) = rust_target_triple(target) {
                         cargo_cmd.arg("--target").arg(triple);
                     }
@@ -1409,9 +1472,12 @@ pub(super) fn build_and_run_link(
                     // relocations are baked into the dlopen'd `libperry_app.so`, so an
                     // Initial-Executable model (rustc's android default) crashes at load.
                     if is_android {
+                        let tls_flag = super::optimized_libs::android_global_dynamic_tls_rustflag(
+                            &mut cargo_cmd,
+                        );
                         cargo_cmd.env(
                             "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
-                            "-C link-arg=-Wl,-z,max-page-size=16384 -C tls-model=global-dynamic",
+                            format!("-C link-arg=-Wl,-z,max-page-size=16384 {tls_flag}"),
                         );
                     }
 
@@ -1486,6 +1552,7 @@ pub(super) fn build_and_run_link(
                     );
 
                     if let Some(lib) = lib_path {
+                        let lib = dedup_native_lib_for_tier3(target, lib_name, lib);
                         // For shared libraries (.so) on Android, use -L/-l so the linker
                         // records just the soname (not the full build path) in DT_NEEDED.
                         if is_android && lib_name.ends_with(".so") {
@@ -1612,6 +1679,7 @@ pub(super) fn build_and_run_link(
 
             // Add pkg-config libraries
             for pkg in &target_config.pkg_config {
+                pkg_config::validate_pkg_config_name(pkg)?;
                 if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
@@ -1679,6 +1747,7 @@ pub(super) fn build_and_run_link(
                     }
                 }
                 for pkg in &backend.pkg_config {
+                    pkg_config::validate_pkg_config_name(pkg)?;
                     if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                         if output.status.success() {
                             let libs = String::from_utf8_lossy(&output.stdout);
@@ -1704,10 +1773,21 @@ pub(super) fn build_and_run_link(
                 } else {
                     "watchos"
                 };
+                // arm64_32 watchOS (Series 4-8 / SE): opt-in, matches the app
+                // binary's triple in platform_cmd.rs so the native @main lib
+                // links against the same arch.
+                let swift_arm64_32 =
+                    target == Some("watchos") && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
+                let swift_watchos_min =
+                    std::env::var("PERRY_WATCHOS_MIN").unwrap_or_else(|_| "11.0".to_string());
+                let swift_triple_owned;
                 let swift_triple = if target == Some("watchos-simulator") {
                     "arm64-apple-watchos10.0-simulator"
+                } else if swift_arm64_32 {
+                    swift_triple_owned = format!("arm64_32-apple-watchos{}", swift_watchos_min);
+                    swift_triple_owned.as_str()
                 } else {
-                    "arm64_32-apple-watchos10.0"
+                    "arm64-apple-watchos26.0"
                 };
                 let swift_sysroot = String::from_utf8(
                     Command::new("xcrun")
@@ -1864,6 +1944,21 @@ pub(super) fn build_and_run_link(
         }
     }
 
+    let link_cache_status = prepare_link_cache_status(
+        &ctx.cache_root,
+        target,
+        &cmd,
+        obj_paths,
+        obj_fingerprints,
+        exe_path,
+    );
+    if !link_cache_status.linked {
+        if let Some(path) = embedded_info_plist_path {
+            let _ = fs::remove_file(path);
+        }
+        return Ok(link_cache_status);
+    }
+
     let status_result = cmd.status();
     if let Some(path) = embedded_info_plist_path {
         let _ = fs::remove_file(path);
@@ -1874,60 +1969,8 @@ pub(super) fn build_and_run_link(
         return Err(anyhow!("Linking failed"));
     }
 
-    Ok(())
+    Ok(link_cache_status)
 }
 
 #[cfg(test)]
-mod optional_framework_dir_tests {
-    use super::*;
-
-    /// Lay out a temp project: `<root>/perry.toml` + `<root>/src/main.ts`,
-    /// with the perry.toml `[google_auth]` table set to `toml_body`.
-    /// Returns (tempdir, entry-ts-path).
-    fn scaffold(toml_body: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("perry.toml"), toml_body).unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        let entry = src.join("main.ts");
-        fs::write(&entry, "export {}\n").unwrap();
-        (dir, entry)
-    }
-
-    #[test]
-    fn resolves_framework_dir_relative_to_project_root() {
-        let (dir, entry) =
-            scaffold("[google_auth]\nframework_dir = \"vendor/google-sign-in/frameworks\"\n");
-        // Use a uniquely-named env var that is guaranteed unset.
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_A";
-        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
-        // Compare against the canonicalized root — `find_project_root_for`
-        // canonicalizes the entry, so the resolved path is symlink-resolved
-        // (e.g. /var/folders → /private/var on macOS).
-        assert_eq!(
-            resolved,
-            dir.path()
-                .canonicalize()
-                .unwrap()
-                .join("vendor/google-sign-in/frameworks")
-        );
-    }
-
-    #[test]
-    fn returns_none_when_no_framework_dir_key() {
-        let (_dir, entry) = scaffold("[google_auth]\nios_client_id = \"abc\"\n");
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_UNSET_B";
-        assert!(resolve_optional_framework_dir(env_name, &entry).is_none());
-    }
-
-    #[test]
-    fn env_var_takes_precedence_over_perry_toml() {
-        let (_dir, entry) = scaffold("[google_auth]\nframework_dir = \"vendor/from-toml\"\n");
-        // Unique name so we don't race other tests sharing process env.
-        let env_name = "PERRY_TEST_GA_FRAMEWORK_DIR_SET_C";
-        std::env::set_var(env_name, "/absolute/from/env");
-        let resolved = resolve_optional_framework_dir(env_name, &entry).unwrap();
-        std::env::remove_var(env_name);
-        assert_eq!(resolved, PathBuf::from("/absolute/from/env"));
-    }
-}
+mod optional_framework_dir_tests;

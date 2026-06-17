@@ -233,6 +233,7 @@ fn collect_used_new_fields_in_expr(
         | Expr::IsUndefinedOrBareNan(operand)
         | Expr::ParseFloat(operand)
         | Expr::ObjectKeys(operand)
+        | Expr::ForInKeys(operand)
         | Expr::ObjectValues(operand)
         | Expr::ObjectEntries(operand)
         | Expr::SetSize(operand)
@@ -240,11 +241,14 @@ fn collect_used_new_fields_in_expr(
         | Expr::MathFloor(operand)
         | Expr::MathCeil(operand)
         | Expr::MathRound(operand)
+        | Expr::MathTrunc(operand)
+        | Expr::MathSign(operand)
         | Expr::MathAbs(operand)
         | Expr::MathF16round(operand)
         | Expr::MathMinSpread(operand)
         | Expr::MathMaxSpread(operand)
         | Expr::ArrayFrom(operand)
+        | Expr::ArrayFromArrayLikeHoley(operand)
         | Expr::IteratorFrom(operand)
         | Expr::Uint8ArrayFrom(operand)
         | Expr::JsonParse(operand)
@@ -253,7 +257,9 @@ fn collect_used_new_fields_in_expr(
         | Expr::JsonIsRawJson(operand)
         | Expr::IteratorToArray(operand)
         | Expr::GetIterator(operand)
+        | Expr::GetAsyncIterator(operand)
         | Expr::ForOfToArray(operand)
+        | Expr::ForAwaitToArray(operand)
         | Expr::WeakRefNew(operand)
         | Expr::WeakRefDeref(operand)
         | Expr::FinalizationRegistryNew(operand)
@@ -339,6 +345,7 @@ fn collect_used_new_fields_in_expr(
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         collect_used_new_fields_in_expr(e, non_escaping_news, used)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -362,7 +369,44 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_used_new_fields_in_expr(home, non_escaping_news, used);
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            collect_used_new_fields_in_expr(home, non_escaping_news, used);
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_used_new_fields_in_expr(home, non_escaping_news, used);
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
+            for arg in args {
+                collect_used_new_fields_in_expr(arg, non_escaping_news, used);
+            }
+        }
+        Expr::NewDynamic { callee, args, .. } => {
             collect_used_new_fields_in_expr(callee, non_escaping_news, used);
             for arg in args {
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);
@@ -559,6 +603,7 @@ fn collect_used_new_fields_in_expr(
             }
         }
         Expr::ArrayToReversed { array }
+        | Expr::ArrayReverseValue { receiver: array }
         | Expr::ArrayFlat { array }
         | Expr::ArrayEntries(array)
         | Expr::ArrayKeys(array)
@@ -590,6 +635,19 @@ fn collect_used_new_fields_in_expr(
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            collect_used_new_fields_in_expr(target, non_escaping_news, used);
+            collect_used_new_fields_in_expr(start, non_escaping_news, used);
+            if let Some(end) = end {
+                collect_used_new_fields_in_expr(end, non_escaping_news, used);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
             collect_used_new_fields_in_expr(target, non_escaping_news, used);
             collect_used_new_fields_in_expr(start, non_escaping_news, used);
             if let Some(end) = end {
@@ -695,12 +753,16 @@ fn collect_used_new_fields_in_expr(
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             collect_used_new_fields_in_expr(url, non_escaping_news, used);
             collect_used_new_fields_in_expr(method, non_escaping_news, used);
             collect_used_new_fields_in_expr(body, non_escaping_news, used);
             for (_, value) in headers {
                 collect_used_new_fields_in_expr(value, non_escaping_news, used);
+            }
+            if let Some(hd) = headers_dynamic {
+                collect_used_new_fields_in_expr(hd, non_escaping_news, used);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {

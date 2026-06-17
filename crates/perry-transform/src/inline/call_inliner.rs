@@ -1,4 +1,4 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
+use perry_hir::walker::walk_expr_children_mut;
 use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
 use perry_types::{FuncId, LocalId, Type};
 use std::collections::{HashMap, HashSet};
@@ -120,6 +120,41 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
 /// recognizes `Expr::LocalGet(obj_id)` as a method receiver. The Phase 6
 /// driver passes the class name; Phases 4 (init) and 5 (top-level functions)
 /// pass `None`.
+/// Exact-receiver facts that stay valid on *every* iteration of a loop body:
+/// the subset of `outer` whose receiver local is never reassigned anywhere in
+/// the loop (`body` plus any condition/update exprs in `extra_exprs`). A
+/// receiver reassigned mid-loop could hold a different (sub)class on a later
+/// iteration, so its fact is dropped — keeping direct method inlining sound
+/// while still inlining calls on loop-invariant receivers declared *before* the
+/// loop (e.g. `const c = new Counter(); for (…) c.increment();`). Before this,
+/// loop bodies were seeded with empty facts, so such calls were never inlined.
+///
+/// `collect_mutated_local_ids` recurses into closures and nested loops and
+/// catches every `LocalSet`/`Update`, so "not mutated in the loop" is a sound
+/// (conservative) proxy for "fact holds on every iteration".
+fn loop_invariant_seed_facts(
+    outer: &ExactReceiverFacts,
+    body: &[Stmt],
+    extra_exprs: &[&Expr],
+) -> ExactReceiverFacts {
+    if outer.is_empty() {
+        return ExactReceiverFacts::new();
+    }
+    let mut mutated = std::collections::HashSet::new();
+    collect_mutated_local_ids(body, &mut mutated);
+    for e in extra_exprs {
+        collect_mutated_local_ids(
+            std::slice::from_ref(&Stmt::Expr((*e).clone())),
+            &mut mutated,
+        );
+    }
+    outer
+        .iter()
+        .filter(|(id, _)| !mutated.contains(*id))
+        .map(|(id, f)| (*id, f.clone()))
+        .collect()
+}
+
 pub fn inline_calls_in_stmts(
     stmts: &mut Vec<Stmt>,
     func_candidates: &HashMap<FuncId, Function>,
@@ -457,7 +492,8 @@ pub fn inline_calls_in_stmts(
                 if hoisted.is_empty() {
                     *condition = condition_candidate;
                 }
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -473,7 +509,8 @@ pub fn inline_calls_in_stmts(
                 exact_effect_handled = true;
             }
             Stmt::DoWhile { body, condition } => {
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &[&*condition]);
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -557,7 +594,29 @@ pub fn inline_calls_in_stmts(
                         class_field_types,
                     );
                 }
-                let mut body_facts = ExactReceiverFacts::new();
+                let mut for_extra: Vec<&Expr> = Vec::new();
+                if let Some(c) = condition.as_ref() {
+                    for_extra.push(c);
+                }
+                if let Some(u) = update.as_ref() {
+                    for_extra.push(u);
+                }
+                let mut body_facts =
+                    loop_invariant_seed_facts(exact_receiver_facts, body, &for_extra);
+                // The for-init can also rebind a receiver local (e.g.
+                // `for (c = makeOther(); …)`), so drop facts it mutates too —
+                // otherwise a stale pre-loop class could survive into the body
+                // and allow an unsound inline. (`init` is a Stmt, not an Expr,
+                // so it can't go through `for_extra`.)
+                if let Some(init_stmt) = init.as_ref() {
+                    let mut init_mutated: std::collections::HashSet<LocalId> =
+                        std::collections::HashSet::new();
+                    collect_mutated_local_ids(
+                        std::slice::from_ref(init_stmt.as_ref()),
+                        &mut init_mutated,
+                    );
+                    body_facts.retain(|id, _| !init_mutated.contains(id));
+                }
                 inline_calls_in_stmts(
                     body,
                     func_candidates,
@@ -630,6 +689,16 @@ pub fn inline_calls_in_expr(
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
 ) -> Vec<Stmt> {
+    let Some(_recursion_guard) = enter_inline_expr_recursion() else {
+        // The inliner is an optimization pass. Very deeply nested generated
+        // expression/closure trees can exceed Perry's compiler stack if we
+        // chase every child recursively; skipping deeper inlining is
+        // semantics-preserving. Clear exact receiver facts because we are no
+        // longer proving what the skipped expression may reference or mutate.
+        exact_receiver_facts.clear();
+        return Vec::new();
+    };
+
     // First try to inline this expression if it's a call
     if let Some((stmts, mut result)) = try_inline_simple_call(
         expr,
@@ -874,6 +943,7 @@ pub fn inline_calls_in_expr(
                         ));
                         kill_referenced_exact_receivers(e, exact_receiver_facts);
                     }
+                    perry_hir::ArrayElement::Hole => {}
                 }
             }
         }
@@ -1190,13 +1260,7 @@ pub fn inline_calls_in_expr(
             for id in captures.iter().chain(mutable_captures.iter()) {
                 exact_receiver_facts.remove(id);
             }
-            let mut body_refs = HashSet::new();
-            for stmt in body {
-                collect_exact_receiver_refs_in_stmt(stmt, exact_receiver_facts, &mut body_refs);
-            }
-            for id in body_refs {
-                exact_receiver_facts.remove(&id);
-            }
+            exact_receiver_facts.clear();
             for param in params {
                 if let Some(default) = &param.default {
                     invalidate_exact_receivers_for_expr(default, exact_receiver_facts);
@@ -1214,6 +1278,7 @@ pub fn build_inline_arg_bindings(
     params: &[Param],
     args: &[Expr],
     closure_captures: &HashSet<LocalId>,
+    mutated_params: &HashSet<LocalId>,
     next_local_id: &mut LocalId,
 ) -> Option<(Vec<Stmt>, HashMap<LocalId, Expr>)> {
     if params.iter().any(|param| param.is_rest) {
@@ -1228,7 +1293,12 @@ pub fn build_inline_arg_bindings(
             let trivial_in_closure = is_trivial_expr(arg)
                 && !matches!(arg, Expr::LocalGet(_))
                 && closure_captures.contains(&param.id);
-            if is_trivial_expr(arg) && !trivial_in_closure {
+            // A param the body WRITES must get its own copy: substituting
+            // the caller's LocalGet would alias the write onto the caller's
+            // local (`function f(a){a++}; f(x)` mutated x — S13.2.1_A6),
+            // and substituting a literal would produce `5++`.
+            let force_let = mutated_params.contains(&param.id);
+            if is_trivial_expr(arg) && !trivial_in_closure && !force_let {
                 param_map.insert(param.id, arg.clone());
             } else {
                 let fresh = *next_local_id;
@@ -1237,7 +1307,7 @@ pub fn build_inline_arg_bindings(
                     id: fresh,
                     name: param.name.clone(),
                     ty: param.ty.clone(),
-                    mutable: false,
+                    mutable: force_let,
                     init: Some(arg.clone()),
                 });
                 param_map.insert(param.id, Expr::LocalGet(fresh));
@@ -1298,10 +1368,14 @@ pub fn try_inline_simple_call(
                             std::collections::HashSet::new();
                         collect_closure_captured_local_ids(&func.body, &mut closure_capt);
 
+                        let mut mutated: std::collections::HashSet<LocalId> =
+                            std::collections::HashSet::new();
+                        collect_mutated_local_ids(&func.body, &mut mutated);
                         let (setup_stmts, param_map) = build_inline_arg_bindings(
                             &func.params,
                             args,
                             &closure_capt,
+                            &mutated,
                             next_local_id,
                         )?;
                         let mut result = return_expr.clone();
@@ -1338,10 +1412,14 @@ pub fn try_inline_simple_call(
                                 std::collections::HashSet::new();
                             collect_closure_captured_local_ids(&func.body, &mut closure_capt);
 
+                            let mut mutated: std::collections::HashSet<LocalId> =
+                                std::collections::HashSet::new();
+                            collect_mutated_local_ids(&func.body, &mut mutated);
                             let (mut setup, mut param_map) = build_inline_arg_bindings(
                                 &func.params,
                                 args,
                                 &closure_capt,
+                                &mutated,
                                 next_local_id,
                             )?;
 
@@ -1425,6 +1503,9 @@ pub fn try_inline_simple_call(
                     if !method_candidate.method_lookup_safe {
                         return None;
                     }
+                    if method_contains_lexical_super(&method_candidate.func) {
+                        return None;
+                    }
 
                     // Check for single return statement
                     if method_candidate.func.body.len() == 1 {
@@ -1439,10 +1520,14 @@ pub fn try_inline_simple_call(
                                 &mut closure_capt,
                             );
 
+                            let mut mutated: std::collections::HashSet<LocalId> =
+                                std::collections::HashSet::new();
+                            collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
                             let (setup_stmts, mut param_map) = build_inline_arg_bindings(
                                 &method_candidate.func.params,
                                 args,
                                 &closure_capt,
+                                &mutated,
                                 next_local_id,
                             )?;
 
@@ -1491,10 +1576,14 @@ pub fn try_inline_simple_call(
                             &method_candidate.func.body,
                             &mut closure_capt,
                         );
+                        let mut mutated: std::collections::HashSet<LocalId> =
+                            std::collections::HashSet::new();
+                        collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
                         let (setup_for_params, mut shared_param_map) = build_inline_arg_bindings(
                             &method_candidate.func.params,
                             args,
                             &closure_capt,
+                            &mutated,
                             next_local_id,
                         )?;
                         if let (Some(this_id), Some(obj_id)) =
@@ -1571,11 +1660,18 @@ pub fn try_inline_call(
                     std::collections::HashSet::new();
                 collect_closure_captured_local_ids(&func.body, &mut closure_capt);
 
+                let mut mutated: std::collections::HashSet<LocalId> =
+                    std::collections::HashSet::new();
+                collect_mutated_local_ids(&func.body, &mut mutated);
+
                 for (param, arg) in func.params.iter().zip(args.iter()) {
                     let trivial_in_closure = is_trivial_expr(arg)
                         && !matches!(arg, Expr::LocalGet(_))
                         && closure_capt.contains(&param.id);
-                    if is_trivial_expr(arg) && !trivial_in_closure {
+                    // Body-written params get a copy — see
+                    // build_inline_arg_bindings (S13.2.1_A6).
+                    let force_let = mutated.contains(&param.id);
+                    if is_trivial_expr(arg) && !trivial_in_closure && !force_let {
                         param_map.insert(param.id, arg.clone());
                     } else {
                         let local_id = *next_local_id;
@@ -1585,7 +1681,7 @@ pub fn try_inline_call(
                             id: local_id,
                             name: param.name.clone(),
                             ty: param.ty.clone(),
-                            mutable: false,
+                            mutable: force_let,
                             init: Some(arg.clone()),
                         });
 
@@ -1673,6 +1769,7 @@ pub fn try_inline_call(
                     // extra actual args plus their side effects.
                     if !method_candidate.method_lookup_safe
                         || args.len() > method_candidate.func.params.len()
+                        || method_contains_lexical_super(&method_candidate.func)
                     {
                         return None;
                     }
@@ -1787,4 +1884,59 @@ pub fn is_trivial_expr(expr: &Expr) -> bool {
             | Expr::LocalGet(_)
             | Expr::GlobalGet(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nested_closure_expr(depth: usize) -> Expr {
+        let mut expr = Expr::Integer(1);
+        for func_id in 0..depth as u32 {
+            expr = Expr::Closure {
+                func_id,
+                params: Vec::new(),
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(expr))],
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: false,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            };
+        }
+        expr
+    }
+
+    #[test]
+    fn inline_expr_skips_extremely_deep_closure_trees() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let mut expr = nested_closure_expr(MAX_INLINE_EXPR_RECURSION_DEPTH + 64);
+                let mut exact_receiver_facts = ExactReceiverFacts::new();
+                let mut next_local_id = 1;
+
+                let hoisted = inline_calls_in_expr(
+                    &mut expr,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &mut exact_receiver_facts,
+                    &mut next_local_id,
+                    None,
+                    &HashMap::new(),
+                );
+
+                assert!(hoisted.is_empty());
+                assert!(exact_receiver_facts.is_empty());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }

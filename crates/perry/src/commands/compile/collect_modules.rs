@@ -10,13 +10,13 @@
 //! V2.2 codegen cache key derivation.
 
 use anyhow::{anyhow, Result};
-use perry_hir::{Expr, ModuleKind, Stmt};
+use perry_hir::ModuleKind;
 use perry_transform::{
     gather_cross_module_anon_classes, gather_cross_module_methods,
     gather_cross_module_methods_with_extern_imports, inline_finally_into_returns, inline_functions,
     transform_async_to_generator, transform_generators, MethodCandidate,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -26,343 +26,35 @@ use crate::OutputFormat;
 use super::{
     cached_resolve_import, declaration_sidecar_for_resolved_import, extract_compile_package_dir,
     has_perry_native_library, is_declaration_file, is_in_compile_package,
-    is_in_perry_native_package, is_js_file, parse_cached, parse_native_library_manifest,
-    parse_package_specifier, CompilationContext, JsModule, ParseCache,
+    is_in_perry_native_package, is_js_file, is_recognized_text_asset, parse_cached,
+    parse_native_library_manifest, parse_package_specifier, CompilationContext, JsModule,
+    ParseCache,
 };
 
-/// Issue #818: scan a JS module's source for static ESM imports /
-/// re-exports / string-literal dynamic imports, resolve each one
-/// against the module's directory (with `resolve_with_extensions` so
-/// extensionless and folder-index lookups work the same way they do at
-/// import-time), and return the deduped list of file paths to add to
-/// the bundle.
-///
-/// Bare specifiers (`react`, `@foo/bar`) and unresolvable relative
-/// paths are skipped: bare specifiers are the V8 fallback's job to
-/// resolve via the node_modules tree (we don't have a `require.resolve`
-/// equivalent here without a full parse), and unresolvable relatives
-/// just leak the same runtime error the V8 loader would have produced
-/// anyway. This keeps the scan cheap and side-effect free.
-pub(super) fn collect_js_module_imports(file_path: &std::path::Path, source: &str) -> Vec<PathBuf> {
-    use std::sync::OnceLock;
-    static IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static EXPORT_FROM_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static DYNAMIC_IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static BARE_IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
+mod create_require_transform;
+mod crypto_ns;
+mod dynamic_glob;
+mod feature_detect;
+mod import_helpers;
+mod native_addon;
+mod parse_error;
+#[cfg(test)]
+mod tests;
+mod wasm_asset;
 
-    // `import ... from "spec"` — matches default/named/namespace forms.
-    let import_re = IMPORT_RE.get_or_init(|| {
-        regex::Regex::new(r#"(?m)^\s*import\s+(?:[^'"]+?\s+from\s+)?['"]([^'"]+)['"]"#)
-            .expect("import regex")
-    });
-    // Bare side-effect import: `import "./foo.js";`
-    let bare_re = BARE_IMPORT_RE.get_or_init(|| {
-        regex::Regex::new(r#"(?m)^\s*import\s+['"]([^'"]+)['"]"#).expect("bare import regex")
-    });
-    // `export ... from "spec"` — covers `export *`, `export * as ns`,
-    // `export { a, b }`. Captures the specifier.
-    let export_re = EXPORT_FROM_RE.get_or_init(|| {
-        regex::Regex::new(
-            r#"(?m)^\s*export\s+(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]"#,
-        )
-        .expect("export from regex")
-    });
-    // Dynamic `import("spec")` — string-literal only.
-    let dyn_re = DYNAMIC_IMPORT_RE.get_or_init(|| {
-        regex::Regex::new(r#"\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)"#).expect("dynamic import regex")
-    });
+use create_require_transform::transform_create_require_literal_requires;
+use dynamic_glob::expand_dynamic_import_glob;
+use import_helpers::{
+    cached_resolve_import_with_lexical_base, collect_js_module_imports, env_defines_for_lowering,
+};
+// Re-exported at `pub(super)` because `compile.rs` (the parent module) calls
+// `collect_modules::known_node_submodule_key` directly.
+pub(super) use import_helpers::known_node_submodule_key;
+use native_addon::refuse_compile_package_native_addon;
+use parse_error::annotate_parse_error;
+use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
 
-    let mut specs: Vec<String> = Vec::new();
-    for cap in import_re.captures_iter(source) {
-        specs.push(cap[1].to_string());
-    }
-    for cap in bare_re.captures_iter(source) {
-        specs.push(cap[1].to_string());
-    }
-    for cap in export_re.captures_iter(source) {
-        specs.push(cap[1].to_string());
-    }
-    for cap in dyn_re.captures_iter(source) {
-        specs.push(cap[1].to_string());
-    }
-
-    let parent = match file_path.parent() {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
-    let mut out: Vec<PathBuf> = Vec::new();
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    for spec in specs {
-        // Only follow relative or absolute paths — bare specifiers like
-        // `react` need the node_modules resolver which is more invasive
-        // to call here. The original entry walker (TS path) already
-        // pulled bare-specifier dependencies in via `cached_resolve_import`,
-        // so the most common case (top-level package brings in submodules)
-        // is covered. Inside a package's `node_modules` tree, all
-        // sibling imports are relative-path anyway.
-        if !(spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/')) {
-            continue;
-        }
-        let candidate = if spec.starts_with('/') {
-            PathBuf::from(&spec)
-        } else {
-            parent.join(&spec)
-        };
-        if let Some(resolved) = super::resolve::resolve_with_extensions(&candidate) {
-            if let Ok(canon) = resolved.canonicalize() {
-                if seen.insert(canon.clone()) {
-                    out.push(canon);
-                }
-            }
-        }
-    }
-    out
-}
-
-/// Issue #841: Node.js submodules that Perry knows about at the
-/// resolver level (no perry-stdlib backing, no compiled-source backing)
-/// but for which we still want to provide a minimal import surface so
-/// `typeof import-name === "function"` and `import * as ns` work.
-///
-/// Each entry returns the bare submodule key that matches
-/// `perry_runtime::node_submodules::SUBMODULES[i].key`. Codegen routes
-/// every named/namespace import from these specifiers through the
-/// runtime singleton getters in that module.
-pub(super) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
-    let normalized = source.strip_prefix("node:").unwrap_or(source);
-    match normalized {
-        // node:timers — only the `import * as timers` namespace shape routes
-        // through the submodule namespace; named imports keep the global
-        // fast-path (gated in compile.rs). (#1213)
-        "timers" => Some("timers"),
-        "timers/promises" => Some("timers_promises"),
-        "fs/promises" => Some("fs_promises"),
-        "readline/promises" => Some("readline_promises"),
-        "stream/promises" => Some("stream_promises"),
-        "stream/consumers" => Some("stream_consumers"),
-        // #1545: node:stream/web (WHATWG Web Streams). Named imports bind to
-        // function singletons so `typeof ReadableStream === "function"`;
-        // `new ReadableStream(...)` / `new CountQueuingStrategy(...)` are lowered
-        // through the builtin-constructor dispatch in codegen regardless of the
-        // import binding (see lower_call/builtin.rs), so these thunks only ever
-        // run if the class is called *without* `new`.
-        "stream/web" => Some("stream_web"),
-        "sys" => Some("sys"),
-        "test" => Some("test"),
-        "test/reporters" => Some("test_reporters"),
-        // Pino downstream (#906 follow-up): `require('node:diagnostics_channel')`
-        // returns the module exports object. The CJS-wrap rewrites this as
-        // `import diagChan from 'node:diagnostics_channel'`. Pre-fix the
-        // codegen catch-all returned TAG_TRUE for that ExternFuncRef, so
-        // `diagChan.tracingChannel(...)` threw
-        // `TypeError: (boolean).tracingChannel is not a function`. Routing
-        // through the namespace stub gives `diagChan` a real object whose
-        // `tracingChannel` field is a callable thunk that hands back a
-        // TracingChannel-shaped stub object — enough for pino to read
-        // `asJsonChan.hasSubscribers === false` and take the fast path
-        // without ever entering the tracing-instrumentation branch.
-        "diagnostics_channel" => Some("diagnostics_channel"),
-        "trace_events" => Some("trace_events"),
-        // #1671: hono JSX runtime/streaming helpers. Perry renders JSX with the
-        // built-in `js_jsx` runtime, so these submodules have no compiled-source
-        // backing — they expose function singletons (jsx/jsxs/Fragment/JSXNode,
-        // renderToReadableStream/Suspense) for code that imports the helpers
-        // directly. Note these are NOT `node:`-prefixed; the strip above is a
-        // no-op and they match verbatim.
-        "hono/jsx/server" => Some("hono_jsx_server"),
-        "hono/jsx/streaming" => Some("hono_jsx_streaming"),
-        _ => None,
-    }
-}
-
-fn expr_uses_global_crypto_namespace(expr: &Expr) -> bool {
-    if matches!(
-        expr,
-        Expr::PropertyGet { object, property }
-            if property == "crypto" && matches!(object.as_ref(), Expr::GlobalGet(0))
-    ) {
-        return true;
-    }
-
-    // The shared expression walker intentionally does not enter closure
-    // bodies; global crypto reads inside closures still need stdlib crypto
-    // linked for runtime-dispatched calls such as `c.randomUUID()`.
-    if let Expr::Closure { body, .. } = expr {
-        if stmts_use_global_crypto_namespace(body) {
-            return true;
-        }
-    }
-
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |child| {
-        if !found && expr_uses_global_crypto_namespace(child) {
-            found = true;
-        }
-    });
-    found
-}
-
-fn stmts_use_global_crypto_namespace(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_uses_global_crypto_namespace)
-}
-
-fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
-    match stmt {
-        Stmt::Let { init, .. } => init
-            .as_ref()
-            .map(expr_uses_global_crypto_namespace)
-            .unwrap_or(false),
-        Stmt::Expr(expr) | Stmt::Throw(expr) => expr_uses_global_crypto_namespace(expr),
-        Stmt::Return(expr) => expr
-            .as_ref()
-            .map(expr_uses_global_crypto_namespace)
-            .unwrap_or(false),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_uses_global_crypto_namespace(condition)
-                || stmts_use_global_crypto_namespace(then_branch)
-                || else_branch
-                    .as_ref()
-                    .map(|branch| stmts_use_global_crypto_namespace(branch))
-                    .unwrap_or(false)
-        }
-        Stmt::While { condition, body } => {
-            expr_uses_global_crypto_namespace(condition) || stmts_use_global_crypto_namespace(body)
-        }
-        Stmt::DoWhile { body, condition } => {
-            stmts_use_global_crypto_namespace(body) || expr_uses_global_crypto_namespace(condition)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref()
-                .map(|stmt| stmt_uses_global_crypto_namespace(stmt))
-                .unwrap_or(false)
-                || condition
-                    .as_ref()
-                    .map(expr_uses_global_crypto_namespace)
-                    .unwrap_or(false)
-                || update
-                    .as_ref()
-                    .map(expr_uses_global_crypto_namespace)
-                    .unwrap_or(false)
-                || stmts_use_global_crypto_namespace(body)
-        }
-        Stmt::Labeled { body, .. } => stmt_uses_global_crypto_namespace(body),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            stmts_use_global_crypto_namespace(body)
-                || catch
-                    .as_ref()
-                    .map(|catch| stmts_use_global_crypto_namespace(&catch.body))
-                    .unwrap_or(false)
-                || finally
-                    .as_ref()
-                    .map(|body| stmts_use_global_crypto_namespace(body))
-                    .unwrap_or(false)
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_uses_global_crypto_namespace(discriminant)
-                || cases.iter().any(|case| {
-                    case.test
-                        .as_ref()
-                        .map(expr_uses_global_crypto_namespace)
-                        .unwrap_or(false)
-                        || stmts_use_global_crypto_namespace(&case.body)
-                })
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
-    }
-}
-
-fn function_uses_global_crypto_namespace(function: &perry_hir::Function) -> bool {
-    function
-        .params
-        .iter()
-        .filter_map(|param| param.default.as_ref())
-        .any(expr_uses_global_crypto_namespace)
-        || stmts_use_global_crypto_namespace(&function.body)
-}
-
-fn module_uses_global_crypto_namespace(module: &perry_hir::Module) -> bool {
-    stmts_use_global_crypto_namespace(&module.init)
-        || module
-            .functions
-            .iter()
-            .any(function_uses_global_crypto_namespace)
-}
-
-/// #1674 sub-part B: expand a dynamic-`import()` glob pattern
-/// (`<prefix>*<suffix>`, where `prefix` is a relative, directory-anchored
-/// path) into concrete relative specifiers by reading the importing module's
-/// directory. Each returned specifier equals the string the runtime template
-/// produces (`prefix_dir + filename`), so the compile-time candidate keys match
-/// the runtime dispatch arg exactly. Returns specifiers sorted for determinism.
-fn expand_dynamic_import_glob(
-    importing_file: &str,
-    prefix: &str,
-    suffix: &str,
-    cap: usize,
-) -> Vec<String> {
-    // Split the prefix into its directory part (through the last '/') and the
-    // leading filename fragment that survivors must start with.
-    let last_slash = match prefix.rfind('/') {
-        Some(i) => i,
-        None => return Vec::new(),
-    };
-    let prefix_dir = &prefix[..=last_slash]; // e.g. "./plugins/" or "./"
-    let file_prefix = &prefix[last_slash + 1..]; // e.g. "" or "locale_"
-
-    let importing_dir = std::path::Path::new(importing_file)
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let glob_dir = importing_dir.join(prefix_dir);
-
-    let entries = match std::fs::read_dir(&glob_dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
-    let min_len = file_prefix.len() + suffix.len();
-    let mut out: Vec<String> = Vec::new();
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        // The wildcard must match a non-empty middle: `name` strictly longer
-        // than `file_prefix + suffix`, and bracketed by them.
-        if name.len() <= min_len || !name.starts_with(file_prefix) || !name.ends_with(suffix) {
-            continue;
-        }
-        let candidate = format!("{prefix_dir}{name}");
-        if !out.contains(&candidate) {
-            out.push(candidate);
-        }
-        if out.len() > cap {
-            break;
-        }
-    }
-    out.sort();
-    out
-}
+const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
 /// Collect all modules to compile (transitive closure of imports)
 pub(super) fn collect_modules(
@@ -376,25 +68,115 @@ pub(super) fn collect_modules(
     progress: &VerboseProgress,
     mut parse_cache: Option<&mut ParseCache>,
 ) -> Result<()> {
-    let canonical = entry_path
-        .canonicalize()
-        .map_err(|e| anyhow!("Failed to canonicalize {}: {}", entry_path.display(), e))?;
+    let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
+    let mut stack = vec![WorkFrame::Enter(entry_path.clone())];
+    while let Some(frame) = stack.pop() {
+        match frame {
+            WorkFrame::Enter(next_path) => {
+                let canonical = next_path.canonicalize().map_err(|e| {
+                    anyhow!("Failed to canonicalize {}: {}", next_path.display(), e)
+                })?;
 
-    if visited.contains(&canonical) {
-        return Ok(());
+                if matches!(
+                    states.get(&canonical),
+                    Some(VisitState::InProgress | VisitState::Done)
+                ) {
+                    continue;
+                }
+                if visited.contains(&canonical) {
+                    states.insert(canonical, VisitState::Done);
+                    continue;
+                }
+
+                states.insert(canonical.clone(), VisitState::InProgress);
+                visited.insert(canonical.clone());
+                progress.record(ProgressSnapshot {
+                    stage: "collect-module",
+                    module_path: Some(&canonical),
+                    visited: Some(visited.len()),
+                    collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+                    ..Default::default()
+                });
+
+                let discovered = collect_module_one(
+                    &next_path,
+                    canonical.clone(),
+                    ctx,
+                    visited,
+                    format,
+                    target,
+                    next_class_id,
+                    progress,
+                    parse_cache.as_deref_mut(),
+                )?;
+
+                if let Some(prepared) = discovered.finish {
+                    stack.push(WorkFrame::Finish(prepared));
+                } else {
+                    states.insert(canonical, VisitState::Done);
+                }
+                for child in discovered.children.into_iter().rev() {
+                    stack.push(WorkFrame::Enter(child));
+                }
+            }
+            WorkFrame::Finish(prepared) => {
+                let canonical = prepared.canonical.clone();
+                collect_module_finish(prepared, ctx, visited, target, skip_transforms, progress)?;
+                states.insert(canonical, VisitState::Done);
+            }
+        }
     }
-    visited.insert(canonical.clone());
-    progress.record(ProgressSnapshot {
-        stage: "collect-module",
-        module_path: Some(&canonical),
-        visited: Some(visited.len()),
-        collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
-        ..Default::default()
-    });
+    Ok(())
+}
+
+enum VisitState {
+    InProgress,
+    Done,
+}
+
+enum WorkFrame {
+    Enter(PathBuf),
+    Finish(PreparedModule),
+}
+
+struct ModuleDiscovery {
+    finish: Option<PreparedModule>,
+    children: Vec<PathBuf>,
+}
+
+struct PreparedModule {
+    canonical: PathBuf,
+    module_name: String,
+    hir_module: perry_hir::Module,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_module_one(
+    entry_path: &PathBuf,
+    canonical: PathBuf,
+    ctx: &mut CompilationContext,
+    visited: &mut HashSet<PathBuf>,
+    format: OutputFormat,
+    target: Option<&str>,
+    next_class_id: &mut perry_hir::ClassId,
+    progress: &VerboseProgress,
+    mut parse_cache: Option<&mut ParseCache>,
+) -> Result<ModuleDiscovery> {
+    let mut pending = Vec::new();
 
     // Check if this file should be handled by JS runtime instead of native compilation
     // This includes: JS files, declaration files (.d.ts), JSON files, or any file in node_modules when JS runtime is enabled
     let is_json = canonical.extension().and_then(|e| e.to_str()) == Some("json");
+    // #5223: text-asset imports (`import s from "./x.txt"`). A recognized text
+    // extension is read verbatim and synthesized into a native module whose
+    // default export is the file contents as a JS string (see the text branch
+    // below, mirroring the JSON-module path). `.wasm` is out of scope.
+    let is_text_asset = is_recognized_text_asset(&canonical);
+    // #5235: `.wasm` ESM import. The file is binary (not valid UTF-8), so it
+    // must NOT be read as a string. We read the bytes, parse the export section,
+    // and synthesize a throwing-stub module (see the wasm branch below). Real
+    // `.wasm` ESM instantiation is the companion issue #5234.
+    let is_wasm = is_wasm_asset(&canonical);
     let is_in_node_modules = canonical.to_string_lossy().contains("node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
@@ -427,24 +209,32 @@ pub(super) fn collect_modules(
     // surfaces as an unsupported-module error rather than silently running).
     let should_use_js_runtime =
         (is_js_file(&canonical) && !is_in_compiled_pkg && is_in_node_modules)
-            || is_declaration_file(&canonical)
-            || is_json;
+            || is_declaration_file(&canonical);
 
-    // Skip JSON files — they're data, not code (imported via `with { type: "json" }`)
-    if is_json {
-        return Ok(());
-    }
+    // #348 follow-up: JSON module imports (`import data from "./x.json"`,
+    // optionally with `with { type: "json" }`) are NOT skipped — they compile
+    // to a native module whose default export is the parsed data (synthesized
+    // as `export default <json>;` just below). Previously JSON was handed to
+    // the (now-removed) JS runtime / skipped outright, leaving the default
+    // import bound to the empty-module sentinel — which broke cli-boxes (and
+    // thus ink's `borderStyle` box-drawing).
 
     if should_use_js_runtime {
         // Skip declaration files - they're just type information
         if is_declaration_file(&canonical) {
-            return Ok(());
+            return Ok(ModuleDiscovery {
+                finish: None,
+                children: pending,
+            });
         }
 
         // Perry native extension packages (ioredis, ethers, mysql2, ws, dotenv) are handled
         // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
         if is_perry_native {
-            return Ok(());
+            return Ok(ModuleDiscovery {
+                finish: None,
+                children: pending,
+            });
         }
 
         let source = fs::read_to_string(&canonical)
@@ -488,7 +278,7 @@ pub(super) fn collect_modules(
         // also walked. Template-literal / variable specifiers can't be
         // resolved statically and are skipped (V8 will surface the
         // resolution failure at runtime, same as today).
-        let transitive_paths = collect_js_module_imports(&canonical, &source);
+        let transitive_paths = collect_js_module_imports(entry_path, &source);
         ctx.js_modules.insert(
             specifier.clone(),
             JsModule {
@@ -513,24 +303,87 @@ pub(super) fn collect_modules(
         // — covering the case where a JS file re-imports something that
         // resolves to a TypeScript file under a `compilePackages` dir.
         for next in transitive_paths {
-            collect_modules(
-                &next,
-                ctx,
-                visited,
-                format,
-                target,
-                next_class_id,
-                skip_transforms,
-                progress,
-                parse_cache.as_deref_mut(),
-            )?;
+            pending.push(next);
         }
-        return Ok(());
+        return Ok(ModuleDiscovery {
+            finish: None,
+            children: pending,
+        });
     }
 
-    // It's a TypeScript file to compile natively
-    let raw_source = fs::read_to_string(&canonical)
-        .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+    // #5235: `.wasm` ESM import — defer. Read the BYTES (never as UTF-8; the
+    // file is binary), parse the WebAssembly export section, and synthesize a
+    // TypeScript stub module whose exports are throw-on-call functions. Strict
+    // mode makes it a hard error; the default policy defers it (records the
+    // shared end-of-compile notice and keeps building) so a build with a
+    // peripheral `.wasm` dep compiles + runs its core — the wasm feature throws
+    // only if reached. Real `.wasm` ESM instantiation is the companion #5234.
+    //
+    // The synthesized source flows through the exact same parse/lower/codegen
+    // pipeline as the #5223 text-asset and JSON synthetic modules below — we
+    // just feed `raw_source` from the stub instead of reading the file as text.
+    let raw_source = if is_wasm {
+        let display_name = canonical
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("module.wasm");
+        let loc = canonical.to_string_lossy().to_string();
+        // Strict mode (broad `perry.strict` / `--strict-dynamic-import` /
+        // `perry.dynamicImport = "error"`) turns the deferred `.wasm` import into
+        // a hard compile error. `PERRY_ALLOW_EVAL=1` forces defer (shared AOT
+        // escape hatch), mirroring the dynamic-import deferral (#5230).
+        if ctx.strict_dynamic_import && !perry_hir::eval_classifier::eval_override_enabled() {
+            return Err(anyhow!(
+                ".wasm import {} cannot run in an ahead-of-time compiled binary \
+                 — full .wasm ESM instantiation is tracked in #5234 (strict mode)",
+                loc
+            ));
+        }
+        let bytes = fs::read(&canonical)
+            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+        let stub = synthesize_wasm_stub_module(&bytes, display_name);
+        perry_hir::record_deferred_aot_site(".wasm import", loc);
+        stub.source
+    } else {
+        // It's a TypeScript (or synthetic JSON/text) file to compile natively.
+        fs::read_to_string(&canonical)
+            .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
+    };
+    // JSON module import: turn the data file into a native ESM module whose
+    // default export is the parsed value. JSON is a syntactic subset of a JS
+    // expression, so `export default <json>;` parses and lowers like any other
+    // module. Validate as JSON first so a malformed file yields a clear error
+    // rather than a confusing TS parse failure on the synthesized source.
+    let raw_source = if is_json {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(&raw_source) {
+            return Err(anyhow!(
+                "Failed to parse JSON module {}: {}",
+                canonical.display(),
+                e
+            ));
+        }
+        format!("export default {};\n", raw_source.trim())
+    } else if is_text_asset {
+        // #5223: text-asset import. The file's contents are exposed verbatim as
+        // the module's default export (a JS string). We never TS-parse the raw
+        // text — instead we synthesize `export default "<escaped-contents>";`.
+        // `serde_json::to_string` of a string produces a valid double-quoted JS
+        // string literal with all required escaping (newlines, quotes, control
+        // chars, unicode), so the contents round-trip byte-for-byte.
+        let literal = serde_json::to_string(&raw_source).map_err(|e| {
+            anyhow!(
+                "Failed to encode text asset {} as a string literal: {}",
+                canonical.display(),
+                e
+            )
+        })?;
+        format!("export default {};\n", literal)
+    } else {
+        raw_source
+    };
+    if is_in_compiled_pkg {
+        refuse_compile_package_native_addon(ctx, &canonical)?;
+    }
 
     // Issue #348: when a `compilePackages` target ships CommonJS (e.g. React
     // 18's `module.exports = require('./cjs/react.production.min.js')`),
@@ -548,10 +401,11 @@ pub(super) fn collect_modules(
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
     let source = if was_cjs_wrapped {
-        super::cjs_wrap::wrap_commonjs(&raw_source, &canonical)
+        super::cjs_wrap::wrap_commonjs_for_target(&raw_source, &canonical, target)
     } else {
         raw_source
     };
+    let source = transform_create_require_literal_requires(&source, &ctx.compile_packages);
 
     // Note (#686): we no longer hash source bytes here. The object cache key
     // is now keyed on a post-transform HIR fingerprint computed inside the
@@ -563,6 +417,7 @@ pub(super) fn collect_modules(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("input.ts");
+    let parse_filename = canonical.to_str().unwrap_or(filename);
 
     // Use a relative path from project root for unique module names
     // This ensures files like "routes/auth.ts" and "middleware/auth.ts" have different names
@@ -586,7 +441,7 @@ pub(super) fn collect_modules(
     });
     let ast_module_owned: swc_ecma_ast::Module;
     let ast_module: &swc_ecma_ast::Module = match parse_cache.as_deref_mut() {
-        Some(cache) => match parse_cached(cache, &canonical, &source, filename) {
+        Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
             Ok(m) => m,
             Err(e) => {
                 return Err(annotate_parse_error(
@@ -597,7 +452,7 @@ pub(super) fn collect_modules(
                 ))
             }
         },
-        None => match perry_parser::parse_typescript(&source, filename) {
+        None => match perry_parser::parse_typescript(&source, parse_filename) {
             Ok(m) => {
                 ast_module_owned = m;
                 &ast_module_owned
@@ -650,6 +505,11 @@ pub(super) fn collect_modules(
     } else {
         Some(&ctx.cross_module_class_field_types)
     };
+    let imported_class_accessors = if ctx.cross_module_class_accessors.is_empty() {
+        None
+    } else {
+        Some(&ctx.cross_module_class_accessors)
+    };
     // Issue #444: this module is the user-supplied entry iff its canonical
     // path matches the one stashed by `compile.rs::run_with_parse_cache`
     // before the first `collect_modules` invocation. Bundle-extension
@@ -684,11 +544,24 @@ pub(super) fn collect_modules(
     // immediately after the lower call so it can't leak to subsequent
     // unrelated work on the same thread.
     perry_hir::set_compile_packages_override(ctx.compile_packages.clone());
+    // #5009: install the `process.env.<NAME>` build-time defines so a static
+    // `process.env.X` read folds to its `perry.define` literal at lowering —
+    // esbuild-style, in every context and independent of tree-shaking. Keyed
+    // by the bare env var name (the `process.env.` prefix stripped). Cleared
+    // after the lower below (rayon-safe). The runtime-env default
+    // (`NODE_ENV → "production"` for node_modules) stays in the tree-shake
+    // `env_fold` pass; only explicit defines are folded here.
+    perry_hir::set_env_defines(env_defines_for_lowering(&ctx.define));
     // #503: re-install the dynamic-stdlib-dispatch config on the current
     // thread before each lower. Driver may be a rayon worker that didn't
     // inherit the thread-local set on the main thread by `compile.rs`.
     perry_hir::set_refuse_dynamic_stdlib_dispatch(ctx.refuse_dynamic_stdlib_dispatch);
     perry_hir::set_allow_dynamic_stdlib_packages(ctx.allow_dynamic_stdlib_packages.clone());
+    // #5206: re-install strict-eval mode on this (possibly rayon-worker)
+    // thread before each lower, mirroring the dynamic-stdlib knob above.
+    perry_hir::set_eval_strict_mode(ctx.strict_eval);
+    // #5245: likewise re-install strict-unimplemented mode per worker thread.
+    perry_hir::set_unimplemented_strict_mode(ctx.strict_unimplemented);
     // #503: stash the module source text so the dynamic-dispatch check
     // can look up `// @perry-allow-dynamic` line annotations adjacent to
     // any violation site without re-reading the file. Cleared right
@@ -726,6 +599,7 @@ pub(super) fn collect_modules(
         *next_class_id,
         resolved_types,
         imported_class_fields,
+        imported_class_accessors,
         is_entry_module,
         is_external_module,
     );
@@ -740,6 +614,7 @@ pub(super) fn collect_modules(
     perry_hir::clear_compile_packages_override();
     perry_hir::clear_current_module_source();
     perry_hir::clear_precompile_state();
+    perry_hir::clear_env_defines();
     // #2309: drain refusals deferred during this lower and tag them with the
     // canonical module path so the post-collection prune can decide whether
     // they survive. Done before the `?` below so a non-deferrable error can't
@@ -751,7 +626,24 @@ pub(super) fn collect_modules(
             ctx.deferred_refusals.push(d);
         }
     }
-    let (mut hir_module, new_next_class_id) = lower_result?;
+    // #5249: a lowering error carries a file-relative span but no file
+    // identity, and only this module's `source` text is in scope here — so
+    // resolve the span into a `file:line:col` + snippet diagnostic now,
+    // matching what `perry check` prints, instead of letting the bare
+    // locationless message propagate to the top-level error sink.
+    let (mut hir_module, new_next_class_id) = match lower_result {
+        Ok(v) => v,
+        Err(e) => {
+            if let Some(rendered) = crate::commands::lower_diagnostic::render_compile_lower_error(
+                &e,
+                &source_file_path,
+                &source,
+            ) {
+                return Err(anyhow!("{}", rendered));
+            }
+            return Err(e);
+        }
+    };
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
     // #2309 Stage 2: fold build-time `process.env` branches BEFORE dynamic
@@ -774,16 +666,44 @@ pub(super) fn collect_modules(
     // the resolver can follow `import(localStringVar)` and
     // `` import(`./prefix_${localStringVar}.ts`) `` paths transitively.
     let module_const_locals = perry_hir::collect_module_const_locals(&hir_module);
-    perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
-        if let perry_hir::Expr::DynamicImport { paths, arg } = expr {
+    let dynamic_param_literals = perry_hir::collect_dynamic_import_param_literals(&hir_module);
+    let dynamic_local_literals = perry_hir::collect_dynamic_import_local_candidate_literals(
+        &hir_module,
+        &module_const_locals,
+        &dynamic_param_literals,
+    );
+    // #5230: re-install this module's source (cleared after the lower above) so
+    // `current_module_line_at` can resolve a `file:line` for a deferred dynamic
+    // import's notice/runtime-error message. Cleared again after the fill pass.
+    perry_hir::set_current_module_source(source.clone());
+    // Per-site outcome, aligned 1:1 with the `for_each_dynamic_import`
+    // traversal order so the mutable fill pass below can apply them.
+    // `Resolved(set)` populates `paths`; `Deferred(msg)` (#5230) leaves
+    // `paths` empty and sets `deferred_error` so codegen lowers the site to a
+    // rejected promise that throws `msg` only if reached.
+    enum DynImportOutcome {
+        Resolved(Vec<String>),
+        Deferred(String),
+    }
+    let mut dynamic_path_sets: Vec<DynImportOutcome> = Vec::new();
+    perry_hir::for_each_dynamic_import(&hir_module, &mut |expr| {
+        if let perry_hir::Expr::DynamicImport {
+            paths,
+            arg,
+            byte_offset,
+            ..
+        } = expr
+        {
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
                 return;
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            match perry_hir::resolve_import_path_with_consts(
-                arg,
+            match perry_hir::resolve_import_path_with_context(
+                arg.as_ref(),
                 &module_const_locals,
+                &dynamic_param_literals,
+                &dynamic_local_literals,
                 &mut visiting,
             ) {
                 perry_hir::Resolution::Set(set) => {
@@ -804,7 +724,7 @@ pub(super) fn collect_modules(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    *paths = set;
+                    dynamic_path_sets.push(DynImportOutcome::Resolved(set));
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     // #1674 sub-part B: a non-resolvable template specifier with
@@ -812,7 +732,7 @@ pub(super) fn collect_modules(
                     // (`import(`./plugins/${name}.ts`)`) globs the importing
                     // module's directory for matching files instead of erroring.
                     if let Some((prefix, suffix)) =
-                        perry_hir::dynamic_import_glob_pattern(arg, &module_const_locals)
+                        perry_hir::dynamic_import_glob_pattern(arg.as_ref(), &module_const_locals)
                     {
                         let matches = expand_dynamic_import_glob(
                             &source_file_path,
@@ -839,21 +759,49 @@ pub(super) fn collect_modules(
                                     new_dyn_imports.push(p.clone());
                                 }
                             }
-                            *paths = matches;
+                            dynamic_path_sets.push(DynImportOutcome::Resolved(matches));
                             return;
                         }
                     }
-                    dyn_errors.push(format!(
-                        "dynamic import() in module {} ({}): {}",
-                        module_name,
-                        canonical.display(),
-                        reason
-                    ));
+                    // #5230: a genuinely runtime-computed specifier. This is the
+                    // analog of #5206's runtime-unknown eval bucket. Strict mode
+                    // (`--strict-dynamic-import` / `perry.dynamicImport = "error"`
+                    // / `perry.strict`) restores the historical hard compile
+                    // error. The default policy *defers* it: compile the site to
+                    // a rejected promise that throws a descriptive Error only if
+                    // reached, record it for the shared end-of-compile notice,
+                    // and keep building so plugin-loader apps compile + run their
+                    // core. `PERRY_ALLOW_EVAL=1` forces defer (shared AOT escape
+                    // hatch).
+                    if ctx.strict_dynamic_import
+                        && !perry_hir::eval_classifier::eval_override_enabled()
+                    {
+                        dyn_errors.push(format!(
+                            "dynamic import() in module {} ({}): {}",
+                            module_name,
+                            canonical.display(),
+                            reason
+                        ));
+                    } else {
+                        let line =
+                            perry_hir::current_module_line_at(*byte_offset).filter(|&l| l != 0);
+                        let loc = match line {
+                            Some(l) => format!("{}:{}", source_file_path, l),
+                            None => source_file_path.clone(),
+                        };
+                        let msg = format!(
+                            "dynamic import() of a runtime-computed path cannot run in an \
+                             ahead-of-time compiled binary ({loc})"
+                        );
+                        perry_hir::record_deferred_aot_site("import(...)", loc);
+                        dynamic_path_sets.push(DynImportOutcome::Deferred(msg));
+                    }
                 }
             }
         }
     });
-    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+    let mut worker_path_sets: Vec<Vec<String>> = Vec::new();
+    perry_hir::for_each_worker_new(&hir_module, &mut |expr| {
         if let perry_hir::Expr::WorkerNew {
             paths, filename, ..
         } = expr
@@ -862,9 +810,11 @@ pub(super) fn collect_modules(
                 return;
             }
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            match perry_hir::resolve_import_path_with_consts(
-                filename,
+            match perry_hir::resolve_import_path_with_context(
+                filename.as_ref(),
                 &module_const_locals,
+                &dynamic_param_literals,
+                &dynamic_local_literals,
                 &mut visiting,
             ) {
                 perry_hir::Resolution::Set(set) => {
@@ -891,20 +841,63 @@ pub(super) fn collect_modules(
                             new_dyn_imports.push(p.clone());
                         }
                     }
-                    *paths = set;
+                    worker_path_sets.push(set);
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
-                    dyn_errors.push(format!(
-                        "worker_threads Worker in module {}: {}",
-                        module_name, reason
-                    ));
+                    // Real-world packages (e.g. Next.js build-time worker
+                    // pools) construct Workers on paths that are never hit
+                    // when the compiled program runs. Warn and let codegen
+                    // lower this WorkerNew to a runtime throw instead of
+                    // failing the whole compile. Push an empty set to keep
+                    // the fill pass aligned with resolved siblings.
+                    if matches!(format, OutputFormat::Text) {
+                        eprintln!(
+                            "  Warning: worker_threads Worker in module {}: {} — \
+                             this Worker will throw if constructed at runtime",
+                            module_name, reason
+                        );
+                    }
+                    worker_path_sets.push(Vec::new());
                 }
             }
         }
     });
+    drop(dynamic_local_literals);
+    drop(module_const_locals);
     if !dyn_errors.is_empty() {
+        perry_hir::clear_current_module_source();
         return Err(anyhow!("{}", dyn_errors.join("\n")));
     }
+    let mut dynamic_path_sets = dynamic_path_sets.into_iter();
+    perry_hir::for_each_dynamic_import_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::DynamicImport {
+            paths,
+            deferred_error,
+            ..
+        } = expr
+        {
+            if paths.is_empty() && deferred_error.is_none() {
+                match dynamic_path_sets.next() {
+                    Some(DynImportOutcome::Resolved(set)) => *paths = set,
+                    Some(DynImportOutcome::Deferred(msg)) => *deferred_error = Some(msg),
+                    None => {}
+                }
+            }
+        }
+    });
+    let mut worker_path_sets = worker_path_sets.into_iter();
+    perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
+        if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+            if paths.is_empty() {
+                if let Some(set) = worker_path_sets.next() {
+                    *paths = set;
+                }
+            }
+        }
+    });
+    // #5230: done with the dynamic-import line resolution; don't leak this
+    // module's source onto unrelated work on this (possibly rayon-worker) thread.
+    perry_hir::clear_current_module_source();
     for source in new_dyn_imports {
         // A dynamic edge to the same source as a static import is folded
         // into the existing static edge: that edge already gives us full
@@ -941,6 +934,8 @@ pub(super) fn collect_modules(
             type_only: false,
             is_dynamic: true,
             is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
         });
     }
 
@@ -1109,8 +1104,12 @@ pub(super) fn collect_modules(
             continue;
         }
 
-        if let Some((resolved_path, kind)) = cached_resolve_import(&import.source, &canonical, ctx)
+        if let Some(resolved) =
+            cached_resolve_import_with_lexical_base(&import.source, entry_path, &canonical, ctx)
         {
+            let resolved_path = resolved.canonical_path;
+            let source_path = resolved.source_path;
+            let kind = resolved.kind;
             import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
             import.module_kind = kind;
             if let Some(sidecar) =
@@ -1232,18 +1231,7 @@ pub(super) fn collect_modules(
                             pkg_dir = dir.parent();
                         }
                     }
-                    // Recursively collect TypeScript modules
-                    collect_modules(
-                        &resolved_path,
-                        ctx,
-                        visited,
-                        format,
-                        target,
-                        next_class_id,
-                        skip_transforms,
-                        progress,
-                        parse_cache.as_deref_mut(),
-                    )?;
+                    pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
                     // Perry native extension packages (ioredis, ethers, ws, mysql2, dotenv)
@@ -1356,18 +1344,7 @@ pub(super) fn collect_modules(
                         OutputFormat::Json => {}
                     }
 
-                    // Collect JS module
-                    collect_modules(
-                        &resolved_path,
-                        ctx,
-                        visited,
-                        format,
-                        target,
-                        next_class_id,
-                        skip_transforms,
-                        progress,
-                        parse_cache.as_deref_mut(),
-                    )?;
+                    pending.push(source_path);
                 }
                 ModuleKind::NativeRust => {
                     // Native Rust modules are handled by stdlib
@@ -1423,6 +1400,43 @@ pub(super) fn collect_modules(
         }
     }
 
+    // Next.js lazy-require: the CJS→ESM wrap names a binding `_lazyreq_N` when
+    // every `require('S')` call site is inside a function body (lazy in Node).
+    // Tag the import so `classify_eager_modules` leaves the target Deferred —
+    // matching Node, which only loads such a module when the enclosing function
+    // runs (e.g. jsonwebtoken, required only inside Next.js's request handlers).
+    // The require shim triggers the target's `__init` on first `require()`, so
+    // an over-eager classification is self-correcting at runtime. Limited to
+    // Perry-compiled (`NativeCompiled`) targets — native stdlib / V8 modules
+    // have their own init paths.
+    if was_cjs_wrapped {
+        for import in &mut hir_module.imports {
+            if import.type_only
+                || import.is_dynamic
+                || import.is_native
+                || import.module_kind != perry_hir::ModuleKind::NativeCompiled
+            {
+                continue;
+            }
+            let is_lazy = import.specifiers.iter().any(|s| {
+                let local = match s {
+                    perry_hir::ImportSpecifier::Default { local } => local,
+                    perry_hir::ImportSpecifier::Namespace { local } => local,
+                    perry_hir::ImportSpecifier::Named { local, .. } => local,
+                };
+                local.starts_with("_lazyreq_")
+            });
+            if is_lazy {
+                import.is_deferred_require = true;
+            }
+            // #5257: every import here was synthesized from a `require('S')`,
+            // which under CJS returns the exports object — so a no-`default`
+            // target must route through the namespace machinery (#4872), not
+            // trip the static-ESM default gate. Tag so the gate skips them.
+            import.is_adopted_require = true;
+        }
+    }
+
     // Process re-exports
     for export in &hir_module.exports {
         let source = match export {
@@ -1447,9 +1461,12 @@ pub(super) fn collect_modules(
                 collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
                 ..Default::default()
             });
-            if let Some((resolved_path, kind)) =
-                cached_resolve_import(src.as_str(), &canonical, ctx)
+            if let Some(resolved) =
+                cached_resolve_import_with_lexical_base(src.as_str(), entry_path, &canonical, ctx)
             {
+                let resolved_path = resolved.canonical_path;
+                let source_path = resolved.source_path;
+                let kind = resolved.kind;
                 if let Some(sidecar) =
                     declaration_sidecar_for_resolved_import(src.as_str(), &resolved_path)
                 {
@@ -1538,19 +1555,7 @@ pub(super) fn collect_modules(
                 }
 
                 match kind {
-                    ModuleKind::NativeCompiled => {
-                        collect_modules(
-                            &resolved_path,
-                            ctx,
-                            visited,
-                            format,
-                            target,
-                            next_class_id,
-                            skip_transforms,
-                            progress,
-                            parse_cache.as_deref_mut(),
-                        )?;
-                    }
+                    ModuleKind::NativeCompiled => pending.push(source_path),
                     ModuleKind::Interpreted => {
                         // JS runtime (V8) support was removed, so interpreted
                         // node_modules dependencies are not followed. A direct
@@ -1563,6 +1568,30 @@ pub(super) fn collect_modules(
             }
         }
     }
+
+    return Ok(ModuleDiscovery {
+        finish: Some(PreparedModule {
+            canonical,
+            module_name,
+            hir_module,
+        }),
+        children: pending,
+    });
+}
+
+fn collect_module_finish(
+    prepared: PreparedModule,
+    ctx: &mut CompilationContext,
+    visited: &HashSet<PathBuf>,
+    target: Option<&str>,
+    skip_transforms: bool,
+    progress: &VerboseProgress,
+) -> Result<()> {
+    let PreparedModule {
+        canonical,
+        module_name,
+        mut hir_module,
+    } = prepared;
 
     // Issue #535 — `perry/ui` `state<T>` desugar pass.
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
@@ -1604,19 +1633,31 @@ pub(super) fn collect_modules(
                     .collect::<Vec<_>>()
             );
         }
-        for prior_module in ctx.native_modules.values() {
-            // The strict harvester rejects ExternFuncRef-using methods.
-            // The loose variant records each required extern name;
-            // `inline_functions` filters by destination imports.
-            // First-write-wins on key collision (rare — issue #309 cycle
-            // breaker). Strict-harvest entries are functionally equivalent
-            // when colliding with the loose variant (same body), so
-            // either ordering is correct.
-            for (k, v) in gather_cross_module_methods_with_extern_imports(prior_module) {
-                extra_methods.entry(k).or_insert(v);
-            }
-            for (k, v) in gather_cross_module_methods(prior_module) {
-                extra_methods.entry(k).or_insert(v);
+        let enable_cross_module_inline =
+            ctx.native_modules.len() <= MAX_CROSS_MODULE_INLINE_PRIOR_MODULES;
+        if std::env::var("PERRY_INLINE_DEBUG").is_ok() && !enable_cross_module_inline {
+            eprintln!(
+                "[INLINE-DRIVER] skipping cross-module inline harvest for {}: prior_modules={} budget={}",
+                hir_module.name,
+                ctx.native_modules.len(),
+                MAX_CROSS_MODULE_INLINE_PRIOR_MODULES
+            );
+        }
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                // The strict harvester rejects ExternFuncRef-using methods.
+                // The loose variant records each required extern name;
+                // `inline_functions` filters by destination imports.
+                // First-write-wins on key collision (rare — issue #309 cycle
+                // breaker). Strict-harvest entries are functionally equivalent
+                // when colliding with the loose variant (same body), so
+                // either ordering is correct.
+                for (k, v) in gather_cross_module_methods_with_extern_imports(prior_module) {
+                    extra_methods.entry(k).or_insert(v);
+                }
+                for (k, v) in gather_cross_module_methods(prior_module) {
+                    extra_methods.entry(k).or_insert(v);
+                }
             }
         }
         // Cross-module field-type info: `(class_name, field_name) ->
@@ -1627,13 +1668,15 @@ pub(super) fn collect_modules(
         // class.fields where the type is `Named(...)`.
         let mut extra_class_fields: std::collections::HashMap<(String, String), String> =
             std::collections::HashMap::new();
-        for prior_module in ctx.native_modules.values() {
-            for class in &prior_module.classes {
-                for f in &class.fields {
-                    if let perry_types::Type::Named(field_class) = &f.ty {
-                        extra_class_fields
-                            .entry((class.name.clone(), f.name.clone()))
-                            .or_insert_with(|| field_class.clone());
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                for class in &prior_module.classes {
+                    for f in &class.fields {
+                        if let perry_types::Type::Named(field_class) = &f.ty {
+                            extra_class_fields
+                                .entry((class.name.clone(), f.name.clone()))
+                                .or_insert_with(|| field_class.clone());
+                        }
                     }
                 }
             }
@@ -1647,11 +1690,13 @@ pub(super) fn collect_modules(
         // `__AnonShape_<hash>` into this module, codegen can resolve the
         // class definition (otherwise the field list is missing and the
         // literal lowers as a bare object with all properties dropped).
-        let mut extra_anon_classes: std::collections::HashMap<String, perry_hir::Class> =
+        let mut extra_anon_classes: std::collections::HashMap<String, &perry_hir::Class> =
             std::collections::HashMap::new();
-        for prior_module in ctx.native_modules.values() {
-            for (k, v) in gather_cross_module_anon_classes(prior_module) {
-                extra_anon_classes.entry(k).or_insert(v);
+        if enable_cross_module_inline {
+            for prior_module in ctx.native_modules.values() {
+                for (k, v) in gather_cross_module_anon_classes(prior_module) {
+                    extra_anon_classes.entry(k).or_insert(v);
+                }
             }
         }
         // Interprocedural deforestation. Runs BEFORE inline_functions
@@ -1660,7 +1705,23 @@ pub(super) fn collect_modules(
         // already use the new shape). Intra-module only — see
         // `deforest::run` doc-comment for limitations and the manual
         // ABC451D validation.
+        progress.record(ProgressSnapshot {
+            stage: "transform-deforest",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         perry_transform::deforest::run(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-inline-functions",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         inline_functions(
             &mut hir_module,
             &extra_methods,
@@ -1676,6 +1737,14 @@ pub(super) fn collect_modules(
         // become 25 fully-unrolled stmts with `KERNEL[ky+2][kx+2]` collapsed
         // to compile-time integer literals — see crates/perry-transform/
         // src/unroll.rs.
+        progress.record(ProgressSnapshot {
+            stage: "transform-unroll-static-loops",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         perry_transform::unroll_static_loops(&mut hir_module);
         // Inline `finally` bodies before each abrupt completion
         // (`return` / `break` / `continue` / labeled-break / labeled-
@@ -1685,100 +1754,38 @@ pub(super) fn collect_modules(
         // state-machine sequence — an abrupt completion in the body
         // terminates the state, leaving the appended finally as dead
         // code. Issue #536.
+        progress.record(ProgressSnapshot {
+            stage: "transform-inline-finally",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         inline_finally_into_returns(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-async-to-generator",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         transform_async_to_generator(&mut hir_module);
+        progress.record(ProgressSnapshot {
+            stage: "transform-generators",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         transform_generators(&mut hir_module);
     }
 
-    // Detect fetch() usage — js_fetch_with_options lives in perry-stdlib
-    if hir_module.uses_fetch {
-        ctx.needs_stdlib = true;
-        ctx.uses_fetch = true;
-    }
-
-    // Issue #76 — auto-link the wasmi host runtime when any module
-    // references `WebAssembly.*`. Without this the user has to remember
-    // `--enable-wasm-runtime`; with it the flag is only needed when they
-    // want to override the auto-detection (e.g. force-link for plugins
-    // they'll dlopen later).
-    if hir_module.uses_webassembly {
-        ctx.needs_wasm_runtime = true;
-    }
-
-    // Detect crypto.* builtin usage (randomBytes/randomUUID/sha256/md5 used
-    // without `import crypto`). The runtime symbols live behind the
-    // perry-stdlib `crypto` Cargo feature, so we need to flip that on for
-    // auto-optimize. Text-grep the serialized Debug form for the established
-    // dedicated HIR variants. The global WebCrypto namespace path below uses
-    // a structured walk because it is an ordinary `PropertyGet`.
-    {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        let uses_global_crypto_namespace = module_uses_global_crypto_namespace(&hir_module);
-        if hir_debug.contains("CryptoRandomBytes")
-            || hir_debug.contains("CryptoRandomUUID")
-            || hir_debug.contains("CryptoSha256")
-            || hir_debug.contains("CryptoMd5")
-            // Web Crypto API (issue #561). The four WebCrypto* HIR
-            // variants lower to extern calls into perry-stdlib's
-            // webcrypto module, gated behind the `crypto` feature.
-            // Without flipping the gate, auto-optimize would build
-            // perry-stdlib without `crypto` and link would fail with
-            // "_js_webcrypto_digest" undefined.
-            || hir_debug.contains("WebCryptoDigest")
-            || hir_debug.contains("WebCryptoImportKey")
-            || hir_debug.contains("WebCryptoSign")
-            || hir_debug.contains("WebCryptoVerify")
-            || hir_debug.contains("WebCryptoEncrypt")
-            || hir_debug.contains("WebCryptoDecrypt")
-            || hir_debug.contains("WebCryptoGenerateKey")
-            || hir_debug.contains("WebCryptoWrapKey")
-            || hir_debug.contains("WebCryptoUnwrapKey")
-            // `globalThis.crypto` / bare `crypto` now materializes the
-            // WebCrypto singleton. Its `randomUUID` property dispatches
-            // through perry-stdlib's crypto bridge when called via a
-            // runtime property read rather than the direct HIR variant.
-            || uses_global_crypto_namespace
-        {
-            ctx.needs_stdlib = true;
-            ctx.uses_crypto_builtins = true;
-        }
-    }
-
-    // Detect readline usage via process.stdin raw/lifecycle methods. These
-    // don't go through an `import 'readline'` statement, so the import-based
-    // needs_stdlib detection above misses them.
-    {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
-        if hir_debug.contains("ProcessStdinSetRawMode")
-            || hir_debug.contains("ProcessStdinOn")
-            || hir_debug.contains("ProcessStdinRemoveListener")
-            || hir_debug.contains("ProcessStdinLifecycle")
-        {
-            ctx.needs_stdlib = true;
-            ctx.native_module_imports.insert("readline".to_string());
-        }
-    }
-
-    // Detect ioredis usage (detected by class name, not import path)
-    let mut found_ioredis = false;
-    for (_, module_name, _) in &hir_module.exported_native_instances {
-        if module_name == "ioredis" {
-            found_ioredis = true;
-            break;
-        }
-    }
-    if !found_ioredis {
-        for (_, module_name, _) in &hir_module.exported_func_return_native_instances {
-            if module_name == "ioredis" {
-                found_ioredis = true;
-                break;
-            }
-        }
-    }
-    if found_ioredis {
-        ctx.needs_stdlib = true;
-        ctx.native_module_imports.insert("ioredis".to_string());
-    }
+    // Set optional-feature gates (regex/temporal/url/crypto/events/etc.) so
+    // auto-optimize links only the runtime subsystems this module can reach.
+    feature_detect::detect_optional_feature_usage(ctx, &hir_module);
 
     let collected_after_insert = ctx.native_modules.len() + ctx.js_modules.len() + 1;
     progress.record(ProgressSnapshot {
@@ -1791,131 +1798,4 @@ pub(super) fn collect_modules(
     });
     ctx.native_modules.insert(canonical, hir_module);
     Ok(())
-}
-
-/// Issue #845: when SWC fails to parse a CJS-wrapped source, the byte
-/// offset in the error refers to the wrap output, not the on-disk file
-/// — so the offset is past EOF of the original. Rewrite the message to
-/// say so, and (when we can parse a `(lo..hi, ...)` span out of SWC's
-/// Debug-formatted error) include an excerpt of the wrap output around
-/// `lo` so the user can see what choked the re-parse. Pass-through for
-/// non-wrapped sources.
-fn annotate_parse_error(
-    e: anyhow::Error,
-    path: &std::path::Path,
-    parsed_source: &str,
-    was_cjs_wrapped: bool,
-) -> anyhow::Error {
-    if !was_cjs_wrapped {
-        return e;
-    }
-    let msg = format!("{}", e);
-    let span_re = regex::Regex::new(r"\((\d+)\.\.(\d+),").ok();
-    let offset = span_re
-        .as_ref()
-        .and_then(|re| re.captures(&msg))
-        .and_then(|cap| cap.get(1)?.as_str().parse::<usize>().ok());
-    let excerpt = offset.and_then(|lo| excerpt_around_offset(parsed_source, lo));
-
-    let mut extra = format!(
-        "\nnote: this file is inside a `compilePackages` target and was rewritten by Perry's CJS-to-ESM wrap before parsing. The error offset above refers to the post-wrap source ({} bytes), NOT the {}-byte file on disk. Re-run with `PERRY_DEBUG_CJS_WRAP=1` to see the full wrap output.",
-        parsed_source.len(),
-        std::fs::metadata(path)
-            .map(|m| m.len().to_string())
-            .unwrap_or_else(|_| "original".to_string()),
-    );
-    if let Some(snippet) = excerpt {
-        extra.push_str("\nwrap-output excerpt around the error offset:\n");
-        extra.push_str(&snippet);
-    }
-    anyhow::anyhow!("{}{}", msg, extra)
-}
-
-/// Render up to 2 lines of context on either side of the byte offset
-/// `lo`, with the offending line highlighted by a `>>>` prefix. Returns
-/// `None` when `lo` is out of range or the source has no newlines.
-fn excerpt_around_offset(source: &str, lo: usize) -> Option<String> {
-    let lo = lo.min(source.len().saturating_sub(1));
-    let line_start = source[..lo].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let line_end = source[lo..]
-        .find('\n')
-        .map(|i| lo + i)
-        .unwrap_or(source.len());
-    let pre_line = (0..2).fold(line_start, |acc, _| {
-        source[..acc.saturating_sub(1)]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0)
-    });
-    let post_line = (0..2).fold(line_end, |acc, _| {
-        source
-            .get(acc + 1..)
-            .and_then(|s| s.find('\n').map(|i| acc + 1 + i))
-            .unwrap_or(source.len())
-    });
-    let line_number_at = |off: usize| source[..off].matches('\n').count() + 1;
-    let mut out = String::new();
-    let mut cursor = pre_line;
-    while cursor < post_line {
-        let next = source[cursor..]
-            .find('\n')
-            .map(|i| cursor + i)
-            .unwrap_or(post_line);
-        let line = &source[cursor..next];
-        let marker = if cursor <= lo && lo <= next {
-            ">>>"
-        } else {
-            "   "
-        };
-        out.push_str(&format!(
-            "{} {:>5} | {}\n",
-            marker,
-            line_number_at(cursor),
-            line
-        ));
-        if next >= post_line {
-            break;
-        }
-        cursor = next + 1;
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
-}
-
-#[cfg(test)]
-mod glob_expand_tests {
-    use super::expand_dynamic_import_glob;
-
-    #[test]
-    fn expands_directory_files_matching_suffix() {
-        // #1674 sub-B: glob `./plugins/*.ts` against the importing module's dir.
-        let base = std::env::temp_dir().join(format!("perry_glob_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let plugins = base.join("plugins");
-        std::fs::create_dir_all(&plugins).unwrap();
-        std::fs::write(plugins.join("alpha.ts"), "export const x=1;").unwrap();
-        std::fs::write(plugins.join("beta.ts"), "export const x=2;").unwrap();
-        std::fs::write(plugins.join("notes.md"), "ignored: wrong suffix").unwrap();
-        let importing = base.join("main.ts");
-        std::fs::write(&importing, "").unwrap();
-
-        let got = expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".ts", 64);
-        assert_eq!(
-            got,
-            vec![
-                "./plugins/alpha.ts".to_string(),
-                "./plugins/beta.ts".to_string()
-            ]
-        );
-
-        // A directory with no matches yields nothing (→ rejected promise).
-        let none =
-            expand_dynamic_import_glob(importing.to_str().unwrap(), "./plugins/", ".mjs", 64);
-        assert!(none.is_empty());
-
-        let _ = std::fs::remove_dir_all(&base);
-    }
 }

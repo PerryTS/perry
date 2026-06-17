@@ -54,12 +54,14 @@ pub async fn resign_for_development(
             println!("  Creating development provisioning profile via App Store Connect...");
         }
         let app_group = read_ios_app_group_from_toml();
+        let push = read_ios_push_notifications_from_toml().unwrap_or(false);
         create_dev_profile_via_api(
             config,
             &bundle_id,
             &team_id,
             device_udid,
             app_group.as_deref(),
+            push,
             format,
         )
         .await
@@ -320,6 +322,7 @@ pub async fn create_dev_profile_via_api(
     _team_id: &str,
     device_udid: &str,
     app_group: Option<&str>,
+    push_notifications: bool,
     format: OutputFormat,
 ) -> Result<Vec<u8>> {
     let apple = config.apple.as_ref().ok_or_else(|| {
@@ -470,6 +473,41 @@ pub async fn create_dev_profile_via_api(
             );
             println!("    Then re-run so the profile picks up the binding.");
             println!();
+        }
+    }
+
+    // 2c. Best-effort Push Notifications capability enablement (#5074).
+    //
+    // Unlike App Groups, PUSH_NOTIFICATIONS has no identifier to register — the
+    // capability toggle on the App ID is all that's needed for the minted
+    // profile to validate the `aps-environment` entitlement that
+    // `inject_ios_push_entitlement` writes at compile time. An already-enabled
+    // capability comes back as a 409 conflict; treat that as success and never
+    // fail profile creation over the toggle.
+    if push_notifications {
+        if let OutputFormat::Text = format {
+            print!("    Enabling Push Notifications capability...");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
+        let resp = client
+            .post(format!("{base}/bundleIdCapabilities"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({
+                "data": {
+                    "type": "bundleIdCapabilities",
+                    "attributes": { "capabilityType": "PUSH_NOTIFICATIONS" },
+                    "relationships": {
+                        "bundleId": {
+                            "data": { "type": "bundleIds", "id": bundle_id_resource_id }
+                        }
+                    }
+                }
+            }))
+            .send()
+            .await;
+        let enabled = matches!(&resp, Ok(r) if r.status().is_success());
+        if let OutputFormat::Text = format {
+            println!(" {}", if enabled { "done" } else { "already enabled" });
         }
     }
 
@@ -667,6 +705,28 @@ fn parse_ios_app_group(content: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Read `[ios] push_notifications` from `./perry.toml` (#5074). Best-effort —
+/// any missing file / key / parse error yields `false`, since the capability
+/// toggle never gates provisioning. The matching `aps-environment` entitlement
+/// is written separately by `inject_ios_push_entitlement` at compile time.
+pub fn read_ios_push_notifications_from_toml() -> Option<bool> {
+    let path = std::env::current_dir().ok()?.join("perry.toml");
+    let content = std::fs::read_to_string(path).ok()?;
+    Some(parse_ios_push_notifications(&content))
+}
+
+fn parse_ios_push_notifications(content: &str) -> bool {
+    toml::from_str::<toml::Value>(content)
+        .ok()
+        .and_then(|parsed| {
+            parsed
+                .get("ios")
+                .and_then(|i| i.get("push_notifications"))
+                .and_then(|v| v.as_bool())
+        })
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,5 +807,48 @@ mod tests {
         assert_eq!(parse_ios_app_group("[ios]\nbundle_id = \"a\"\n"), None);
         assert_eq!(parse_ios_app_group("[ios]\napp_group = \"\"\n"), None);
         assert_eq!(parse_ios_app_group("not = valid = toml"), None);
+    }
+
+    /// #5074: re-signing must not drop the `aps-environment` entitlement that
+    /// `perry compile --target ios` writes to `app.entitlements` — otherwise
+    /// `registerForRemoteNotifications` fails on the dev-signed bundle.
+    #[test]
+    fn dev_entitlements_preserve_compile_emitted_push() {
+        let dir = std::env::temp_dir().join(format!("perry_resign_push_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("app.entitlements"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <plist version=\"1.0\">\n<dict>\n    \
+             <key>aps-environment</key>\n    <string>development</string>\n</dict>\n</plist>\n",
+        )
+        .unwrap();
+
+        let xml = build_dev_entitlements_xml(&dir, "ABCDE12345", "com.example.app");
+
+        // Push entitlement survives, development keys are layered in.
+        assert!(xml.contains("<key>aps-environment</key>"));
+        assert!(xml.contains("<string>development</string>"));
+        assert!(xml.contains("<key>application-identifier</key>"));
+        assert!(xml.contains("ABCDE12345.com.example.app"));
+        assert_eq!(xml.matches("</dict>").count(), 1);
+        assert_eq!(xml.matches("</plist>").count(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #5074: `[ios] push_notifications` drives the best-effort
+    /// PUSH_NOTIFICATIONS capability toggle during dev provisioning.
+    #[test]
+    fn parse_ios_push_notifications_opt_in() {
+        assert!(parse_ios_push_notifications(
+            "[ios]\npush_notifications = true\n"
+        ));
+        assert!(!parse_ios_push_notifications(
+            "[ios]\npush_notifications = false\n"
+        ));
+        assert!(!parse_ios_push_notifications("[ios]\nbundle_id = \"a\"\n"));
+        assert!(!parse_ios_push_notifications("not = valid = toml"));
     }
 }

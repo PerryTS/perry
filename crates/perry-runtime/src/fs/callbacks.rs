@@ -83,6 +83,23 @@ fn callback_or_arg3(arg2: f64, arg3: f64) -> *const ClosureHeader {
     }
 }
 
+fn callback_or_symlink_type_arg(arg2: f64, arg3: f64) -> *const ClosureHeader {
+    let fourth = extract_closure_ptr(arg3);
+    if !fourth.is_null() {
+        return fourth;
+    }
+    if !is_undefined_value(arg3) {
+        return required_callback(arg3);
+    }
+
+    let third = extract_closure_ptr(arg2);
+    if !third.is_null() {
+        third
+    } else {
+        required_callback(arg2)
+    }
+}
+
 fn callback_from_options_arg(options: f64, callback: f64) -> *const ClosureHeader {
     let cb = extract_closure_ptr(callback);
     if !cb.is_null() {
@@ -591,7 +608,7 @@ pub extern "C" fn js_fs_symlink_callback(
     arg3: f64,
 ) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    let cb = callback_or_arg3(arg2, arg3);
+    let cb = callback_or_symlink_type_arg(arg2, arg3);
     unsafe {
         match crate::fs::js_fs_symlink_result(from_value, to_value) {
             Ok(()) => call_cb0(cb),

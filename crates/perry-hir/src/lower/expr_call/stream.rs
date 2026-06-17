@@ -28,6 +28,7 @@ pub(super) fn is_stream_api_method(module: &str, method: &str) -> bool {
                 | "close"
                 | "error"
                 | "desiredSize"
+                | "byobRequest"
         ),
         "readable_stream_reader" => {
             matches!(method, "read" | "releaseLock" | "cancel" | "closed")

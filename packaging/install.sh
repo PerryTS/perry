@@ -2,11 +2,23 @@
 # Perry installer — downloads the latest release from GitHub
 # Usage: curl -fsSL https://perryts.com/install.sh | sh
 
-set -e
+set -eu
 
 REPO="PerryTS/perry"
 INSTALL_DIR="/usr/local/bin"
 LIB_DIR="/usr/local/lib"
+
+# Only show progress bars on interactive terminals
+if [ -t 2 ]; then
+  CURL_PROGRESS="--progress-bar"
+  PV=""
+  if command -v pv >/dev/null 2>&1; then
+    PV="pv"
+  fi
+else
+  CURL_PROGRESS="-fsS"
+  PV=""
+fi
 
 # Detect platform
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -83,15 +95,24 @@ echo "Using version: $LATEST"
 
 URL="https://github.com/$REPO/releases/download/$LATEST/$ARTIFACT"
 
-echo "Downloading $ARTIFACT..."
-
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-curl -fsSL "$URL" -o "$TMPDIR/perry.tar.gz"
+echo "Downloading $ARTIFACT..."
+START=$(date +%s 2>/dev/null || echo 0)
+curl -fL $CURL_PROGRESS -o "$TMPDIR/perry.tar.gz" "$URL"
+END=$(date +%s 2>/dev/null || echo 0)
+
+if [ "$END" -gt "$START" ] && [ "$START" -gt 0 ]; then
+  echo "  Done in $((END - START))s ($(ls -lh "$TMPDIR/perry.tar.gz" | awk '{print $5}'))"
+fi
 
 echo "Extracting..."
-tar xzf "$TMPDIR/perry.tar.gz" -C "$TMPDIR"
+if [ -n "$PV" ]; then
+  pv "$TMPDIR/perry.tar.gz" | tar xz -C "$TMPDIR"
+else
+  tar xzf "$TMPDIR/perry.tar.gz" -C "$TMPDIR"
+fi
 
 # Install binary
 if [ -w "$INSTALL_DIR" ]; then

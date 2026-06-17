@@ -460,6 +460,11 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += net_count;
     }
 
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    {
+        count += unsafe { crate::tls::js_tls_process_pending() };
+    }
+
     // Process pending HTTP server requests + WS upgrades (perry-ext-http-server).
     // Closes #604 — pre-fix `js_node_http_server_listen` blocked the
     // main TS thread inside an inner event_loop, so axios.get/etc.
@@ -501,6 +506,12 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // reader's queue and dispatches to question/line/close callbacks.
     count += crate::readline::js_readline_process_pending();
 
+    // Process pending crypto Hash/Hmac stream digest events (#2479).
+    #[cfg(feature = "crypto")]
+    {
+        count += unsafe { crate::crypto::js_crypto_stream_process_pending() };
+    }
+
     // Process pending zlib stream events (#1843) — `createGzip()` etc.
     // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
     // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
@@ -511,7 +522,7 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     }
     // External path: the well-known flip routed `node:zlib` to perry-ext-zlib
     // and stripped `compression`. Drain perry-ext-zlib's queue via its extern.
-    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    #[cfg(feature = "external-zlib-pump")]
     {
         extern "C" {
             fn js_ext_zlib_process_pending() -> i32;
@@ -631,6 +642,12 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
             return 1;
         }
     }
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    {
+        if crate::tls::js_tls_has_active_handles() != 0 {
+            return 1;
+        }
+    }
     #[cfg(all(
         feature = "external-net-pump",
         not(feature = "bundled-net"),
@@ -687,6 +704,12 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     if crate::worker_threads::js_worker_threads_has_pending() != 0 {
         return 1;
     }
+    #[cfg(feature = "crypto")]
+    {
+        if crate::crypto::js_crypto_stream_has_active_handles() != 0 {
+            return 1;
+        }
+    }
     // Bundled-fastify — keep the loop alive while any FastifyServerHandle
     // is in the "listening" state. Paired with
     // `js_fastify_process_pending` in `js_stdlib_process_pending` above
@@ -723,7 +746,7 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
         }
     }
     // External (perry-ext-zlib) path:
-    #[cfg(all(feature = "external-zlib-pump", not(feature = "compression")))]
+    #[cfg(feature = "external-zlib-pump")]
     {
         extern "C" {
             fn js_ext_zlib_has_active_handles() -> i32;

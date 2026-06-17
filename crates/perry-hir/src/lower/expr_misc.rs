@@ -68,15 +68,46 @@ pub(super) fn lower_super_prop(
     // NestJS patterns are all ident-form method calls, which go
     // through SuperMethodCall anyway).
     match &super_prop.prop {
-        ast::SuperProp::Ident(ident) => Ok(Expr::SuperPropertyGet {
-            property: ident.sym.to_string(),
-        }),
+        ast::SuperProp::Ident(ident) => {
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                Ok(Expr::ObjectSuperPropertyGet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key: Box::new(Expr::String(ident.sym.to_string())),
+                    receiver: Box::new(Expr::This),
+                })
+            } else {
+                Ok(Expr::SuperPropertyGet {
+                    property: ident.sym.to_string(),
+                })
+            }
+        }
         ast::SuperProp::Computed(computed) => {
-            let index = Box::new(lower_expr(ctx, &computed.expr)?);
-            Ok(Expr::IndexGet {
-                object: Box::new(Expr::This),
-                index,
-            })
+            if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                let index = Box::new(lower_expr(ctx, &computed.expr)?);
+                Ok(Expr::ObjectSuperPropertyGet {
+                    home: Box::new(Expr::LocalGet(home_id)),
+                    key: index,
+                    receiver: Box::new(Expr::This),
+                })
+            } else if let Some(key) = match computed.expr.as_ref() {
+                ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(|s| s.to_string()),
+                _ => None,
+            } {
+                // `super['fromA']` in a CLASS method with a string-literal key:
+                // route through the same parent-prototype-chain lookup as the
+                // ident form `super.fromA` (Expr::SuperPropertyGet). The previous
+                // `this[index]` fallback read the property off the CHILD instance,
+                // shadowing the parent value (test262
+                // super/prop-expr-cls-val{,-from-arrow}). A truly dynamic computed
+                // key (not a literal) still falls back below.
+                Ok(Expr::SuperPropertyGet { property: key })
+            } else {
+                let index = Box::new(lower_expr(ctx, &computed.expr)?);
+                Ok(Expr::IndexGet {
+                    object: Box::new(Expr::This),
+                    index,
+                })
+            }
         }
     }
 }
@@ -103,9 +134,35 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
         // Simple identifier: x++ or ++x
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
-            let id = ctx
-                .lookup_local(&name)
-                .ok_or_else(|| anyhow!("Undefined variable in update expression: {}", name))?;
+            let Some(id) = ctx.lookup_local(&name) else {
+                // `++x` / `x--` on a name with no lexical binding is a (sloppy)
+                // global property reference: read-modify-write globalThis[x] at
+                // runtime (`for (i = 0; i < n; i++)` with an undeclared `i` —
+                // #3575). The helper throws the spec ReferenceError only when
+                // the property is genuinely absent (`++neverDeclared` —
+                // test262 prefix/postfix S11.4.4_A2.1_T2), so this still both
+                // compiles and throws at the right time; `if (false) { ++x }`
+                // never reaches the helper at runtime.
+                let is_increment = matches!(update.op, ast::UpdateOp::PlusPlus);
+                return Ok(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_global_update".to_string(),
+                        param_types: vec![
+                            perry_types::Type::Any,
+                            perry_types::Type::Any,
+                            perry_types::Type::Any,
+                        ],
+                        return_type: perry_types::Type::Any,
+                    }),
+                    args: vec![
+                        Expr::String(name),
+                        Expr::Bool(is_increment),
+                        Expr::Bool(update.prefix),
+                    ],
+                    type_args: vec![],
+                    byte_offset: 0,
+                });
+            };
             let op = match update.op {
                 ast::UpdateOp::PlusPlus => UpdateOp::Increment,
                 ast::UpdateOp::MinusMinus => UpdateOp::Decrement,
@@ -240,21 +297,19 @@ pub(super) fn lower_meta_prop(
             ]))
         }
         ast::MetaPropKind::NewTarget => {
-            // Inside a class constructor, `new.target` evaluates to the
-            // class itself. We approximate this with a small object
-            // literal `{ name: <class_name> }` so:
-            //   - `new.target ? a : b` is truthy → takes the `a` branch
-            //   - `new.target.name` returns the class name string
-            // Outside a constructor (e.g., a regular function called
-            // without `new`), `new.target` is `undefined`.
-            if let Some(class_name) = ctx.in_constructor_class.clone() {
-                Ok(Expr::Object(vec![(
-                    "name".to_string(),
-                    Expr::String(class_name),
-                )]))
-            } else {
-                Ok(Expr::Undefined)
-            }
+            // `new.target` always lowers to the runtime meta-property read
+            // (#2768). Codegen resolves it to the active constructor's leaf
+            // class ref: for an inlined `new C()` via a `new_target_stack`
+            // slot holding `C`'s class ref, and for dynamic dispatch
+            // (`Reflect.construct`, imported classes) via the `js_new_target_*`
+            // cell the construct path sets. The previous in-constructor
+            // approximation hardcoded `{ name: <enclosing-class> }`, which made
+            // `new.target` the class whose BODY runs (a base class via super())
+            // rather than the actual constructed class, and broke
+            // `new.target === C` identity (a fresh object never equals the
+            // class ref). `ctx.in_constructor_class` is no longer consulted
+            // here.
+            Ok(Expr::NewTarget)
         }
     }
 }
@@ -265,14 +320,14 @@ pub(super) fn lower_meta_prop(
 /// Used by both the bare-`import.meta` Object synthesis above and the
 /// member-access fast path in `expr_member::lower_member`.
 pub(crate) fn import_meta_paths(ctx: &LoweringContext) -> (String, String, String) {
-    let path = &ctx.source_file_path;
+    let path = ctx.source_file_path.replace('\\', "/");
     let url = format!("file://{}", path);
     let dirname = match path.rfind('/') {
         Some(i) if i > 0 => path[..i].to_string(),
         Some(_) => "/".to_string(),
         None => String::new(),
     };
-    let filename = path.to_string();
+    let filename = path;
     (url, dirname, filename)
 }
 

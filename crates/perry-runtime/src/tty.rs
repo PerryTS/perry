@@ -94,12 +94,62 @@ pub(crate) fn is_tty_fd(fd: i32) -> bool {
     isatty_impl(fd)
 }
 
-fn validate_tty_fd(fd: f64) -> i32 {
+fn validate_fd_number(fd: f64) -> i32 {
     if !fd.is_finite() || fd < 0.0 || fd.fract() != 0.0 {
         throw_invalid_fd(fd);
     }
-    let fd_i = fd as i32;
+    fd as i32
+}
+
+fn tty_isatty_fd_arg(value: f64) -> Option<i32> {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_int32() {
+        let fd = js_value.as_int32();
+        return (fd >= 0).then_some(fd);
+    }
+    if !js_value.is_number() {
+        return None;
+    }
+
+    let fd = js_value.as_number();
+    if !fd.is_finite() || fd < 0.0 || fd.fract() != 0.0 || fd > i32::MAX as f64 {
+        return None;
+    }
+    Some(fd as i32)
+}
+
+#[cfg(unix)]
+fn write_stream_fd_type_supported(fd: i32) -> bool {
+    unsafe {
+        let mut stat: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut stat) != 0 {
+            return false;
+        }
+        let file_type = stat.st_mode & libc::S_IFMT;
+        file_type == libc::S_IFIFO || file_type == libc::S_IFSOCK
+    }
+}
+
+#[cfg(not(unix))]
+fn write_stream_fd_type_supported(_fd: i32) -> bool {
+    false
+}
+
+fn can_init_write_stream_fd(fd: i32) -> bool {
+    is_tty_fd(fd) || write_stream_fd_type_supported(fd)
+}
+
+fn validate_tty_read_fd(fd: f64) -> i32 {
+    let fd_i = validate_fd_number(fd);
     if !is_tty_fd(fd_i) {
+        throw_tty_init_failed();
+    }
+    fd_i
+}
+
+fn validate_tty_write_fd(fd: f64) -> i32 {
+    let fd_i = validate_fd_number(fd);
+    if !can_init_write_stream_fd(fd_i) {
         throw_tty_init_failed();
     }
     fd_i
@@ -272,7 +322,9 @@ fn set_fd_raw_mode(_fd: i32, _enabled: bool) -> bool {
 /// `tty.isatty(fd)` — return 1 if the fd refers to a terminal.
 #[no_mangle]
 pub extern "C" fn js_tty_isatty(fd: f64) -> f64 {
-    let fd_i = fd as i32;
+    let Some(fd_i) = tty_isatty_fd_arg(fd) else {
+        return TAG_FALSE_F64;
+    };
     if isatty_impl(fd_i) {
         TAG_TRUE_F64
     } else {
@@ -772,7 +824,7 @@ pub(crate) fn tty_listener_remove_all_value() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_tty_read_stream_new(fd: f64) -> f64 {
-    validate_tty_fd(fd);
+    validate_tty_read_fd(fd);
     ensure_tty_prototypes();
     let keys = b"isRaw\0isTTY\0";
     let obj = crate::object::js_object_alloc_class_with_keys(
@@ -791,7 +843,7 @@ pub extern "C" fn js_tty_read_stream_new(fd: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_new(fd: f64) -> f64 {
-    validate_tty_fd(fd);
+    validate_tty_write_fd(fd);
     ensure_tty_prototypes();
     let obj = crate::object::js_object_alloc_class_with_keys(
         CLASS_ID_TTY_WRITE_STREAM,
@@ -1054,7 +1106,7 @@ pub fn throw_invalid_fd(fd: f64) -> ! {
 }
 
 pub fn throw_tty_init_failed() -> ! {
-    let message = "TTY initialization failed";
+    let message = "TTY initialization failed: uv_tty_init returned EINVAL (invalid argument)";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_TTY_INIT_FAILED");
     let err = crate::error::js_error_new_with_name_message(b"SystemError", msg);
@@ -1170,6 +1222,18 @@ pub extern "C" fn js_tty_resize_drain() -> i32 {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    struct FdGuard(i32);
+
+    #[cfg(unix)]
+    impl Drop for FdGuard {
+        fn drop(&mut self) {
+            unsafe {
+                libc::close(self.0);
+            }
+        }
+    }
+
     #[test]
     fn isatty_zero_for_pipe() {
         // In test runner stdin is not a TTY (cargo test pipes stdin).
@@ -1209,6 +1273,76 @@ mod tests {
             "expected TAG_FALSE or TAG_TRUE, got {:#x}",
             bits
         );
+    }
+
+    #[test]
+    fn isatty_fd_arg_matches_node_validation() {
+        assert_eq!(tty_isatty_fd_arg(0.0), Some(0));
+        assert_eq!(tty_isatty_fd_arg(-0.0), Some(0));
+        assert_eq!(tty_isatty_fd_arg(i32::MAX as f64), Some(i32::MAX));
+        assert_eq!(tty_isatty_fd_arg((i32::MAX as f64) + 1.0), None);
+        assert_eq!(tty_isatty_fd_arg(-1.0), None);
+        assert_eq!(tty_isatty_fd_arg(1.5), None);
+        assert_eq!(tty_isatty_fd_arg(f64::NAN), None);
+        assert_eq!(tty_isatty_fd_arg(f64::INFINITY), None);
+        assert_eq!(tty_isatty_fd_arg(f64::NEG_INFINITY), None);
+
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(7).bits())),
+            Some(7)
+        );
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(-1).bits())),
+            None
+        );
+
+        assert_eq!(tty_isatty_fd_arg(TAG_TRUE_F64), None);
+        assert_eq!(tty_isatty_fd_arg(TAG_FALSE_F64), None);
+        assert_eq!(tty_isatty_fd_arg(TAG_UNDEFINED_F64), None);
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(crate::value::TAG_NULL)),
+            None
+        );
+        assert_eq!(
+            tty_isatty_fd_arg(f64::from_bits(
+                JSValue::try_short_string(b"0").unwrap().bits()
+            )),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_stream_init_accepts_pipe_fd() {
+        let mut fds = [0; 2];
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        let _read_guard = FdGuard(fds[0]);
+        let write_guard = FdGuard(fds[1]);
+
+        assert!(!is_tty_fd(write_guard.0));
+        assert!(can_init_write_stream_fd(write_guard.0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_stream_init_rejects_regular_file_fd() {
+        use std::os::unix::io::AsRawFd;
+
+        let path =
+            std::env::temp_dir().join(format!("perry-tty-regular-file-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+
+        assert!(!is_tty_fd(file.as_raw_fd()));
+        assert!(!can_init_write_stream_fd(file.as_raw_fd()));
+
+        drop(file);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

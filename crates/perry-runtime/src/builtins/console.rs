@@ -157,6 +157,36 @@ pub extern "C" fn js_console_log_as_closure() -> f64 {
     f64::from_bits(JSValue::pointer(closure_ptr as *const u8).bits())
 }
 
+/// `console[dynamicKey]` — resolve a console method by a RUNTIME key string,
+/// returning the same bound native closure a static `console.<key>` value read
+/// produces. Codegen routes the computed-member form here (`console[m](...)`,
+/// `const f = console[m]`, `loadEnvConfig(dir, true, console, false)` reaching
+/// into a forwarded console). Without it the receiver collapsed to the
+/// `GlobalGet(0)` sentinel and the method was read off numeric `0`, so the call
+/// threw `(number).log is not a function` (the Next.js `_log.event` wall:
+/// `prefixedLog` does `console[consoleMethod](...)`). A non-string key or an
+/// unknown method name yields `undefined`, matching a real object miss.
+#[no_mangle]
+pub extern "C" fn js_console_method_by_value(key: f64) -> f64 {
+    // Apply JS property-key coercion before the lookup: `console[0]` → "0",
+    // `console[{toString:()=>'log'}]` → "log". A Symbol key coerces to a
+    // symbol (not a string method name), so it falls through to `undefined`,
+    // matching a real object miss.
+    let coerced = unsafe { crate::object::js_to_property_key(key) };
+    let name = match jsvalue_string_content(coerced) {
+        Some(s) => s,
+        None => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    unsafe {
+        crate::object::js_native_module_property_by_name(
+            b"console".as_ptr(),
+            "console".len(),
+            name.as_ptr(),
+            name.len(),
+        )
+    }
+}
+
 /// GC root scanner: pin the lazily-allocated `console.log`-as-closure
 /// singleton against the next sweep.
 pub fn scan_console_log_singleton_roots(mark: &mut dyn FnMut(f64)) {
@@ -423,6 +453,166 @@ fn print_console_text(text: &str, stderr: bool) {
 #[no_mangle]
 pub extern "C" fn js_console_noop() {}
 
+fn console_undefined() -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+fn throw_plain_console_error(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_error_new_with_message(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn throw_console_symbol_to_string_type_error() -> ! {
+    let message = b"Cannot convert a Symbol value to a string";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
+fn console_is_callable(value: f64) -> bool {
+    let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
+    ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr)
+}
+
+unsafe fn console_string_len(value: f64) -> Option<usize> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_any_string() {
+        return None;
+    }
+    let ptr = crate::value::js_jsvalue_to_string(value) as *const StringHeader;
+    if ptr.is_null() {
+        return None;
+    }
+    Some((*ptr).byte_len as usize)
+}
+
+fn console_make_named_function(
+    scope: &crate::gc::RuntimeHandleScope,
+    name: &str,
+    func_ptr: *const u8,
+    call_arity: u32,
+    exposed_length: u32,
+) -> f64 {
+    crate::closure::js_register_closure_arity(func_ptr, call_arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    crate::object::set_bound_native_closure_name(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        name,
+    );
+    crate::object::set_builtin_closure_length(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+        exposed_length,
+    );
+    let closure = closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn console_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+extern "C" fn console_context_method_noop(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    console_undefined()
+}
+
+extern "C" fn console_task_run(
+    _closure: *const crate::closure::ClosureHeader,
+    callback: f64,
+) -> f64 {
+    if !console_is_callable(callback) {
+        throw_plain_console_error("First argument must be a function.");
+    }
+    unsafe { crate::closure::js_native_call_value(callback, std::ptr::null(), 0) }
+}
+
+/// `console.context([name])` returns an inspector-scoped console object in
+/// Node. Perry has no inspector context plumbing here, but the object shape is
+/// observable by feature detection.
+#[no_mangle]
+pub extern "C" fn js_console_context(name: f64) -> f64 {
+    let jsval = JSValue::from_bits(name.to_bits());
+    if !jsval.is_undefined() {
+        if unsafe { crate::symbol::js_is_symbol(name) != 0 } {
+            throw_console_symbol_to_string_type_error();
+        }
+        let _ = crate::value::js_jsvalue_to_string(name);
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = crate::object::js_object_alloc(0, 0);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    for method in [
+        "assert",
+        "clear",
+        "count",
+        "countReset",
+        "debug",
+        "dir",
+        "dirXml",
+        "error",
+        "group",
+        "groupCollapsed",
+        "groupEnd",
+        "info",
+        "log",
+        "profile",
+        "profileEnd",
+        "table",
+        "time",
+        "timeEnd",
+        "timeLog",
+        "timeStamp",
+        "trace",
+        "warn",
+    ] {
+        let func = console_make_named_function(
+            &scope,
+            method,
+            console_context_method_noop as *const u8,
+            0,
+            1,
+        );
+        let func_handle = scope.root_nanbox_f64(func);
+        console_set_field(
+            obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+            method,
+            func_handle.get_nanbox_f64(),
+        );
+    }
+
+    crate::value::js_nanbox_pointer(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+    )
+}
+
+/// `console.createTask(name)` is V8 inspector async-stack tagging. The
+/// compatibility surface returns `{ run(fn) }`; `run` executes and forwards
+/// the callback result while preserving thrown errors.
+#[no_mangle]
+pub extern "C" fn js_console_create_task(name: f64) -> f64 {
+    let len = unsafe { console_string_len(name) };
+    if len.unwrap_or(0) == 0 {
+        throw_plain_console_error("First argument must be a non-empty string.");
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = crate::object::js_object_alloc(0, 0);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let run = console_make_named_function(&scope, "run", console_task_run as *const u8, 1, 0);
+    let run_handle = scope.root_nanbox_f64(run);
+    console_set_field(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        "run",
+        run_handle.get_nanbox_f64(),
+    );
+    crate::value::js_nanbox_pointer(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+    )
+}
+
 /// Debug trace for module initialization order.
 /// Called before each _perry_init_* call to identify which module crashes.
 /// No-op in release builds; re-enable eprintln for debugging.
@@ -477,7 +667,7 @@ pub(crate) fn is_console_instance_value(value: f64) -> bool {
         return false;
     }
     let obj = jsval.as_pointer::<crate::object::ObjectHeader>();
-    if obj.is_null() || (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         return false;
     }
     unsafe { (*obj).class_id == CONSOLE_INSTANCE_CLASS_ID }
@@ -1146,11 +1336,13 @@ pub extern "C" fn js_console_assert_spread(cond: f64, args_arr_handle: i64) {
 
 // === console.trace ===
 //
-// Node writes `Trace: <msg>` + a JS stack trace to **stderr**. Perry can't
-// reproduce Node's TS source positions without a source-map / DWARF pass,
-// but `std::backtrace::Backtrace::force_capture()` gives us the native
-// call stack for free — good enough to see *where* the trace was called
-// from, which is what issue #20 is actually asking for.
+// Node writes `Trace: <msg>` + a JS stack trace to **stderr**. Perry's stack
+// traces are intentionally coarse (see `error.rs` `make_stack`: "Real stack
+// traces are not implemented"), so console.trace emits the same `at <anonymous>`
+// frame `Error().stack` does. We deliberately do NOT use
+// `std::backtrace::Backtrace::force_capture()`: it pulled the std DWARF
+// symbolizer (gimli/addr2line/dwarf, ~143KB) into every binary, and on stripped
+// release builds every frame symbolicated to `__mh_execute_header` anyway.
 #[no_mangle]
 pub extern "C" fn js_console_trace(value: f64) {
     let jsval = JSValue::from_bits(value.to_bits());
@@ -1174,56 +1366,12 @@ pub extern "C" fn js_console_trace(value: f64) {
     } else {
         eprintln!("Trace: {}", format_jsvalue(value, 0));
     }
-    let bt = std::backtrace::Backtrace::force_capture();
-    let rendered = format!("{}", bt);
-    // Parse the Display output into (header, continuation*) frames. The
-    // header looks like "   N: symbol" and each continuation starts with
-    // "at …". Drop frames whose header matches internal noise (the
-    // std::backtrace plumbing itself, plus `js_console_trace` — the user
-    // already sees `Trace:` above). Collapse consecutive identical headers
-    // (what you get on stripped builds, where every frame symbolicates to
-    // `__mh_execute_header`).
-    let noise = ["backtrace", "Backtrace::", "js_console_trace"];
-    let is_header =
-        |t: &str| t.chars().next().is_some_and(|c| c.is_ascii_digit()) && t.contains(':');
-    let mut frames: Vec<(String, Vec<String>)> = Vec::new();
-    for line in rendered.lines() {
-        let t = line.trim_start();
-        if t.is_empty() || t.starts_with("note:") {
-            continue;
-        }
-        if is_header(t) {
-            let sym = t.split_once(':').map(|(_, r)| r.trim()).unwrap_or(t);
-            frames.push((sym.to_string(), Vec::new()));
-        } else if let Some(last) = frames.last_mut() {
-            last.1.push(t.to_string());
-        }
-    }
-    let mut emitted = 0usize;
-    let mut prev_sym: Option<String> = None;
-    let mut dup_run = 0usize;
-    for (sym, cont) in frames {
-        if noise.iter().any(|p| sym.contains(p)) {
-            continue;
-        }
-        if prev_sym.as_deref() == Some(sym.as_str()) {
-            dup_run += 1;
-            continue;
-        }
-        if dup_run > 0 {
-            eprintln!("        (… {} more identical frames)", dup_run);
-            dup_run = 0;
-        }
-        eprintln!("    {}: {}", emitted, sym);
-        for c in cont {
-            eprintln!("             {}", c);
-        }
-        emitted += 1;
-        prev_sym = Some(sym);
-    }
-    if dup_run > 0 {
-        eprintln!("        (… {} more identical frames)", dup_run);
-    }
+    // Perry stack traces are intentionally coarse (error.rs make_stack:
+    // "Real stack traces are not implemented") — match `Error().stack`
+    // and drop the std DWARF symbolizer (gimli/addr2line/dwarf ~143KB) that
+    // `Backtrace::force_capture()` pulls into every binary; on stripped
+    // release builds those frames are all `__mh_execute_header` anyway.
+    emit_console_trace_stack();
 }
 
 #[no_mangle]
@@ -1243,55 +1391,9 @@ pub extern "C" fn js_console_trace_spread(arr_ptr: *const crate::array::ArrayHea
 }
 
 fn emit_console_trace_stack() {
-    let bt = std::backtrace::Backtrace::force_capture();
-    let rendered = format!("{}", bt);
-    let noise = [
-        "backtrace",
-        "Backtrace::",
-        "js_console_trace",
-        "js_console_trace_spread",
-        "emit_console_trace_stack",
-    ];
-    let is_header =
-        |t: &str| t.chars().next().is_some_and(|c| c.is_ascii_digit()) && t.contains(':');
-    let mut frames: Vec<(String, Vec<String>)> = Vec::new();
-    for line in rendered.lines() {
-        let t = line.trim_start();
-        if t.is_empty() || t.starts_with("note:") {
-            continue;
-        }
-        if is_header(t) {
-            let sym = t.split_once(':').map(|(_, r)| r.trim()).unwrap_or(t);
-            frames.push((sym.to_string(), Vec::new()));
-        } else if let Some(last) = frames.last_mut() {
-            last.1.push(t.to_string());
-        }
-    }
-    let mut emitted = 0usize;
-    let mut prev_sym: Option<String> = None;
-    let mut dup_run = 0usize;
-    for (sym, cont) in frames {
-        if noise.iter().any(|p| sym.contains(p)) {
-            continue;
-        }
-        if prev_sym.as_deref() == Some(sym.as_str()) {
-            dup_run += 1;
-            continue;
-        }
-        if dup_run > 0 {
-            eprintln!("        (… {} more identical frames)", dup_run);
-            dup_run = 0;
-        }
-        eprintln!("    {}: {}", emitted, sym);
-        for c in cont.into_iter().take(2) {
-            eprintln!("        {}", c);
-        }
-        emitted += 1;
-        prev_sym = Some(sym);
-        if emitted >= 8 {
-            break;
-        }
-    }
+    // Coarse JS frame, consistent with `Error().stack`. Avoids
+    // `std::backtrace::Backtrace` so the std DWARF symbolizer is not linked.
+    eprintln!("    at <anonymous>");
 }
 
 // === console.clear ===

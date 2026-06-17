@@ -38,6 +38,7 @@ impl JsEmitter {
                 method,
                 body,
                 headers,
+                headers_dynamic,
             } => {
                 self.output.push_str("fetch(");
                 self.emit_expr(url);
@@ -45,16 +46,24 @@ impl JsEmitter {
                 self.emit_expr(method);
                 self.output.push_str(", body: ");
                 self.emit_expr(body);
-                self.output.push_str(", headers: {");
-                for (i, (key, val)) in headers.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push_str(", ");
+                self.output.push_str(", headers: ");
+                if let Some(hexpr) = headers_dynamic {
+                    // Dynamically-built headers (variable / spread / call): emit
+                    // the expression verbatim so the JS engine enumerates it.
+                    self.emit_expr(hexpr);
+                } else {
+                    self.output.push('{');
+                    for (i, (key, val)) in headers.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.output.push_str(&self.quote_string(key));
+                        self.output.push_str(": ");
+                        self.emit_expr(val);
                     }
-                    self.output.push_str(&self.quote_string(key));
-                    self.output.push_str(": ");
-                    self.emit_expr(val);
+                    self.output.push('}');
                 }
-                self.output.push_str("}})");
+                self.output.push_str("})");
             }
             Expr::FetchGetWithAuth { url, auth_header } => {
                 self.output.push_str("fetch(");
@@ -652,6 +661,10 @@ impl JsEmitter {
                 self.emit_expr(d);
                 self.output.push_str(".toTimeString()");
             }
+            Expr::DateToUTCString(d) => {
+                self.emit_expr(d);
+                self.output.push_str(".toUTCString()");
+            }
             Expr::DateToLocaleDateString(d) => {
                 self.emit_expr(d);
                 self.output.push_str(".toLocaleDateString()");
@@ -954,6 +967,14 @@ impl JsEmitter {
                 self.emit_expr(obj);
                 self.output.push(')');
             }
+            // for-in enumeration keys: own + inherited enumerable, nullish-safe.
+            Expr::ForInKeys(obj) => {
+                self.output.push_str(
+                    "((__o)=>{var __a=[];for(var __k in __o)__a.push(__k);return __a;})(",
+                );
+                self.emit_expr(obj);
+                self.output.push(')');
+            }
             Expr::ObjectValues(obj) => {
                 self.output.push_str("Object.values(");
                 self.emit_expr(obj);
@@ -1034,6 +1055,18 @@ impl JsEmitter {
                 self.output.push_str("Array.from(");
                 self.emit_expr(val);
                 self.output.push(')');
+            }
+            Expr::ForAwaitToArray(val) => {
+                self.output.push_str("Array.fromAsync(");
+                self.emit_expr(val);
+                self.output.push(')');
+            }
+            Expr::GetAsyncIterator(val) => {
+                self.output.push_str("(");
+                self.emit_expr(val);
+                self.output.push_str(")[Symbol.asyncIterator]?.() ?? (");
+                self.emit_expr(val);
+                self.output.push_str(")[Symbol.iterator]()");
             }
             Expr::ArrayFromMapped {
                 iterable,
@@ -1573,13 +1606,20 @@ impl JsEmitter {
                 self.emit_expr(receiver);
                 self.output.push(')');
             }
-            Expr::ReflectSet { target, key, value } => {
+            Expr::ReflectSet {
+                target,
+                key,
+                value,
+                receiver,
+            } => {
                 self.output.push_str("Reflect.set(");
                 self.emit_expr(target);
                 self.output.push_str(", ");
                 self.emit_expr(key);
                 self.output.push_str(", ");
                 self.emit_expr(value);
+                self.output.push_str(", ");
+                self.emit_expr(receiver);
                 self.output.push(')');
             }
             Expr::ReflectHas { target, key } => {

@@ -14,6 +14,15 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn stable_tagged_template_site_salt(source_file_path: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in source_file_path.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h & 0xFFFF_FFFF
+}
+
 impl LoweringContext {
     // #854: single-arg constructor (delegates to `with_class_id_start`).
     // Currently only exercised from the `#[cfg(test)]` lowering tests, so it
@@ -27,6 +36,8 @@ impl LoweringContext {
         source_file_path: impl Into<String>,
         start_class_id: ClassId,
     ) -> Self {
+        let source_file_path = source_file_path.into();
+        let tagged_template_site_salt = stable_tagged_template_site_salt(&source_file_path);
         Self {
             next_local_id: 0,
             next_global_id: 0,
@@ -35,7 +46,9 @@ impl LoweringContext {
             next_enum_id: 0,
             next_interface_id: 0,
             next_type_alias_id: 0,
-            locals: Vec::new(),
+            tagged_template_site_salt,
+            next_tagged_template_site_id: 0,
+            locals: crate::lower::Locals::new(),
             globals: Vec::new(),
             functions: Vec::new(),
             func_defaults: Vec::new(),
@@ -52,6 +65,7 @@ impl LoweringContext {
             interface_source_keys: std::collections::HashMap::new(),
             interface_object_types: std::collections::HashMap::new(),
             imported_functions: Vec::new(),
+            builtin_named_imports: Vec::new(),
             native_modules: Vec::new(),
             builtin_module_aliases: Vec::new(),
             subns_path_aliases: HashMap::new(),
@@ -61,17 +75,28 @@ impl LoweringContext {
             current_strict: false,
             ui_widget_type_aliases: HashMap::new(),
             current_class: None,
+            current_class_member_is_static: false,
+            private_scopes: Vec::new(),
+            object_super_home_stack: Vec::new(),
             extern_func_types: Vec::new(),
-            source_file_path: source_file_path.into(),
+            source_file_path,
             exportable_object_vars: HashSet::new(),
             pending_functions: Vec::new(),
             closure_display_names: HashMap::new(),
+            gen_param_prologue_len: HashMap::new(),
+            assignment_inferred_name: None,
+            closure_source_text: HashMap::new(),
             func_return_native_instances: Vec::new(),
             pending_classes: Vec::new(),
             func_return_types: Vec::new(),
             resolved_types: None,
             pre_registered_module_vars: HashSet::new(),
+            pre_registered_module_var_decls: HashSet::new(),
             module_level_ids: HashSet::new(),
+            sloppy_implicit_globals: Vec::new(),
+            sloppy_implicit_global_ids: HashSet::new(),
+            with_sloppy_implicit_ids: std::collections::HashMap::new(),
+            pending_with_implicit_inits: Vec::new(),
             scope_depth: 0,
             scope_local_marks: Vec::new(),
             inside_block_scope: 0,
@@ -80,47 +105,70 @@ impl LoweringContext {
             module_native_instances: Vec::new(),
             uses_fetch: false,
             uses_webassembly: false,
+            react_default_import_local: None,
             suppress_stdlib_dispatch_guard_once: false,
             lowering_call_callee: false,
             unresolved_ident_as_global: false,
+            with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
+            lexical_forward_decls: HashMap::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),
             imported_functions_index: HashMap::new(),
             builtin_module_aliases_index: HashMap::new(),
+            native_instances_index: HashMap::new(),
+            module_native_instances_index: HashMap::new(),
+            func_return_native_instances_index: HashMap::new(),
+            native_modules_index: HashMap::new(),
+            class_statics_index: HashMap::new(),
             weakref_locals: HashSet::new(),
             finreg_locals: HashSet::new(),
             weakmap_locals: HashSet::new(),
             weakset_locals: HashSet::new(),
             namespace_import_locals: HashSet::new(),
+            namespace_import_sources: std::collections::HashMap::new(),
             generator_func_names: HashSet::new(),
             async_generator_func_names: HashSet::new(),
             iterator_func_for_class: std::collections::HashMap::new(),
-            regex_exec_locals: HashSet::new(),
             proxy_locals: HashSet::new(),
             builtin_proto_method_locals: HashMap::new(),
             wasm_instance_locals: HashSet::new(),
             plain_object_locals: HashSet::new(),
             proxy_revoke_locals: HashMap::new(),
-            proxy_target_classes: HashMap::new(),
             class_expr_aliases: HashMap::new(),
             in_constructor_class: None,
+            current_class_is_derived: false,
+            in_class_field_init: false,
             current_class_super_ident: None,
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
+            forward_class_names: std::collections::HashSet::new(),
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
             let_class_aliases: Vec::new(),
+            global_this_aliases: HashSet::new(),
             prototype_aliases: HashMap::new(),
             prototype_function_aliases: HashMap::new(),
             function_valued_locals: HashSet::new(),
             prototype_function_locals: HashMap::new(),
             object_static_method_aliases: HashMap::new(),
+            array_static_method_aliases: HashMap::new(),
             is_entry_module: false,
+            module_strict: false,
+            strict_mode_stack: Vec::new(),
             is_external_module: false,
             optional_require_try_depth: 0,
+            fn_ctor_env: super::fn_ctor_env::FnCtorEnv::default(),
+            expr_lower_depth: 0,
+            prelowered_member_receiver: None,
         }
+    }
+
+    pub(crate) fn fresh_tagged_template_site_id(&mut self) -> u64 {
+        let local_id = self.next_tagged_template_site_id;
+        self.next_tagged_template_site_id = self.next_tagged_template_site_id.wrapping_add(1);
+        (self.tagged_template_site_salt << 32) | u64::from(local_id)
     }
 
     pub(crate) fn fresh_interface(&mut self) -> InterfaceId {
@@ -224,6 +272,29 @@ impl LoweringContext {
         id
     }
 
+    /// Push a private-name scope for a class body (innermost last). Built by
+    /// pre-scanning the class members. See `private_scopes`.
+    pub(crate) fn push_private_scope(&mut self, scope: PrivateScope) {
+        self.private_scopes.push(scope);
+    }
+
+    pub(crate) fn pop_private_scope(&mut self) {
+        self.private_scopes.pop();
+    }
+
+    /// Resolve a private name (`#name`, with the leading `#`) to its declaring
+    /// class and member kind by walking the private-scope stack innermost
+    /// outward — matching the lexical resolution rule for private names. A
+    /// nested class that redeclares the same name shadows the outer one.
+    pub(crate) fn resolve_private(&self, field_name: &str) -> Option<(String, PrivMember)> {
+        for scope in self.private_scopes.iter().rev() {
+            if let Some(m) = scope.members.get(field_name) {
+                return Some((scope.class_name.clone(), *m));
+            }
+        }
+        None
+    }
+
     pub(crate) fn mark_local_immutable(&mut self, id: LocalId) {
         self.immutable_locals.insert(id);
     }
@@ -236,6 +307,21 @@ impl LoweringContext {
         let id = self.next_func_id;
         self.next_func_id += 1;
         id
+    }
+
+    pub(crate) fn current_strict_mode(&self) -> bool {
+        self.strict_mode_stack
+            .last()
+            .copied()
+            .unwrap_or(self.module_strict)
+    }
+
+    pub(crate) fn enter_strict_mode(&mut self, strict: bool) {
+        self.strict_mode_stack.push(strict);
+    }
+
+    pub(crate) fn exit_strict_mode(&mut self) {
+        self.strict_mode_stack.pop();
     }
 
     /// If `ast_arg` is a bare `Boolean`, `Number`, or `String` identifier, wrap the
@@ -267,13 +353,16 @@ impl LoweringContext {
                         default: None,
                         decorators: Vec::new(),
                         is_rest: false,
+                        arguments_object: None,
                     }],
                     return_type: Type::Any,
                     body: vec![Stmt::Return(Some(coerce_body))],
                     captures: vec![],
                     mutable_captures: vec![],
                     captures_this: false,
+                    captures_new_target: false,
                     enclosing_class: None,
+                    is_arrow: false,
                     is_async: false,
                     is_generator: false,
                     is_strict: self.current_strict,
@@ -359,14 +448,14 @@ impl LoweringContext {
             .map(|(_, f)| f.as_slice())
     }
 
-    /// Issue #665: register the getter+setter property names for a class.
+    /// Issue #665: register getter and setter property names for a class.
     /// Mirrors `register_class_field_names`; consumed by the ctor-body
     /// field-detection pass to skip names that are accessors. Stored as the
     /// own+inherited union so a child lookup sees the full chain in one hop.
     pub(crate) fn register_class_accessor_names(
         &mut self,
         class_name: String,
-        accessor_names: Vec<String>,
+        accessor_names: crate::ClassAccessorNames,
     ) {
         if let Some(entry) = self
             .class_accessor_names
@@ -379,15 +468,18 @@ impl LoweringContext {
         }
     }
 
-    /// Look up the accessor (getter+setter) property names registered for a
+    /// Look up the accessor property names registered for a
     /// class. The stored list includes inherited accessors (mirroring how
     /// `class_field_names` stores the own+inherited union), so callers do
     /// not need to walk the parent chain themselves.
-    pub(crate) fn lookup_class_accessor_names(&self, class_name: &str) -> Option<&[String]> {
+    pub(crate) fn lookup_class_accessor_names(
+        &self,
+        class_name: &str,
+    ) -> Option<&crate::ClassAccessorNames> {
         self.class_accessor_names
             .iter()
             .find(|(n, _)| n == class_name)
-            .map(|(_, f)| f.as_slice())
+            .map(|(_, f)| f)
     }
 
     /// Issue #302: register declared field types for a class (parallel to
@@ -432,6 +524,21 @@ impl LoweringContext {
             if !self.class_field_names.iter().any(|(n, _)| n == name) {
                 let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
                 self.class_field_names.push((name.clone(), names));
+            }
+        }
+    }
+
+    /// Pre-seed class accessor names with cross-module class info collected
+    /// from already-lowered dependencies. This lets constructor-field
+    /// inference avoid creating data slots for inherited imported accessors.
+    pub fn seed_imported_class_accessors(
+        &mut self,
+        seeds: &std::collections::HashMap<String, crate::ClassAccessorNames>,
+    ) {
+        for (name, accessors) in seeds {
+            if !self.class_accessor_names.iter().any(|(n, _)| n == name) {
+                self.class_accessor_names
+                    .push((name.clone(), accessors.clone()));
             }
         }
     }
@@ -519,23 +626,26 @@ impl LoweringContext {
         static_fields: Vec<String>,
         static_methods: Vec<String>,
     ) {
+        // Forward-scan (first-match-wins): index keeps the FIRST entry per name.
+        let idx = self.class_statics.len();
+        self.class_statics_index
+            .entry(class_name.clone())
+            .or_insert(idx);
         self.class_statics
             .push((class_name, static_fields, static_methods));
     }
 
     pub(crate) fn has_static_field(&self, class_name: &str, field_name: &str) -> bool {
-        self.class_statics
-            .iter()
-            .find(|(cn, _, _)| cn == class_name)
-            .map(|(_, fields, _)| fields.contains(&field_name.to_string()))
+        self.class_statics_index
+            .get(class_name)
+            .map(|&idx| self.class_statics[idx].1.iter().any(|f| f == field_name))
             .unwrap_or(false)
     }
 
     pub(crate) fn has_static_method(&self, class_name: &str, method_name: &str) -> bool {
-        self.class_statics
-            .iter()
-            .find(|(cn, _, _)| cn == class_name)
-            .map(|(_, _, methods)| methods.contains(&method_name.to_string()))
+        self.class_statics_index
+            .get(class_name)
+            .map(|&idx| self.class_statics[idx].2.iter().any(|m| m == method_name))
             .unwrap_or(false)
     }
 
@@ -591,6 +701,23 @@ impl LoweringContext {
         id
     }
 
+    pub(crate) fn define_sloppy_implicit_global(&mut self, name: String) -> LocalId {
+        if let Some((_, id, _)) = self
+            .locals
+            .iter()
+            .rev()
+            .find(|(n, id, _)| n == &name && self.sloppy_implicit_global_ids.contains(id))
+        {
+            return *id;
+        }
+        let id = self.fresh_local();
+        self.module_level_ids.insert(id);
+        self.sloppy_implicit_global_ids.insert(id);
+        self.sloppy_implicit_globals.push((name.clone(), id));
+        self.locals.push((name, id, Type::Any));
+        id
+    }
+
     /// Drop module-level LocalIds from a closure's `captures` list. Module-
     /// level variables are loaded directly from their global data slot inside
     /// the closure body (see `closures.rs` auto-loading pass), so passing them
@@ -605,19 +732,60 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_local(&self, name: &str) -> Option<LocalId> {
-        self.locals
-            .iter()
-            .rev()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, id, _)| *id)
+        self.locals.lookup(name)
+    }
+
+    fn lookup_local_index(&self, name: &str) -> Option<usize> {
+        self.locals.lookup_index(name)
+    }
+
+    /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a
+    /// module-var the top-level pre-scan registered for `const ns =
+    /// require("<native>")`. After this, a bare read of `name` resolves to its
+    /// native-module / builtin-alias registration instead of an
+    /// always-`undefined` `LocalGet`, matching how `import * as ns` (which
+    /// never creates a local) behaves. Returns the removed `LocalId`.
+    pub(crate) fn remove_local_binding(&mut self, name: &str) -> Option<LocalId> {
+        let idx = self.lookup_local_index(name)?;
+        let (_, id, _) = self.locals.remove(idx);
+        self.pre_registered_module_vars.remove(name);
+        self.pre_registered_module_var_decls.remove(name);
+        Some(id)
+    }
+
+    pub(crate) fn push_with_env(&mut self, local_id: LocalId) {
+        let local_mark = self.locals.len();
+        self.with_env_stack.push(WithEnvFrame {
+            local_id,
+            local_mark,
+        });
+    }
+
+    pub(crate) fn pop_with_env(&mut self) {
+        self.with_env_stack.pop();
+    }
+
+    pub(crate) fn active_with_envs_for_ident(&self, name: &str) -> Vec<LocalId> {
+        let nearest_local_index = self.lookup_local_index(name);
+        let mut envs = Vec::new();
+        for frame in self.with_env_stack.iter().rev() {
+            if nearest_local_index.is_some_and(|idx| idx >= frame.local_mark) {
+                break;
+            }
+            envs.push(frame.local_id);
+        }
+        envs
+    }
+
+    pub(crate) fn shadows_unqualified_global(&self, name: &str) -> bool {
+        self.lookup_local(name).is_some()
+            || self.lookup_func(name).is_some()
+            || self.lookup_imported_func(name).is_some()
+            || self.lookup_class(name).is_some()
     }
 
     pub(crate) fn lookup_local_type(&self, name: &str) -> Option<&Type> {
-        self.locals
-            .iter()
-            .rev()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, _, ty)| ty)
+        self.locals.lookup_type(name)
     }
 
     pub(crate) fn lookup_func(&self, name: &str) -> Option<FuncId> {
@@ -639,7 +807,7 @@ impl LoweringContext {
     }
 
     /// Phase 3: synthesize (or retrieve) an anon class for a closed-shape object
-    /// literal. `fields_with_types` is parallel to the literal's source-declared
+    /// literal. `field_shapes` is parallel to the literal's source-declared
     /// properties — source order is preserved so the anon class's field layout
     /// matches JS evaluation order. Returns the synthetic class name.
     ///
@@ -654,7 +822,7 @@ impl LoweringContext {
     /// `[a, a, a, a]`).
     pub(crate) fn synthesize_anon_shape_class(
         &mut self,
-        fields_with_types: &[(String, Type, Expr)],
+        field_shapes: &[(String, Type)],
     ) -> String {
         // Canonical shape key: each field as `name:tag` joined by ',' in source
         // order. Different declaration orders -> different classes (preserves
@@ -679,7 +847,7 @@ impl LoweringContext {
             }
         }
         let mut shape_key = String::new();
-        for (name, ty, _) in fields_with_types {
+        for (name, ty) in field_shapes {
             shape_key.push_str(name);
             shape_key.push(':');
             shape_key.push_str(tag(ty));
@@ -716,9 +884,9 @@ impl LoweringContext {
         // positional constructor args, so the class stays shape-only (no
         // per-literal state). See the method doc comment for why this
         // matters under shape-deduplication.
-        let fields: Vec<ClassField> = fields_with_types
+        let fields: Vec<ClassField> = field_shapes
             .iter()
-            .map(|(name, ty, _init_expr_unused)| ClassField {
+            .map(|(name, ty)| ClassField {
                 name: name.clone(),
                 key_expr: None,
                 ty: ty.clone(),
@@ -735,9 +903,9 @@ impl LoweringContext {
         // PropertySet's direct-GEP path fires because `this` resolves to
         // the anon class via the usual class_stack/this_stack dance in
         // lower_call.rs::lower_new.
-        let mut ctor_params: Vec<Param> = Vec::with_capacity(fields_with_types.len());
-        let mut ctor_body: Vec<Stmt> = Vec::with_capacity(fields_with_types.len());
-        for (name, ty, _value) in fields_with_types {
+        let mut ctor_params: Vec<Param> = Vec::with_capacity(field_shapes.len());
+        let mut ctor_body: Vec<Stmt> = Vec::with_capacity(field_shapes.len());
+        for (name, ty) in field_shapes {
             let param_id = self.fresh_local();
             ctor_params.push(Param {
                 id: param_id,
@@ -746,6 +914,7 @@ impl LoweringContext {
                 default: None,
                 decorators: Vec::new(),
                 is_rest: false,
+                arguments_object: None,
             });
             ctor_body.push(Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
@@ -788,8 +957,11 @@ impl LoweringContext {
             methods: Vec::new(),
             getters: Vec::new(),
             setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
             static_fields: Vec::new(),
             static_methods: Vec::new(),
+            computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
@@ -837,6 +1009,23 @@ impl LoweringContext {
         self.imported_functions.push((local_name, original_name));
     }
 
+    pub(crate) fn register_builtin_named_import(
+        &mut self,
+        local_name: String,
+        module_name: String,
+        exported_name: String,
+    ) {
+        self.builtin_named_imports
+            .push((local_name, module_name, exported_name));
+    }
+
+    pub(crate) fn lookup_builtin_named_import(&self, name: &str) -> Option<(&str, &str)> {
+        self.builtin_named_imports
+            .iter()
+            .find(|(local, _, _)| local == name)
+            .map(|(_, module, exported)| (module.as_str(), exported.as_str()))
+    }
+
     pub(crate) fn register_extern_func_types(
         &mut self,
         name: String,
@@ -860,15 +1049,21 @@ impl LoweringContext {
         module_name: String,
         method_name: Option<String>,
     ) {
+        // Forward-scan (first-match-wins) semantics: only record the FIRST
+        // index for a name so lookups match the old `.iter().find()`.
+        let idx = self.native_modules.len();
+        self.native_modules_index
+            .entry(local_name.clone())
+            .or_insert(idx);
         self.native_modules
             .push((local_name, module_name, method_name));
     }
 
     pub(crate) fn lookup_native_module(&self, name: &str) -> Option<(&str, Option<&str>)> {
-        self.native_modules
-            .iter()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, m, method)| (m.as_str(), method.as_ref().map(|s| s.as_str())))
+        self.native_modules_index.get(name).map(|&idx| {
+            let (_, m, method) = &self.native_modules[idx];
+            (m.as_str(), method.as_ref().map(|s| s.as_str()))
+        })
     }
 
     pub(crate) fn register_builtin_module_alias(
@@ -910,8 +1105,50 @@ impl LoweringContext {
         module_name: String,
         class_name: String,
     ) {
+        // #5137: if the user opted this package into `perry.compilePackages`,
+        // its real npm source is being compiled and the binding resolves to
+        // the compiled-from-source class. Registering a native instance here
+        // would re-route the instance's fluent methods (`new Command()` →
+        // `.name()`/`.option()`/`.parse()`) to the `js_commander_*` native
+        // shim that was deliberately kept off the import path — so the call
+        // emits an FFI reference the source-compile build never links (or, in
+        // a shimless build, returns `undefined`). Back off so the source class
+        // is used. `is_native_module` already makes the same back-off for the
+        // import-resolution side (#665).
+        if is_compile_package_override(&module_name) {
+            return;
+        }
+        // Push the new index onto this name's shadow stack (innermost last).
+        let idx = self.native_instances.len();
+        self.native_instances_index
+            .entry(local_name.clone())
+            .or_default()
+            .push(idx);
         self.native_instances
             .push((local_name, module_name, class_name));
+    }
+
+    /// Truncate `native_instances` back to `mark`, keeping the
+    /// `native_instances_index` shadow stacks in sync: every recorded index
+    /// `>= mark` is popped (these belong to bindings whose scope is exiting),
+    /// re-exposing any earlier (outer-scope) binding of the same name. Empty
+    /// stacks are removed to keep the map small. Use this everywhere
+    /// `native_instances.truncate(..)` was previously called directly.
+    pub(crate) fn truncate_native_instances(&mut self, mark: usize) {
+        if self.native_instances.len() <= mark {
+            return;
+        }
+        self.native_instances.truncate(mark);
+        // Drop indices >= mark from each name's shadow stack, re-exposing any
+        // earlier (outer-scope) binding. The map is keyed by distinct
+        // native-instance names (bounded, not proportional to class count), so
+        // this stays cheap.
+        self.native_instances_index.retain(|_, stack| {
+            while stack.last().is_some_and(|&i| i >= mark) {
+                stack.pop();
+            }
+            !stack.is_empty()
+        });
     }
 
     /// #1483: resolve a parameter's declared type name to a perry/ui widget
@@ -934,6 +1171,14 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_native_instance(&self, name: &str) -> Option<(&str, &str)> {
+        fn exposes_plain_object_fields(module: &str, class: &str) -> bool {
+            // `node:module`'s CommonJS Module constructor returns an ordinary
+            // heap object with data fields (`id`, `path`, `exports`, ...).
+            // Rewriting those reads as native receiver methods makes them
+            // miss the object's actual properties.
+            matches!((module, class), ("module", "Module") | ("repl", _))
+        }
+
         // Issue #1132 — walk the scoped instances back-to-front so a
         // later (inner-scope) registration shadows an earlier
         // (outer-scope) one with the same name. `native_instances` is
@@ -946,18 +1191,31 @@ impl LoweringContext {
         // inner `res` always resolved to the outer `("http",
         // "ServerResponse")` tag and `res.on('data')` misrouted
         // through ServerResponse dispatch instead of IncomingMessage.)
-        self.native_instances
-            .iter()
-            .rev()
-            .find(|(n, _, _)| n == name)
+        //
+        // Indexed (#5271): `native_instances_index[name]` is the shadow stack
+        // of indices for this name, innermost (last) on top — so the top index
+        // is exactly the entry the old `.rev().find()` would have selected.
+        // The `exposes_plain_object_fields` filter is then applied to THAT
+        // entry only (matching `.find().filter()`, which never falls through to
+        // an earlier match when the top one is filtered out).
+        self.native_instances_index
+            .get(name)
+            .and_then(|stack| stack.last())
+            .map(|&idx| &self.native_instances[idx])
+            // `node:repl` constructors allocate real heap objects/errors with
+            // bound methods; routing them through handle-dispatch native
+            // getters turns ordinary fields like `Recoverable.err` into
+            // zero-arg FFI calls.
+            .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
                 // Check module-level instances (survive scope exits).
-                // Same last-match-wins rule for consistency.
-                self.module_native_instances
-                    .iter()
-                    .rev()
-                    .find(|(n, _, _)| n == name)
+                // Same last-match-wins rule for consistency — the index stores
+                // the LAST pushed entry per name.
+                self.module_native_instances_index
+                    .get(name)
+                    .map(|&idx| &self.module_native_instances[idx])
+                    .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })
     }
@@ -966,10 +1224,35 @@ impl LoweringContext {
         &self,
         func_name: &str,
     ) -> Option<(&str, &str)> {
-        self.func_return_native_instances
-            .iter()
-            .find(|(n, _, _)| n == func_name)
-            .map(|(_, module, class)| (module.as_str(), class.as_str()))
+        // Forward-scan (first-match-wins): index keeps the FIRST pushed entry.
+        self.func_return_native_instances_index
+            .get(func_name)
+            .map(|&idx| {
+                let (_, module, class) = &self.func_return_native_instances[idx];
+                (module.as_str(), class.as_str())
+            })
+    }
+
+    /// Push a function-return native instance (push-only, never truncated) and
+    /// update its perf index. `lookup_func_return_native_instance` scanned
+    /// FORWARD (first-match-wins), so the index keeps the FIRST pushed entry.
+    pub(crate) fn push_func_return_native_instance(&mut self, entry: (String, String, String)) {
+        let idx = self.func_return_native_instances.len();
+        self.func_return_native_instances_index
+            .entry(entry.0.clone())
+            .or_insert(idx);
+        self.func_return_native_instances.push(entry);
+    }
+
+    /// Push a module-level native instance (module-scoped, never truncated)
+    /// and update its perf index. `lookup_native_instance`'s fallback arm
+    /// scans these in reverse (last-match-wins), so the index stores the LAST
+    /// pushed entry per name (overwrite).
+    pub(crate) fn push_module_native_instance(&mut self, entry: (String, String, String)) {
+        let idx = self.module_native_instances.len();
+        self.module_native_instances_index
+            .insert(entry.0.clone(), idx);
+        self.module_native_instances.push(entry);
     }
 }
 
@@ -1043,8 +1326,16 @@ impl LoweringContext {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
         self.scope_local_marks.pop();
-        self.locals.truncate(mark.0);
-        self.native_instances.truncate(mark.1);
+        if self.locals.len() > mark.0 {
+            let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
+            for entry in self.locals.drain_from(mark.0) {
+                if self.sloppy_implicit_global_ids.contains(&entry.1) {
+                    kept.push(entry);
+                }
+            }
+            self.locals.extend(kept);
+        }
+        self.truncate_native_instances(mark.1);
         // Remove index entries for functions being truncated, then restore any
         // earlier entries that were shadowed by the removed ones.
         for i in mark.2..self.functions.len() {
@@ -1090,10 +1381,14 @@ impl LoweringContext {
 
         // Preserve var-hoisted locals: move any hoisted entries defined after
         // the mark to the position just past the mark, then drop the rest.
+        // Sloppy implicit globals (`undeclared = v` inside the block) are
+        // module-scoped bindings too — keep them visible after the block.
         if self.locals.len() > locals_mark {
             let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
-            for entry in self.locals.drain(locals_mark..) {
-                if self.var_hoisted_ids.contains(&entry.1) {
+            for entry in self.locals.drain_from(locals_mark) {
+                if self.var_hoisted_ids.contains(&entry.1)
+                    || self.sloppy_implicit_global_ids.contains(&entry.1)
+                {
                     kept.push(entry);
                 }
             }

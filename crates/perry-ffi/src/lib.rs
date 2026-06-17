@@ -71,7 +71,7 @@ pub use handle::{
 
 mod jsvalue;
 pub use jsvalue::{
-    build_object_shape, js_array_alloc, js_array_get, js_array_push, js_array_set,
+    build_object_shape, js_array_alloc, js_array_get, js_array_length, js_array_push, js_array_set,
     js_object_alloc_with_shape, js_object_get_field, js_object_set_field, JsValue,
 };
 
@@ -88,7 +88,9 @@ mod json;
 pub use json::json_stringify;
 
 mod error;
-pub use error::{throw_with_code, value_byte_slice, ErrorKind};
+pub use error::{
+    error_value_with_code, system_error_value, throw_with_code, value_byte_slice, ErrorKind,
+};
 
 mod event_pump;
 pub use event_pump::notify_main_thread;

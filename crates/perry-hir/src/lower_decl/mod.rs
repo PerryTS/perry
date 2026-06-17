@@ -11,6 +11,7 @@
 mod block;
 mod body_stmt;
 mod class_captures;
+mod class_computed;
 mod class_decl;
 mod class_members;
 mod class_validation;
@@ -28,27 +29,32 @@ mod typeof_narrow;
 // this list in sync with each sibling's `pub fn` declarations.
 pub(crate) use block::{
     collect_refs_in_closure_bodies_stmt, collect_top_level_let_ids_stmt,
-    compute_prealloc_for_hoisted_closures, lower_block_stmt, lower_block_stmt_scoped,
-    lower_fn_body_block_stmt, lower_stmts_using_aware,
+    collect_var_binding_names_from_stmt, compute_prealloc_for_hoisted_closures, lower_block_stmt,
+    lower_block_stmt_scoped, lower_fn_body_block_stmt, lower_stmts_using_aware,
+    pre_register_forward_captured_lets,
 };
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
 pub(crate) use class_captures::synthesize_class_captures;
 pub(crate) use class_decl::{lower_class_decl, lower_class_from_ast};
 pub(crate) use class_members::{
-    collect_method_captures, lower_class_method, lower_class_prop,
-    lower_computed_key_method_as_field, lower_constructor, lower_getter_method,
-    lower_setter_method,
+    lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,
+    lower_getter_method, lower_getter_method_with_name, lower_setter_method,
+    lower_setter_method_with_name,
 };
-pub(crate) use class_validation::validate_legacy_decorator_surface;
-pub(crate) use enum_decl::lower_enum_decl;
+pub(crate) use class_validation::{
+    validate_class_element_early_errors, validate_legacy_decorator_surface,
+};
+pub(crate) use enum_decl::{compute_enum_members, lower_enum_decl};
 pub(crate) use fn_decl::lower_fn_decl;
 pub(crate) use helpers::{
-    append_synthetic_arguments_param, body_uses_arguments, build_default_param_stmts,
-    collect_let_decls_in_stmt, init_is_webassembly_instantiate, is_inspect_custom_key,
-    is_symbol_iterator_key, symbol_well_known_key,
+    append_synthetic_arguments_param, body_has_use_strict, body_uses_arguments,
+    build_default_param_stmts, collect_let_decls_in_stmt, init_is_webassembly_instantiate,
+    is_inspect_custom_key, is_symbol_iterator_key, mapped_argument_parameter_ids,
+    params_are_simple_arguments_list, params_use_arguments, symbol_well_known_key,
 };
 pub(crate) use interface_decl::lower_interface_decl;
 pub(crate) use private_members::{
-    lower_private_getter, lower_private_method, lower_private_prop, lower_private_setter,
+    build_private_scope, lower_private_getter, lower_private_method, lower_private_prop,
+    lower_private_setter,
 };
 pub(crate) use type_alias::lower_type_alias_decl;

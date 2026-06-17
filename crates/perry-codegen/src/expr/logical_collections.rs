@@ -58,7 +58,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let result = blk.call(
                 I64,
                 "js_array_filter",
@@ -78,34 +79,49 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             let url_box = lower_expr(ctx, url)?;
             let method_box = lower_expr(ctx, method)?;
             let body_box = lower_expr(ctx, body)?;
 
-            // Build the headers object: js_object_alloc(0, N) followed by
-            // js_object_set_field_by_name for each (interned key, value).
-            let n_str = (headers.len() as u32).to_string();
-            let zero_str = "0".to_string();
-            let headers_handle =
-                ctx.block()
-                    .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
-            for (key, val_expr) in headers {
-                let key_idx = ctx.strings.intern(key);
-                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let v_box = lower_expr(ctx, val_expr)?;
+            // Obtain the headers as a NaN-boxed object value, then JSON-stringify
+            // it below. Two cases:
+            //   * `headers_dynamic` — the headers value was a variable, a spread
+            //     literal, or a call (`Object.assign`/`new Headers`/`JSON.parse`).
+            //     Lower it directly; `js_json_stringify` enumerates its own
+            //     properties at runtime (#4932).
+            //   * otherwise — statically-extracted `{ "k": v, ... }` pairs, which
+            //     we build into a fresh object field-by-field.
+            let headers_obj_box = if let Some(hexpr) = headers_dynamic {
+                lower_expr(ctx, hexpr)?
+            } else {
+                // Build the headers object: js_object_alloc(0, N) followed by
+                // js_object_set_field_by_name for each (interned key, value).
+                let n_str = (headers.len() as u32).to_string();
+                let zero_str = "0".to_string();
+                let headers_handle =
+                    ctx.block()
+                        .call(I64, "js_object_alloc", &[(I32, &zero_str), (I32, &n_str)]);
+                for (key, val_expr) in headers {
+                    let key_idx = ctx.strings.intern(key);
+                    let key_handle_global =
+                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let v_box = lower_expr(ctx, val_expr)?;
+                    let blk = ctx.block();
+                    let key_box = blk.load(DOUBLE, &key_handle_global);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    blk.call_void(
+                        "js_object_set_field_by_name",
+                        &[(I64, &headers_handle), (I64, &key_raw), (DOUBLE, &v_box)],
+                    );
+                }
                 let blk = ctx.block();
-                let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                blk.call_void(
-                    "js_object_set_field_by_name",
-                    &[(I64, &headers_handle), (I64, &key_raw), (DOUBLE, &v_box)],
-                );
-            }
+                nanbox_pointer_inline(blk, &headers_handle)
+            };
 
             let blk = ctx.block();
-            let headers_obj_box = nanbox_pointer_inline(blk, &headers_handle);
             // js_json_stringify(value: f64, indent: i32) -> i64 string handle.
             let zero_i = "0".to_string();
             let headers_str = blk.call(
@@ -141,7 +157,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_some",
@@ -155,7 +172,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let cb_box = lower_expr(ctx, callback)?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_every",
@@ -181,6 +199,176 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(I64, &arr_handle), (DOUBLE, &sep_box)],
             );
             Ok(nanbox_string_inline(blk, &result))
+        }
+
+        // -------- Array.prototype.<m>.call/apply(arrayLike, ...) (#4597) --------
+        // Generic over an array-like receiver: the runtime `js_arraylike_*`
+        // entry points take the *original* receiver value (NaN-boxed `f64`) so
+        // they apply ToObject + LengthOfArrayLike + indexed Get/HasProperty and
+        // pass the original receiver as the callback's 3rd argument. The result
+        // is already a NaN-boxed JS value (number / boolean / pointer / string),
+        // so it is returned directly with no re-boxing.
+        Expr::ArrayLikeMethod {
+            method,
+            receiver,
+            args,
+        } => {
+            let recv_box = lower_expr(ctx, receiver)?;
+            let mut arg_boxes: Vec<String> = Vec::with_capacity(args.len());
+            for a in args {
+                arg_boxes.push(lower_expr(ctx, a)?);
+            }
+            let undef = || double_literal(f64::from_bits(TAG_UNDEFINED));
+            let nth = |i: usize| arg_boxes.get(i).cloned();
+            let blk = ctx.block();
+            let result = match method.as_str() {
+                // Callback iterators: (recv, callback, thisArg).
+                "forEach" | "map" | "filter" | "some" | "every" | "find" | "findIndex"
+                | "findLast" | "findLastIndex" => {
+                    let cb = nth(0).unwrap_or_else(undef);
+                    let this_arg = nth(1).unwrap_or_else(undef);
+                    let fname = match method.as_str() {
+                        "forEach" => "js_arraylike_forEach",
+                        "map" => "js_arraylike_map",
+                        "filter" => "js_arraylike_filter",
+                        "some" => "js_arraylike_some",
+                        "every" => "js_arraylike_every",
+                        "find" => "js_arraylike_find",
+                        "findIndex" => "js_arraylike_findIndex",
+                        "findLast" => "js_arraylike_findLast",
+                        _ => "js_arraylike_findLastIndex",
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[(DOUBLE, &recv_box), (DOUBLE, &cb), (DOUBLE, &this_arg)],
+                    )
+                }
+                // Reducers: (recv, callback, has_init, init).
+                "reduce" | "reduceRight" => {
+                    let cb = nth(0).unwrap_or_else(undef);
+                    let (has_init, init) = match nth(1) {
+                        Some(i) => ("1".to_string(), i),
+                        None => ("0".to_string(), undef()),
+                    };
+                    let fname = if method == "reduce" {
+                        "js_arraylike_reduce"
+                    } else {
+                        "js_arraylike_reduceRight"
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[
+                            (DOUBLE, &recv_box),
+                            (DOUBLE, &cb),
+                            (I32, &has_init),
+                            (DOUBLE, &init),
+                        ],
+                    )
+                }
+                // Search: (recv, value, fromIndex, has_from).
+                "indexOf" | "lastIndexOf" | "includes" => {
+                    let value = nth(0).unwrap_or_else(undef);
+                    let (has_from, from) = match nth(1) {
+                        Some(f) => ("1".to_string(), f),
+                        None => ("0".to_string(), undef()),
+                    };
+                    let fname = match method.as_str() {
+                        "indexOf" => "js_arraylike_indexOf",
+                        "lastIndexOf" => "js_arraylike_lastIndexOf",
+                        _ => "js_arraylike_includes",
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[
+                            (DOUBLE, &recv_box),
+                            (DOUBLE, &value),
+                            (DOUBLE, &from),
+                            (I32, &has_from),
+                        ],
+                    )
+                }
+                // at(index): ToIntegerOrInfinity(undefined) === 0 when omitted.
+                "at" => {
+                    let idx = nth(0).unwrap_or_else(undef);
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_at",
+                        &[(DOUBLE, &recv_box), (DOUBLE, &idx)],
+                    )
+                }
+                // join(separator?): undefined separator → comma.
+                "join" => {
+                    let sep = nth(0).unwrap_or_else(undef);
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_join",
+                        &[(DOUBLE, &recv_box), (DOUBLE, &sep)],
+                    )
+                }
+                // slice(start?, end?): has-flags distinguish omitted from undefined.
+                "slice" => {
+                    let (has_start, start) = match nth(0) {
+                        Some(s) => ("1".to_string(), s),
+                        None => ("0".to_string(), undef()),
+                    };
+                    let (has_end, end) = match nth(1) {
+                        Some(e) => ("1".to_string(), e),
+                        None => ("0".to_string(), undef()),
+                    };
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_slice",
+                        &[
+                            (DOUBLE, &recv_box),
+                            (DOUBLE, &start),
+                            (I32, &has_start),
+                            (DOUBLE, &end),
+                            (I32, &has_end),
+                        ],
+                    )
+                }
+                // sort(comparator?): validated + run by the runtime engine.
+                "sort" => {
+                    let cmp = nth(0).unwrap_or_else(undef);
+                    blk.call(
+                        DOUBLE,
+                        "js_arraylike_sort",
+                        &[(DOUBLE, &recv_box), (DOUBLE, &cmp)],
+                    )
+                }
+                // splice(...) / concat(...): variadic — pass an alloca buffer
+                // of raw NaN-boxed doubles + count (mirrors the dense
+                // `js_array_concat_variadic` lowering).
+                "splice" | "concat" => {
+                    let n = arg_boxes.len();
+                    let (buf_reg, count_str) = if n == 0 {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf_reg = blk.next_reg();
+                        blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
+                        for (i, val) in arg_boxes.iter().enumerate() {
+                            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                            blk.store(DOUBLE, val, &slot);
+                        }
+                        (buf_reg, format!("{}", n))
+                    };
+                    let fname = if method == "splice" {
+                        "js_arraylike_splice"
+                    } else {
+                        "js_arraylike_concat"
+                    };
+                    blk.call(
+                        DOUBLE,
+                        fname,
+                        &[(DOUBLE, &recv_box), (PTR, &buf_reg), (I32, &count_str)],
+                    )
+                }
+                other => bail!("unsupported generic array-like method '{other}'"),
+            };
+            Ok(result)
         }
 
         // -------- map.delete(key) -> boolean --------
@@ -209,6 +397,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // can dispatch on its tag — a string receiver yields index keys and
             // a primitive yields [], instead of crashing on a bad deref.
             let arr_handle = blk.call(I64, "js_object_keys_value", &[(DOUBLE, &obj_box)]);
+            Ok(nanbox_pointer_inline(blk, &arr_handle))
+        }
+
+        // -------- for (key in obj) enumeration keys -> string[] --------
+        // Like ObjectKeys but nullish-safe (no throw) and walks the prototype
+        // chain for inherited enumerable keys. Backs the for-in desugar.
+        Expr::ForInKeys(obj) => {
+            let obj_box = lower_expr(ctx, obj)?;
+            let blk = ctx.block();
+            let arr_handle = blk.call(I64, "js_for_in_keys_value", &[(DOUBLE, &obj_box)]);
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
@@ -250,6 +448,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // call js_math_min_array. The variadic form materializes a
         // temporary fixed-size array via js_array_alloc + push.
         Expr::MathMin(values) => {
+            if values.len() == 2 {
+                let left = lower_expr(ctx, &values[0])?;
+                let right = lower_expr(ctx, &values[1])?;
+                let blk = ctx.block();
+                return Ok(blk.call(DOUBLE, "js_math_min2", &[(DOUBLE, &left), (DOUBLE, &right)]));
+            }
             let cap = (values.len() as u32).to_string();
             let arr_handle_v = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
             // Push each value. push_f64 may realloc, so we thread the
@@ -270,12 +474,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathMinSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
             Ok(blk.call(DOUBLE, "js_math_min_array", &[(I64, &arr_handle)]))
         }
 
         // -------- Math.max(...args) — same shape as Math.min --------
         Expr::MathMax(values) => {
+            if values.len() == 2 {
+                let left = lower_expr(ctx, &values[0])?;
+                let right = lower_expr(ctx, &values[1])?;
+                let blk = ctx.block();
+                return Ok(blk.call(DOUBLE, "js_math_max2", &[(DOUBLE, &left), (DOUBLE, &right)]));
+            }
             let cap = (values.len() as u32).to_string();
             let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
             for v_expr in values {
@@ -293,7 +503,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::MathMaxSpread(arr_expr) => {
             let arr_box = lower_expr(ctx, arr_expr)?;
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let arr_handle = blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
             Ok(blk.call(DOUBLE, "js_math_max_array", &[(I64, &arr_handle)]))
         }
 
@@ -380,6 +590,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &obj), (DOUBLE, &key)],
             ))
         }
+        Expr::PrivateBrandCheck {
+            class_name,
+            field_name,
+            object,
+        } => {
+            let obj = lower_expr(ctx, object)?;
+            let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+            let key_label = emit_string_literal_global(ctx, field_name);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_private_brand_check",
+                &[
+                    (DOUBLE, &obj),
+                    (I32, &class_id.to_string()),
+                    (PTR, &key_label),
+                    (I32, &field_name.len().to_string()),
+                ],
+            ))
+        }
+        Expr::PrivateGuard {
+            class_name,
+            field_name,
+            kind,
+            op,
+            object,
+        } => {
+            // Evaluate the receiver once, brand+kind check it, and return it
+            // unchanged (or throw TypeError). The enclosing PropertyGet /
+            // PropertySet / method-call lowering then operates on the result.
+            let obj = lower_expr(ctx, object)?;
+            let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+            let key_label = emit_string_literal_global(ctx, field_name);
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_private_guard",
+                &[
+                    (DOUBLE, &obj),
+                    (I32, &class_id.to_string()),
+                    (PTR, &key_label),
+                    (I32, &field_name.len().to_string()),
+                    (I32, &kind.to_string()),
+                    (I32, &op.to_string()),
+                ],
+            ))
+        }
 
         // -------- fs.writeFileSync(path, content) --------
         // The runtime takes both args as NaN-boxed doubles directly.
@@ -435,29 +690,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `js_regexp_new` always sees a real `StringHeader*`. Followup
         // to #957 / PR #959.
         Expr::RegExpDynamic { pattern, flags } => {
+            // Route through the full ECMAScript constructor: it handles a RegExp
+            // pattern (copy / flag override), an `undefined`/`null` pattern
+            // (`ToString` → `""`/`"null"`), an object pattern, and ToString-
+            // coerced flags (an object flags → `"[object Object]"` → SyntaxError).
+            // Passing the NaN-boxed values verbatim (NOT `unbox_str_handle`,
+            // which mis-reads a non-string pattern as a StringHeader → garbage).
             let pattern_box = lower_expr(ctx, pattern)?;
-            let flags_handle = if let Some(flags_expr) = flags {
-                let flags_box = lower_expr(ctx, flags_expr)?;
-                let blk = ctx.block();
-                unbox_str_handle(blk, &flags_box)
+            let flags_box = if let Some(flags_expr) = flags {
+                lower_expr(ctx, flags_expr)?
             } else {
-                // Intern an empty string and use its handle so the
-                // runtime sees a valid `StringHeader*` (the
-                // `is_valid_ptr` check inside `js_regexp_new` already
-                // accepts null, but the LLVM type system needs a real
-                // i64 here, not a `null` typed `ptr`).
-                let empty_idx = ctx.strings.intern("");
-                let empty_global = format!("@{}", ctx.strings.entry(empty_idx).handle_global);
-                let blk = ctx.block();
-                let empty_box = blk.load(DOUBLE, &empty_global);
-                unbox_to_i64(blk, &empty_box)
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
             let blk = ctx.block();
-            let pattern_handle = unbox_str_handle(blk, &pattern_box);
             let result = blk.call(
                 I64,
-                "js_regexp_new",
-                &[(I64, &pattern_handle), (I64, &flags_handle)],
+                "js_regexp_construct",
+                &[(DOUBLE, &pattern_box), (DOUBLE, &flags_box)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }

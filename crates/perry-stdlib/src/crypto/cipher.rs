@@ -445,14 +445,47 @@ pub(super) fn decrypt_gcm256_with_tag_len(
     }
 }
 
+fn encrypt_gcm_for_kind(
+    kind: CipherKind,
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+    auth_tag_len: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (ciphertext, tag) = match kind {
+        CipherKind::Aes256Gcm => encrypt_gcm::<Aes256, Aes256Ctr32Be>(key, iv, aad, plaintext)?,
+        CipherKind::Aes192Gcm => encrypt_gcm::<Aes192, Aes192Ctr32Be>(key, iv, aad, plaintext)?,
+        CipherKind::Aes128Gcm => encrypt_gcm::<Aes128, Aes128Ctr32Be>(key, iv, aad, plaintext)?,
+        _ => return None,
+    };
+    Some((ciphertext, tag[..auth_tag_len.min(tag.len())].to_vec()))
+}
+
+fn decrypt_gcm_for_kind(
+    kind: CipherKind,
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Option<Vec<u8>> {
+    match kind {
+        CipherKind::Aes256Gcm => decrypt_gcm256_with_tag_len(key, iv, aad, ciphertext, tag),
+        CipherKind::Aes192Gcm => decrypt_gcm192_with_tag_len(key, iv, aad, ciphertext, tag),
+        CipherKind::Aes128Gcm => decrypt_gcm128_with_tag_len(key, iv, aad, ciphertext, tag),
+        _ => None,
+    }
+}
+
 /// Per-handle cipher state. CBC ciphers accumulate plaintext (or
 /// ciphertext, on decrypt) in `buffer` until `.final()` runs the
 /// single-shot encryptor/decryptor — block ciphers can't safely emit
 /// partial output without buffering the trailing fragment for PKCS7
 /// padding anyway, and bouncing through the `_padded_mut` API keeps
-/// the implementation small. GCM uses `aes_gcm::Aes256Gcm::encrypt`
-/// / `decrypt` which are one-shot AEAD ops, so the same "buffer and
-/// flush on final" shape applies there.
+/// the implementation small. GCM decrypt also buffers ciphertext until
+/// `.final()` authenticates it; GCM encrypt emits ciphertext at `.update()`
+/// and keeps enough plaintext to finalize the authentication tag.
 pub struct CipherHandle {
     state: std::sync::Mutex<CipherState>,
 }
@@ -500,6 +533,8 @@ unsafe fn throw_plain_error(message: &str) -> ! {
     let err = perry_runtime::error::js_error_new_with_message(msg);
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
+
+const GCM_AUTH_FAILURE_MESSAGE: &str = "Unsupported state or unable to authenticate data";
 
 pub(super) unsafe fn create_cipher_handle(
     alg_ptr: i64,
@@ -613,23 +648,40 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
     // frame, which would otherwise leave the per-handle `Mutex` locked on this
     // thread and deadlock the next dispatch call. Read the flags under a
     // short-lived guard, drop it, then throw.
+    let mut invalid_state = false;
+    let mut invalid_state_for: Option<&'static str> = None;
+    let mut plain_error: Option<&'static str> = None;
     {
-        let g = h.state.lock().unwrap();
-        let finished = g.finished;
-        let updated = g.updated;
-        drop(g);
+        let mut g = h.state.lock().unwrap();
         match method {
-            "final" if finished => perry_runtime::fs::validate::throw_error_with_code(
-                "Invalid state",
-                "ERR_CRYPTO_INVALID_STATE",
-            ),
-            "update" if finished => throw_plain_error("Trying to add data in unsupported state"),
-            "setAutoPadding" if finished => throw_invalid_state_for("setAutoPadding"),
-            "setAuthTag" if finished => throw_invalid_state_for("setAuthTag"),
-            "getAuthTag" if !finished => throw_invalid_state_for("getAuthTag"),
-            "setAAD" if updated || finished => throw_invalid_state_for("setAAD"),
+            "final" if g.finished => invalid_state = true,
+            "final" if g.kind.is_gcm() && !g.encrypt && g.auth_tag.is_none() => {
+                g.finished = true;
+                plain_error = Some(GCM_AUTH_FAILURE_MESSAGE);
+            }
+            "update" if g.finished => plain_error = Some("Trying to add data in unsupported state"),
+            "setAutoPadding" if g.finished => invalid_state_for = Some("setAutoPadding"),
+            "setAuthTag" if g.finished || g.encrypt || !g.kind.is_gcm() || g.auth_tag.is_some() => {
+                invalid_state_for = Some("setAuthTag")
+            }
+            "getAuthTag" if !g.finished || !g.encrypt || !g.kind.is_gcm() => {
+                invalid_state_for = Some("getAuthTag")
+            }
+            "setAAD" if g.updated || g.finished => invalid_state_for = Some("setAAD"),
             _ => {}
         }
+    }
+    if invalid_state {
+        perry_runtime::fs::validate::throw_error_with_code(
+            "Invalid state",
+            "ERR_CRYPTO_INVALID_STATE",
+        );
+    }
+    if let Some(op) = invalid_state_for {
+        throw_invalid_state_for(op);
+    }
+    if let Some(message) = plain_error {
+        throw_plain_error(message);
     }
     let mut guard = h.state.lock().unwrap();
     let state = &mut *guard;
@@ -674,11 +726,29 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                     bytes_from_ptr(ptr)
                 }
             };
+            let previous_len = state.buffer.len();
             state.buffer.extend_from_slice(&bytes);
+            let output = if state.kind.is_gcm() && state.encrypt {
+                let (ciphertext, tag) = match encrypt_gcm_for_kind(
+                    state.kind,
+                    &state.key,
+                    &state.iv,
+                    &state.aad,
+                    &state.buffer,
+                    state.auth_tag_len,
+                ) {
+                    Some(v) => v,
+                    None => return nanbox_undefined(),
+                };
+                state.auth_tag = Some(tag);
+                ciphertext[previous_len..].to_vec()
+            } else {
+                Vec::new()
+            };
             match out_tag {
-                Some(tag) => encode_bytes_with_tag(&[], tag),
+                Some(tag) => encode_bytes_with_tag(&output, tag),
                 None => {
-                    let buf = alloc_buffer_from_slice(&[]);
+                    let buf = alloc_buffer_from_slice(&output);
                     nanbox_pointer_f64(buf as usize)
                 }
             }
@@ -690,6 +760,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
             // Repeated-final rejection handled in the pre-lock guard above.
             state.finished = true;
             let plaintext_or_ct = std::mem::take(&mut state.buffer);
+            let mut gcm_auth_failed = false;
             let output: Vec<u8> = match (state.kind, state.encrypt) {
                 (CipherKind::Aes256Cbc, true) => {
                     let block_size = 16;
@@ -1009,56 +1080,35 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         Err(_) => return nanbox_undefined(),
                     }
                 }
-                // GCM encrypt (#3382): the manual CTR32+GHASH path
-                // (`encrypt_gcm`) derives J0 from any non-empty IV, so a
-                // non-96-bit IV (e.g. 8 or 16 bytes) no longer panics in the
-                // fixed-nonce `Aes*Gcm` types. The 16-byte tag is truncated to
-                // `auth_tag_len` for `getAuthTag()`.
-                (CipherKind::Aes256Gcm, true) => {
-                    let (ct, tag) = match encrypt_gcm::<Aes256, Aes256Ctr32Be>(
+                // GCM encrypt (#3382): update emits ciphertext, while final
+                // only finalizes and stores the auth tag for getAuthTag().
+                // The manual CTR32+GHASH path derives J0 from any non-empty
+                // IV, so non-96-bit IVs do not panic in fixed-nonce types.
+                (kind, true) if kind.is_gcm() => {
+                    let (_, tag) = match encrypt_gcm_for_kind(
+                        kind,
                         &state.key,
                         &state.iv,
                         &state.aad,
                         &plaintext_or_ct,
+                        state.auth_tag_len,
                     ) {
                         Some(v) => v,
                         None => return nanbox_undefined(),
                     };
-                    state.auth_tag = Some(tag[..state.auth_tag_len.min(tag.len())].to_vec());
-                    ct
+                    state.auth_tag = Some(tag);
+                    Vec::new()
                 }
-                (CipherKind::Aes128Gcm, true) => {
-                    let (ct, tag) = match encrypt_gcm::<Aes128, Aes128Ctr32Be>(
-                        &state.key,
-                        &state.iv,
-                        &state.aad,
-                        &plaintext_or_ct,
-                    ) {
-                        Some(v) => v,
-                        None => return nanbox_undefined(),
-                    };
-                    state.auth_tag = Some(tag[..state.auth_tag_len.min(tag.len())].to_vec());
-                    ct
-                }
-                (CipherKind::Aes192Gcm, true) => {
-                    let (ct, tag) = match encrypt_gcm::<Aes192, Aes192Ctr32Be>(
-                        &state.key,
-                        &state.iv,
-                        &state.aad,
-                        &plaintext_or_ct,
-                    ) {
-                        Some(v) => v,
-                        None => return nanbox_undefined(),
-                    };
-                    state.auth_tag = Some(tag[..state.auth_tag_len.min(tag.len())].to_vec());
-                    ct
-                }
-                (CipherKind::Aes256Gcm, false) => {
+                (kind, false) if kind.is_gcm() => {
                     let tag = match state.auth_tag.as_ref() {
                         Some(t) if t.len() == state.auth_tag_len => t.clone(),
-                        _ => return nanbox_undefined(), // GCM decrypt needs tag
+                        _ => {
+                            gcm_auth_failed = true;
+                            Vec::new()
+                        }
                     };
-                    match decrypt_gcm256_with_tag_len(
+                    match decrypt_gcm_for_kind(
+                        kind,
                         &state.key,
                         &state.iv,
                         &state.aad,
@@ -1066,42 +1116,18 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                         &tag,
                     ) {
                         Some(pt) => pt,
-                        None => return nanbox_undefined(),
+                        None => {
+                            gcm_auth_failed = true;
+                            Vec::new()
+                        }
                     }
                 }
-                (CipherKind::Aes192Gcm, false) => {
-                    let tag = match state.auth_tag.as_ref() {
-                        Some(t) if t.len() == state.auth_tag_len => t.clone(),
-                        _ => return nanbox_undefined(),
-                    };
-                    match decrypt_gcm192_with_tag_len(
-                        &state.key,
-                        &state.iv,
-                        &state.aad,
-                        &plaintext_or_ct,
-                        &tag,
-                    ) {
-                        Some(pt) => pt,
-                        None => return nanbox_undefined(),
-                    }
-                }
-                (CipherKind::Aes128Gcm, false) => {
-                    let tag = match state.auth_tag.as_ref() {
-                        Some(t) if t.len() == state.auth_tag_len => t.clone(),
-                        _ => return nanbox_undefined(),
-                    };
-                    match decrypt_gcm128_with_tag_len(
-                        &state.key,
-                        &state.iv,
-                        &state.aad,
-                        &plaintext_or_ct,
-                        &tag,
-                    ) {
-                        Some(pt) => pt,
-                        None => return nanbox_undefined(),
-                    }
-                }
+                _ => return nanbox_undefined(),
             };
+            if gcm_auth_failed {
+                drop(guard);
+                throw_plain_error(GCM_AUTH_FAILURE_MESSAGE);
+            }
             // #3381 — `final(outputEncoding)`: when an output encoding string
             // is passed, return an encoded JS string (e.g. hex/utf8) instead of
             // a Buffer. With no arg the Buffer-returning shape is preserved.
@@ -1135,6 +1161,9 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         "setAuthTag" => {
             // After-final rejection handled in the pre-lock guard above.
             if args.is_empty() {
+                return nanbox_undefined();
+            }
+            if state.encrypt || !state.kind.is_gcm() {
                 return nanbox_undefined();
             }
             let ptr = (args[0].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
@@ -1181,6 +1210,16 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
 /// `typeof c.getAuthTag === "function"` and `const g = c.getAuthTag; g()`
 /// both work, mirroring Node's `Cipher` shape.
 pub unsafe fn dispatch_cipher_property(handle: i64, property: &str) -> f64 {
+    if matches!(property, "getAuthTag" | "setAuthTag") {
+        let h = match get_handle_mut::<CipherHandle>(handle) {
+            Some(h) => h,
+            None => return nanbox_undefined(),
+        };
+        let encrypt = h.state.lock().unwrap().encrypt;
+        if (property == "getAuthTag" && !encrypt) || (property == "setAuthTag" && encrypt) {
+            return nanbox_undefined();
+        }
+    }
     let name_bytes: &'static [u8] = match property {
         "update" => b"update",
         "final" => b"final",

@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    networks:
+      - app-net
+    depends_on:
+      - api
+  api:
+    image: myapp/api:latest
+    environment:
+      DATABASE_URL: postgres://app:secret@db:5432/app
+    networks:
+      - app-net
+networks:
+  app-net:
+    driver: bridge

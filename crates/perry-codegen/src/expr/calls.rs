@@ -47,6 +47,98 @@ use super::{
     I18nLowerCtx,
 };
 
+/// #5247: under `--debug-symbols`, emit a `js_set_call_location(file, line)`
+/// runtime call right before a dynamic method dispatch so the
+/// "X is not a function" throw path can render `at <file>:<line>` in the thrown
+/// TypeError's `.stack`. Resolves the *pending* call byte offset (recorded by
+/// the `Expr::Call` dispatcher) → `(file, line)` via the module's installed
+/// debug-location context. No-op (no IR emitted) when the context is absent
+/// (default build) or the pending offset is 0 (synthesized call).
+///
+/// Called at the dispatch emission site (after the call's arguments are
+/// lowered) with the offset the dispatcher captured at entry — before any
+/// nested-call argument overwrote the shared pending offset — so the location
+/// reflects the OUTER call, not its last-lowered argument.
+pub(crate) fn emit_call_location_at(ctx: &mut FnCtx<'_>, byte_offset: u32) {
+    let Some((file, line)) = ctx
+        .strings
+        .call_location_for(byte_offset)
+        .map(|(f, l)| (f.to_string(), l))
+    else {
+        return;
+    };
+    let file_label = emit_string_literal_global(ctx, &file);
+    let file_len = file.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_set_call_location",
+        &[
+            (PTR, &file_label),
+            (I64, &file_len.to_string()),
+            (I32, &line.to_string()),
+        ],
+    );
+}
+
+/// #2013/#3146: emit a setup-time `validateString` call. `value_box` is the
+/// original NaN-boxed value; `name` is the static argument name node uses in
+/// the error (`"algorithm"` for `createHash`, `"hmac"` for `createHmac`'s
+/// algorithm, `"digest"` for `pbkdf2`). The runtime throws `TypeError
+/// [ERR_INVALID_ARG_TYPE]` on a non-string value, so this is emitted BEFORE the
+/// value is unboxed to a raw pointer (a number would otherwise mask into a
+/// bogus pointer and segfault `bytes_from_ptr`).
+fn emit_validate_string_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str) {
+    let name_label = emit_string_literal_global(ctx, name);
+    let name_len = name.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_runtime_validate_string_arg",
+        &[
+            (DOUBLE, value_box),
+            (PTR, &name_label),
+            (I32, &name_len.to_string()),
+        ],
+    );
+}
+
+/// #2013/#3146: emit a setup-time validation for a `node:crypto` key-material
+/// argument (`createHmac` key). Accepts a string or `Buffer`/`TypedArray`/
+/// `DataView`/`ArrayBuffer`; throws `TypeError [ERR_INVALID_ARG_TYPE]`
+/// otherwise. Emitted before the value is unboxed.
+fn emit_validate_crypto_key_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str) {
+    let name_label = emit_string_literal_global(ctx, name);
+    let name_len = name.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_runtime_validate_crypto_key_arg",
+        &[
+            (DOUBLE, value_box),
+            (PTR, &name_label),
+            (I32, &name_len.to_string()),
+        ],
+    );
+}
+
+/// #2013/#3146: emit a setup-time `validateInteger(value, name, min, max)`
+/// call. Used for `pbkdf2*` iterations/keylen and `scryptSync` keylen, which
+/// node validates as integers in a fixed range before deriving. Emitted in
+/// node's argument order so the first bad argument reports the matching error.
+fn emit_validate_integer_arg(ctx: &mut FnCtx<'_>, value_box: &str, name: &str, min: f64, max: f64) {
+    let name_label = emit_string_literal_global(ctx, name);
+    let name_len = name.len();
+    let blk = ctx.block();
+    blk.call_void(
+        "js_runtime_validate_integer_arg",
+        &[
+            (DOUBLE, value_box),
+            (PTR, &name_label),
+            (I32, &name_len.to_string()),
+            (DOUBLE, &double_literal(min)),
+            (DOUBLE, &double_literal(max)),
+        ],
+    );
+}
+
 /// Whether a `createHash(...).update(e)` / `createHmac(alg, e)` argument is a
 /// Buffer / Uint8Array — either a direct buffer-producing expression or a
 /// local/field whose static type is `Buffer` / `Uint8Array`. Such inputs must
@@ -365,6 +457,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         Some(lower_expr(ctx, &digest_args[0])?)
                     };
 
+                    // #2013/#3146: validate the algorithm (and HMAC key) BEFORE
+                    // unboxing — a non-string would mask into a bogus pointer
+                    // and segfault `bytes_from_ptr`. node validates the
+                    // algorithm first, then the key.
+                    let is_hmac = create_method == "createHmac" || create_method == "Hmac";
+                    emit_validate_string_arg(
+                        ctx,
+                        &alg_box,
+                        if is_hmac { "hmac" } else { "algorithm" },
+                    );
+                    if is_hmac {
+                        if let Some(kb) = &key_box_opt {
+                            emit_validate_crypto_key_arg(ctx, kb, "key");
+                        }
+                    }
                     let blk = ctx.block();
                     let alg_handle = unbox_to_i64(blk, &alg_box);
                     // Allocate the handle. Both helpers return f64 already
@@ -494,6 +601,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 None
             };
+            // #2013/#3146: reject a non-string algorithm before unboxing.
+            emit_validate_string_arg(ctx, &alg_box, "algorithm");
             let blk = ctx.block();
             let alg_handle = unbox_to_i64(blk, &alg_box);
             // Returns an already-NaN-boxed f64 (POINTER_TAG + handle id).
@@ -560,12 +669,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(blk.call(DOUBLE, "js_crypto_create_ecdh", &[(I64, &curve_handle)]))
         }
 
-        // `crypto.createDiffieHellman(...)` / `crypto.getDiffieHellman(name)`
-        // / `crypto.createDiffieHellmanGroup(name)` classic DH handles.
+        // `crypto.createDiffieHellman(...)` / legacy constructor alias
+        // `crypto.DiffieHellman(...)` / `crypto.getDiffieHellman(name)` /
+        // `crypto.createDiffieHellmanGroup(name)` / constructor alias
+        // `crypto.DiffieHellmanGroup(name)` classic DH handles.
         Expr::Call { callee, args, .. }
             if matches!(
                 callee.as_ref(),
-                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup") && matches!(
+                Expr::PropertyGet { object, property } if (property == "createDiffieHellman" || property == "DiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup" || property == "DiffieHellmanGroup") && matches!(
                     object.as_ref(),
                     Expr::NativeModuleRef(n) if n == "crypto"
                 )
@@ -576,7 +687,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 unreachable!()
             };
-            if property == "getDiffieHellman" || property == "createDiffieHellmanGroup" {
+            if property == "getDiffieHellman"
+                || property == "createDiffieHellmanGroup"
+                || property == "DiffieHellmanGroup"
+            {
                 let group = if let Some(arg) = args.first() {
                     lower_expr(ctx, arg)?
                 } else {
@@ -717,6 +831,71 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &secret))
         }
 
+        // `crypto.encapsulate(publicKey[, callback])` — currently covers the
+        // high-value X25519 KEM path using Perry's KeyObject surrogate.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "encapsulate" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.is_empty() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key = lower_expr(ctx, &args[0])?;
+            if let Some(callback) = args.get(1) {
+                let callback = lower_expr(ctx, callback)?;
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_encapsulate_async",
+                    &[(DOUBLE, &key), (DOUBLE, &callback)],
+                ))
+            } else {
+                let blk = ctx.block();
+                let result = blk.call(I64, "js_crypto_encapsulate", &[(DOUBLE, &key)]);
+                Ok(nanbox_pointer_inline(blk, &result))
+            }
+        }
+
+        // `crypto.decapsulate(privateKey, ciphertext[, callback])` — X25519
+        // ciphertexts return the recovered shared key Buffer.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "decapsulate" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let key = lower_expr(ctx, &args[0])?;
+            let ciphertext = lower_expr(ctx, &args[1])?;
+            if let Some(callback) = args.get(2) {
+                let callback = lower_expr(ctx, callback)?;
+                let blk = ctx.block();
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_crypto_decapsulate_async",
+                    &[(DOUBLE, &key), (DOUBLE, &ciphertext), (DOUBLE, &callback)],
+                ))
+            } else {
+                let blk = ctx.block();
+                let shared = blk.call(
+                    I64,
+                    "js_crypto_decapsulate",
+                    &[(DOUBLE, &key), (DOUBLE, &ciphertext)],
+                );
+                Ok(nanbox_pointer_inline(blk, &shared))
+            }
+        }
+
         // Standalone `crypto.createHmac(alg, key)` / legacy
         // callable `crypto.Hmac(alg, key)` — same shape as
         // `createHash` above. Closes #1076 for the `const h = createHmac(...)`
@@ -746,6 +925,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             let alg_box = lower_expr(ctx, &args[0])?;
             let key_box = lower_expr(ctx, &args[1])?;
+            // #2013/#3146: validate algorithm (then key) before unboxing.
+            emit_validate_string_arg(ctx, &alg_box, "hmac");
+            emit_validate_crypto_key_arg(ctx, &key_box, "key");
             let blk = ctx.block();
             let alg_handle = unbox_to_i64(blk, &alg_box);
             let key_handle = unbox_to_i64(blk, &key_box);
@@ -1090,12 +1272,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ));
             }
             if is_generate {
-                let buf = blk.call(
-                    I64,
+                Ok(blk.call(
+                    DOUBLE,
                     "js_crypto_generate_prime_sync",
                     &[(DOUBLE, &first_box), (DOUBLE, &options_box)],
-                );
-                Ok(nanbox_pointer_inline(blk, &buf))
+                ))
             } else {
                 Ok(blk.call(
                     DOUBLE,
@@ -1443,6 +1624,56 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
 
+        // crypto.argon2Sync(algorithm, parameters) -> Buffer.
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "argon2Sync" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 2 {
+                return Ok(double_literal(0.0));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let params_box = lower_expr(ctx, &args[1])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            let buf_handle = blk.call(
+                I64,
+                "js_crypto_argon2_sync",
+                &[(I64, &alg_handle), (DOUBLE, &params_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &buf_handle))
+        }
+
+        // crypto.argon2(algorithm, parameters, callback)
+        Expr::Call { callee, args, .. }
+            if matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property } if property == "argon2" && matches!(
+                    object.as_ref(),
+                    Expr::NativeModuleRef(n) if n == "crypto"
+                )
+            ) =>
+        {
+            if args.len() < 3 {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            let alg_box = lower_expr(ctx, &args[0])?;
+            let params_box = lower_expr(ctx, &args[1])?;
+            let cb_box = lower_expr(ctx, &args[2])?;
+            let blk = ctx.block();
+            let alg_handle = unbox_to_i64(blk, &alg_box);
+            Ok(blk.call(
+                DOUBLE,
+                "js_crypto_argon2_async",
+                &[(I64, &alg_handle), (DOUBLE, &params_box), (DOUBLE, &cb_box)],
+            ))
+        }
+
         // crypto.hkdfSync(algorithm, ikm, salt, info, keylen) -> Buffer.
         Expr::Call { callee, args, .. }
             if matches!(
@@ -1582,6 +1813,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 None
             };
+            // #2013/#3146: node validates iterations (int >= 1), keylen
+            // (int >= 0), then the digest (string) before deriving — and a
+            // non-string digest would otherwise mask into a bogus pointer and
+            // segfault `bytes_from_ptr`.
+            emit_validate_integer_arg(ctx, &iter_box, "iterations", 1.0, i32::MAX as f64);
+            emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
+            if let Some(db) = &digest_box {
+                emit_validate_string_arg(ctx, db, "digest");
+            }
             let blk = ctx.block();
             let pwd_handle = unbox_to_i64(blk, &pwd_box);
             let salt_handle = unbox_to_i64(blk, &salt_box);
@@ -1665,6 +1905,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 None
             };
+            // #2013/#3146: node validates keylen as an integer in [0, 2^31-1].
+            emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
             let blk = ctx.block();
             let pwd_handle = unbox_to_i64(blk, &pwd_box);
             let salt_handle = unbox_to_i64(blk, &salt_box);
@@ -2053,6 +2295,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &p), (DOUBLE, &options)],
                     ))
                 }
+                "symlink" if args.len() >= 2 => {
+                    let target = lower_expr(ctx, &args[0])?;
+                    let path = lower_expr(ctx, &args[1])?;
+                    let arg2 = if args.len() >= 3 {
+                        lower_expr(ctx, &args[2])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    let arg3 = if args.len() >= 4 {
+                        lower_expr(ctx, &args[3])?
+                    } else {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    };
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_fs_symlink_callback",
+                        &[
+                            (DOUBLE, &target),
+                            (DOUBLE, &path),
+                            (DOUBLE, &arg2),
+                            (DOUBLE, &arg3),
+                        ],
+                    ))
+                }
                 "rmdirSync" if !args.is_empty() => {
                     let p = lower_expr(ctx, &args[0])?;
                     let options = if args.len() >= 2 {
@@ -2136,13 +2402,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Calls --------
-        Expr::Call { callee, args, .. } => {
+        Expr::Call {
+            callee,
+            args,
+            byte_offset,
+            ..
+        } => {
             for arg in args {
                 super::downgrade_buffer_aliases_in_expr(
                     ctx,
                     arg,
                     crate::native_value::MaterializationReason::UnknownCallEscape,
                 );
+            }
+            // #5247: under `--debug-symbols`, record this call's source byte
+            // offset so the dynamic method-dispatch emission site can emit a
+            // `js_set_call_location` immediately before the throwing dispatch
+            // (after the call's args — which may be nested calls that overwrite
+            // this — have been lowered). The dynamic dispatch path renders it as
+            // `at <file>:<line>` in the "X is not a function" TypeError's
+            // `.stack`. No-op in the default build.
+            if ctx.strings.debug_locations_enabled() {
+                ctx.strings.set_pending_call_offset(*byte_offset);
             }
             lower_call(ctx, callee, args)
         }

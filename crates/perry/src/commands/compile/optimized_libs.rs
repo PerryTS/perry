@@ -11,7 +11,8 @@
 //! use a hash-keyed target dir so consecutive runs with the same
 //! profile are no-ops after the first build.
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
@@ -19,6 +20,69 @@ use crate::OutputFormat;
 
 use super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
 use super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
+
+/// (#1529) Android's `libperry_app.so` is loaded via `dlopen`, so its TLS
+/// relocations must use the global-dynamic model — the aarch64-linux-android
+/// default (Initial-Executable) crashes at load with
+/// `TLS symbol "(null)" ... using IE access model`. The model is selected by a
+/// `tls-model` rustc flag, but that flag is exposed as a stable `-C` codegen
+/// option on some toolchains and is still nightly-gated (`-Z`) on others.
+/// Passing the `-C` form to a toolchain that only knows the `-Z` form aborts
+/// *every* Android build with `error: unknown codegen option: tls-model`.
+/// (This slipped past CI because release CI builds the runtime libs with plain
+/// `cargo build` and never compiles a full Android app through this path.)
+///
+/// Probe the active rustc and return the spelling it accepts. When only the
+/// `-Z` form is available, also set `RUSTC_BOOTSTRAP=1` on `cmd` so the gated
+/// flag is honored on a stable toolchain without requiring a nightly install.
+pub(crate) fn android_global_dynamic_tls_rustflag(cmd: &mut Command) -> &'static str {
+    let c_form_supported = Command::new("rustc")
+        .args(["-C", "help"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("tls-model"))
+        .unwrap_or(false);
+    if c_form_supported {
+        "-C tls-model=global-dynamic"
+    } else {
+        cmd.env("RUSTC_BOOTSTRAP", "1");
+        "-Z tls-model=global-dynamic"
+    }
+}
+
+#[cfg(windows)]
+fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{}", rest))
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+
+#[cfg(not(windows))]
+fn cargo_target_dir_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(windows)]
+fn cargo_target_dir_env_path(_target_dir: &Path, relative_target_dir: &Path) -> PathBuf {
+    relative_target_dir.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn cargo_target_dir_env_path(target_dir: &Path, _relative_target_dir: &Path) -> PathBuf {
+    target_dir.to_path_buf()
+}
+
+fn auto_target_dir_paths(workspace_root: &Path, hash: u64) -> (PathBuf, PathBuf) {
+    let workspace_root = cargo_target_dir_path(workspace_root.to_path_buf());
+    let relative_target_dir = PathBuf::from("target").join(format!("perry-auto-{:016x}", hash));
+    let target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
+    let cargo_env_dir = cargo_target_dir_env_path(&target_dir, &relative_target_dir);
+    (target_dir, cargo_env_dir)
+}
 
 pub struct OptimizedLibs {
     /// Path to the rebuilt `libperry_runtime.a` (or `perry_runtime.lib`).
@@ -40,6 +104,11 @@ pub struct OptimizedLibs {
     /// is *also* stripped from the rebuild so the link line stays
     /// free of duplicate `_js_*` symbols.
     pub well_known_libs: Vec<PathBuf>,
+    /// True when the stdlib archive is the prebuilt full archive rather
+    /// than an optimized rebuild with well-known features stripped. In that
+    /// fallback shape, wrapper archives must appear before stdlib so their
+    /// duplicate Node binding symbols satisfy the object files first.
+    pub prefer_well_known_before_stdlib: bool,
 }
 
 impl OptimizedLibs {
@@ -51,7 +120,54 @@ impl OptimizedLibs {
             stdlib_bc: None,
             extra_bc: Vec::new(),
             well_known_libs: Vec::new(),
+            prefer_well_known_before_stdlib: false,
         }
+    }
+}
+
+fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<String> {
+    let mut iteration_set: BTreeSet<String> = ctx.native_module_imports.iter().cloned().collect();
+    if let Ok(forced) = std::env::var("PERRY_FORCE_WELL_KNOWN") {
+        for module in forced.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace()) {
+            let module = module.trim();
+            if module.is_empty() {
+                continue;
+            }
+            if super::well_known::lookup_well_known(module).is_some() {
+                iteration_set.insert(module.strip_prefix("node:").unwrap_or(module).to_string());
+            }
+        }
+    }
+    iteration_set
+}
+
+/// Resolve well-known wrapper archives without rebuilding runtime/stdlib.
+///
+/// Used when automatic runtime/stdlib specialization is disabled. The
+/// no-auto path still needs wrapper archives for FFI symbols that are not
+/// defined by the full prebuilt stdlib, such as the `perry-ext-http` server
+/// entry points recorded by the codegen FFI registry. Prefer already-built
+/// archives, but when the Perry workspace source is available, build a missing
+/// wrapper once in the caller's cargo target dir so fresh dev checkouts still
+/// link no-auto parity cases correctly.
+pub(super) fn resolve_no_auto_optimized_libs(
+    ctx: &CompilationContext,
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> OptimizedLibs {
+    if matches!(format, OutputFormat::Text) && verbose > 0 {
+        eprintln!("  auto-optimize: skipped; using prebuilt target/release/libperry_*.a");
+    }
+    let well_known_libs = if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none() {
+        resolve_prebuilt_ext_libs(&well_known_iteration_set(ctx), target, format, verbose)
+    } else {
+        Vec::new()
+    };
+    OptimizedLibs {
+        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
+        well_known_libs,
+        ..OptimizedLibs::empty()
     }
 }
 
@@ -72,6 +188,9 @@ pub(super) fn build_optimized_libs(
     format: OutputFormat,
     verbose: u8,
 ) -> OptimizedLibs {
+    let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
+    let iteration_set = well_known_iteration_set(ctx);
+
     // `PERRY_NO_AUTO_OPTIMIZE=1` — opt out of the per-app feature-set
     // specialization and use the prebuilt `target/release/libperry_*.a`
     // built with the default `full` feature set. Used by CI doc-tests
@@ -81,19 +200,15 @@ pub(super) fn build_optimized_libs(
     // to a different `target/perry-auto-<hash>` cache dir). Trades
     // binary size for ~80% wall-time reduction on doc-tests.
     //
-    // Returning `OptimizedLibs::empty()` makes the link path fall
-    // through to `find_runtime_library` / `find_stdlib_library`,
-    // which probe `target/release/` and `target/<target-triple>/release/`
-    // in that order. The workflow's prebuild step is responsible for
-    // making sure those paths exist.
+    // The runtime/stdlib link path still falls through to
+    // `find_runtime_library` / `find_stdlib_library`, which probe
+    // `target/release/` and `target/<target-triple>/release/`. Keep the
+    // well-known wrapper lookup active, though: native-table rows such
+    // as `http.request(...)` and `http.createServer(...)` emit symbols
+    // owned by `perry-ext-http`, and the full prebuilt stdlib does not
+    // define those wrapper-only entry points.
     if std::env::var_os("PERRY_NO_AUTO_OPTIMIZE").is_some() {
-        if matches!(format, OutputFormat::Text) && verbose > 0 {
-            eprintln!(
-                "  auto-optimize: skipped (PERRY_NO_AUTO_OPTIMIZE=1); \
-                 using prebuilt target/release/libperry_*.a"
-            );
-        }
-        return OptimizedLibs::empty();
+        return resolve_no_auto_optimized_libs(ctx, target, format, verbose);
     }
     // (compute_required_features + features_to_cargo_arg imported at module top)
     let mut features = compute_required_features(
@@ -133,7 +248,6 @@ pub(super) fn build_optimized_libs(
     // each entry falls back to the perry-stdlib copy individually
     // (logged with `well-known: skipping` when verbose), so a
     // partially-built workspace still produces a working binary.
-    let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
     let mut well_known_libs: Vec<PathBuf> = Vec::new();
     // #507 — wrappers whose own crate-level `[dependencies]` pull tokio
     // (TcpStream, hyper, reqwest, mongodb, sqlx, tokio-tungstenite,
@@ -164,24 +278,17 @@ pub(super) fn build_optimized_libs(
     // imported and routes to perry-ext-http — but perry-ext-http only
     // exports the HTTP-client surface (`js_http_*` / `js_node_http_*`),
     // not the Web Fetch ctors that hono's compiled output references.
-    // perry-ext-fetch is the staticlib that ships those symbols.
     //
     // When the user's TS code (or any compilePackages-resolved module like
     // hono) constructs `new Headers(...)` / `new Request(...)` / `new Response(...)`,
     // the HIR sets `ctx.uses_fetch = true` (see
     // `crates/perry-hir/src/destructuring.rs::1469-1492` + the explicit
-    // `fetch(...)` arms in `lower/expr_call.rs`). If that flag is set but
-    // the user didn't *also* import `'fetch'` / `'node-fetch'` (so the
-    // well-known table won't pull perry-ext-fetch in on its own), we
-    // synthetically add `"fetch"` here so the iteration below routes
-    // perry-ext-fetch into the link line. The `'fetch'` binding strips
-    // no perry-stdlib feature (see stdlib_features.rs — fetch falls
-    // through to `_ => &[]`), so this is a pure-add.
-    let mut iteration_set: std::collections::BTreeSet<String> =
-        ctx.native_module_imports.iter().cloned().collect();
-    if ctx.uses_fetch && !iteration_set.contains("fetch") && !iteration_set.contains("node-fetch") {
-        iteration_set.insert("fetch".to_string());
-    }
+    // `fetch(...)` arms in `lower/expr_call.rs`). Keep `http-client` below
+    // so perry-stdlib supplies both the constructors and the erased-type
+    // Request/Response/Headers/Blob dispatch registries. Do not synthesize
+    // the `"fetch"` well-known binding from `uses_fetch`: perry-ext-fetch has
+    // separate registries, so a builtin `new Request()` constructed there
+    // would make `(req as any).url` miss stdlib's dispatch path.
     if use_well_known {
         for module in &iteration_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);
@@ -257,21 +364,29 @@ pub(super) fn build_optimized_libs(
             // `compute_required_features` consulted above, so we
             // know exactly what to remove.
             for feat in crate::commands::stdlib_features::module_to_features(module_normalized) {
-                // Fix #589: `node:http` / `node:https` / `node:http2`
-                // map to `http-client`, but that feature also covers
-                // the Web Fetch FFIs (`js_headers_new`,
-                // `js_response_new`, `js_request_new`). When a
-                // compilePackages package — typically hono — uses
-                // `new Headers()` / `new Response()` while the user
-                // also imports `node:http`, stripping `http-client`
-                // breaks the link with undefined `js_headers_new` /
-                // `js_response_new` symbols. perry-ext-http only
-                // bundles the server side (perry-ext-http-server). So
-                // keep `http-client` if `uses_fetch` is set —
-                // perry-stdlib's fetch.rs stays in the build to
-                // satisfy the Web Fetch references; the well-known
-                // staticlib is still added for the server side.
+                // Fix #589 / #5174: `node:http` / `node:https` /
+                // `node:http2` map to `http-client`, but that umbrella
+                // covers BOTH the bundled node:http client
+                // (`src/http.rs` + `src/axios.rs`) AND the Web Fetch
+                // FFIs (`js_headers_new`, `js_response_new`,
+                // `js_request_new`, …). When a program uses
+                // `new Headers()` / `new Response()` (directly or via a
+                // compilePackages package like hono) while also
+                // importing `node:http`, we must keep the Web Fetch
+                // half but drop the bundled client — otherwise its
+                // `js_http_process_pending` (and the rest of the
+                // `js_http_*` surface) duplicate perry-ext-http's
+                // symbols, and perry-ext-http's aux-pump call binds to
+                // perry-stdlib's empty-queue copy, wedging the
+                // in-process response pump (#5174). Since `http-client
+                // = ["web-fetch"]`, strip the umbrella and re-assert
+                // `web-fetch`: fetch.rs/fetch_blob.rs stay,
+                // http.rs/axios.rs go. The well-known staticlib
+                // (perry-ext-http / perry-ext-http-server) is still
+                // added for the actual node:http surface.
                 if *feat == "http-client" && ctx.uses_fetch {
+                    features.remove("http-client");
+                    features.insert("web-fetch");
                     continue;
                 }
                 // Refs #643: keep `database-sqlite` enabled even when
@@ -407,6 +522,17 @@ pub(super) fn build_optimized_libs(
             if matches!(module_normalized, "http" | "https") {
                 features.insert("external-http-client-pump");
             }
+            // Issue #4995 — when `node:events` routes to perry-ext-events,
+            // have js_stdlib_init_dispatch eagerly register the ext crate's
+            // EventEmitter constructor as the runtime's events construct
+            // dispatcher. Without this, a dynamic `new` on the bound
+            // `events.EventEmitter` export value (`require('events')`,
+            // default import, aliased ctor) falls through to the
+            // empty-object path until the first static construction has
+            // lazily registered the hooks.
+            if module_normalized == "events" {
+                features.insert("external-events-construct");
+            }
         }
     }
 
@@ -458,9 +584,23 @@ pub(super) fn build_optimized_libs(
     let workspace_root = match find_perry_workspace_root() {
         Some(p) => p,
         None => {
+            // Not verbose-gated: the fallback links the full-feature
+            // prebuilt stdlib (sqlite/crypto/tokio/…), which typically
+            // adds 5MB+ of code the linker cannot dead-strip (the
+            // dynamic dispatch table pins every module). Users should
+            // know why the binary is big and how to opt back in.
+            if matches!(format, OutputFormat::Text) && verbose == 0 {
+                eprintln!(
+                    "  note: Perry workspace source not found — linking the prebuilt \
+                     full stdlib (larger binary). Set PERRY_WORKSPACE_ROOT to a \
+                     source checkout to enable size-optimized rebuilds."
+                );
+            }
             if matches!(format, OutputFormat::Text) && verbose > 0 {
                 let (rt_name, std_name) = match target {
-                    Some("windows") => ("perry_runtime.lib", "perry_stdlib.lib"),
+                    Some("windows") | Some("windows-winui") => {
+                        ("perry_runtime.lib", "perry_stdlib.lib")
+                    }
                     None if cfg!(target_os = "windows") => {
                         ("perry_runtime.lib", "perry_stdlib.lib")
                     }
@@ -490,12 +630,33 @@ pub(super) fn build_optimized_libs(
             } else {
                 Vec::new()
             };
+            // Out-of-tree size salvage: release packaging ships a
+            // panic=abort prebuilt runtime variant alongside the unwind
+            // one (stage-npm.sh / release-packages.yml). When the app
+            // links runtime-only (no stdlib) and pulls in nothing that
+            // needs `catch_unwind`, prefer it — same ~12-18% saving the
+            // workspace rebuild gets from panic=abort, no source needed.
+            // Unix-only by construction: Windows always links stdlib
+            // (codegen declares all stdlib externs there), and mixing an
+            // abort runtime with the unwind stdlib is not supported.
+            let runtime = if panic_abort_safe && !ctx.needs_stdlib {
+                let found = super::library_search::find_runtime_abort_library(target);
+                if found.is_some() && matches!(format, OutputFormat::Text) && verbose > 0 {
+                    eprintln!("  auto-optimize: using prebuilt panic=abort runtime");
+                }
+                found
+            } else {
+                None
+            };
             return OptimizedLibs {
+                runtime,
+                prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
                 well_known_libs,
                 ..OptimizedLibs::empty()
             };
         }
     };
+    let workspace_root = cargo_target_dir_path(workspace_root);
 
     // Hash the (features, panic_mode, target, wasm-host) tuple into the
     // target dir name so cargo treats each combination as its own
@@ -504,17 +665,39 @@ pub(super) fn build_optimized_libs(
     // separately so a wasm program's build doesn't get served from a
     // cached non-wasm dir (which would lack `js_webassembly_*` symbols)
     // and vice versa (would carry unresolved `perry_wasm_host_*` refs).
+    //
+    // The compiler version is part of the key too. Codegen emits calls to
+    // runtime entrypoints (e.g. `js_promise_run_promise_jobs`,
+    // `js_mark_entry_module_esm`) that grow with each release; the object
+    // cache is already version-invalidated (see build_cache.rs — it misses on
+    // `perry_version != CARGO_PKG_VERSION`), so on a persistent build host a
+    // newer compiler emits the new calls while this version-blind dir would
+    // hand back a stale `libperry_runtime.a` lacking those symbols — an
+    // "undefined symbol" link failure for exactly the newly-added entrypoints.
+    // Keying on the version forces a matching rebuild whenever perry upgrades.
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
     let key_input = format!(
-        "{}|{}|{}|wasm={}",
-        feature_arg, panic_abort_safe, target_str, ctx.needs_wasm_runtime
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|diag={}|dgram={}|v={}",
+        feature_arg,
+        panic_abort_safe,
+        target_str,
+        ctx.needs_wasm_runtime,
+        ctx.uses_regex,
+        ctx.uses_temporal,
+        ctx.uses_event_emitter,
+        ctx.uses_url,
+        ctx.uses_string_normalize,
+        ctx.uses_intl_segmenter,
+        ctx.uses_diagnostics,
+        ctx.uses_dgram,
+        env!("CARGO_PKG_VERSION"),
     );
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
     }
-    let target_dir = workspace_root.join(format!("target/perry-auto-{:016x}", hash));
+    let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace_root, hash);
 
     if matches!(format, OutputFormat::Text) {
         let panic_str = if panic_abort_safe { "abort" } else { "unwind" };
@@ -543,7 +726,10 @@ pub(super) fn build_optimized_libs(
     }
     cargo_cmd
         .current_dir(&workspace_root)
-        .env("CARGO_TARGET_DIR", &target_dir)
+        // Keep Windows auto-target paths in the non-verbatim form before
+        // handing them to Cargo or downstream MSVC tools. Other platforms
+        // keep the previous absolute env path behavior.
+        .env("CARGO_TARGET_DIR", &cargo_env_dir)
         .arg("build")
         .arg("--release")
         .arg("-p")
@@ -593,6 +779,48 @@ pub(super) fn build_optimized_libs(
     if ctx.needs_wasm_runtime {
         cross_features.push("perry-runtime/wasm-host".to_string());
     }
+    // Enable the regex engine (`regex` + `fancy-regex`, ~1.2 MB) only when the
+    // program can actually produce or use a RegExp — detected in
+    // collect_modules. A program that never evaluates a regex literal/`RegExp`,
+    // a regex-coercing string method, or a glob API links none of it. The
+    // RegExp identity/display layer is always compiled, so non-regex programs
+    // still format/compare values correctly with the engine absent.
+    if ctx.uses_regex {
+        cross_features.push("perry-runtime/regex-engine".to_string());
+    }
+    // Enable the TC39 Temporal engine (`temporal_rs` + tz/calendar deps,
+    // ~580 KB) only when the program references `Temporal.*`. JS `Date` is a
+    // separate implementation and does not require this.
+    if ctx.uses_temporal {
+        cross_features.push("perry-runtime/temporal".to_string());
+    }
+    // Enable the WHATWG URL host/IDNA engine (`url`+`idna`+transitive
+    // `percent_encoding`, ~195 KB) only when the program uses a URL API.
+    if ctx.uses_url {
+        cross_features.push("perry-runtime/url-engine".to_string());
+    }
+    // `String.prototype.normalize` tables (~113 KB) and `Intl.Segmenter`
+    // UAX #29 tables (~73 KB) — each enabled only on its specific usage.
+    if ctx.uses_string_normalize {
+        cross_features.push("perry-runtime/string-normalize".to_string());
+    }
+    if ctx.uses_intl_segmenter {
+        cross_features.push("perry-runtime/intl-segmenter".to_string());
+    }
+    // Cold-path diagnostic JSON serializers (~95 KB incl. the `serde_json`
+    // pulled only by them) — enabled only when the program uses a heap-snapshot
+    // API or `process.report`. The env-driven GC/typed-feedback dev trace JSON
+    // ride this feature and stay off in size-optimized binaries.
+    if ctx.uses_diagnostics {
+        cross_features.push("perry-runtime/diagnostics".to_string());
+    }
+    // Per-Node-module gating: `node:dgram`'s implementation + dispatch arm are
+    // behind `mod-dgram`, enabled only when the program uses dgram (detected via
+    // `module: "dgram"` in the HIR). codegen only emits the `js_dgram_*` externs
+    // for dgram programs, so detection is complete (no dangling symbols).
+    if ctx.uses_dgram {
+        cross_features.push("perry-runtime/mod-dgram".to_string());
+    }
     if !cross_features.is_empty() {
         cargo_cmd.arg("--features").arg(cross_features.join(","));
     }
@@ -623,7 +851,10 @@ pub(super) fn build_optimized_libs(
     // #1508: same shape for Android — cc-rs can't find the NDK clang
     // otherwise (silent on Unix where `clang` happens to exist, hard fail
     // on Windows with `clang.exe not found`).
-    if matches!(target, Some("android") | Some("android-x86_64")) {
+    if matches!(
+        target,
+        Some("android") | Some("android-x86_64") | Some("wearos")
+    ) {
         if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
             for (k, v) in
                 super::library_search::android_cross_env(std::path::Path::new(&ndk), target)
@@ -651,8 +882,11 @@ pub(super) fn build_optimized_libs(
     // shadow stack), so those IE TLS relocations get baked into the final
     // cdylib. Force global-dynamic so the dynamic linker can resolve TLS
     // slots after the process has started.
-    if matches!(target, Some("android") | Some("android-x86_64")) {
-        rustflags.push("-C tls-model=global-dynamic");
+    if matches!(
+        target,
+        Some("android") | Some("android-x86_64") | Some("wearos")
+    ) {
+        rustflags.push(android_global_dynamic_tls_rustflag(&mut cargo_cmd));
     }
     if !rustflags.is_empty() {
         cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
@@ -713,13 +947,13 @@ pub(super) fn build_optimized_libs(
 
     // Resolve both archive paths.
     let runtime_name = match target {
-        Some("windows") => "perry_runtime.lib",
+        Some("windows") | Some("windows-winui") => "perry_runtime.lib",
         #[cfg(target_os = "windows")]
         None => "perry_runtime.lib",
         _ => "libperry_runtime.a",
     };
     let stdlib_name = match target {
-        Some("windows") => "perry_stdlib.lib",
+        Some("windows") | Some("windows-winui") => "perry_stdlib.lib",
         #[cfg(target_os = "windows")]
         None => "perry_stdlib.lib",
         _ => "libperry_stdlib.a",
@@ -837,7 +1071,7 @@ pub(super) fn build_optimized_libs(
         let emit_bc = |crate_name: &str| -> Option<PathBuf> {
             let mut cmd = Command::new("cargo");
             cmd.current_dir(&workspace_root)
-                .env("CARGO_TARGET_DIR", &target_dir)
+                .env("CARGO_TARGET_DIR", &cargo_env_dir)
                 .env("RUSTFLAGS", &bc_rustflags)
                 .arg("rustc")
                 .arg("--release")
@@ -938,10 +1172,11 @@ pub(super) fn build_optimized_libs(
                 | Some("ios-widget")
                 | Some("ios-widget-simulator") => "perry-ui-ios",
                 Some("visionos-simulator") | Some("visionos") => "perry-ui-visionos",
-                Some("android") => "perry-ui-android",
+                Some("android") | Some("wearos") => "perry-ui-android",
                 Some("watchos-simulator") | Some("watchos") => "perry-ui-watchos",
                 Some("tvos-simulator") | Some("tvos") => "perry-ui-tvos",
                 Some("linux") => "perry-ui-gtk4",
+                Some("windows-winui") => "perry-ui-windows-winui",
                 Some("windows") => "perry-ui-windows",
                 Some("macos") => "perry-ui-macos",
                 _ => {
@@ -982,30 +1217,25 @@ pub(super) fn build_optimized_libs(
         stdlib_bc,
         extra_bc,
         well_known_libs,
+        prefer_well_known_before_stdlib: false,
     }
 }
 
-/// #2532 — resolve the prebuilt `perry-ext-*` staticlibs a program needs
-/// when there is **no workspace source** to rebuild from (a released /
-/// out-of-tree install).
+/// #2532 / #3954 — resolve the `perry-ext-*` staticlibs a program needs
+/// while runtime/stdlib auto-specialization is disabled.
 ///
 /// The in-tree path strips the matching perry-stdlib feature and rebuilds
 /// stdlib so the ext lib and stdlib don't both define the same `_js_*`
 /// symbols. Out-of-tree we can't rebuild — the link uses the prebuilt full
-/// `libperry_stdlib.a` and the ext lib is appended *after* it. That's safe:
-/// the ext lib's only otherwise-undefined symbols (e.g.
-/// `js_node_http_create_server_with_options`, `js_node_http_server_listen`,
-/// `js_node_http_res_end`) are server-side and absent from stdlib, so the
-/// linker pulls just those archive members; the ext crate's *client*-side
-/// duplicates (`js_http_*`) are never pulled because stdlib already resolves
-/// them.
+/// `libperry_stdlib.a`, so the no-auto/fallback linker path places wrappers
+/// before stdlib. That lets wrapper factories and their duplicate client-side
+/// follow-up symbols come from the same archive while still letting the full
+/// stdlib satisfy unrelated bundled modules.
 ///
-/// Each well-known lib is located through `find_library`, which honours the
-/// `PERRY_LIB_DIR` / `PERRY_RUNTIME_DIR` overrides and the exe-dir /
-/// Homebrew `../lib` probes — the same precedence the runtime/stdlib
-/// lookups already use, so a release tarball or `brew` bottle that ships
-/// the ext libs alongside `libperry_runtime.a` resolves them with no extra
-/// configuration.
+/// Each well-known lib is first located through `find_library`, which honours
+/// the `PERRY_LIB_DIR` / `PERRY_RUNTIME_DIR` overrides and the exe-dir /
+/// Homebrew `../lib` probes. If that fails in an in-tree dev checkout, build
+/// the missing wrapper crate once and link the resulting archive.
 fn resolve_prebuilt_ext_libs(
     iteration_set: &std::collections::BTreeSet<String>,
     target: Option<&str>,
@@ -1030,7 +1260,7 @@ fn resolve_prebuilt_ext_libs(
             Some(path) => {
                 if matches!(format, OutputFormat::Text) {
                     println!(
-                        "  well-known (out-of-tree): routing `{}` → {} ({})",
+                        "  well-known (no-auto): routing `{}` → {} ({})",
                         module,
                         path.display(),
                         binding.tracking.as_deref().unwrap_or("no tracking issue")
@@ -1039,18 +1269,136 @@ fn resolve_prebuilt_ext_libs(
                 libs.push(path);
             }
             None => {
+                if let Some(workspace_root) = find_perry_workspace_root() {
+                    if let Some(path) = build_missing_prebuilt_ext_lib(
+                        &workspace_root,
+                        binding,
+                        &filename,
+                        target,
+                        format,
+                        verbose,
+                    ) {
+                        libs.push(path);
+                        continue;
+                    }
+                }
                 if matches!(format, OutputFormat::Text) && verbose > 0 {
                     eprintln!(
-                        "  well-known (out-of-tree): `{}` not found for `{}` — install \
-                         Perry's bundled ext libs next to the perry binary or set \
-                         PERRY_LIB_DIR; the link will fail with unresolved `js_*` symbols.",
-                        filename, module
+                        "  well-known (no-auto): `{}` not found for `{}` — install \
+                         Perry's bundled ext libs next to the perry binary, set \
+                         PERRY_LIB_DIR, or build `{}`; the link will fail with \
+                         unresolved `js_*` symbols.",
+                        filename, module, binding.krate
                     );
                 }
             }
         }
     }
     libs
+}
+
+fn cargo_target_dir_for_workspace(workspace_root: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(raw) if !raw.is_empty() => {
+            let path = PathBuf::from(raw);
+            if path.is_absolute() {
+                path
+            } else {
+                workspace_root.join(path)
+            }
+        }
+        _ => workspace_root.join("target"),
+    }
+}
+
+fn built_staticlib_path(workspace_root: &Path, filename: &str, target: Option<&str>) -> PathBuf {
+    let mut release_dir = cargo_target_dir_for_workspace(workspace_root);
+    if let Some(triple) = rust_target_triple(target) {
+        release_dir = release_dir.join(triple);
+    }
+    release_dir.join("release").join(filename)
+}
+
+fn build_missing_prebuilt_ext_lib(
+    workspace_root: &Path,
+    binding: &super::well_known::WellKnownBinding,
+    filename: &str,
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> Option<PathBuf> {
+    let crate_dir = workspace_root.join("crates").join(&binding.krate);
+    if !crate_dir.is_dir() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!(
+                "  well-known (no-auto): skipping `{}` — crate source not found at {}",
+                binding.krate,
+                crate_dir.display()
+            );
+        }
+        return None;
+    }
+
+    if matches!(format, OutputFormat::Text) {
+        println!(
+            "  well-known (no-auto): building missing `{}` from `{}`",
+            filename, binding.krate
+        );
+    }
+
+    let mut cargo_cmd = Command::new("cargo");
+    cargo_cmd
+        .current_dir(workspace_root)
+        .arg("build")
+        .arg("--release")
+        .arg("-p")
+        .arg(&binding.krate);
+    if let Some(triple) = rust_target_triple(target) {
+        cargo_cmd.arg("--target").arg(triple);
+    }
+
+    let status = match cargo_cmd.status() {
+        Ok(status) => status,
+        Err(err) => {
+            if matches!(format, OutputFormat::Text) && verbose > 0 {
+                eprintln!(
+                    "  well-known (no-auto): failed to spawn cargo for `{}` ({})",
+                    binding.krate, err
+                );
+            }
+            return None;
+        }
+    };
+    if !status.success() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!(
+                "  well-known (no-auto): cargo build for `{}` failed ({})",
+                binding.krate, status
+            );
+        }
+        return None;
+    }
+
+    let path = built_staticlib_path(workspace_root, filename, target);
+    if path.exists() {
+        if matches!(format, OutputFormat::Text) {
+            println!(
+                "  well-known (no-auto): routing `{}` → {}",
+                binding.package,
+                path.display()
+            );
+        }
+        return Some(path);
+    }
+
+    if matches!(format, OutputFormat::Text) && verbose > 0 {
+        eprintln!(
+            "  well-known (no-auto): cargo finished but `{}` was not produced at {}",
+            filename,
+            path.display()
+        );
+    }
+    None
 }
 
 /// True if this binding's wrapper crate has its own tokio dependency
@@ -1099,6 +1447,22 @@ fn binding_needs_shared_tokio(module: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock poisoned")
+    }
+
+    fn set_env_var(key: &str, value: Option<&str>) {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
 
     /// Closes #507. The well-known flip's "shared tokio" allowlist
     /// must match the set of perry-ext-* crates whose own
@@ -1127,5 +1491,261 @@ mod tests {
         // Defensive default: if a module isn't in the allowlist,
         // treat it as CPU-only (existing v0.5.586 behavior).
         assert!(!binding_needs_shared_tokio("definitely-not-a-real-package"));
+    }
+
+    #[test]
+    fn builtin_fetch_usage_does_not_synthesize_well_known_fetch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.uses_fetch = true;
+
+        let modules = well_known_iteration_set(&ctx);
+
+        assert!(
+            !modules.contains("fetch"),
+            "built-in Web Fetch should stay on perry-stdlib so erased-type dispatch shares the constructor registry"
+        );
+    }
+
+    #[test]
+    fn explicit_node_fetch_import_still_routes_to_well_known_fetch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports.insert("node-fetch".to_string());
+
+        let modules = well_known_iteration_set(&ctx);
+
+        assert!(modules.contains("node-fetch"));
+    }
+
+    #[test]
+    fn forced_well_known_env_extends_iteration_set() {
+        let _guard = env_lock();
+        let old_force_well_known = std::env::var("PERRY_FORCE_WELL_KNOWN").ok();
+
+        set_env_var(
+            "PERRY_FORCE_WELL_KNOWN",
+            Some("http, node:net ws definitely-not-real"),
+        );
+        let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
+        let modules = well_known_iteration_set(&ctx);
+
+        set_env_var("PERRY_FORCE_WELL_KNOWN", old_force_well_known.as_deref());
+
+        assert!(modules.contains("http"));
+        assert!(modules.contains("net"));
+        assert!(modules.contains("ws"));
+        assert!(!modules.contains("node:net"));
+        assert!(!modules.contains("definitely-not-real"));
+    }
+
+    #[test]
+    fn no_auto_still_resolves_prebuilt_well_known_archives() {
+        let _guard = env_lock();
+        let old_lib_dir = std::env::var("PERRY_LIB_DIR").ok();
+        let old_runtime_dir = std::env::var("PERRY_RUNTIME_DIR").ok();
+        let old_disable_well_known = std::env::var("PERRY_DISABLE_WELL_KNOWN").ok();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let http =
+            super::super::well_known::lookup_well_known("http").expect("http well-known binding");
+        let net =
+            super::super::well_known::lookup_well_known("net").expect("net well-known binding");
+        let ws = super::super::well_known::lookup_well_known("ws").expect("ws well-known binding");
+        let http_lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &http.lib,
+                rust_target_triple(None),
+            ));
+        let net_lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &net.lib,
+                rust_target_triple(None),
+            ));
+        let ws_lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &ws.lib,
+                rust_target_triple(None),
+            ));
+        std::fs::write(&http_lib, b"!<arch>\n").expect("write fake http archive");
+        std::fs::write(&net_lib, b"!<arch>\n").expect("write fake net archive");
+        std::fs::write(&ws_lib, b"!<arch>\n").expect("write fake ws archive");
+
+        set_env_var(
+            "PERRY_LIB_DIR",
+            Some(dir.path().to_str().expect("utf8 temp path")),
+        );
+        set_env_var("PERRY_RUNTIME_DIR", None);
+        set_env_var("PERRY_DISABLE_WELL_KNOWN", None);
+
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports.insert("http".to_string());
+        ctx.native_module_imports.insert("net".to_string());
+        ctx.native_module_imports.insert("ws".to_string());
+        let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
+
+        set_env_var("PERRY_LIB_DIR", old_lib_dir.as_deref());
+        set_env_var("PERRY_RUNTIME_DIR", old_runtime_dir.as_deref());
+        set_env_var(
+            "PERRY_DISABLE_WELL_KNOWN",
+            old_disable_well_known.as_deref(),
+        );
+
+        assert_eq!(libs.runtime, None);
+        assert_eq!(libs.stdlib, None);
+        assert!(
+            libs.well_known_libs.contains(&http_lib),
+            "expected no-auto well-known libs to include {http_lib:?}, got {:?}",
+            libs.well_known_libs
+        );
+        assert!(
+            libs.well_known_libs.contains(&net_lib),
+            "expected no-auto well-known libs to include {net_lib:?}, got {:?}",
+            libs.well_known_libs
+        );
+        assert!(
+            libs.well_known_libs.contains(&ws_lib),
+            "expected no-auto well-known libs to include {ws_lib:?}, got {:?}",
+            libs.well_known_libs
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cargo_target_dir_strips_windows_verbatim_prefixes() {
+        let drive = cargo_target_dir_path(PathBuf::from(
+            r"\\?\D:\Projects\perry\target\perry-auto-deadbeef",
+        ));
+        assert_eq!(
+            drive,
+            PathBuf::from(r"D:\Projects\perry\target\perry-auto-deadbeef")
+        );
+
+        let unc = cargo_target_dir_path(PathBuf::from(
+            r"\\?\UNC\server\share\perry\target\perry-auto-deadbeef",
+        ));
+        assert_eq!(
+            unc,
+            PathBuf::from(r"\\server\share\perry\target\perry-auto-deadbeef")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn auto_target_dir_uses_relative_cargo_env_path_on_windows() {
+        let workspace = PathBuf::from(r"\\?\D:\Projects\perry");
+        let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace, 0xdeadbeef);
+
+        assert!(
+            !cargo_env_dir.is_absolute(),
+            "CARGO_TARGET_DIR should stay relative so Cargo build scripts do not receive verbatim Windows paths"
+        );
+        assert_eq!(
+            cargo_env_dir,
+            PathBuf::from("target").join("perry-auto-00000000deadbeef")
+        );
+        assert_eq!(
+            target_dir,
+            PathBuf::from(r"D:\Projects\perry\target\perry-auto-00000000deadbeef")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn auto_target_dir_keeps_absolute_cargo_env_path_off_windows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (target_dir, cargo_env_dir) = auto_target_dir_paths(dir.path(), 0xdeadbeef);
+
+        assert!(
+            cargo_env_dir.is_absolute(),
+            "non-Windows hosts should keep the previous absolute CARGO_TARGET_DIR behavior"
+        );
+        assert_eq!(target_dir, cargo_env_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_auto_builds_missing_well_known_archive_from_workspace_source() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = env_lock();
+        let old_path = std::env::var_os("PATH");
+        let old_cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR");
+
+        let workspace = tempfile::tempdir().expect("tempdir");
+        for dir in [
+            "crates/perry-runtime",
+            "crates/perry-ui-geisterhand",
+            "crates/perry-ext-http",
+        ] {
+            std::fs::create_dir_all(workspace.path().join(dir)).expect("mkdir workspace marker");
+        }
+
+        let fake_bin = workspace.path().join("fake-bin");
+        std::fs::create_dir_all(&fake_bin).expect("mkdir fake bin");
+        let fake_cargo = fake_bin.join("cargo");
+        std::fs::write(
+            &fake_cargo,
+            r#"#!/bin/sh
+case "$*" in
+  *"-p perry-ext-http"*) ;;
+  *) exit 43 ;;
+esac
+mkdir -p "$CARGO_TARGET_DIR/release"
+printf '!<arch>\n' > "$CARGO_TARGET_DIR/release/libperry_ext_http.a"
+"#,
+        )
+        .expect("write fake cargo");
+        let mut perms = std::fs::metadata(&fake_cargo)
+            .expect("fake cargo metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_cargo, perms).expect("chmod fake cargo");
+
+        let target_dir = workspace.path().join("out-target");
+        let test_path = match old_path.as_ref() {
+            Some(path) => {
+                let mut paths = vec![fake_bin.clone()];
+                paths.extend(std::env::split_paths(path));
+                std::env::join_paths(paths).expect("join PATH")
+            }
+            None => fake_bin.clone().into_os_string(),
+        };
+        std::env::set_var("PATH", test_path);
+        std::env::set_var("CARGO_TARGET_DIR", &target_dir);
+
+        let binding =
+            super::super::well_known::lookup_well_known("http").expect("http well-known binding");
+        let filename = super::super::well_known::ext_staticlib_filename(
+            &binding.lib,
+            rust_target_triple(None),
+        );
+        let got = build_missing_prebuilt_ext_lib(
+            workspace.path(),
+            binding,
+            &filename,
+            None,
+            OutputFormat::Json,
+            0,
+        );
+
+        if let Some(path) = old_path {
+            std::env::set_var("PATH", path);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(dir) = old_cargo_target_dir {
+            std::env::set_var("CARGO_TARGET_DIR", dir);
+        } else {
+            std::env::remove_var("CARGO_TARGET_DIR");
+        }
+
+        assert_eq!(
+            got.expect("missing archive should be built from workspace source"),
+            target_dir.join("release/libperry_ext_http.a")
+        );
     }
 }

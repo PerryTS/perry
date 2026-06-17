@@ -2,9 +2,13 @@
 
 **One codebase. Every platform. Native performance.**
 
+[![Join the Perry Discord community](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/chEmpGdTtZ)
+
 Perry is a native TypeScript compiler written in Rust. It takes your TypeScript and compiles it straight to native executables — no Node.js, no Electron, no browser engine. Just fast, small binaries that run anywhere.
 
-**Current Version:** 0.5.152 | [Website](https://perryts.com) | [Documentation](https://perryts.github.io/perry/) | [Showcase](https://perryts.com/showcase)
+**Current Version:** 0.5.1164 | [Website](https://perryts.com) | [Documentation](https://perryts.github.io/perry/) | [Showcase](https://perryts.com/showcase)
+
+**Community:** [Join the Perry Discord](https://discord.gg/chEmpGdTtZ)
 
 ```bash
 perry compile src/main.ts -o myapp
@@ -12,6 +16,25 @@ perry compile src/main.ts -o myapp
 ```
 
 Perry uses [SWC](https://swc.rs/) for TypeScript parsing and [LLVM](https://llvm.org/) for native code generation. The output is a single binary with no runtime dependencies.
+
+### Node.js compatibility
+
+Perry targets close behavioral parity with Node.js. Against Node's own test suite
+(node v26.3.0, 53 `node:*` modules), Perry's native runtime passes **~97%**
+(2792 / 2863 cases), and overall Node/TypeScript compatibility sits around **95%**.
+Real implementations — not stubs — cover `fs`, `http`/`https`/`http2`, `net`/`tls`,
+`dns`/`dgram`, `crypto`, `stream` (+ `stream/web`), `events`, `child_process`,
+`cluster`, `worker_threads`, `zlib`, `process`, `async_hooks` /
+`AsyncLocalStorage`, `Atomics` / `SharedArrayBuffer` (cross-thread), the WHATWG
+web globals (`fetch`, `URL`, streams, `structuredClone`, WebCrypto, …), and ~50
+popular npm packages. The remaining gap is a long tail of edge-case options and a
+few categorical items (lookbehind regex, some `console` formatting). See
+[`docs/runtime-parity-gaps.md`](docs/runtime-parity-gaps.md).
+
+**Perry also compiles `.js` / `.cjs` / `.mjs` / `.jsx` source directly** (parsed as
+JavaScript, lowered through the same native pipeline as TypeScript) — no
+TypeScript annotations required. There are no guarantees for every dynamic JS
+pattern, but plain JavaScript projects compile and run in most cases.
 
 ---
 
@@ -173,8 +196,30 @@ cargo build --release
 
 Perry requires a C linker to link compiled executables:
 - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
-- **Linux:** GCC or Clang (`sudo apt install build-essential`)
+- **Linux:** GCC or Clang (see below for your distro)
 - **Windows:** MSVC (Visual Studio Build Tools)
+
+Linux linker by distro:
+
+```bash
+# Debian / Ubuntu / Pop!_OS / Mint
+sudo apt install build-essential
+
+# Arch / Manjaro / CachyOS / EndeavourOS
+sudo pacman -S base-devel gcc
+
+# Fedora / RHEL / CentOS Stream
+sudo dnf install gcc gcc-c++ glibc-devel
+
+# openSUSE
+sudo zypper install -t pattern devel_basis
+
+# Alpine / musl-based
+sudo apk add build-base
+
+# Void Linux
+sudo xbps-install -S base-devel
+```
 
 Run `perry doctor` to verify your environment.
 
@@ -326,7 +371,7 @@ splitViewAddChild(split, content);
 App({ title: 'My App', width: 800, height: 500, body: split });
 ```
 
-**10 target outputs from one codebase:**
+**11 target outputs from one codebase:**
 
 | Platform | Backend | Target Flag |
 |----------|---------|-------------|
@@ -336,6 +381,7 @@ App({ title: 'My App', width: 800, height: 500, body: split });
 | tvOS | UIKit | `--target tvos` / `--target tvos-simulator` |
 | watchOS | WatchKit | `--target watchos` / `--target watchos-simulator` |
 | Android | Android Views (JNI) | `--target android` |
+| Wear OS | Android Views (JNI) | `--target wearos` |
 | Windows | Win32 | *(default on Windows)* |
 | Linux | GTK4 | *(default on Linux)* |
 | Web | DOM (JS codegen) | `--target web` |
@@ -420,6 +466,7 @@ perry compile src/main.ts --target android -o MyApp
 # TV / Watch
 perry compile src/main.ts --target tvos -o MyApp
 perry compile src/main.ts --target watchos -o MyApp
+perry compile src/main.ts --target wearos -o MyApp       # Wear OS (Android on a watch)
 
 # Web
 perry compile src/main.ts --target web -o app.html       # JavaScript output
@@ -465,7 +512,7 @@ perry publish macos   # or: ios / android / linux
 | Spread operator in calls and literals | ✅ |
 | RegExp (test, match, replace) | ✅ |
 | BigInt (256-bit) | ✅ |
-| Decorators | ❌ ([not supported](docs/src/language/limitations.md#no-decorators)) |
+| Decorators | ⚠️ Legacy TS decorators + `emitDecoratorMetadata` ([details](docs/src/language/limitations.md#decorators)) |
 
 ### Standard Library
 
@@ -498,6 +545,43 @@ These packages are natively implemented in Rust — no Node.js required:
 | **Database** | mysql2, pg, ioredis |
 | **Security** | bcrypt, argon2, jsonwebtoken |
 | **Utilities** | dotenv, uuid, nodemailer, zlib, node-cron |
+| **Container** | perry/container (OCI container management) |
+
+---
+
+## Container Module
+
+Perry includes a native container management module `perry/container` for creating, running, and managing OCI containers:
+
+```typescript
+import { run, list, composeUp } from 'perry/container';
+
+// Run a container
+const container = await run({
+  image: 'nginx:alpine',
+  name: 'my-nginx',
+  ports: ['8080:80'],
+});
+
+// List containers
+const containers = await list();
+console.log(containers);
+
+// Multi-container orchestration
+const compose = await composeUp({
+  services: {
+    web: { image: 'nginx:alpine' },
+    db: { image: 'postgres:15-alpine' },
+  },
+});
+```
+
+**Platform support:**
+- macOS/iOS: Podman (apple/container support coming soon)
+- Linux: Podman (native)
+- Windows: Podman Desktop (experimental)
+
+See `example-code/container-demo/` for a complete example.
 
 ---
 

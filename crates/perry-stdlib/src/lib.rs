@@ -83,6 +83,9 @@ pub mod string_decoder;
 // Greenfield implementation (Node ships it deprecated since v11 but
 // many npm packages still import it).
 pub mod querystring;
+// vm — node:vm import/require shape plus narrowed local execution helpers.
+// The wrappers here retain direct-call FFI symbols.
+pub mod vm;
 pub mod worker_threads;
 
 // Re-export core
@@ -111,6 +114,7 @@ pub use readline::*;
 #[cfg(feature = "bundled-slugify")]
 pub use slugify::*;
 pub use string_decoder::*;
+pub use vm::*;
 pub use worker_threads::*;
 
 // === HTTP Server ===
@@ -131,18 +135,30 @@ pub mod fastify;
 #[cfg(feature = "bundled-fastify")]
 pub use fastify::*;
 
-// === HTTP Client ===
-#[cfg(feature = "http-client")]
+// === Web Fetch API (fetch / Headers / Request / Response / Blob) ===
+// #5174: gated on `web-fetch`, NOT `http-client`. The Web Fetch surface
+// (reqwest-backed `fetch()` + the WHATWG data types) is independent of
+// the bundled node:http client below, so a program that only needs
+// `new Headers()` while routing `node:http` to perry-ext-http keeps
+// these without dragging in the colliding bundled http.rs symbols.
+// `http-client = ["web-fetch"]`, so `--features http-client` still
+// compiles all of this exactly as before.
+#[cfg(feature = "web-fetch")]
 pub mod fetch;
-#[cfg(feature = "http-client")]
+#[cfg(feature = "web-fetch")]
 pub use fetch::*;
 // Issue #1211: Blob/File constructors + object-URL helpers split out
 // of fetch.rs to keep that file under the 2,000-line lint gate.
-#[cfg(feature = "http-client")]
+#[cfg(feature = "web-fetch")]
 pub mod fetch_blob;
-#[cfg(feature = "http-client")]
+#[cfg(feature = "web-fetch")]
 pub use fetch_blob::*;
 
+// === Bundled node:http client (http.request / http.get / axios) ===
+// Stays on `http-client`. The well-known flip strips `http-client`
+// (keeping `web-fetch`) when `node:http` routes to perry-ext-http, so
+// these modules — which export the same `js_http_*` symbols as
+// perry-ext-http — are absent and can't collide (#5174).
 #[cfg(feature = "http-client")]
 pub mod http;
 #[cfg(feature = "http-client")]
@@ -187,6 +203,10 @@ pub mod net;
     not(target_os = "android")
 ))]
 pub use net::*;
+#[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+pub mod tls;
+#[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+pub use tls::*;
 
 // === Databases ===
 // pg lives behind `bundled-pg` (v0.5.566); mysql2 lives behind
@@ -378,3 +398,9 @@ pub use uuid::*;
 pub mod nanoid;
 #[cfg(feature = "bundled-nanoid")]
 pub use nanoid::*;
+
+// === Container Module ===
+#[cfg(feature = "container")]
+pub mod container;
+#[cfg(feature = "container")]
+pub use container::*;

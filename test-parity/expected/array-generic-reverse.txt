@@ -1,0 +1,13 @@
+sparse return same: true
+sparse: e,<hole>,c,<hole>,a keys=0|2|4|length
+one-sided: <hole>,<hole>,b,<hole> keys=2|length
+coerced length: d,c,b,a keys=0|1|2|3|length
+apply return same: true
+apply: z,y,x,w keys=0|1|2|3|length
+delete missing source: <hole>,<hole>,a keys=2|length
+delete has: false true
+null receiver: TypeError
+undefined receiver: TypeError
+string abc receiver: TypeError
+string one: object 1 "a"
+string empty: object 0 ""

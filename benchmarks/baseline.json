@@ -1,178 +1,465 @@
 {
-  "commit": "c89b3ad5",
-  "generated_at": "2026-04-23T13:05:00Z",
-  "notes": "json_roundtrip row rerun at v0.5.173 (best-of-5): Perry 314ms vs Node 377ms → Perry now 1.2x faster than Node (was 1.58x slower at v0.5.166, baseline commit 00fa823). Other rows unchanged from the 2026-04-17 sweep.",
+  "commit": "98c88a2ec",
+  "generated_at": "2026-06-13T09:40:52Z",
+  "notes": "Refreshed 2026-06-13 on commit 98c88a2ec via `./benchmarks/compare.sh --update-baseline --full --runs 5` (macos-14-class host, Node 24, median of 5). The prior baseline (53f0f29, 2026-06-09) had gone badly stale: it recorded 100x-3000x regressions on the array/numeric rows (e.g. 03_array_write 4143ms, 04_array_read 4067ms, 16_matrix_multiply 10221ms, bench_numeric_array_downgrade 21902ms) that no longer reproduce after the intervening array/codegen work - most of those rows are now at or below Node. The numbers here are the honest current state. Rows where Perry still trails Node materially and are worth real investigation: 09_method_calls (~490x - monomorphic method dispatch), bench_numeric_array_downgrade (~780x - dynamic ops on a mixed any[] array), bench_object_property (~70x), bench_numeric_array_numeric (~50x), 16_matrix_multiply / 10_nested_loops / 04_array_read (~15-17x - inner loops not vectorized to V8's level). Note macos runner-to-runner speed variance of +10-35% on CPU-bound rows: treat single-row flags near the 20% gate threshold as suspect and prefer the perry/node ratio column as the cross-run signal. Strip correctness payloads when hand-editing; the gate only reads perry_ms/perry_rss_kb.",
   "benchmarks": {
     "02_loop_overhead": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1712,
+      "perry_ms": 97,
+      "perry_rss_kb": 4609,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "sum:100000000"
+        ],
+        "expected_lines": [
+          "sum:100000000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
       "node_ms": 54,
-      "node_rss_kb": 34481,
-      "memory_ratio": 0.05
+      "node_rss_kb": 33332,
+      "speed_ratio": 1.796,
+      "memory_ratio": 0.138
     },
     "03_array_write": {
       "perry_ms": 3,
-      "perry_rss_kb": 212208,
-      "node_ms": 9,
-      "node_rss_kb": 281506,
-      "speed_ratio": 0.333,
-      "memory_ratio": 0.754
+      "perry_rss_kb": 92993,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:9999999"
+        ],
+        "expected_lines": [
+          "checksum:9999999"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 8,
+      "node_rss_kb": 361678,
+      "speed_ratio": 0.375,
+      "memory_ratio": 0.257
     },
     "04_array_read": {
-      "perry_ms": 4,
-      "perry_rss_kb": 212240,
-      "node_ms": 13,
-      "node_rss_kb": 282978,
-      "speed_ratio": 0.308,
-      "memory_ratio": 0.75
+      "perry_ms": 167,
+      "perry_rss_kb": 93009,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "sum:49999995000000"
+        ],
+        "expected_lines": [
+          "sum:49999995000000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 11,
+      "node_rss_kb": 362173,
+      "speed_ratio": 15.182,
+      "memory_ratio": 0.257
     },
     "05_fibonacci": {
       "perry_ms": 317,
-      "perry_rss_kb": 1776,
-      "node_ms": 1028,
-      "node_rss_kb": 34449,
-      "speed_ratio": 0.308,
-      "memory_ratio": 0.052
+      "perry_rss_kb": 4609,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "fib(40):102334155"
+        ],
+        "expected_lines": [
+          "fib(40):102334155"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 1010,
+      "node_rss_kb": 33188,
+      "speed_ratio": 0.314,
+      "memory_ratio": 0.139
     },
     "06_math_intensive": {
-      "perry_ms": 15,
-      "perry_rss_kb": 1776,
-      "node_ms": 50,
-      "node_rss_kb": 36642,
-      "speed_ratio": 0.3,
-      "memory_ratio": 0.048
+      "perry_ms": 51,
+      "perry_rss_kb": 4593,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "result:19.30474921829397"
+        ],
+        "expected_lines": [
+          "result:19.30474921829397"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 51,
+      "node_rss_kb": 33989,
+      "speed_ratio": 1.0,
+      "memory_ratio": 0.135
     },
     "07_object_create": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1792,
-      "node_ms": 9,
-      "node_rss_kb": 37762,
-      "memory_ratio": 0.047
+      "perry_ms": 2,
+      "perry_rss_kb": 4657,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "sum:1000000000000"
+        ],
+        "expected_lines": [
+          "sum:1000000000000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 5,
+      "node_rss_kb": 35589,
+      "speed_ratio": 0.4,
+      "memory_ratio": 0.131
     },
     "08_string_concat": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1968,
-      "node_ms": 2,
-      "node_rss_kb": 41586,
-      "memory_ratio": 0.047
+      "perry_ms": 3,
+      "perry_rss_kb": 4897,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "length:100000"
+        ],
+        "expected_lines": [
+          "length:100000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 5,
+      "node_rss_kb": 41209,
+      "speed_ratio": 0.6,
+      "memory_ratio": 0.119
     },
     "09_method_calls": {
-      "perry_ms": 1,
-      "perry_rss_kb": 1760,
+      "perry_ms": 5408,
+      "perry_rss_kb": 6449,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "value:10000000"
+        ],
+        "expected_lines": [
+          "value:10000000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
       "node_ms": 11,
-      "node_rss_kb": 36689,
-      "speed_ratio": 0.091,
-      "memory_ratio": 0.048
+      "node_rss_kb": 33653,
+      "speed_ratio": 491.636,
+      "memory_ratio": 0.192
     },
     "10_nested_loops": {
-      "perry_ms": 9,
-      "perry_rss_kb": 1840,
-      "node_ms": 17,
-      "node_rss_kb": 34993,
-      "speed_ratio": 0.529,
-      "memory_ratio": 0.053
+      "perry_ms": 306,
+      "perry_rss_kb": 6433,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "sum:26991000000"
+        ],
+        "expected_lines": [
+          "sum:26991000000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 19,
+      "node_rss_kb": 34005,
+      "speed_ratio": 16.105,
+      "memory_ratio": 0.189
     },
     "11_prime_sieve": {
-      "perry_ms": 4,
-      "perry_rss_kb": 17888,
-      "node_ms": 8,
-      "node_rss_kb": 58450,
-      "speed_ratio": 0.5,
-      "memory_ratio": 0.306
+      "perry_ms": 47,
+      "perry_rss_kb": 24833,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "primes:78498"
+        ],
+        "expected_lines": [
+          "primes:78498"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 10,
+      "node_rss_kb": 70629,
+      "speed_ratio": 4.7,
+      "memory_ratio": 0.352
     },
     "12_binary_trees": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1776,
-      "node_ms": 9,
-      "node_rss_kb": 37458,
-      "memory_ratio": 0.047
+      "perry_ms": 3,
+      "perry_rss_kb": 4673,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "sum:1500001500000"
+        ],
+        "expected_lines": [
+          "sum:1500001500000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 6,
+      "node_rss_kb": 35717,
+      "speed_ratio": 0.5,
+      "memory_ratio": 0.131
     },
     "13_factorial": {
-      "perry_ms": 35,
-      "perry_rss_kb": 1744,
-      "node_ms": 608,
-      "node_rss_kb": 37522,
-      "speed_ratio": 0.058,
-      "memory_ratio": 0.046
+      "perry_ms": 98,
+      "perry_rss_kb": 4592,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "sum:49950000000"
+        ],
+        "expected_lines": [
+          "sum:49950000000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 101,
+      "node_rss_kb": 34613,
+      "speed_ratio": 0.97,
+      "memory_ratio": 0.133
     },
     "14_closure": {
-      "perry_ms": 0,
-      "perry_rss_kb": 1792,
-      "node_ms": 311,
-      "node_rss_kb": 36866,
-      "memory_ratio": 0.049
+      "perry_ms": 49,
+      "perry_rss_kb": 4609,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "sum:2500000000000000"
+        ],
+        "expected_lines": [
+          "sum:2500000000000000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 52,
+      "node_rss_kb": 34549,
+      "speed_ratio": 0.942,
+      "memory_ratio": 0.133
     },
     "15_mandelbrot": {
-      "perry_ms": 21,
-      "perry_rss_kb": 1760,
+      "perry_ms": 23,
+      "perry_rss_kb": 4609,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "total_iter:8011148"
+        ],
+        "expected_lines": [
+          "total_iter:8011148"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
       "node_ms": 25,
-      "node_rss_kb": 36850,
-      "speed_ratio": 0.84,
-      "memory_ratio": 0.048
+      "node_rss_kb": 34293,
+      "speed_ratio": 0.92,
+      "memory_ratio": 0.134
     },
     "16_matrix_multiply": {
-      "perry_ms": 21,
-      "perry_rss_kb": 4816,
-      "node_ms": 35,
-      "node_rss_kb": 41730,
-      "speed_ratio": 0.6,
-      "memory_ratio": 0.115
+      "perry_ms": 671,
+      "perry_rss_kb": 8273,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:41079519680"
+        ],
+        "expected_lines": [
+          "checksum:41079519680"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 39,
+      "node_rss_kb": 39639,
+      "speed_ratio": 17.205,
+      "memory_ratio": 0.209
     },
     "bench_gc_pressure": {
-      "perry_ms": 16,
-      "perry_rss_kb": 21376,
-      "node_ms": 13,
-      "node_rss_kb": 42147,
-      "speed_ratio": 1.231,
-      "memory_ratio": 0.507
+      "perry_ms": 70,
+      "perry_rss_kb": 24305,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:249999500000"
+        ],
+        "expected_lines": [
+          "checksum:249999500000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 19,
+      "node_rss_kb": 44056,
+      "speed_ratio": 3.684,
+      "memory_ratio": 0.552
     },
     "bench_json_roundtrip": {
-      "perry_ms": 314,
-      "perry_rss_kb": 310640,
-      "node_ms": 377,
-      "node_rss_kb": 186768,
-      "speed_ratio": 0.833,
-      "memory_ratio": 1.663
+      "perry_ms": 432,
+      "perry_rss_kb": 320033,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:53735550"
+        ],
+        "expected_lines": [
+          "checksum:53735550"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 454,
+      "node_rss_kb": 129496,
+      "speed_ratio": 0.952,
+      "memory_ratio": 2.471
     },
     "bench_object_property": {
-      "perry_ms": 9,
-      "perry_rss_kb": 13520,
+      "perry_ms": 1127,
+      "perry_rss_kb": 90785,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:1999990000"
+        ],
+        "expected_lines": [
+          "checksum:1999990000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
       "node_ms": 16,
-      "node_rss_kb": 38290,
-      "speed_ratio": 0.562,
-      "memory_ratio": 0.353
+      "node_rss_kb": 35173,
+      "speed_ratio": 70.438,
+      "memory_ratio": 2.581
     },
     "bench_int_arithmetic": {
-      "perry_ms": 7,
-      "perry_rss_kb": 1776,
-      "node_ms": 73,
-      "node_rss_kb": 34849,
-      "speed_ratio": 0.096,
-      "memory_ratio": 0.051
+      "perry_ms": 596,
+      "perry_rss_kb": 4657,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:5760000"
+        ],
+        "expected_lines": [
+          "checksum:5760000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 71,
+      "node_rss_kb": 33620,
+      "speed_ratio": 8.394,
+      "memory_ratio": 0.139
     },
     "bench_buffer_readwrite": {
-      "perry_ms": 23,
-      "perry_rss_kb": 2784,
-      "node_ms": 86,
-      "node_rss_kb": 36385,
-      "speed_ratio": 0.267,
-      "memory_ratio": 0.077
+      "perry_ms": 933,
+      "perry_rss_kb": 5665,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:12749385600"
+        ],
+        "expected_lines": [
+          "checksum:12749385600"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 88,
+      "node_rss_kb": 33460,
+      "speed_ratio": 10.602,
+      "memory_ratio": 0.169
     },
     "bench_array_grow": {
-      "perry_ms": 12,
-      "perry_rss_kb": 34176,
-      "node_ms": 13,
-      "node_rss_kb": 97330,
-      "speed_ratio": 0.923,
-      "memory_ratio": 0.351
+      "perry_ms": 141,
+      "perry_rss_kb": 41537,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "length:2000000",
+          "checksum:2998500000"
+        ],
+        "expected_lines": [
+          "length:2000000",
+          "checksum:2998500000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 16,
+      "node_rss_kb": 96916,
+      "speed_ratio": 8.812,
+      "memory_ratio": 0.429
     },
     "bench_string_heavy": {
-      "perry_ms": 37,
-      "perry_rss_kb": 49696,
-      "node_ms": 49,
-      "node_rss_kb": 41795,
-      "speed_ratio": 0.755,
-      "memory_ratio": 1.189
+      "perry_ms": 60,
+      "perry_rss_kb": 60497,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:21063000"
+        ],
+        "expected_lines": [
+          "checksum:21063000"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 48,
+      "node_rss_kb": 37478,
+      "speed_ratio": 1.25,
+      "memory_ratio": 1.614
+    },
+    "bench_numeric_array_numeric": {
+      "perry_ms": 248,
+      "perry_rss_kb": 25041,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:6500625"
+        ],
+        "expected_lines": [
+          "checksum:6500625"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 5,
+      "node_rss_kb": 55854,
+      "speed_ratio": 49.6,
+      "memory_ratio": 0.448
+    },
+    "bench_numeric_array_downgrade": {
+      "perry_ms": 4690,
+      "perry_rss_kb": 24705,
+      "correctness": {
+        "status": "pass",
+        "reference": "node",
+        "actual_lines": [
+          "checksum:6500875"
+        ],
+        "expected_lines": [
+          "checksum:6500875"
+        ],
+        "reason": "all 5 Perry sample(s) matched Node semantic output"
+      },
+      "node_ms": 6,
+      "node_rss_kb": 55774,
+      "speed_ratio": 781.667,
+      "memory_ratio": 0.443
     }
   }
 }

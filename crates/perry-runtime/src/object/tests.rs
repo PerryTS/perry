@@ -2,6 +2,7 @@
 #![cfg(test)]
 
 use super::*;
+use std::os::raw::c_int;
 
 fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
     let closure_ptr = crate::closure::js_closure_alloc(
@@ -25,6 +26,471 @@ fn test_global_this_builtin_constructor_value(name: &str) -> f64 {
         js_object_set_field_by_name(proto_obj, constructor_key, constructor_value);
     }
     crate::value::js_nanbox_pointer(closure_ptr as i64)
+}
+
+fn js_string_to_rust(value: JSValue) -> String {
+    assert!(
+        value.is_string(),
+        "expected JS string, got bits={:#x}",
+        value.bits()
+    );
+    let ptr = value.as_string_ptr();
+    assert!(!ptr.is_null());
+    unsafe {
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let bytes = std::slice::from_raw_parts(data, (*ptr).byte_len as usize);
+        std::str::from_utf8(bytes).unwrap().to_string()
+    }
+}
+
+fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
+    let env = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
+    if jumped == 0 {
+        let result = f();
+        crate::exception::js_try_end();
+        Ok(result)
+    } else {
+        crate::exception::js_try_end();
+        let err = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(err)
+    }
+}
+
+unsafe fn installed_builtin_method(ctor_name: &str, method_name: &str) -> f64 {
+    let global_ptr = js_object_alloc(0, 0);
+    super::global_this::populate_global_this_builtins(global_ptr);
+    let ctor_key = crate::string::js_string_from_bytes(ctor_name.as_ptr(), ctor_name.len() as u32);
+    let ctor = js_object_get_field_by_name(global_ptr, ctor_key);
+    assert!(
+        ctor.is_pointer(),
+        "{ctor_name} constructor should be installed"
+    );
+
+    let prototype_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let prototype = js_object_get_field_by_name(
+        ctor.as_pointer::<crate::closure::ClosureHeader>() as *const ObjectHeader,
+        prototype_key,
+    );
+    assert!(
+        prototype.is_pointer(),
+        "{ctor_name}.prototype should be installed"
+    );
+
+    let method_key =
+        crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let method = js_object_get_field_by_name(prototype.as_pointer::<ObjectHeader>(), method_key);
+    assert!(
+        method.is_pointer(),
+        "{ctor_name}.prototype.{method_name} should be a function value"
+    );
+    f64::from_bits(method.bits())
+}
+
+extern "C" fn symbol_to_primitive_nan(
+    _closure: *const crate::closure::ClosureHeader,
+    hint: f64,
+) -> f64 {
+    let hint_value = JSValue::from_bits(hint.to_bits());
+    assert_eq!(js_string_to_rust(hint_value), "number");
+    f64::NAN
+}
+
+extern "C" fn value_of_finite(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    1.0
+}
+
+extern "C" fn symbol_to_primitive_this_object(
+    _closure: *const crate::closure::ClosureHeader,
+    hint: f64,
+) -> f64 {
+    let hint_value = JSValue::from_bits(hint.to_bits());
+    assert_eq!(js_string_to_rust(hint_value), "number");
+    crate::object::js_implicit_this_get()
+}
+
+extern "C" fn to_iso_string_sentinel(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let string = crate::string::js_string_from_bytes(b"iso".as_ptr(), 3);
+    crate::value::js_nanbox_string(string as i64)
+}
+
+#[test]
+fn date_to_json_number_hint_honors_symbol_to_primitive() {
+    unsafe {
+        let receiver = js_object_alloc(0, 0);
+        let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
+
+        let to_primitive =
+            crate::closure::js_closure_alloc(symbol_to_primitive_nan as *const u8, 0);
+        crate::closure::js_register_closure_arity(symbol_to_primitive_nan as *const u8, 1);
+        let sym = crate::symbol::well_known_symbol("toPrimitive");
+        let sym_value =
+            f64::from_bits(crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK));
+        crate::symbol::js_object_set_symbol_property(
+            receiver_value,
+            sym_value,
+            crate::value::js_nanbox_pointer(to_primitive as i64),
+        );
+
+        let value_of = crate::closure::js_closure_alloc(value_of_finite as *const u8, 0);
+        crate::closure::js_register_closure_arity(value_of_finite as *const u8, 0);
+        let value_of_key = crate::string::js_string_from_bytes(b"valueOf".as_ptr(), 7);
+        js_object_set_field_by_name(
+            receiver,
+            value_of_key,
+            crate::value::js_nanbox_pointer(value_of as i64),
+        );
+
+        let prev_this = js_implicit_this_set(receiver_value);
+        let result = catch_js(crate::object::date_proto_thunks::test_date_to_json_current_this);
+        js_implicit_this_set(prev_this);
+
+        let result = result.expect("Date.prototype.toJSON should not throw");
+        assert!(
+            JSValue::from_bits(result.to_bits()).is_null(),
+            "@@toPrimitive returning NaN must make Date.prototype.toJSON return null"
+        );
+    }
+}
+
+#[test]
+fn date_to_json_symbol_to_primitive_object_result_throws() {
+    unsafe {
+        let receiver = js_object_alloc(0, 0);
+        let receiver_value = crate::value::js_nanbox_pointer(receiver as i64);
+
+        let to_primitive =
+            crate::closure::js_closure_alloc(symbol_to_primitive_this_object as *const u8, 0);
+        crate::closure::js_register_closure_arity(symbol_to_primitive_this_object as *const u8, 1);
+        let sym = crate::symbol::well_known_symbol("toPrimitive");
+        let sym_value =
+            f64::from_bits(crate::value::POINTER_TAG | (sym as u64 & crate::value::POINTER_MASK));
+        crate::symbol::js_object_set_symbol_property(
+            receiver_value,
+            sym_value,
+            crate::value::js_nanbox_pointer(to_primitive as i64),
+        );
+
+        let to_iso = crate::closure::js_closure_alloc(to_iso_string_sentinel as *const u8, 0);
+        crate::closure::js_register_closure_arity(to_iso_string_sentinel as *const u8, 0);
+        let to_iso_key = crate::string::js_string_from_bytes(b"toISOString".as_ptr(), 11);
+        js_object_set_field_by_name(
+            receiver,
+            to_iso_key,
+            crate::value::js_nanbox_pointer(to_iso as i64),
+        );
+
+        let prev_this = js_implicit_this_set(receiver_value);
+        let result = catch_js(crate::object::date_proto_thunks::test_date_to_json_current_this);
+        js_implicit_this_set(prev_this);
+
+        assert!(
+            result.is_err(),
+            "@@toPrimitive returning an object must throw before toISOString"
+        );
+    }
+}
+
+#[test]
+fn builtin_prototype_methods_reject_dynamic_new() {
+    unsafe {
+        for (ctor, method) in [
+            ("Date", "toJSON"),
+            ("Array", "map"),
+            ("Object", "hasOwnProperty"),
+        ] {
+            let method_value = installed_builtin_method(ctor, method);
+            let result = catch_js(|| js_new_function_construct(method_value, std::ptr::null(), 0));
+            assert!(
+                result.is_err(),
+                "{ctor}.prototype.{method} should not be constructable"
+            );
+
+            let args = crate::array::js_array_alloc(0);
+            let args_value = crate::value::js_nanbox_pointer(args as i64);
+            let result = catch_js(|| {
+                crate::proxy::js_reflect_construct(
+                    method_value,
+                    args_value,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                )
+            });
+            assert!(
+                result.is_err(),
+                "{ctor}.prototype.{method} should not be a Reflect.construct target"
+            );
+        }
+
+        let ordinary = crate::closure::js_closure_alloc(value_of_finite as *const u8, 0);
+        crate::closure::js_register_closure_arity(value_of_finite as *const u8, 0);
+        let ordinary_value = crate::value::js_nanbox_pointer(ordinary as i64);
+        let result = catch_js(|| js_new_function_construct(ordinary_value, std::ptr::null(), 0));
+        assert!(result.is_ok(), "ordinary closures remain constructable");
+
+        let args = crate::array::js_array_alloc(0);
+        let args_value = crate::value::js_nanbox_pointer(args as i64);
+        let result = catch_js(|| {
+            crate::proxy::js_reflect_construct(
+                ordinary_value,
+                args_value,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            )
+        });
+        assert!(
+            result.is_ok(),
+            "ordinary closures remain Reflect.construct targets"
+        );
+    }
+}
+
+#[test]
+fn closure_name_and_length_ignore_plain_assignment() {
+    crate::closure::test_clear_closure_side_tables();
+    unsafe {
+        let closure = crate::closure::js_closure_alloc(
+            crate::object::global_this_builtin_noop_thunk as *const u8,
+            0,
+        );
+        assert!(!closure.is_null());
+        super::native_module::set_bound_native_closure_name(closure, "fn");
+        super::native_module::set_builtin_closure_length(closure as usize, 2);
+
+        let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+        let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let custom_key = crate::string::js_string_from_bytes(b"custom".as_ptr(), 6);
+        let replacement = crate::string::js_string_from_bytes(b"changed".as_ptr(), 7);
+        let replacement_value = f64::from_bits(JSValue::string_ptr(replacement).bits());
+        let closure_obj = closure as *mut ObjectHeader;
+
+        js_object_set_field_by_name(closure_obj, name_key, replacement_value);
+        let name = js_object_get_field_by_name(closure_obj, name_key);
+        assert_eq!(js_string_to_rust(name), "fn");
+
+        js_object_set_field_by_name(closure_obj, length_key, 99.0);
+        let length = js_object_get_field_by_name(closure_obj, length_key);
+        assert!(length.is_number());
+        assert_eq!(length.as_number(), 2.0);
+
+        js_object_set_field_by_name(closure_obj, custom_key, replacement_value);
+        let custom = js_object_get_field_by_name(closure_obj, custom_key);
+        assert_eq!(js_string_to_rust(custom), "changed");
+    }
+}
+
+#[test]
+fn closure_name_can_be_redefined_with_define_property() {
+    crate::closure::test_clear_closure_side_tables();
+    unsafe {
+        let closure = crate::closure::js_closure_alloc(
+            crate::object::global_this_builtin_noop_thunk as *const u8,
+            0,
+        );
+        assert!(!closure.is_null());
+        super::native_module::set_bound_native_closure_name(closure, "fn");
+
+        let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+        let enumerable_key = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+        let configurable_key = crate::string::js_string_from_bytes(b"configurable".as_ptr(), 12);
+        let replacement = crate::string::js_string_from_bytes(b"require".as_ptr(), 7);
+
+        let descriptor = js_object_alloc(0, 0);
+        assert!(!descriptor.is_null());
+        js_object_set_field_by_name(
+            descriptor,
+            value_key,
+            f64::from_bits(JSValue::string_ptr(replacement).bits()),
+        );
+        js_object_set_field_by_name(
+            descriptor,
+            writable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        js_object_set_field_by_name(
+            descriptor,
+            enumerable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        js_object_set_field_by_name(
+            descriptor,
+            configurable_key,
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+
+        let closure_value = crate::value::js_nanbox_pointer(closure as i64);
+        let name_value = f64::from_bits(JSValue::string_ptr(name_key).bits());
+        let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+        js_object_define_property(closure_value, name_value, descriptor_value);
+
+        let name = js_object_get_field_by_name(closure as *const ObjectHeader, name_key);
+        assert_eq!(js_string_to_rust(name), "require");
+
+        let own_descriptor = js_object_get_own_property_descriptor(closure_value, name_value);
+        let own_descriptor_obj = crate::value::js_nanbox_get_pointer(own_descriptor)
+            as *const crate::object::ObjectHeader;
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, value_key).bits(),
+            JSValue::string_ptr(replacement).bits()
+        );
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, writable_key).bits(),
+            crate::value::TAG_FALSE
+        );
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, enumerable_key).bits(),
+            crate::value::TAG_FALSE
+        );
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, configurable_key).bits(),
+            crate::value::TAG_TRUE
+        );
+    }
+}
+
+extern "C" fn closure_accessor_getter(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    4.0
+}
+
+#[test]
+fn closure_accessor_define_property_is_own_and_invoked() {
+    crate::closure::test_clear_closure_side_tables();
+    let closure = crate::closure::js_closure_alloc(
+        crate::object::global_this_builtin_noop_thunk as *const u8,
+        0,
+    );
+    assert!(!closure.is_null());
+    let getter = crate::closure::js_closure_alloc(closure_accessor_getter as *const u8, 0);
+    assert!(!getter.is_null());
+
+    let caller_key = crate::string::js_string_from_bytes(b"caller".as_ptr(), 6);
+    let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+    let configurable_key = crate::string::js_string_from_bytes(b"configurable".as_ptr(), 12);
+    let descriptor = js_object_alloc(0, 0);
+    assert!(!descriptor.is_null());
+    js_object_set_field_by_name(
+        descriptor,
+        get_key,
+        crate::value::js_nanbox_pointer(getter as i64),
+    );
+    js_object_set_field_by_name(
+        descriptor,
+        configurable_key,
+        f64::from_bits(crate::value::TAG_TRUE),
+    );
+
+    let closure_value = crate::value::js_nanbox_pointer(closure as i64);
+    let key_value = f64::from_bits(JSValue::string_ptr(caller_key).bits());
+    let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+    js_object_define_property(closure_value, key_value, descriptor_value);
+
+    assert!(super::has_own_helpers::closure_own_key_present(
+        closure as usize,
+        "caller"
+    ));
+    let value = js_object_get_field_by_name(closure as *const ObjectHeader, caller_key);
+    assert!(value.is_number());
+    assert_eq!(value.as_number(), 4.0);
+
+    let own_descriptor = js_object_get_own_property_descriptor(closure_value, key_value);
+    let own_descriptor_obj =
+        crate::value::js_nanbox_get_pointer(own_descriptor) as *const crate::object::ObjectHeader;
+    assert_eq!(
+        js_object_get_field_by_name(own_descriptor_obj, get_key).bits(),
+        crate::value::js_nanbox_pointer(getter as i64).to_bits()
+    );
+    assert_eq!(
+        js_object_get_field_by_name(own_descriptor_obj, configurable_key).bits(),
+        crate::value::TAG_TRUE
+    );
+}
+
+#[test]
+fn symbol_define_property_attrs_round_trip_descriptor() {
+    crate::symbol::test_clear_symbol_side_table_roots();
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        assert!(!obj.is_null());
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let symbol_key = crate::symbol::js_symbol_new_empty();
+        let symbol_ptr = crate::symbol::sym_key_from_f64(symbol_key);
+        assert_ne!(symbol_ptr, 0);
+
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+        let enumerable_key = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+        let configurable_key = crate::string::js_string_from_bytes(b"configurable".as_ptr(), 12);
+
+        let descriptor = js_object_alloc(0, 0);
+        assert!(!descriptor.is_null());
+        js_object_set_field_by_name(descriptor, value_key, 42.0);
+        js_object_set_field_by_name(
+            descriptor,
+            writable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        js_object_set_field_by_name(
+            descriptor,
+            enumerable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        js_object_set_field_by_name(
+            descriptor,
+            configurable_key,
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+
+        let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+        js_object_define_property(obj_value, symbol_key, descriptor_value);
+
+        assert_eq!(
+            crate::symbol::symbol_property_root_bits(obj as usize, symbol_ptr),
+            Some(42.0f64.to_bits())
+        );
+        assert!(!crate::symbol::symbol_property_is_enumerable(
+            obj as usize,
+            symbol_ptr
+        ));
+
+        let own_descriptor = js_object_get_own_property_descriptor(obj_value, symbol_key);
+        let own_descriptor_obj =
+            crate::value::js_nanbox_get_pointer(own_descriptor) as *const ObjectHeader;
+        assert!(!own_descriptor_obj.is_null());
+        let value = js_object_get_field_by_name(own_descriptor_obj, value_key);
+        assert!(value.is_number());
+        assert_eq!(value.as_number(), 42.0);
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, writable_key).bits(),
+            crate::value::TAG_FALSE
+        );
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, enumerable_key).bits(),
+            crate::value::TAG_FALSE
+        );
+        assert_eq!(
+            js_object_get_field_by_name(own_descriptor_obj, configurable_key).bits(),
+            crate::value::TAG_TRUE
+        );
+
+        let attr_descriptor = js_object_alloc(0, 0);
+        assert!(!attr_descriptor.is_null());
+        js_object_set_field_by_name(
+            attr_descriptor,
+            enumerable_key,
+            f64::from_bits(crate::value::TAG_TRUE),
+        );
+        let attr_descriptor_value = crate::value::js_nanbox_pointer(attr_descriptor as i64);
+        js_object_define_property(obj_value, symbol_key, attr_descriptor_value);
+        assert_eq!(
+            crate::symbol::symbol_property_root_bits(obj as usize, symbol_ptr),
+            Some(42.0f64.to_bits())
+        );
+        assert!(crate::symbol::symbol_property_is_enumerable(
+            obj as usize,
+            symbol_ptr
+        ));
+    }
 }
 
 #[test]
@@ -175,4 +641,120 @@ fn transition_cache_lookup_rejects_mutated_edge_target() {
             target_len: 0,
         };
     });
+}
+
+#[test]
+fn entries_and_values_skip_non_enumerable_descriptor_slots() {
+    // #5046: Object.defineProperty(o, 'hidden', { value: 1 }) defaults to
+    // enumerable: false. Object.keys filtered it; entries/values did not.
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        let hidden_key = crate::string::js_string_from_bytes(b"hidden".as_ptr(), 6);
+        let shown_key = crate::string::js_string_from_bytes(b"shown".as_ptr(), 5);
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+
+        let descriptor = js_object_alloc(0, 0);
+        js_object_set_field_by_name(descriptor, value_key, 1.0);
+
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let hidden_value = f64::from_bits(JSValue::string_ptr(hidden_key).bits());
+        let descriptor_value = crate::value::js_nanbox_pointer(descriptor as i64);
+        js_object_define_property(obj_value, hidden_value, descriptor_value);
+        js_object_set_field_by_name(obj as *mut ObjectHeader, shown_key, 2.0);
+
+        let keys = js_object_keys(obj);
+        assert_eq!(crate::array::js_array_length(keys), 1);
+        assert_eq!(
+            js_string_to_rust(crate::array::js_array_get(keys, 0).into()),
+            "shown"
+        );
+
+        let values = js_object_values(obj);
+        assert_eq!(crate::array::js_array_length(values), 1);
+        assert_eq!(
+            crate::array::js_array_get(values, 0).bits(),
+            2.0f64.to_bits()
+        );
+
+        let entries = js_object_entries(obj);
+        assert_eq!(crate::array::js_array_length(entries), 1);
+        let pair = crate::value::js_nanbox_get_pointer(f64::from_bits(
+            crate::array::js_array_get(entries, 0).bits(),
+        )) as *const crate::array::ArrayHeader;
+        assert_eq!(
+            js_string_to_rust(crate::array::js_array_get(pair, 0).into()),
+            "shown"
+        );
+        assert_eq!(crate::array::js_array_get(pair, 1).bits(), 2.0f64.to_bits());
+    }
+}
+
+/// #5054: wide objects (≥257 keys) read through the validated key→index map;
+/// the dynamic-write fast path must still respect descriptors installed later.
+#[test]
+fn wide_object_index_reads_and_descriptor_writes() {
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        let n = 600u32;
+        for i in 0..n {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(obj, key, i as f64);
+        }
+        for i in 0..n {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let v = js_object_get_field_by_name(obj as *const ObjectHeader, key);
+            assert_eq!(f64::from_bits(v.bits()), i as f64, "read-back of {}", name);
+        }
+        // Missing key stays undefined (index miss → scan → not found).
+        let missing = crate::string::js_string_from_bytes(b"nope".as_ptr(), 4);
+        assert!(crate::value::JSValue::from_bits(
+            js_object_get_field_by_name(obj as *const ObjectHeader, missing).bits()
+        )
+        .is_undefined());
+
+        // Install a non-writable descriptor on one key; the put_value_set
+        // fast path must bail to the descriptor-aware walk and reject the
+        // write (sloppy mode: value unchanged, no throw).
+        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+        let target_name = b"w42";
+        let target_key = crate::string::js_string_from_bytes(target_name.as_ptr(), 3);
+        let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+        let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+        let descriptor = js_object_alloc(0, 0);
+        js_object_set_field_by_name(descriptor, value_key, 42.0);
+        js_object_set_field_by_name(
+            descriptor,
+            writable_key,
+            f64::from_bits(crate::value::TAG_FALSE),
+        );
+        crate::object::object_ops::js_object_define_property(
+            obj_value,
+            f64::from_bits(JSValue::string_ptr(target_key).bits()),
+            crate::value::js_nanbox_pointer(descriptor as i64),
+        );
+        crate::proxy::js_put_value_set(
+            obj_value,
+            f64::from_bits(JSValue::string_ptr(target_key).bits()),
+            777.0,
+            obj_value,
+            0,
+        );
+        let after = js_object_get_field_by_name(obj as *const ObjectHeader, target_key);
+        assert_eq!(f64::from_bits(after.bits()), 42.0);
+
+        // Writes to other keys still go through (fast path off for this
+        // object now — but correctness preserved either way).
+        let other_key = crate::string::js_string_from_bytes(b"w43".as_ptr(), 3);
+        crate::proxy::js_put_value_set(
+            obj_value,
+            f64::from_bits(JSValue::string_ptr(other_key).bits()),
+            4343.0,
+            obj_value,
+            0,
+        );
+        let v43 = js_object_get_field_by_name(obj as *const ObjectHeader, other_key);
+        assert_eq!(f64::from_bits(v43.bits()), 4343.0);
+    }
 }

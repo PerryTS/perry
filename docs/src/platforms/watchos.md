@@ -8,10 +8,32 @@ Since watchOS does not support UIKit views, Perry uses a **data-driven SwiftUI r
 
 - macOS host (cross-compilation from Linux/Windows is not supported)
 - Xcode (full install) for watchOS SDK and Simulator
-- Rust watchOS targets:
+- Rust watchOS targets. The simulator target is tier 2 and can be added with
+  `rustup`; the **device** targets are tier 3 and ship no prebuilt `std`, so
+  their runtime libraries must be built from source with a nightly toolchain
+  and `-Z build-std` (see [Building for Device](#building-for-device)):
   ```bash
-  rustup target add arm64_32-apple-watchos aarch64-apple-watchos-sim
+  rustup target add aarch64-apple-watchos-sim       # simulator (tier 2)
+  rustup component add rust-src --toolchain nightly  # for device build-std
   ```
+
+## Watch architectures
+
+watchOS spans two CPU architectures, and which one you target decides which
+watches your app runs on:
+
+| Architecture | Watches | watchOS | Perry target |
+|---|---|---|---|
+| **arm64** (64-bit) | Series 9/10/11, Ultra 2/3, SE 3 (S9 chip+) | 26+ | `--target watchos` (default) |
+| **arm64_32** (ILP32, 32-bit pointers) | Series 4–8, SE 1/2 | 9–11 | `--target watchos` + `PERRY_WATCHOS_ARM64_32=1` |
+| **arm64** (simulator) | — | — | `--target watchos-simulator` |
+
+Apple moved S9-and-later watches to full arm64 in watchOS 26. Older watches stay
+arm64_32 forever. Perry's NaN-boxed value representation works on both (a 32-bit
+pointer fits in the 48-bit NaN payload); the architecture split is purely about
+which hardware the binary loads on. The simulator is always arm64 (Apple Silicon
+host) and **cannot run an arm64_32 binary** — device-arch builds can only be
+tested on real hardware (or shipped via TestFlight).
 
 ## Building for Simulator
 
@@ -19,15 +41,59 @@ Since watchOS does not support UIKit views, Perry uses a **data-driven SwiftUI r
 perry compile app.ts -o app --target watchos-simulator
 ```
 
-This produces an ARM64 binary linked with `swiftc` against the watchOS Simulator SDK, wrapped in a `.app` bundle.
+This produces an arm64 binary linked with `swiftc` against the watchOS Simulator
+SDK, wrapped in a `.app` bundle.
 
 ## Building for Device
 
+Device runtime libraries are tier-3 Rust targets with no prebuilt `std`, so build
+`perry-runtime` (and `perry-ui-watchos`, if you use the SwiftUI tree renderer)
+from source once, then point `PERRY_RUNTIME_DIR` at them:
+
 ```bash
-perry compile app.ts -o app --target watchos
+# arm64 (Series 9+ / watchOS 26+) — the default device target
+cargo +nightly build -Z build-std=std,panic_abort --release \
+  -p perry-runtime -p perry-ui-watchos --target aarch64-apple-watchos
+
+PERRY_RUNTIME_DIR=target/aarch64-apple-watchos/release \
+  perry compile app.ts -o app --target watchos
 ```
 
-This produces an arm64_32 (ILP32) binary for physical Apple Watch hardware. Apple Watch uses 32-bit pointers on 64-bit ARM.
+```bash
+# arm64_32 (Series 4-8 / SE) — opt in with PERRY_WATCHOS_ARM64_32
+cargo +nightly build -Z build-std=std,panic_abort --release \
+  -p perry-runtime -p perry-ui-watchos --target arm64_32-apple-watchos
+
+PERRY_WATCHOS_ARM64_32=1 \
+PERRY_RUNTIME_DIR=target/arm64_32-apple-watchos/release \
+  perry compile app.ts -o app --target watchos
+```
+
+To support every watch from a single App Store upload, build **both** and `lipo`
+them into a fat binary — see [Publishing to the App Store](watchos-app-store.md).
+
+### Build environment variables
+
+| Variable | Effect |
+|---|---|
+| `PERRY_WATCHOS_ARM64_32=1` | Switch the `watchos` device target from arm64 to arm64_32 (codegen object arch, runtime/native-lib/Swift/link triples, and the bundle's `MinimumOSVersion` floor all follow). |
+| `PERRY_WATCHOS_MIN` | Override `MinimumOSVersion` for arm64_32 device builds (default `11.0`). The engine/SwiftUI you link may impose its own floor — e.g. `onChange(of:initial:)` needs watchOS 10. |
+| `PERRY_ENTRY_SYMBOL` | Name the C entry symbol emitted by codegen instead of renaming `_main` afterwards. Needed on arm64_32 because `rust-objcopy --redefine-sym` segfaults on arm64_32 Mach-O (`MachOWriter::writeSections`); see below. |
+
+> **arm64_32 entry symbol.** With `--features watchos-swift-app`/`watchos-game-loop`,
+> Perry normally emits `_main` and renames it to `__perry_user_main` with
+> `rust-objcopy`. That tool crashes on arm64_32 objects, so for arm64_32 set
+> `PERRY_ENTRY_SYMBOL=_perry_user_main` — codegen then emits the final symbol
+> directly (the leading underscore yields Mach-O `__perry_user_main`, which the
+> Swift `@main` shell references via `@_silgen_name`) and Perry skips the objcopy
+> pass. A fat `lipo` build needs the same symbol in both slices.
+
+> **Note for runtime contributors.** arm64_32 has 32-bit `usize`. Pointer-range
+> guards and size caps in `perry-runtime` must compare in `u64` (e.g.
+> `(addr as u64) < 0x8000_0000_0000`) rather than writing bare `usize` literals
+> ≥ 2³² — those are a hard "literal out of range" error on arm64_32 (and wasm32).
+> Use `usize::try_from(...).unwrap_or(usize::MAX)` to saturate length caps like
+> `1usize << 53`.
 
 ## Running with `perry run`
 
@@ -122,6 +188,22 @@ perry_ui_*() FFI calls  →  Node tree stored in memory (Rust)
 
 The `PerryWatchApp.swift` file is a fixed runtime (~280 lines) that ships with Perry. It never changes per-app — it's the watchOS equivalent of `libperry_ui_ios.a`.
 
+## App rendering modes
+
+The data-driven SwiftUI renderer above is the default. Two feature flags switch
+to app shells that own their own entry point — used by games and apps that draw
+their own frames instead of building a `perry/ui` tree:
+
+| Feature | Shell | Use case |
+|---|---|---|
+| *(default)* | Perry's `PerryWatchApp.swift` observes the UI tree | Standard `perry/ui` apps |
+| `--features watchos-swift-app` | A native library ships its own `@main struct App: App` | Games / engines with a custom SwiftUI `Canvas` (e.g. Bloom Engine) |
+| `--features watchos-game-loop` | `perry-runtime` provides C `main()` + `WKApplicationMain` | Metal/wgpu game loops |
+
+In both non-default modes the TypeScript entry runs on a background thread the
+shell spawns, and the shell references it as `__perry_user_main` (see
+`PERRY_ENTRY_SYMBOL` above).
+
 ## Configuration
 
 Configure watchOS settings in `perry.toml`:
@@ -184,6 +266,7 @@ watchOS apps have inherent platform constraints compared to other Perry targets:
 
 ## Next Steps
 
+- [Publishing watchOS apps to the App Store](watchos-app-store.md) — fat binaries, the iOS-stub wrapper, and signing for a watch-only app
 - [watchOS Complications](../widgets/watchos.md) — WidgetKit complications
 - [iOS](ios.md) — iOS platform reference
 - [Platform Overview](overview.md) — All platforms

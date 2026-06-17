@@ -216,6 +216,33 @@ pub fn set_truncation_mode(handle: i64, mode: i64) {
     }
 }
 
+/// Set horizontal text alignment on a Text widget (issue #3621).
+/// `alignment` is the canonical Perry scheme (== macOS NSTextAlignment):
+/// 0=left, 1=right, 2=center, 3=justified, 4=natural. AppKit's
+/// `NSTextField` uses these values natively, so we pass them straight to
+/// `setAlignment:` (clamping anything unknown to left).
+pub fn set_text_alignment(handle: i64, alignment: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(tf_cls) = objc2::runtime::AnyClass::get(c"NSTextField") {
+                let is_tf: bool = objc2::msg_send![&*view, isKindOfClass: tf_cls];
+                if !is_tf {
+                    return;
+                }
+            }
+            let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
+            let native: i64 = match alignment {
+                1 => 1, // right
+                2 => 2, // center
+                3 => 3, // justified
+                4 => 4, // natural
+                _ => 0, // left (default / unknown)
+            };
+            let _: () = objc2::msg_send![tf, setAlignment: native];
+        }
+    }
+}
+
 /// Set text decoration on a Text widget via `NSAttributedString` (issue
 /// #185 Phase B). `decoration`: 0=none, 1=underline, 2=strikethrough.
 /// Reads the current `stringValue`, wraps it with the requested

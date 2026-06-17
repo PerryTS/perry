@@ -14,6 +14,7 @@ pub(super) enum GcCyclePhase {
 }
 
 impl GcCyclePhase {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -565,6 +566,7 @@ impl RootScanCycleState {
         consider_evacuation: bool,
         budget: usize,
         allow_synchronous_scanners: bool,
+        pin_only_old_conservative: bool,
     ) -> bool {
         match self.subphase {
             RootScanSubphase::ConservativeStack => {
@@ -572,8 +574,13 @@ impl RootScanCycleState {
                     return false;
                 }
                 let conservative_scan_decision = conservative_stack_scan_decision();
-                let conservative_root_stats =
-                    mark_stack_roots_for_decision(valid_ptrs, conservative_scan_decision);
+                // #5029: minors retain old-gen conservative discoveries
+                // pin-only (no trace) — see try_mark_conservative_word.
+                let conservative_root_stats = mark_stack_roots_for_decision(
+                    valid_ptrs,
+                    conservative_scan_decision,
+                    pin_only_old_conservative,
+                );
                 let conservative_pin_stats = if consider_evacuation
                     && matches!(
                         conservative_scan_decision,
@@ -780,6 +787,7 @@ fn run_malloc_trim(progress_kind: GcProgressKind) -> MallocTrimOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AtomicFinalizeSubphase {
+    WeakProcessing,
     MinorPrelude,
     BarrierSeedDrain,
     RememberedSetRebuild,
@@ -796,7 +804,7 @@ struct AtomicFinalizeCycleState {
 impl AtomicFinalizeCycleState {
     fn new(collection_kind: GcCollectionKind) -> Self {
         let subphase = match collection_kind {
-            GcCollectionKind::Minor => AtomicFinalizeSubphase::MinorPrelude,
+            GcCollectionKind::Minor => AtomicFinalizeSubphase::WeakProcessing,
             GcCollectionKind::Full => AtomicFinalizeSubphase::BarrierSeedDrain,
         };
         Self {
@@ -809,6 +817,7 @@ impl AtomicFinalizeCycleState {
 
 pub(super) struct GcCycleState {
     collection_kind: GcCollectionKind,
+    trigger_kind: GcTriggerKind,
     progress_kind: GcProgressKind,
     phase: GcCyclePhase,
     trace: Option<GcCycleTrace>,
@@ -822,6 +831,9 @@ pub(super) struct GcCycleState {
     atomic_finalize: Option<AtomicFinalizeCycleState>,
     minor: Option<MinorCycleContext>,
     live_old_to_young_sticky: Option<StickyRememberedSet>,
+    /// Dirty snapshot captured just before this cycle's remembered_set_clear
+    /// begins, for the post-restore coverage repair (#5029).
+    pre_clear_dirty_snapshot: Option<super::barrier::RememberedDirtySnapshot>,
     sweep_state: Option<IncrementalSweepState>,
     reclaim_state: Option<ReclaimCycleState>,
     sweep: Option<SweepTraceStats>,
@@ -831,13 +843,15 @@ pub(super) struct GcCycleState {
 
 impl GcCycleState {
     pub(super) fn new_full(trigger: GcTriggerSnapshot) -> Self {
+        let trigger_kind = trigger.kind;
         let trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
         let start = Instant::now();
         crate::arena::old_pages_begin_gc_cycle();
         clear_mark_seeds();
         Self {
             collection_kind: GcCollectionKind::Full,
-            progress_kind: trigger.kind.progress_kind(GcCollectionKind::Full),
+            trigger_kind,
+            progress_kind: trigger_kind.progress_kind(GcCollectionKind::Full),
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
             active_elapsed: start.elapsed(),
@@ -850,6 +864,7 @@ impl GcCycleState {
             atomic_finalize: None,
             minor: None,
             live_old_to_young_sticky: None,
+            pre_clear_dirty_snapshot: None,
             sweep_state: None,
             reclaim_state: None,
             sweep: None,
@@ -873,8 +888,10 @@ impl GcCycleState {
         old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
     ) -> Self {
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
+        let trigger_kind = trigger.kind;
         Self {
             collection_kind: GcCollectionKind::Minor,
+            trigger_kind,
             progress_kind,
             phase: GcCyclePhase::BuildValidPointerSet,
             trace,
@@ -901,6 +918,7 @@ impl GcCycleState {
                 evacuation_sticky: StickyRememberedSet::default(),
             }),
             live_old_to_young_sticky: None,
+            pre_clear_dirty_snapshot: None,
             sweep_state: None,
             reclaim_state: None,
             sweep: None,
@@ -1073,6 +1091,7 @@ impl GcCycleState {
                     consider_evacuation,
                     budget.work_units,
                     allow_synchronous_scanners,
+                    self.minor.is_some(),
                 );
             trace_phase_record(&mut self.trace, phase_name, phase_start);
             if done {
@@ -1145,6 +1164,28 @@ impl GcCycleState {
             .expect("atomic finalize state exists")
             .subphase;
         match subphase {
+            AtomicFinalizeSubphase::WeakProcessing => {
+                if budget == 0 {
+                    return;
+                }
+                let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
+                let minor_only = self.minor.is_some();
+                let enqueue_callbacks = matches!(self.trigger_kind, GcTriggerKind::Manual);
+                crate::weakref::process_weak_targets_after_mark(
+                    valid_ptrs,
+                    minor_only,
+                    enqueue_callbacks,
+                );
+                let next = if minor_only {
+                    AtomicFinalizeSubphase::MinorPrelude
+                } else {
+                    AtomicFinalizeSubphase::DisableBarrier
+                };
+                self.atomic_finalize
+                    .as_mut()
+                    .expect("atomic finalize state exists")
+                    .subphase = next;
+            }
             AtomicFinalizeSubphase::MinorPrelude => {
                 if budget == 0 {
                     return;
@@ -1204,7 +1245,7 @@ impl GcCycleState {
                         self.atomic_finalize
                             .as_mut()
                             .expect("atomic finalize state exists")
-                            .subphase = AtomicFinalizeSubphase::DisableBarrier;
+                            .subphase = AtomicFinalizeSubphase::WeakProcessing;
                     }
                 }
             }
@@ -1387,6 +1428,14 @@ impl GcCycleState {
                     let clear = {
                         let reclaim_state =
                             self.reclaim_state.as_mut().expect("reclaim state exists");
+                        if reclaim_state.remembered_set_clear.is_none()
+                            && self.pre_clear_dirty_snapshot.is_none()
+                        {
+                            // Snapshot the pre-clear dirty set so the
+                            // post-restore repair can rescan it (#5029).
+                            self.pre_clear_dirty_snapshot =
+                                Some(super::barrier::remembered_dirty_snapshot());
+                        }
                         reclaim_state
                             .remembered_set_clear
                             .get_or_insert_with(RememberedSetClearState::new)
@@ -1401,6 +1450,9 @@ impl GcCycleState {
                         }
                         if let Some(sticky) = self.live_old_to_young_sticky.as_ref() {
                             sticky.restore();
+                        }
+                        if let Some(snapshot) = self.pre_clear_dirty_snapshot.take() {
+                            restore_surviving_dirty_coverage(&snapshot);
                         }
                         let reclaim_state =
                             self.reclaim_state.as_mut().expect("reclaim state exists");

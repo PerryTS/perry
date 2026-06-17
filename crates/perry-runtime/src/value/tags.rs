@@ -137,6 +137,12 @@ pub(crate) type JsNativeSqliteDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize, i32) -> f64;
 pub(crate) type JsNativeDomainDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// node:tls module-method dispatcher (registered by perry-stdlib). Same
+/// dependency-boundary pattern as crypto/zlib/querystring: captured callable
+/// exports and object-valued properties can reach the rustls-backed stdlib
+/// implementation without perry-runtime depending on perry-stdlib.
+pub(crate) type JsNativeTlsDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:http / node:https / node:http2 server-factory dispatcher (registered
 /// by perry-stdlib under the `external-http-server-pump` feature, which is
 /// enabled whenever a program imports one of those modules). Lets a captured /
@@ -147,6 +153,16 @@ pub(crate) type JsNativeDomainDispatchFn =
 /// http2. Stays null when the http ext crate isn't linked. (#2533)
 pub(crate) type JsNativeHttpDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const u8, usize, *const f64, usize) -> f64;
+/// node:events class-constructor dispatcher (registered by perry-stdlib under
+/// `bundled-events`, or by perry-ext-events). Lets `new` on a bound
+/// `events.EventEmitter` / `events.EventEmitterAsyncResource` export value —
+/// reached via `require('events')`, a default import, or a namespace property
+/// read — construct a real emitter instead of falling through to the generic
+/// empty-object path. Takes (class_name_ptr, class_name_len, args_ptr,
+/// args_len) and returns the NaN-boxed instance. Stays null when no events
+/// impl is linked. (#4995)
+pub(crate) type JsNativeEventsConstructFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 
 // ----- JS handle dispatch atomics (shared between handle.rs and consumers) -----
 
@@ -165,4 +181,6 @@ pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::nul
 pub static JS_NATIVE_QUERYSTRING_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_SQLITE_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_EVENTS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

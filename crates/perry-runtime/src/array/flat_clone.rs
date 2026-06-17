@@ -60,6 +60,11 @@ unsafe fn js_array_flat_into(
     for i in 0..len {
         let element = *elements.add(i);
         let bits = element.to_bits();
+        // Per ECMAScript FlattenIntoArray, holes are absent (HasProperty is
+        // false) and are skipped, not copied as `null`/`undefined`.
+        if bits == crate::value::TAG_HOLE {
+            continue;
+        }
         let top16 = (bits >> 48) as u16;
         let maybe_arr_ptr = if top16 >= 0x7FF8 {
             if top16 == 0x7FFD {
@@ -124,6 +129,10 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
         for i in 0..len {
             let element = *elements.add(i);
             let bits = element.to_bits();
+            // Per ECMAScript FlattenIntoArray, holes are absent and skipped.
+            if bits == crate::value::TAG_HOLE {
+                continue;
+            }
             let top16 = (bits >> 48) as u16;
 
             // Check if the element is an array pointer (NaN-boxed or raw)
@@ -148,30 +157,40 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
                 None
             };
 
-            if let Some(sub_arr) = maybe_arr_ptr {
-                // Check if it's a registered set — if so, it's not an array
-                if crate::set::is_registered_set(sub_arr as usize)
-                    || crate::map::is_registered_map(sub_arr as usize)
-                {
-                    // Not an array — push as-is
-                    result = js_array_push_f64(result, element);
-                } else {
-                    // Try to read as array
-                    let sub_len = (*sub_arr).length as usize;
-                    // Sanity check: if length is unreasonably large, treat as non-array
-                    if sub_len <= 1_000_000 {
-                        let sub_elements = (sub_arr as *const u8)
-                            .add(std::mem::size_of::<ArrayHeader>())
-                            as *const f64;
-                        for j in 0..sub_len {
-                            result = js_array_push_f64(result, *sub_elements.add(j));
+            // Only flatten when the pointer is genuinely an array. A plain
+            // object / Set / Map / string etc. is a non-array element and must
+            // be pushed as-is — `flat` only spreads arrays. Pre-fix this read
+            // an arbitrary heap object's bytes as an `ArrayHeader.length` and
+            // iterated garbage (segfault on `[{…}].flat()`). Mirrors the
+            // `GC_TYPE_ARRAY` gate in the recursive `js_array_flat_into`.
+            let is_array = match maybe_arr_ptr {
+                Some(sub_arr) if (sub_arr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 => {
+                    let hdr = (sub_arr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                        as *const crate::gc::GcHeader;
+                    (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+                }
+                _ => false,
+            };
+            if let (true, Some(sub_arr)) = (is_array, maybe_arr_ptr) {
+                let sub_len = (*sub_arr).length as usize;
+                // Sanity check: if length is unreasonably large, treat as non-array.
+                if sub_len <= 1_000_000 {
+                    let sub_elements = (sub_arr as *const u8)
+                        .add(std::mem::size_of::<ArrayHeader>())
+                        as *const f64;
+                    for j in 0..sub_len {
+                        let sub = *sub_elements.add(j);
+                        // Skip holes in the flattened sub-array too.
+                        if sub.to_bits() == crate::value::TAG_HOLE {
+                            continue;
                         }
-                    } else {
-                        result = js_array_push_f64(result, element);
+                        result = js_array_push_f64(result, sub);
                     }
+                } else {
+                    result = js_array_push_f64(result, element);
                 }
             } else {
-                // Not a pointer - push element directly
+                // Not an array (non-pointer, or a non-array object) — push as-is.
                 result = js_array_push_f64(result, element);
             }
         }
@@ -192,26 +211,7 @@ pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
 /// `crates/perry-codegen/src/expr/objects_arrays_lit.rs`.
 #[no_mangle]
 pub extern "C" fn js_array_clone_for_spread(boxed: f64) -> *mut ArrayHeader {
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    let bits = boxed.to_bits();
-    if bits == TAG_UNDEFINED || bits == TAG_NULL {
-        let receiver = if bits == TAG_NULL {
-            "null"
-        } else {
-            "undefined"
-        };
-        let msg = format!("{} is not iterable", receiver);
-        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_str);
-        let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(err_value));
-    }
-    // Strip the NaN-box tag (the same way unbox_to_i64 does in codegen)
-    // and forward to the existing clone path, which already handles
-    // arrays, sets, strings, typed-arrays, Buffers, and iterables.
-    let ptr_bits = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    js_array_clone(ptr_bits as *const ArrayHeader)
+    super::iterator::array_from_spread_value(boxed)
 }
 
 /// Clone an array from a NaN-boxed f64 pointer value.
@@ -276,7 +276,7 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     // as pointer-shaped ids. `Array.from(handle)` / `[...handle]` reach this
     // helper after codegen strips the tag, so ask the generic iterator resolver
     // before treating the id as a non-array and returning [].
-    if raw_addr > 0 && raw_addr < 0x100000 {
+    if crate::value::addr_class::is_small_handle(raw_addr) {
         if let Some(dispatch) = crate::object::handle_property_dispatch() {
             let method = b"@@iterator";
             let iter_fn = unsafe { dispatch(raw_addr as i64, method.as_ptr(), method.len()) };
@@ -363,7 +363,8 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
                     // dispatch `.next()` via class id too — without this `[...buf.keys()]`
                     // / `Array.from(buf.values())` produced an empty array even though
                     // `.next()` and `for...of` already worked.
-                    || (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID;
+                    || (*obj).class_id == crate::buffer::BUFFER_ITERATOR_CLASS_ID
+                    || (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID;
                 let is_iterable = is_array_iterator || {
                     let iter_sym = crate::symbol::well_known_symbol("iterator");
                     if iter_sym.is_null() {

@@ -53,9 +53,12 @@ pub(crate) const GLOBAL_THIS_BUILTIN_CONSTRUCTORS: &[&str] = &[
     "TextDecoder",
     "TextEncoderStream",
     "TextDecoderStream",
+    "CompressionStream",
+    "DecompressionStream",
     "Navigator",
     "URL",
     "URLSearchParams",
+    "URLPattern",
     "AbortController",
     "AbortSignal",
     "EventTarget",
@@ -107,6 +110,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "TextEncoderStream"
         | "TextDecoderStream"
         | "URLSearchParams"
+        | "URLPattern"
         | "AbortController"
         | "AbortSignal"
         | "DOMException"
@@ -120,6 +124,7 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "Navigator"
         | "DisposableStack"
         | "AsyncDisposableStack" => 0,
+        "CompressionStream" | "DecompressionStream" => 1,
         "Array"
         | "Object"
         | "String"
@@ -165,7 +170,13 @@ pub(crate) const GLOBAL_THIS_BUILTIN_NAMESPACES: &[&str] = &[
     "Math",
     "JSON",
     "Reflect",
+    "Atomics",
+    "Intl",
     "WebAssembly",
+    // TC39 Temporal (#4686): typeof Temporal === "object". The constructors
+    // (Temporal.Duration, …) and the Temporal.Now sub-namespace are hung off it
+    // by `install_temporal_namespace`.
+    "Temporal",
 ];
 
 /// JS global built-in functions exposed as function-valued properties on
@@ -196,6 +207,9 @@ pub(crate) const GLOBAL_THIS_BUILTIN_FUNCTIONS: &[&str] = &[
     "decodeURI",
     "encodeURIComponent",
     "decodeURIComponent",
+    // #4511: legacy escape/unescape (ES Annex B), used by `qs`.
+    "escape",
+    "unescape",
 ];
 
 pub(crate) fn is_web_fetch_constructor(name: &str) -> bool {

@@ -5,7 +5,13 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+// `PathBuf` is only named by the regex-engine-gated glob helpers
+// (`pathbuf_to_slashes`); the cp path at the bottom uses the fully-qualified
+// `std::path::PathBuf`, so the bare import is gated to avoid an unused-import
+// warning when the engine is off.
+#[cfg(feature = "regex-engine")]
+use std::path::PathBuf;
 use std::sync::Once;
 
 use crate::closure::{
@@ -14,6 +20,12 @@ use crate::closure::{
 };
 
 use super::*;
+
+/// Compiled exclude-pattern type for `fs.glob`. Backed by `fancy_regex::Regex`.
+/// Only referenced by the regex-engine-gated glob machinery (`FsGlobOptions`),
+/// so it's defined only when that engine is linked.
+#[cfg(feature = "regex-engine")]
+type GlobExcludeRegex = fancy_regex::Regex;
 
 /// `fs.opendirSync(path)` — codegen emits a direct call to the unmangled
 /// `js_fs_opendir_sync` symbol (runtime_decls/strings.rs). Without `#[no_mangle]`
@@ -77,6 +89,9 @@ fn js_fs_opendir_value_inner(path_value: f64, include_path: bool) -> Result<f64,
 #[derive(Clone)]
 pub(crate) struct FsGlobMatch {
     output: String,
+    // Only consulted by the regex-engine-gated exclude-pattern filter; with the
+    // engine off no `FsGlobMatch` is ever built, so the field is absent.
+    #[cfg(feature = "regex-engine")]
     actual_path: String,
     dirent_name: String,
     dirent_parent: String,
@@ -88,15 +103,17 @@ struct FsGlobRun {
     with_file_types: bool,
 }
 
+#[cfg(feature = "regex-engine")]
 struct FsGlobOptions {
     cwd_actual: String,
     cwd_display: String,
     with_file_types: bool,
     follow_symlinks: bool,
-    exclude_patterns: Vec<fancy_regex::Regex>,
+    exclude_patterns: Vec<GlobExcludeRegex>,
     exclude_fn: Option<*const ClosureHeader>,
 }
 
+#[cfg(feature = "regex-engine")]
 struct GlobCandidate {
     actual_path: String,
     kind: DirentKind,
@@ -106,16 +123,19 @@ fn normalize_slashes(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+#[cfg(feature = "regex-engine")]
 fn pathbuf_to_slashes(path: PathBuf) -> String {
     normalize_slashes(&path.to_string_lossy())
 }
 
+#[cfg(feature = "regex-engine")]
 fn current_dir_slashes() -> String {
     std::env::current_dir()
         .map(pathbuf_to_slashes)
         .unwrap_or_else(|_| ".".to_string())
 }
 
+#[cfg(feature = "regex-engine")]
 fn trim_trailing_slashes(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -125,6 +145,7 @@ fn trim_trailing_slashes(path: &str) -> &str {
     }
 }
 
+#[cfg(feature = "regex-engine")]
 fn join_slash(base: &str, child: &str) -> String {
     if child.is_empty() || child == "." {
         return normalize_slashes(base);
@@ -142,6 +163,7 @@ fn join_slash(base: &str, child: &str) -> String {
     }
 }
 
+#[cfg(feature = "regex-engine")]
 fn absolutize_slash(path: &str) -> String {
     let normalized = normalize_slashes(path);
     if Path::new(&normalized).is_absolute() {
@@ -151,6 +173,7 @@ fn absolutize_slash(path: &str) -> String {
     }
 }
 
+#[cfg(feature = "regex-engine")]
 fn relative_to_base(path: &str, base: &str) -> String {
     let path = normalize_slashes(path);
     let base = normalize_slashes(base);
@@ -166,6 +189,7 @@ fn relative_to_base(path: &str, base: &str) -> String {
     path.strip_prefix(&prefix).unwrap_or(&path).to_string()
 }
 
+#[cfg(feature = "regex-engine")]
 fn parent_display_for_relative(cwd_display: &str, rel_parent: &str) -> String {
     if rel_parent == "." || rel_parent.is_empty() {
         if cwd_display.is_empty() {
@@ -192,6 +216,7 @@ fn decode_string_value(value: f64) -> Option<String> {
     )
 }
 
+#[cfg(feature = "regex-engine")]
 fn decode_string_or_file_url(value: f64) -> Option<String> {
     if let Some(s) = decode_string_value(value) {
         return Some(s);
@@ -240,25 +265,25 @@ fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> 
     }
 }
 
-fn throw_glob_pattern_string(arg_name: &str, value: f64) -> ! {
+fn glob_pattern_string_error(arg_name: &str, value: f64) -> f64 {
     let message = format!(
         "The \"{arg_name}\" argument must be of type string. Received {}",
         validate::describe_received(value)
     );
-    validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+    validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn throw_glob_patterns_array(value: f64) -> ! {
+fn glob_patterns_array_error(value: f64) -> f64 {
     let message = format!(
         "The \"patterns\" argument must be an instance of Array. Received {}",
         validate::describe_received(value)
     );
-    validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+    validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn glob_patterns_from_value(pattern_value: f64) -> Vec<String> {
+fn glob_patterns_from_value_result(pattern_value: f64) -> Result<Vec<String>, f64> {
     if let Some(pattern) = decode_string_value(pattern_value) {
-        return vec![normalize_slashes(&pattern)];
+        return Ok(vec![normalize_slashes(&pattern)]);
     }
     if let Some(arr) = array_ptr_from_value(pattern_value) {
         let len = crate::array::js_array_length(arr) as usize;
@@ -266,26 +291,33 @@ fn glob_patterns_from_value(pattern_value: f64) -> Vec<String> {
         for i in 0..len {
             let value = crate::array::js_array_get_f64(arr, i as u32);
             let Some(pattern) = decode_string_value(value) else {
-                throw_glob_pattern_string(&format!("patterns[{i}]"), value);
+                return Err(glob_pattern_string_error(&format!("patterns[{i}]"), value));
             };
             patterns.push(normalize_slashes(&pattern));
         }
-        return patterns;
+        return Ok(patterns);
     }
     let js = crate::value::JSValue::from_bits(pattern_value.to_bits());
     if js.is_null() || js.is_pointer() {
-        throw_glob_patterns_array(pattern_value);
+        return Err(glob_patterns_array_error(pattern_value));
     }
-    throw_glob_pattern_string("patterns", pattern_value);
+    Err(glob_pattern_string_error("patterns", pattern_value))
 }
 
-fn compile_exclude_patterns(exclude_value: f64, cwd_actual: &str) -> Vec<fancy_regex::Regex> {
+#[cfg(feature = "regex-engine")]
+fn compile_exclude_patterns_result(
+    exclude_value: f64,
+    cwd_actual: &str,
+) -> Result<Vec<GlobExcludeRegex>, f64> {
     let Some(arr) = array_ptr_from_value(exclude_value) else {
         let message = format!(
             "The \"options.exclude\" property must be of type function or string[]. Received {}",
             validate::describe_received(exclude_value)
         );
-        validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+        return Err(validate::build_type_error_with_code_value(
+            &message,
+            "ERR_INVALID_ARG_TYPE",
+        ));
     };
     let len = crate::array::js_array_length(arr) as usize;
     let mut patterns = Vec::with_capacity(len);
@@ -296,7 +328,10 @@ fn compile_exclude_patterns(exclude_value: f64, cwd_actual: &str) -> Vec<fancy_r
                 "The \"options.exclude[{i}]\" property must be of type string. Received {}",
                 validate::describe_received(value)
             );
-            validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+            return Err(validate::build_type_error_with_code_value(
+                &message,
+                "ERR_INVALID_ARG_TYPE",
+            ));
         };
         let normalized = normalize_slashes(&pattern);
         let absolute = if Path::new(&normalized).is_absolute() {
@@ -308,11 +343,14 @@ fn compile_exclude_patterns(exclude_value: f64, cwd_actual: &str) -> Vec<fancy_r
             patterns.push(re);
         }
     }
-    patterns
+    Ok(patterns)
 }
 
-fn glob_options_from_value(options_value: f64) -> FsGlobOptions {
-    validate::validate_object_options("options", options_value);
+#[cfg(feature = "regex-engine")]
+fn glob_options_from_value_result(options_value: f64) -> Result<FsGlobOptions, f64> {
+    if let Some(err) = validate::object_options_type_error_value("options", options_value) {
+        return Err(err);
+    }
     let mut cwd_actual = current_dir_slashes();
     let mut cwd_display = ".".to_string();
     unsafe {
@@ -324,7 +362,10 @@ fn glob_options_from_value(options_value: f64) -> FsGlobOptions {
                         "The \"paths[0]\" argument must be of type string. Received {}",
                         validate::describe_received(cwd_value)
                     );
-                    validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+                    return Err(validate::build_type_error_with_code_value(
+                        &message,
+                        "ERR_INVALID_ARG_TYPE",
+                    ));
                 };
                 let cwd_norm = normalize_slashes(&cwd_raw);
                 cwd_actual = absolutize_slash(&cwd_norm);
@@ -342,23 +383,24 @@ fn glob_options_from_value(options_value: f64) -> FsGlobOptions {
             if !is_nullish(exclude_value) {
                 let callable = extract_closure_ptr(exclude_value);
                 if callable.is_null() {
-                    exclude_patterns = compile_exclude_patterns(exclude_value, &cwd_actual);
+                    exclude_patterns = compile_exclude_patterns_result(exclude_value, &cwd_actual)?;
                 } else {
                     exclude_fn = Some(callable);
                 }
             }
         }
     }
-    FsGlobOptions {
+    Ok(FsGlobOptions {
         cwd_actual,
         cwd_display,
         with_file_types,
         follow_symlinks,
         exclude_patterns,
         exclude_fn,
-    }
+    })
 }
 
+#[cfg(feature = "regex-engine")]
 fn regex_escape_char(out: &mut String, ch: char) {
     if matches!(
         ch,
@@ -369,6 +411,7 @@ fn regex_escape_char(out: &mut String, ch: char) {
     out.push(ch);
 }
 
+#[cfg(feature = "regex-engine")]
 fn split_top_level(input: &str, separator: char) -> Vec<String> {
     let chars: Vec<char> = input.chars().collect();
     let mut parts = Vec::new();
@@ -400,6 +443,7 @@ fn split_top_level(input: &str, separator: char) -> Vec<String> {
     parts
 }
 
+#[cfg(feature = "regex-engine")]
 fn take_balanced(chars: &[char], pos: &mut usize, open: char, close: char) -> Option<String> {
     let mut depth = 1i32;
     let start = *pos;
@@ -428,6 +472,7 @@ fn take_balanced(chars: &[char], pos: &mut usize, open: char, close: char) -> Op
     None
 }
 
+#[cfg(feature = "regex-engine")]
 fn parse_char_class(chars: &[char], pos: &mut usize) -> String {
     let start = pos.saturating_sub(1);
     let mut class = String::from("[");
@@ -457,12 +502,14 @@ fn parse_char_class(chars: &[char], pos: &mut usize) -> String {
     regex::escape(&literal)
 }
 
+#[cfg(feature = "regex-engine")]
 fn glob_fragment_to_regex(pattern: &str) -> Option<String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut pos = 0usize;
     parse_glob_chars(&chars, &mut pos)
 }
 
+#[cfg(feature = "regex-engine")]
 fn parse_glob_chars(chars: &[char], pos: &mut usize) -> Option<String> {
     let mut out = String::new();
     while *pos < chars.len() {
@@ -517,12 +564,14 @@ fn parse_glob_chars(chars: &[char], pos: &mut usize) -> Option<String> {
     Some(out)
 }
 
+#[cfg(feature = "regex-engine")]
 pub(crate) fn glob_regex_from_pattern(pattern: &str) -> Option<fancy_regex::Regex> {
     let normalized = normalize_slashes(pattern);
     let body = glob_fragment_to_regex(&normalized)?;
     fancy_regex::Regex::new(&format!("^{body}$")).ok()
 }
 
+#[cfg(feature = "regex-engine")]
 fn first_glob_meta(pattern: &str) -> usize {
     let chars: Vec<(usize, char)> = pattern.char_indices().collect();
     for (idx, (byte_idx, ch)) in chars.iter().enumerate() {
@@ -536,6 +585,7 @@ fn first_glob_meta(pattern: &str) -> usize {
     pattern.len()
 }
 
+#[cfg(feature = "regex-engine")]
 pub(crate) fn glob_search_root(pattern: &str) -> String {
     let normalized = normalize_slashes(pattern);
     let first_meta = first_glob_meta(&normalized);
@@ -547,6 +597,7 @@ pub(crate) fn glob_search_root(pattern: &str) -> String {
     }
 }
 
+#[cfg(feature = "regex-engine")]
 fn walk_paths_for_glob(dir: &Path, follow_symlinks: bool, out: &mut Vec<GlobCandidate>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -569,6 +620,7 @@ fn walk_paths_for_glob(dir: &Path, follow_symlinks: bool, out: &mut Vec<GlobCand
     }
 }
 
+#[cfg(feature = "regex-engine")]
 fn glob_match_from_candidate(
     candidate: &GlobCandidate,
     pattern_is_absolute: bool,
@@ -610,6 +662,7 @@ fn glob_match_from_candidate(
     })
 }
 
+#[cfg(feature = "regex-engine")]
 fn excluded_by_patterns(path: &str, options: &FsGlobOptions) -> bool {
     options
         .exclude_patterns
@@ -617,6 +670,7 @@ fn excluded_by_patterns(path: &str, options: &FsGlobOptions) -> bool {
         .any(|re| re.is_match(path).unwrap_or(false))
 }
 
+#[cfg(feature = "regex-engine")]
 fn excluded_by_function(entry: &FsGlobMatch, options: &FsGlobOptions) -> bool {
     let Some(callback) = options.exclude_fn else {
         return false;
@@ -637,9 +691,10 @@ fn glob_entry_value(entry: &FsGlobMatch, with_file_types: bool) -> f64 {
     }
 }
 
-fn run_fs_glob(pattern_value: f64, options_value: f64) -> FsGlobRun {
-    let patterns = glob_patterns_from_value(pattern_value);
-    let options = glob_options_from_value(options_value);
+#[cfg(feature = "regex-engine")]
+fn run_fs_glob_result(pattern_value: f64, options_value: f64) -> Result<FsGlobRun, f64> {
+    let patterns = glob_patterns_from_value_result(pattern_value)?;
+    let options = glob_options_from_value_result(options_value)?;
     let mut matches: BTreeMap<String, FsGlobMatch> = BTreeMap::new();
     for pattern in patterns {
         let pattern_is_absolute = Path::new(&pattern).is_absolute();
@@ -684,9 +739,29 @@ fn run_fs_glob(pattern_value: f64, options_value: f64) -> FsGlobRun {
             matches.entry(entry.output.clone()).or_insert(entry);
         }
     }
-    FsGlobRun {
+    Ok(FsGlobRun {
         matches: matches.into_values().collect(),
         with_file_types: options.with_file_types,
+    })
+}
+
+/// Regex engine gated off: `fs.glob*` matching is built on the regex engine, so
+/// with it absent return no matches. The pattern argument is still validated so
+/// bad-input `TypeError`s are preserved; the empty-result path is dead in
+/// practice (a program calling `fs.globSync` forces the engine on).
+#[cfg(not(feature = "regex-engine"))]
+fn run_fs_glob_result(pattern_value: f64, _options_value: f64) -> Result<FsGlobRun, f64> {
+    glob_patterns_from_value_result(pattern_value)?;
+    Ok(FsGlobRun {
+        matches: Vec::new(),
+        with_file_types: false,
+    })
+}
+
+fn run_fs_glob(pattern_value: f64, options_value: f64) -> FsGlobRun {
+    match run_fs_glob_result(pattern_value, options_value) {
+        Ok(run) => run,
+        Err(err) => crate::exception::js_throw(err),
     }
 }
 
@@ -779,6 +854,8 @@ struct PromiseWatchState {
     encoding: String,
     object_value: f64,
     timer_id: i64,
+    persistent: bool,
+    active: bool,
     snapshot: WatchSnapshot,
     queue: VecDeque<WatchEvent>,
     pending: VecDeque<*mut crate::promise::Promise>,
@@ -793,6 +870,7 @@ struct GlobIteratorState {
     index: usize,
     with_file_types: bool,
     closed: bool,
+    validation_error: Option<f64>,
 }
 
 thread_local! {
@@ -1320,7 +1398,9 @@ fn close_promise_watcher_return(id: usize) -> Vec<*mut crate::promise::Promise> 
     let Some(state) = removed else {
         return Vec::new();
     };
-    crate::timer::clearInterval(state.timer_id);
+    if state.timer_id != 0 {
+        crate::timer::clearInterval(state.timer_id);
+    }
     remove_abort_listener(state.signal, state.abort_listener);
     state.pending.into_iter().collect()
 }
@@ -1331,9 +1411,12 @@ fn abort_promise_watcher(id: usize, reason: f64) -> Vec<*mut crate::promise::Pro
         let Some(state) = watchers.get_mut(&id) else {
             return Vec::new();
         };
-        crate::timer::clearInterval(state.timer_id);
+        if state.timer_id != 0 {
+            crate::timer::clearInterval(state.timer_id);
+        }
         remove_abort_listener(state.signal, state.abort_listener);
         state.timer_id = 0;
+        state.active = false;
         state.signal = undefined_value();
         state.abort_listener = undefined_value();
         state.object_value = undefined_value();
@@ -1487,6 +1570,36 @@ extern "C" fn promise_watcher_poll_impl(closure: *const ClosureHeader) -> f64 {
         resolve_promise_with_event(promise, event, encoding);
     }
     undefined_value()
+}
+
+fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
+    if state.active || state.closed {
+        return;
+    }
+    // Re-baseline the snapshot at the moment iteration actually begins (the
+    // first `.next()` pull), then let `promise_watcher_poll_impl` advance the
+    // baseline after every poll. This makes the watcher's two behaviors match
+    // Node:
+    //   * Events emitted between `watch()` and the first `.next()` are NOT
+    //     delivered — Node's async iterator only starts collecting once you
+    //     iterate, so a write before the first pull is ignored. Folding the
+    //     current directory state into the baseline here drops those.
+    //   * A write that happens AFTER a pull is begun is delivered, because each
+    //     subsequent poll diffs against the post-pull baseline (which advanced
+    //     past the now-consumed state) and so detects the fresh change.
+    // Seeding the baseline at creation time (in `js_fs_promises_watch`) without
+    // this refresh broke the post-pull case: the first poll would report the
+    // pre-pull write to the pending pull, and—more importantly—left the
+    // bookkeeping seeded against stale creation-time state. Refreshing here
+    // restores both halves.
+    state.snapshot = snapshot_watch_target(&state.path, state.recursive).unwrap_or_default();
+    let timer_callback = poll_closure_value(promise_watcher_poll_impl as *const u8, id);
+    let timer_id = crate::timer::setInterval(timer_callback as i64, FS_WATCH_POLL_INTERVAL_MS);
+    if !state.persistent {
+        crate::timer::js_timer_unref(timer_id);
+    }
+    state.timer_id = timer_id;
+    state.active = true;
 }
 
 extern "C" fn watch_file_poll_impl(closure: *const ClosureHeader) -> f64 {
@@ -1697,6 +1810,7 @@ enum PromiseNextAction {
 
 enum GlobNextAction {
     Done,
+    Reject(f64),
     Entry(FsGlobMatch, bool),
 }
 
@@ -1707,6 +1821,10 @@ extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
         let Some(state) = iterators.get_mut(&id) else {
             return GlobNextAction::Done;
         };
+        if let Some(reason) = state.validation_error.take() {
+            state.closed = true;
+            return GlobNextAction::Reject(reason);
+        }
         if state.closed || state.index >= state.entries.len() {
             state.closed = true;
             return GlobNextAction::Done;
@@ -1717,6 +1835,7 @@ extern "C" fn glob_iterator_next_impl(closure: *const ClosureHeader) -> f64 {
     });
     match action {
         GlobNextAction::Done => resolved_iterator_promise(undefined_value(), true),
+        GlobNextAction::Reject(reason) => rejected_promise_value(reason),
         GlobNextAction::Entry(entry, with_file_types) => {
             resolved_iterator_promise(glob_entry_value(&entry, with_file_types), false)
         }
@@ -1748,6 +1867,7 @@ extern "C" fn promise_watcher_next_impl(closure: *const ClosureHeader) -> f64 {
         if state.closed {
             return PromiseNextAction::Done;
         }
+        start_promise_watcher(id, state);
         if let Some(event) = state.queue.pop_front() {
             return PromiseNextAction::Event(event, state.encoding.clone());
         }
@@ -1966,16 +2086,21 @@ fn build_glob_iterator_object(id: usize) -> f64 {
 }
 
 pub(crate) fn js_fs_promises_glob_iterator(pattern_value: f64, options_value: f64) -> f64 {
-    let run = run_fs_glob(pattern_value, options_value);
+    let (entries, with_file_types, validation_error) =
+        match run_fs_glob_result(pattern_value, options_value) {
+            Ok(run) => (run.matches, run.with_file_types, None),
+            Err(err) => (Vec::new(), false, Some(err)),
+        };
     let id = next_glob_iterator_id();
     GLOB_ITERATORS.with(|iterators| {
         iterators.borrow_mut().insert(
             id,
             GlobIteratorState {
-                entries: run.matches,
+                entries,
                 index: 0,
-                with_file_types: run.with_file_types,
+                with_file_types,
                 closed: false,
+                validation_error,
             },
         );
     });
@@ -2152,7 +2277,15 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
         Ok(signal) => signal,
         Err(err) => crate::exception::js_throw(err),
     };
-    let snapshot = match snapshot_watch_target(&path, recursive) {
+    // Snapshot the watch target at creation time. This serves two purposes:
+    //   1. It validates the path synchronously, matching Node's `watch()` which
+    //      throws (ENOENT etc.) at call time rather than at first iteration.
+    //   2. It seeds an initial baseline for the state.
+    // The baseline is intentionally re-taken in `start_promise_watcher` at the
+    // first `.next()` pull (so pre-iteration writes are ignored, per Node) and
+    // then advanced by every poll (so post-pull writes are delivered). The
+    // value seeded here is therefore a placeholder that the first pull refreshes.
+    let initial_snapshot = match snapshot_watch_target(&path, recursive) {
         Ok(snapshot) => snapshot,
         Err(err) => unsafe {
             crate::exception::js_throw(build_fs_error_value(&err, "watch", &path));
@@ -2160,11 +2293,6 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
     };
     let id = next_watch_id();
     let object_value = build_promise_watcher_object(id);
-    let timer_callback = poll_closure_value(promise_watcher_poll_impl as *const u8, id);
-    let timer_id = crate::timer::setInterval(timer_callback as i64, FS_WATCH_POLL_INTERVAL_MS);
-    if !persistent {
-        crate::timer::js_timer_unref(timer_id);
-    }
     let abort_listener = signal
         .filter(|signal| !signal_is_aborted(*signal))
         .map(|signal| add_abort_listener(signal, id, promise_watcher_abort_impl))
@@ -2183,8 +2311,10 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
                 recursive,
                 encoding,
                 object_value,
-                timer_id,
-                snapshot,
+                timer_id: 0,
+                persistent,
+                active: false,
+                snapshot: initial_snapshot,
                 queue: VecDeque::new(),
                 pending: VecDeque::new(),
                 signal: signal_value,
@@ -2194,9 +2324,6 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
             },
         );
     });
-    if abort_reason.is_some() {
-        crate::timer::clearInterval(timer_id);
-    }
     object_value
 }
 

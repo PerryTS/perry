@@ -39,6 +39,10 @@ fn invalid_signal_error(signal: f64) -> f64 {
     )
 }
 
+fn invalid_aborted_signal_error() -> f64 {
+    type_error_value("signal is not of type AbortSignal.", "ERR_INVALID_ARG_TYPE")
+}
+
 fn invalid_resource_error(resource: f64) -> f64 {
     type_error_value(
         &format!(
@@ -86,7 +90,7 @@ extern "C" fn aborted_resolve_listener(closure: *const ClosureHeader) -> f64 {
 pub extern "C" fn js_util_aborted(signal: f64, resource: f64) -> f64 {
     let signal_ptr = match crate::url::abort::abort_signal_ptr_from_value(signal) {
         Some(signal_ptr) => signal_ptr,
-        None => return rejected_promise(invalid_signal_error(signal)),
+        None => return rejected_promise(invalid_aborted_signal_error()),
     };
     if !is_object_resource(resource) {
         return rejected_promise(invalid_resource_error(resource));

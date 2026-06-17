@@ -83,6 +83,9 @@ impl SH for ArrayElement {
                 tag(h, 0);
                 e.hash(h);
             }
+            ArrayElement::Hole => {
+                tag(h, 2);
+            }
             ArrayElement::Spread(e) => {
                 tag(h, 1);
                 e.hash(h);

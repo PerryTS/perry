@@ -7,6 +7,32 @@
 
 use super::*;
 
+static CLASS_KEYS_BY_ID: std::sync::RwLock<Option<std::collections::HashMap<u32, (usize, u32)>>> =
+    std::sync::RwLock::new(None);
+
+fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut ArrayHeader) {
+    if class_id == 0 || keys_array.is_null() {
+        return;
+    }
+    let mut guard = CLASS_KEYS_BY_ID.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(std::collections::HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .insert(class_id, (keys_array as usize, field_count));
+}
+
+pub(crate) fn registered_class_keys_array(class_id: u32) -> Option<(*mut ArrayHeader, u32)> {
+    let guard = CLASS_KEYS_BY_ID.read().ok()?;
+    let (addr, field_count) = guard.as_ref()?.get(&class_id).copied()?;
+    if addr == 0 {
+        return None;
+    }
+    Some((addr as *mut ArrayHeader, field_count))
+}
+
 /// Allocate a new object with the given class ID and field count
 /// Returns a pointer to the object header
 #[no_mangle]
@@ -237,7 +263,14 @@ pub extern "C" fn js_build_class_keys_array(
         .wrapping_add(1000000);
     let cached = shape_cache_get(shape_id);
     if !cached.is_null() {
+        remember_class_keys_array(class_id, field_count, cached);
         return cached;
+    }
+    if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
+        let arr = crate::array::js_array_alloc_with_length_longlived(0);
+        shape_cache_insert(shape_id, arr);
+        remember_class_keys_array(class_id, field_count, arr);
+        return arr;
     }
     let keys_bytes = unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
     let keys: Vec<&[u8]> = keys_bytes
@@ -268,6 +301,7 @@ pub extern "C" fn js_build_class_keys_array(
         }
     }
     shape_cache_insert(shape_id, arr);
+    remember_class_keys_array(class_id, field_count, arr);
     arr
 }
 
@@ -352,8 +386,142 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     unsafe {
         set_object_keys_array(ptr, keys_arr);
     }
+    remember_class_keys_array(class_id, field_count, keys_arr);
     ptr
 }
+
+/// Allocate a subclass instance whose parent was resolved DYNAMICALLY at
+/// runtime — the `class X extends _mod.default` interop-ESM shape (wall 38).
+///
+/// At X's compile time the parent's field layout is unknown (the `extends`
+/// target is an unresolvable cross-module value, so X's `extends_name` is the
+/// unresolved `"default"` and `class_field_global_index`'s parent walk bails),
+/// so codegen can only size the instance for X's OWN fields. That
+/// under-allocates and mis-lays-out the instance: the parent's constructor (run
+/// on this `this` via `run_class_constructor_on_this_flat`) and the parent's
+/// inherited methods both address the inherited `__perry_cap_*` / declared
+/// fields at the PARENT's own slot indices (parent fields come first in the
+/// layout), which lie past X's own-only slots → out-of-bounds reads/writes into
+/// adjacent heap. That is wall 45 (`Derived extends _base.default` reads
+/// `_c10`/`_c20` captures as garbage numbers/functions).
+///
+/// The parent edge (`js_register_class_parent_dynamic`) and the parent's
+/// keys-array (`js_build_class_keys_array`) are both registered at module-init
+/// time, before any `new X()`. So here — at construction time — resolve them and
+/// allocate with the MERGED layout: `field_count = parent_field_count +
+/// own_field_count` and `keys_array = [parent keys..] ++ [own keys..]` (parent
+/// first, exactly the slot order the parent's compiled methods/ctor expect).
+/// The parent's keys-array already encodes its WHOLE chain (it was built
+/// parent-first at the parent's own compile time, where its ancestors were
+/// known), so the immediate parent's registered keys are sufficient. Falls back
+/// to the own-only layout (`js_object_alloc_class_with_keys`) when no dynamic
+/// parent / parent keys are registered (e.g. the parent is a builtin or a
+/// not-yet-initialized module).
+#[no_mangle]
+pub extern "C" fn js_object_alloc_class_dynamic_parent(
+    class_id: u32,
+    own_field_count: u32,
+    own_packed_keys: *const u8,
+    own_packed_keys_len: u32,
+) -> *mut ObjectHeader {
+    let parent_cid = crate::object::get_parent_class_id(class_id).unwrap_or(0);
+    let parent_keys = if parent_cid != 0 {
+        registered_class_keys_array(parent_cid)
+    } else {
+        None
+    };
+    let Some((parent_arr, _parent_fc)) = parent_keys else {
+        // No dynamic parent layout available — own-only fallback keeps the
+        // prior baseline (correct for parentless / builtin-parent classes).
+        return js_object_alloc_class_with_keys(
+            class_id,
+            parent_cid,
+            own_field_count,
+            own_packed_keys,
+            own_packed_keys_len,
+        );
+    };
+    let parent_len = unsafe { (*parent_arr).length };
+
+    // Cache the merged keys-array per class. The shape id is namespaced away
+    // from the own-only shape (`+ 2_000_000`) so it can't collide with the
+    // `js_build_class_keys_array` / `js_object_alloc_class_with_keys` shapes.
+    let shape_id = class_id.wrapping_mul(10007).wrapping_add(2_000_000);
+    let cached = shape_cache_get(shape_id);
+    let (merged_arr, field_count) = if !cached.is_null() {
+        (cached, unsafe { (*cached).length })
+    } else {
+        let own_keys: Vec<&[u8]> = if own_packed_keys.is_null() || own_packed_keys_len == 0 {
+            Vec::new()
+        } else {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(own_packed_keys, own_packed_keys_len as usize)
+            };
+            bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect()
+        };
+        let merged_len = parent_len as usize + own_keys.len();
+        let arr = crate::array::js_array_alloc_with_length_longlived(merged_len as u32);
+        let dst = unsafe { (arr as *mut u8).add(8) as *mut f64 };
+        let src = unsafe { (parent_arr as *mut u8).add(8) as *const f64 };
+        unsafe {
+            for i in 0..parent_len as usize {
+                let bits = (*src.add(i)).to_bits();
+                // GC_STORE_AUDIT(INIT): initializing fresh longlived keys-array slot
+                // with a longlived parent key; layout recorded below.
+                *dst.add(i) = f64::from_bits(bits);
+                crate::array::note_array_slot_layout_only(arr, i, bits);
+            }
+            for (j, key_bytes) in own_keys.iter().enumerate() {
+                let str_ptr = crate::string::js_string_from_bytes_longlived(
+                    key_bytes.as_ptr(),
+                    key_bytes.len() as u32,
+                );
+                let nanboxed = f64::from_bits(
+                    crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
+                );
+                let idx = parent_len as usize + j;
+                // GC_STORE_AUDIT(INIT): initializing fresh longlived keys-array slot
+                // with a freshly interned longlived key string; layout recorded below.
+                *dst.add(idx) = nanboxed;
+                crate::array::note_array_slot_layout_only(arr, idx, nanboxed.to_bits());
+            }
+        }
+        shape_cache_insert(shape_id, arr);
+        (arr, merged_len as u32)
+    };
+
+    let header_size = std::mem::size_of::<ObjectHeader>();
+    let alloc_field_count = std::cmp::max(field_count as usize, 8);
+    let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
+    let total_size = header_size + fields_size;
+    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    unsafe {
+        (*ptr).object_type = crate::error::OBJECT_TYPE_REGULAR;
+        (*ptr).class_id = class_id;
+        (*ptr).parent_class_id = parent_cid;
+        (*ptr).field_count = field_count;
+        let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
+        for i in 0..alloc_field_count {
+            // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
+            ptr::write(fields_ptr.add(i), JSValue::undefined());
+        }
+        set_object_keys_array(ptr, merged_arr);
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+    }
+    remember_class_keys_array(class_id, field_count, merged_arr);
+    ptr
+}
+
+/// Keepalive anchor — `js_object_alloc_class_dynamic_parent` is a
+/// generated-code-only callee, so the auto-optimize whole-program build would
+/// otherwise dead-strip it (see the FFI-symbol-link-break class).
+#[used]
+static KEEP_JS_OBJECT_ALLOC_CLASS_DYNAMIC_PARENT: extern "C" fn(
+    u32,
+    u32,
+    *const u8,
+    u32,
+) -> *mut ObjectHeader = js_object_alloc_class_dynamic_parent;
 
 /// Allocate an object with a shape-cached keys array.
 /// First call per shape_id creates the keys array from packed_keys (null-separated key names);
@@ -615,6 +783,11 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         if !key_val.is_any_string() {
             continue;
         }
+        // Private elements (`#x`) live in a class instance's keys_array but are
+        // never copied by object spread / Object.assign.
+        if crate::object::instance_private_key_hidden(src, key_val) {
+            continue;
+        }
         let key_f64 = f64::from_bits(key_val.bits());
         let key_ptr =
             crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
@@ -658,6 +831,56 @@ pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f6
     js_object_coerce(target_f64)
 }
 
+/// Spec `Set(to, key, value, true)` inside `Object.assign` uses the strict
+/// receiver, so a write that the ordinary `[[Set]]` would reject throws a
+/// `TypeError`. Perry's `js_object_set_field_by_name` silently no-ops those
+/// cases, so detect them up front: a non-writable existing own data property,
+/// an accessor own property with no setter, or a new property on a
+/// non-extensible target. Throws when the write must fail.
+unsafe fn object_assign_throw_if_set_rejected(
+    target: *mut ObjectHeader,
+    key_ptr: *const crate::StringHeader,
+    name: &str,
+) {
+    if target.is_null() || (target as usize) <= 0x10000 {
+        return;
+    }
+    // Accessor own property: a setter must exist, else the write fails. Check
+    // this BEFORE `own_key_present`: an accessor-only property (`{ set foo(){} }`)
+    // lives in the accessor side table and may have no `keys_array` entry, so
+    // `own_key_present` can report it absent — which on a frozen/non-extensible
+    // target would mis-classify the setter call as a forbidden new-property add
+    // (test262 assign/target-is-frozen-accessor-property-set-succeeds).
+    if let Some(acc) = super::get_accessor_descriptor(target as usize, name) {
+        if acc.set == 0 {
+            throw_object_assign_readonly(name);
+        }
+        return;
+    }
+    let exists = own_key_present(target, key_ptr);
+    if exists {
+        // Data own property: must be writable.
+        if let Some(attrs) = super::get_property_attrs(target as usize, name) {
+            if !attrs.writable() {
+                throw_object_assign_readonly(name);
+            }
+        }
+        return;
+    }
+    // New property: target must be extensible.
+    let gc = gc_header_for(target);
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
+        throw_object_assign_readonly(name);
+    }
+}
+
+fn throw_object_assign_readonly(name: &str) -> ! {
+    throw_object_type_error_with_suffix(
+        "Cannot assign to read only property '",
+        &format!("{name}' of object '#<Object>'"),
+    )
+}
+
 unsafe fn object_assign_set_string_key(
     target: *mut ObjectHeader,
     target_is_array: bool,
@@ -673,6 +896,17 @@ unsafe fn object_assign_set_string_key(
             value_f64,
         );
     } else {
+        // Strict `Set` semantics: reject (throw) a write the ordinary `[[Set]]`
+        // would silently drop.
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some(name_bytes) = crate::string::js_string_key_bytes(
+            crate::value::JSValue::string_ptr(key_ptr as *mut _),
+            &mut sso,
+        ) {
+            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                object_assign_throw_if_set_rejected(target, key_ptr, name);
+            }
+        }
         js_object_set_field_by_name(target, key_ptr, value_f64);
     }
 }
@@ -759,6 +993,33 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         return target_f64;
     }
 
+    // A function/closure source is NOT an `ObjectHeader`: reading `keys_array`
+    // off it dereferences a bogus field, yielding a garbage `key_count` and a
+    // runaway copy loop. Enumerate the closure's own *enumerable* dynamic props
+    // instead — the built-in `length`/`name`/`prototype` slots are
+    // non-enumerable and excluded, matching `Object.keys`/`getOwnPropertyNames`.
+    // (Stripe's `protoExtend` does `Object.assign(Constructor, Super)` to copy a
+    // resource class's enumerable statics like `.extend`/`.method`; without this
+    // the call hung at `import 'stripe'`.)
+    if crate::closure::is_closure_ptr(src_raw) {
+        for (name, value) in crate::closure::closure_dynamic_props_snapshot(src_raw) {
+            if matches!(name.as_str(), "length" | "name" | "prototype") {
+                continue;
+            }
+            if crate::closure::closure_is_key_deleted(src_raw, &name) {
+                continue;
+            }
+            if let Some(attrs) = get_property_attrs(src_raw, &name) {
+                if !attrs.enumerable() {
+                    continue;
+                }
+            }
+            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            object_assign_set_string_key(target, target_is_array, key_ptr, value);
+        }
+        return target_f64;
+    }
+
     let src = src_raw as *const ObjectHeader;
 
     // 1) Copy own string-keyed enumerable properties from source to target,
@@ -771,6 +1032,11 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         for i in 0..key_count {
             let key_val = crate::array::js_array_get(src_keys, i as u32);
             if !key_val.is_any_string() {
+                continue;
+            }
+            // Private elements (`#x`) live in a class instance's keys_array but
+            // are never copied by Object.assign / object spread.
+            if crate::object::instance_private_key_hidden(src, key_val) {
                 continue;
             }
             let key_f64 = f64::from_bits(key_val.bits());
@@ -794,14 +1060,67 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
         }
     }
 
-    // 2) Copy own symbol-keyed enumerable properties from source to target.
-    //    The clone-then-iterate dance is non-negotiable — the inner
-    //    `js_object_set_symbol_property` re-acquires SYMBOL_PROPERTIES'
-    //    Mutex; holding the lock across the iteration would deadlock.
-    let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(src_raw);
-    for (sym_ptr, value_bits) in entries {
+    // 2) Copy own symbol-keyed enumerable properties from source to target,
+    //    in `[[OwnPropertyKeys]]` symbol order (after the string keys). Use the
+    //    full own-symbol-key list — `clone_symbol_entries_for_obj_ptr` only
+    //    surfaces symbols with a stored *value*, missing accessor-only symbols
+    //    (`Object.defineProperty(o, sym, { get })`), so a symbol getter never
+    //    ran during assign (test262 assign/strings-and-symbol-order). Snapshot
+    //    the symbol pointers first: the inner `[[Get]]` / set re-acquire
+    //    SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
+    let sym_keys: Vec<usize> = {
+        let arr_raw = crate::symbol::js_object_get_own_property_symbols(source_f64);
+        let mut v = Vec::new();
+        if arr_raw != 0 {
+            let arr = arr_raw as *const crate::array::ArrayHeader;
+            if !arr.is_null() {
+                let n = crate::array::js_array_length(arr);
+                for i in 0..n {
+                    let sv = crate::array::js_array_get(arr, i);
+                    let p = (sv.bits() & crate::value::POINTER_MASK) as usize;
+                    if p != 0 {
+                        v.push(p);
+                    }
+                }
+            }
+        }
+        v
+    };
+    for sym_ptr in sym_keys {
+        if !crate::symbol::symbol_property_is_enumerable(src_raw, sym_ptr) {
+            continue;
+        }
         let sym_f64 = f64::from_bits(JSValue::pointer(sym_ptr as *const u8).bits());
-        let value_f64 = f64::from_bits(value_bits);
+        // Read the source value through `[[Get]]`, not the raw side-table bits,
+        // so a symbol-keyed accessor's getter runs during `Object.assign`
+        // (test262 assign/strings-and-symbol-order). The earlier string-key
+        // copy already uses `[[Get]]` via `js_object_get_field_by_name`.
+        let value_f64 = crate::symbol::js_object_get_symbol_property(source_f64, sym_f64);
+        // Strict `Set` semantics for symbol-keyed writes too.
+        {
+            let owner = tgt_raw;
+            let existing = crate::symbol::symbol_property_root_bits(owner, sym_ptr).is_some()
+                || crate::symbol::symbol_accessor_descriptor_bits(owner, sym_ptr).is_some();
+            if existing {
+                if let Some((_get, set)) =
+                    crate::symbol::symbol_accessor_descriptor_bits(owner, sym_ptr)
+                {
+                    if set == 0 {
+                        throw_object_assign_readonly("Symbol()");
+                    }
+                } else if let Some(attrs) = crate::symbol::get_symbol_property_attrs(owner, sym_ptr)
+                {
+                    if !attrs.writable() {
+                        throw_object_assign_readonly("Symbol()");
+                    }
+                }
+            } else {
+                let gc = gc_header_for(target);
+                if (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
+                    throw_object_assign_readonly("Symbol()");
+                }
+            }
+        }
         crate::symbol::js_object_set_symbol_property(target_f64, sym_f64, value_f64);
     }
 

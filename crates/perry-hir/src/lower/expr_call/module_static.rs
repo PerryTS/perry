@@ -381,8 +381,12 @@ pub(super) fn try_module_static_methods(
                                     Box::new(text),
                                     Box::new(reviver),
                                 )));
-                            } else if !args.is_empty() {
-                                let text = args.into_iter().next().unwrap();
+                            } else {
+                                // 0 or 1 args. `JSON.parse()` with no argument is
+                                // `JSON.parse(undefined)` → ToString(undefined) =
+                                // "undefined" → SyntaxError (NOT a TypeError from
+                                // the generic fall-through dispatch).
+                                let text = args.into_iter().next().unwrap_or(Expr::Undefined);
                                 // Issue #179 typed-parse plan: if the call site
                                 // provides a TypeScript type argument (e.g.
                                 // `JSON.parse<Item[]>(blob)`), carry it into HIR
@@ -525,6 +529,44 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // node:events module-level static helpers via `import * as events
+            // from "node:events"; events.once(em, name)` (and `on`,
+            // `listenerCount`, `getMaxListeners`, `setMaxListeners`,
+            // `getEventListeners`, `addAbortListener`). These take the emitter
+            // as a positional arg (`has_receiver: false` in the codegen native
+            // table), so they lower to a receiver-less NativeMethodCall on the
+            // `events` module. Without this, `events.<helper>(...)` fell through
+            // to a generic property-call on the resolved `NativeModuleRef` and
+            // returned `undefined` (issue #850: `events.once(...)` never built a
+            // Promise). Gated on the receiver identifier actually resolving to
+            // the node:events namespace import (not a shadowing local).
+            if ctx.lookup_local(obj_name).is_none()
+                && (ctx.lookup_builtin_module_alias(obj_name) == Some("events")
+                    || matches!(ctx.lookup_native_module(obj_name), Some(("events", _))))
+            {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let m = method_ident.sym.as_ref();
+                    if matches!(
+                        m,
+                        "once"
+                            | "on"
+                            | "listenerCount"
+                            | "getMaxListeners"
+                            | "setMaxListeners"
+                            | "getEventListeners"
+                            | "addAbortListener"
+                    ) {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "events".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: m.to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
             // Check for Response.json(value) / Response.redirect(url, status?) /
             // Response.error() static factories.
             if obj_ident.sym.as_ref() == "Response" {
@@ -633,41 +675,17 @@ pub(super) fn try_module_static_methods(
                             }
                         }
                         "trunc" => {
-                            // Math.trunc(x) = x >= 0 ? floor(x) : ceil(x)
                             if !args.is_empty() {
-                                let arg = args.into_iter().next().unwrap();
-                                return Ok(Ok(Expr::Conditional {
-                                    condition: Box::new(Expr::Compare {
-                                        op: crate::CompareOp::Ge,
-                                        left: Box::new(arg.clone()),
-                                        right: Box::new(Expr::Number(0.0)),
-                                    }),
-                                    then_expr: Box::new(Expr::MathFloor(Box::new(arg.clone()))),
-                                    else_expr: Box::new(Expr::MathCeil(Box::new(arg))),
-                                }));
+                                return Ok(Ok(Expr::MathTrunc(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
                             }
                         }
                         "sign" => {
-                            // Math.sign(x) = x > 0 ? 1 : x < 0 ? -1 : 0 (or x for NaN)
                             if !args.is_empty() {
-                                let arg = args.into_iter().next().unwrap();
-                                return Ok(Ok(Expr::Conditional {
-                                    condition: Box::new(Expr::Compare {
-                                        op: crate::CompareOp::Gt,
-                                        left: Box::new(arg.clone()),
-                                        right: Box::new(Expr::Number(0.0)),
-                                    }),
-                                    then_expr: Box::new(Expr::Number(1.0)),
-                                    else_expr: Box::new(Expr::Conditional {
-                                        condition: Box::new(Expr::Compare {
-                                            op: crate::CompareOp::Lt,
-                                            left: Box::new(arg.clone()),
-                                            right: Box::new(Expr::Number(0.0)),
-                                        }),
-                                        then_expr: Box::new(Expr::Number(-1.0)),
-                                        else_expr: Box::new(arg),
-                                    }),
-                                }));
+                                return Ok(Ok(Expr::MathSign(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
                             }
                         }
                         "abs" => {
@@ -910,38 +928,58 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
+            // `BigInt.asIntN(bits, x)` / `BigInt.asUintN(bits, x)`. Bare `BigInt`
+            // in member position lowers to `globalThis`, so a direct
+            // `BigInt.asIntN(...)` call would read `globalThis.asIntN`
+            // (undefined → "value is not a function"). Route to the runtime via
+            // a receiver-less NativeMethodCall. (The statics are also installed
+            // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
+            // value path.)
+            if obj_ident.sym.as_ref() == "BigInt" {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    let m = method_ident.sym.as_ref();
+                    if m == "asIntN" || m == "asUintN" {
+                        let mut it = args.into_iter();
+                        let bits = it.next().unwrap_or(Expr::Undefined);
+                        let value = it.next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "bigint".to_string(),
+                            class_name: None,
+                            object: None,
+                            method: m.to_string(),
+                            args: vec![bits, value],
+                        }));
+                    }
+                }
+            }
+
             // Check for Number.methodName() static calls
             if obj_ident.sym.as_ref() == "Number" {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
+                        // A missing argument is `undefined` (Type ≠ Number), so
+                        // each predicate is `false`. Fold the no-arg form to the
+                        // same HIR node with an `Undefined` operand — otherwise a
+                        // zero-arg call fell through to the generic dispatch where
+                        // the missing `f64` parameter defaulted to a real NaN,
+                        // making `Number.isNaN()` wrongly return `true`
+                        // (built-ins/Number/isNaN/arg-is-not-number.js "no arg").
                         "isNaN" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsNaN(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsNaN(Box::new(arg))));
                         }
                         "isFinite" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsFinite(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsFinite(Box::new(arg))));
                         }
                         "isInteger" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsInteger(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsInteger(Box::new(arg))));
                         }
                         "isSafeInteger" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::NumberIsSafeInteger(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                            let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::NumberIsSafeInteger(Box::new(arg))));
                         }
                         "parseFloat" => {
                             // Number.parseFloat is the same as global parseFloat
@@ -981,6 +1019,11 @@ pub(super) fn try_module_static_methods(
                             if args.is_empty() {
                                 // #2788: String.fromCharCode() -> "".
                                 return Ok(Ok(Expr::String(String::new())));
+                            }
+                            if has_spread && args.len() == 1 {
+                                return Ok(Ok(Expr::StringFromCharCodeSpread(Box::new(
+                                    args.into_iter().next().unwrap(),
+                                ))));
                             }
                             if args.len() == 1 {
                                 return Ok(Ok(Expr::StringFromCharCode(Box::new(
@@ -1090,6 +1133,7 @@ pub(super) fn try_module_static_methods(
                                     }),
                                     args: vec![],
                                     type_args: vec![],
+                                    byte_offset: 0,
                                 }));
                             }
                         }
@@ -1300,6 +1344,7 @@ pub(super) fn try_module_static_methods(
                                     }),
                                     args: vec![b],
                                     type_args: vec![],
+                                    byte_offset: 0,
                                 }));
                             }
                         }
@@ -1505,9 +1550,17 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "createServer" => {
-                            let mut args_iter = args.into_iter();
-                            let options = args_iter.next().map(Box::new);
-                            let connection_listener = args_iter.next().map(Box::new);
+                            let (options, connection_listener) = match args.as_slice() {
+                                [Expr::Closure { .. }] => {
+                                    (None, args.into_iter().next().map(Box::new))
+                                }
+                                _ => {
+                                    let mut args_iter = args.into_iter();
+                                    let options = args_iter.next().map(Box::new);
+                                    let connection_listener = args_iter.next().map(Box::new);
+                                    (options, connection_listener)
+                                }
+                            };
                             return Ok(Ok(Expr::NetCreateServer {
                                 options,
                                 connection_listener,

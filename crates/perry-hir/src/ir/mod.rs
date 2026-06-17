@@ -20,17 +20,19 @@ mod widget;
 // ---- constants.rs ----
 pub use constants::{
     clear_allow_dynamic_stdlib_packages, clear_compile_packages_override,
-    clear_current_module_source, clear_precompile_state, current_module_has_allow_dynamic_at,
-    current_module_line_at, determine_module_kind, dynamic_stdlib_allowed_for_package,
-    is_native_module, is_native_module_with_externals, is_node_builtin_module,
-    package_name_for_source_path, precompile_capture_enabled, precompile_result_at,
-    refuse_dynamic_stdlib_dispatch_enabled, requires_stdlib, set_allow_dynamic_stdlib_packages,
-    set_compile_packages_override, set_current_module_source, set_precompile_capture,
-    set_precompile_results, set_refuse_dynamic_stdlib_dispatch, typed_array_kind_for_name, ClassId,
-    EnumId, InterfaceId, ModuleInitKind, ModuleKind, PosixCredentialKind, TypeAliasId,
-    NATIVE_MODULES, TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64,
-    TYPED_ARRAY_KIND_FLOAT16, TYPED_ARRAY_KIND_FLOAT32, TYPED_ARRAY_KIND_FLOAT64,
-    TYPED_ARRAY_KIND_INT16, TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_INT8, TYPED_ARRAY_KIND_UINT16,
+    clear_current_module_source, clear_env_defines, clear_precompile_state,
+    current_module_has_allow_dynamic_at, current_module_line_at, current_module_source_slice,
+    determine_module_kind, dynamic_stdlib_allowed_for_package, env_define_lookup,
+    is_compile_package_override, is_native_module, is_native_module_with_externals,
+    is_node_builtin_module, package_name_for_source_path, precompile_capture_enabled,
+    precompile_result_at, refuse_dynamic_stdlib_dispatch_enabled, requires_stdlib,
+    set_allow_dynamic_stdlib_packages, set_compile_packages_override, set_current_module_source,
+    set_env_defines, set_precompile_capture, set_precompile_results,
+    set_refuse_dynamic_stdlib_dispatch, typed_array_kind_for_name, ClassId, EnumId, EnvDefine,
+    InterfaceId, ModuleInitKind, ModuleKind, PosixCredentialKind, TypeAliasId, NATIVE_MODULES,
+    TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64, TYPED_ARRAY_KIND_FLOAT16,
+    TYPED_ARRAY_KIND_FLOAT32, TYPED_ARRAY_KIND_FLOAT64, TYPED_ARRAY_KIND_INT16,
+    TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_INT8, TYPED_ARRAY_KIND_UINT16,
     TYPED_ARRAY_KIND_UINT32, TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_UINT8_CLAMPED,
 };
 
@@ -47,15 +49,18 @@ pub use widget::{
 
 // ---- decl.rs ----
 pub use decl::{
-    Class, ClassField, Decorator, Enum, EnumMember, EnumValue, Export, Function, Global, Import,
-    ImportSpecifier, Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
+    ArgumentsObjectMeta, Class, ClassComputedMember, ClassComputedMemberKind, ClassField,
+    Decorator, Enum, EnumMember, EnumValue, Export, Function, Global, Import, ImportSpecifier,
+    Interface, InterfaceMethod, InterfaceProperty, Param, TypeAlias,
 };
 
 // ---- stmt.rs ----
 pub use stmt::{CatchClause, Stmt, SwitchCase};
 
 // ---- expr.rs ----
-pub use expr::{BoxedPrimitiveKind, Expr, PathWin32Method, ProcessStdinLifecycleMethod};
+pub use expr::{
+    BoxedPrimitiveKind, Expr, PathWin32Method, ProcessStdinLifecycleMethod, WithSetFallback,
+};
 
 // ---- ops.rs ----
 pub use ops::{ArrayElement, BinaryOp, CallArg, CompareOp, LogicalOp, UnaryOp, UpdateOp};

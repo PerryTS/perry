@@ -107,7 +107,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_enter",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_F64,
     },
     NativeModSig {
         module: "domain",
@@ -116,6 +116,6 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_exit",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_F64,
     },
 ];

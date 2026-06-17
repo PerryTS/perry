@@ -14,6 +14,94 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
+fn emit_class_expression_value_binding(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    bind_name: &str,
+    mutable: bool,
+    is_var: bool,
+) {
+    let ty = Type::Any;
+    let id = if ctx.scope_depth == 0
+        && ctx.inside_block_scope == 0
+        && ctx.pre_registered_module_vars.remove(bind_name)
+    {
+        ctx.pre_registered_module_var_decls.remove(bind_name);
+        let id = ctx
+            .lookup_local(bind_name)
+            .unwrap_or_else(|| ctx.define_local(bind_name.to_string(), ty.clone()));
+        if let Some((_, _, existing_ty)) =
+            ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
+        {
+            *existing_ty = ty.clone();
+        }
+        id
+    } else if is_var {
+        // Bind the lookup result first so the `iter_named` borrow of
+        // `ctx.locals` ends before the mutable reuse below (#5267).
+        let existing_var = ctx
+            .locals
+            .iter_named(bind_name)
+            .find(|(_, (_, id, _))| ctx.var_hoisted_ids.contains(id))
+            .map(|(pos, (_, id, _))| (pos, *id));
+        if let Some((reuse_pos, id)) = existing_var {
+            *ctx.locals.type_mut_at(reuse_pos) = ty.clone();
+            id
+        } else {
+            ctx.define_local(bind_name.to_string(), ty.clone())
+        }
+    } else {
+        ctx.define_local(bind_name.to_string(), ty.clone())
+    };
+
+    if is_var {
+        ctx.var_hoisted_ids.insert(id);
+    }
+    if !mutable {
+        ctx.mark_local_immutable(id);
+    }
+    ctx.register_let_class_alias(bind_name.to_string(), bind_name.to_string());
+    module.init.push(Stmt::Let {
+        id,
+        name: bind_name.to_string(),
+        ty,
+        mutable,
+        init: Some(Expr::ClassRef(bind_name.to_string())),
+    });
+}
+
 /// Recursively walk a destructuring pattern collecting every leaf identifier
 /// (and pre-defining each as a local). Used by the for-of binding pre-pass so
 /// the loop body can reference variables introduced by *nested* patterns like
@@ -239,7 +327,7 @@ pub(crate) fn lower_stmt(
                     if let Some((module, class)) =
                         native_instance_from_return_type(&func.return_type)
                     {
-                        ctx.func_return_native_instances.push((
+                        ctx.push_func_return_native_instance((
                             func.name.clone(),
                             module.to_string(),
                             class.to_string(),
@@ -256,7 +344,7 @@ pub(crate) fn lower_stmt(
                     let has_synth_args = func
                         .params
                         .last()
-                        .is_some_and(|p| p.is_rest && p.name == "arguments");
+                        .is_some_and(|p| p.arguments_object.is_some());
                     ctx.func_defaults.push((
                         func.id,
                         defaults,
@@ -387,13 +475,6 @@ pub(crate) fn lower_stmt(
                                         }
                                     }
                                 }
-                            }
-                        }
-                        // Track locals assigned from `regex.exec(...)` so .index/.groups
-                        // accesses route to the bare RegExpExecIndex/Groups variants.
-                        if let (ast::Pat::Ident(ident), Some(init)) = (&decl.name, &decl.init) {
-                            if is_regex_exec_init(ctx, init) {
-                                ctx.regex_exec_locals.insert(ident.id.sym.to_string());
                             }
                         }
                         // `const { proxy: revProxy, revoke } = Proxy.revocable(t, h)`
@@ -567,14 +648,121 @@ pub(crate) fn lower_stmt(
                                     if let Some(inner_name) = inner_name_for_register {
                                         lowered_class.aliases.push(inner_name);
                                     }
+                                    // Computed member keys (`static get [expr]()`,
+                                    // `[expr]() {}`) register at runtime against the
+                                    // class id — the general class-expression arm in
+                                    // `lower_expr.rs` sequences these in front of the
+                                    // `ClassRef`. This `var C = class {…}` fast path
+                                    // emits a bare `ClassRef` binding instead, so emit
+                                    // the same registrations here or the computed
+                                    // accessors/methods never reach the side tables
+                                    // (Test262 accessor-name-{static,inst}/computed).
+                                    let computed_member_registrations: Vec<Expr> = lowered_class
+                                        .computed_members
+                                        .iter()
+                                        .map(|member| {
+                                            class_computed_member_registration_expr(
+                                                &bind_name, member,
+                                            )
+                                        })
+                                        .collect();
+                                    // Runtime-value parent (`var X = class extends
+                                    // <expr> {}` where the parent isn't a known class —
+                                    // e.g. @hono/node-server's `var Request = class
+                                    // extends GlobalRequest {}`, `GlobalRequest =
+                                    // global.Request`). The general class-expression arm
+                                    // in `lower_expr.rs` and the `Decl::Class` arms emit
+                                    // `RegisterClassParentDynamic` so the parent edge —
+                                    // and the fetch-parent kind for Request/Response
+                                    // subclasses — is wired at module init (where the
+                                    // alias still resolves). This `var C = class {…}`
+                                    // fast path emitted a bare `ClassRef` binding and
+                                    // skipped it, so the parent never registered and a
+                                    // `Request`/`Response` subclass got no native handle
+                                    // (inherited body methods threw "text is not a
+                                    // function"). Emit it here too, in source order
+                                    // before the value binding. Clone the extends
+                                    // expression before `push_class_dedup` moves the
+                                    // class out.
+                                    let parent_register =
+                                        lowered_class.extends_expr.clone().map(|p| {
+                                            Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                                class_name: bind_name.clone(),
+                                                parent_expr: p,
+                                            })
+                                        });
+                                    // Inline static field/element initializers and
+                                    // static blocks at the class-expression's source
+                                    // position, exactly as the `Decl::Class` arm does
+                                    // for declarations. Without this the `var C =
+                                    // class { static x = 1 }` fast path relied solely
+                                    // on the late `init_static_fields_late` codegen
+                                    // pass, which runs AFTER the surrounding top-level
+                                    // statements — so `C.x` read immediately after the
+                                    // binding saw the uninitialized (0.0) slot, and a
+                                    // static method's `this.#priv` read undefined.
+                                    let static_field_inits: Vec<Stmt> = lowered_class
+                                        .static_fields
+                                        .iter()
+                                        .filter_map(|sf| {
+                                            sf.init.as_ref().map(|init| {
+                                                // `this` in a static initializer is
+                                                // the class constructor — see the
+                                                // matching substitution in the
+                                                // `Decl::Class` arm.
+                                                let mut init_value = init.clone();
+                                                crate::analysis::substitute_lexical_this_in_expr(
+                                                    &mut init_value,
+                                                    &Expr::ClassRef(bind_name.clone()),
+                                                );
+                                                if let Some(key) = sf.key_expr.as_ref() {
+                                                    Stmt::Expr(Expr::ClassStaticSymbolSet {
+                                                        class_name: bind_name.clone(),
+                                                        key: Box::new(key.clone()),
+                                                        value: Box::new(init_value),
+                                                    })
+                                                } else {
+                                                    Stmt::Expr(Expr::StaticFieldSet {
+                                                        class_name: bind_name.clone(),
+                                                        field_name: sf.name.clone(),
+                                                        value: Box::new(init_value),
+                                                    })
+                                                }
+                                            })
+                                        })
+                                        .collect();
+                                    let static_block_calls: Vec<Stmt> = lowered_class
+                                        .static_methods
+                                        .iter()
+                                        .filter(|m| m.name.starts_with("__perry_static_init_"))
+                                        .map(|m| {
+                                            Stmt::Expr(Expr::StaticMethodCall {
+                                                class_name: bind_name.clone(),
+                                                method_name: m.name.clone(),
+                                                args: Vec::new(),
+                                            })
+                                        })
+                                        .collect();
                                     push_class_dedup(module, lowered_class);
+                                    if let Some(reg) = parent_register {
+                                        module.init.push(reg);
+                                    }
+                                    for reg in computed_member_registrations {
+                                        module.init.push(Stmt::Expr(reg));
+                                    }
+                                    for s in static_field_inits {
+                                        module.init.push(s);
+                                    }
+                                    for s in static_block_calls {
+                                        module.init.push(s);
+                                    }
                                     // Register the alias so `new X()` → `new X()`
                                     // (no-op lookup, but marks the binding as a class).
                                     ctx.class_expr_aliases
                                         .insert(bind_name.clone(), bind_name.clone());
-                                    // We intentionally DO NOT push a Stmt::Let for
-                                    // this binding — the class itself takes the
-                                    // role of a "static value" referenced by name.
+                                    emit_class_expression_value_binding(
+                                        ctx, module, &bind_name, mutable, is_var,
+                                    );
                                     continue;
                                 }
                             }
@@ -705,15 +893,18 @@ pub(crate) fn lower_stmt(
                                     // dispatches via the class-filtered entries.
                                     ("net", "Socket") => Some("Socket"),
                                     ("net", "Server") => Some("Server"),
+                                    ("net", "BlockList") => Some("BlockList"),
+                                    ("net", "SocketAddress") => Some("SocketAddress"),
+                                    ("vm", "SourceTextModule") => Some("SourceTextModule"),
+                                    ("vm", "SyntheticModule") => Some("SyntheticModule"),
                                     _ => None,
                                 };
                                 if let Some(cn) = class_name {
-                                    // Register under `"net"` (the module the Socket class belongs to)
-                                    // regardless of which module the factory lived in, so method
-                                    // dispatch resolves correctly.
+                                    let instance_module =
+                                        if mod_name == "vm" { "vm" } else { "net" };
                                     ctx.register_native_instance(
                                         name.clone(),
-                                        "net".to_string(),
+                                        instance_module.to_string(),
                                         cn.to_string(),
                                     );
                                     let _ = mod_name; // suppress unused on tls branch
@@ -727,6 +918,7 @@ pub(crate) fn lower_stmt(
                                     ("http", "createServer") => Some("HttpServer"),
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
+                                    ("tls", "createServer" | "Server") => Some("Server"),
                                     ("async_hooks", "createHook") => Some("AsyncHook"),
                                     _ => None,
                                 };
@@ -737,7 +929,7 @@ pub(crate) fn lower_stmt(
                                         module_owned.clone(),
                                         cn.to_string(),
                                     );
-                                    ctx.module_native_instances.push((
+                                    ctx.push_module_native_instance((
                                         name.clone(),
                                         module_owned,
                                         cn.to_string(),
@@ -754,7 +946,7 @@ pub(crate) fn lower_stmt(
                                         module_owned.clone(),
                                         cn.to_string(),
                                     );
-                                    ctx.module_native_instances.push((
+                                    ctx.push_module_native_instance((
                                         name.clone(),
                                         module_owned,
                                         cn.to_string(),
@@ -798,7 +990,7 @@ pub(crate) fn lower_stmt(
                                     "net".to_string(),
                                     "Server".to_string(),
                                 );
-                                ctx.module_native_instances.push((
+                                ctx.push_module_native_instance((
                                     name.clone(),
                                     "net".to_string(),
                                     "Server".to_string(),
@@ -852,6 +1044,14 @@ pub(crate) fn lower_stmt(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
+                    for member in &class.computed_members {
+                        module
+                            .init
+                            .push(Stmt::Expr(class_computed_member_registration_expr(
+                                &class.name,
+                                member,
+                            )));
+                    }
                     // Inject static-field-init statements at the source
                     // position of the class declaration. Per ES spec, a
                     // class declaration's static initializers run when the
@@ -866,17 +1066,27 @@ pub(crate) fn lower_stmt(
                     // point in source order.
                     for sf in &class.static_fields {
                         if let Some(init) = &sf.init {
+                            // Per ClassDefinitionEvaluation the initializer
+                            // runs with `this` bound to the class constructor;
+                            // these stmts evaluate in module-init context
+                            // (empty this_stack), so substitute lexical `this`
+                            // — including inside arrows — with the class ref.
+                            let mut init_value = init.clone();
+                            crate::analysis::substitute_lexical_this_in_expr(
+                                &mut init_value,
+                                &Expr::ClassRef(class.name.clone()),
+                            );
                             if let Some(key) = sf.key_expr.as_ref() {
                                 module.init.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
                                     class_name: class.name.clone(),
                                     key: Box::new(key.clone()),
-                                    value: Box::new(init.clone()),
+                                    value: Box::new(init_value),
                                 }));
                             } else {
                                 module.init.push(Stmt::Expr(Expr::StaticFieldSet {
                                     class_name: class.name.clone(),
                                     field_name: sf.name.clone(),
-                                    value: Box::new(init.clone()),
+                                    value: Box::new(init_value),
                                 }));
                             }
                         }
@@ -975,8 +1185,19 @@ pub(crate) fn lower_stmt(
             }
         }
         ast::Stmt::Expr(expr_stmt) => {
+            module
+                .init
+                .extend(predeclare_implicit_assignment_targets(ctx, &expr_stmt.expr));
             // Check if this is a destructuring assignment that needs special handling
-            if let ast::Expr::Assign(assign) = expr_stmt.expr.as_ref() {
+            let maybe_assign = match expr_stmt.expr.as_ref() {
+                ast::Expr::Assign(assign) => Some(assign),
+                ast::Expr::Paren(paren) => match paren.expr.as_ref() {
+                    ast::Expr::Assign(assign) => Some(assign),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(assign) = maybe_assign {
                 if let ast::AssignTarget::Pat(pat) = &assign.left {
                     // This is a destructuring assignment at statement level
                     // We can emit proper Let statements for temporaries
@@ -989,6 +1210,9 @@ pub(crate) fn lower_stmt(
             module.init.push(Stmt::Expr(expr));
         }
         ast::Stmt::If(if_stmt) => {
+            module
+                .init
+                .extend(predeclare_implicit_assignment_targets(ctx, &if_stmt.test));
             let condition = lower_expr(ctx, &if_stmt.test)?;
             // Each branch introduces its own lexical scope. Skip extra push if
             // branch is a BlockStmt (handled there) or an If (else-if chain).
@@ -1099,6 +1323,37 @@ pub(crate) fn lower_stmt(
                         let is_var = var_decl.kind == ast::VarDeclKind::Var;
                         if is_var {
                             for decl in var_decl.decls.iter() {
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
+                                // A destructuring declarator (`for (var {a} = o; …)`)
+                                // routes through the shared pattern-binding helper
+                                // rather than `get_binding_name`, which only handles
+                                // plain idents. The bound ids are var-hoisted so they
+                                // escape the for's block scope, matching plain
+                                // `var`-decl destructuring.
+                                if is_destructuring_pattern(&decl.name) {
+                                    let init_expr = decl
+                                        .init
+                                        .as_ref()
+                                        .map(|e| lower_expr(ctx, e))
+                                        .transpose()?
+                                        .ok_or_else(|| {
+                                            anyhow!("Destructuring requires an initializer")
+                                        })?;
+                                    let stmts = crate::destructuring::lower_pattern_binding(
+                                        ctx, &decl.name, init_expr, true,
+                                    )?;
+                                    for stmt in &stmts {
+                                        if let Stmt::Let { id, .. } = stmt {
+                                            ctx.var_hoisted_ids.insert(*id);
+                                        }
+                                    }
+                                    module.init.extend(stmts);
+                                    continue;
+                                }
                                 let name = get_binding_name(&decl.name)?;
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
@@ -1115,6 +1370,29 @@ pub(crate) fn lower_stmt(
                             None
                         } else {
                             for decl in var_decl.decls.iter().skip(1) {
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
+                                // `for (let {a} = o, i = 0; …)` — a destructuring
+                                // declarator binds via the shared helper into the
+                                // pre-loop init block.
+                                if is_destructuring_pattern(&decl.name) {
+                                    let init_expr = decl
+                                        .init
+                                        .as_ref()
+                                        .map(|e| lower_expr(ctx, e))
+                                        .transpose()?
+                                        .ok_or_else(|| {
+                                            anyhow!("Destructuring requires an initializer")
+                                        })?;
+                                    let stmts = crate::destructuring::lower_pattern_binding(
+                                        ctx, &decl.name, init_expr, true,
+                                    )?;
+                                    module.init.extend(stmts);
+                                    continue;
+                                }
                                 let name = get_binding_name(&decl.name)?;
                                 let init_expr =
                                     decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
@@ -1128,23 +1406,55 @@ pub(crate) fn lower_stmt(
                                 });
                             }
                             if let Some(decl) = var_decl.decls.first() {
-                                let name = get_binding_name(&decl.name)?;
-                                let init_expr =
-                                    decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-                                let id = ctx.define_local(name.clone(), Type::Any);
-                                Some(Box::new(Stmt::Let {
-                                    id,
-                                    name,
-                                    ty: Type::Any,
-                                    mutable: true,
-                                    init: init_expr,
-                                }))
+                                if let Some(init_ast) = decl.init.as_ref() {
+                                    module.init.extend(predeclare_implicit_assignment_targets(
+                                        ctx, init_ast,
+                                    ));
+                                }
+                                // A destructuring first-declarator can't be a single
+                                // `Stmt::Let` (it lowers to several binds), so emit it
+                                // into the pre-loop init block and leave the for's own
+                                // init empty. It still runs exactly once before the
+                                // first test, preserving for-init semantics.
+                                if is_destructuring_pattern(&decl.name) {
+                                    let init_expr = decl
+                                        .init
+                                        .as_ref()
+                                        .map(|e| lower_expr(ctx, e))
+                                        .transpose()?
+                                        .ok_or_else(|| {
+                                            anyhow!("Destructuring requires an initializer")
+                                        })?;
+                                    let stmts = crate::destructuring::lower_pattern_binding(
+                                        ctx, &decl.name, init_expr, true,
+                                    )?;
+                                    module.init.extend(stmts);
+                                    None
+                                } else {
+                                    let name = get_binding_name(&decl.name)?;
+                                    let init_expr = decl
+                                        .init
+                                        .as_ref()
+                                        .map(|e| lower_expr(ctx, e))
+                                        .transpose()?;
+                                    let id = ctx.define_local(name.clone(), Type::Any);
+                                    Some(Box::new(Stmt::Let {
+                                        id,
+                                        name,
+                                        ty: Type::Any,
+                                        mutable: true,
+                                        init: init_expr,
+                                    }))
+                                }
                             } else {
                                 None
                             }
                         }
                     }
                     ast::VarDeclOrExpr::Expr(expr) => {
+                        for stmt in predeclare_implicit_assignment_targets(ctx, expr) {
+                            module.init.push(stmt);
+                        }
                         Some(Box::new(Stmt::Expr(lower_expr(ctx, expr)?)))
                     }
                 }
@@ -1190,15 +1500,35 @@ pub(crate) fn lower_stmt(
             let catch = if let Some(ref catch_clause) = try_stmt.handler {
                 let scope_mark = ctx.enter_scope();
 
+                let mut binding_stmts: Vec<Stmt> = Vec::new();
                 let param = if let Some(ref pat) = catch_clause.param {
                     let param_name = get_pat_name(pat)?;
                     let param_id = ctx.define_local(param_name.clone(), Type::Any);
+                    // Destructured catch binding — `catch ([a, b = d()])` /
+                    // `catch ({ message })`: bind the pattern leaves off the
+                    // exception value before the user body runs.
+                    if !matches!(pat, ast::Pat::Ident(_)) {
+                        let mut leaves = Vec::new();
+                        collect_for_of_pattern_leaves(ctx, pat, &mut leaves);
+                        let mut idx = 0usize;
+                        emit_for_of_pattern_binding(
+                            ctx,
+                            pat,
+                            Expr::LocalGet(param_id),
+                            &leaves,
+                            &mut idx,
+                            &mut binding_stmts,
+                        )?;
+                    }
                     Some((param_id, param_name))
                 } else {
                     None
                 };
 
-                let catch_body = lower_block_stmt(ctx, &catch_clause.body)?;
+                let mut catch_body = lower_block_stmt(ctx, &catch_clause.body)?;
+                for (i, stmt) in binding_stmts.into_iter().enumerate() {
+                    catch_body.insert(i, stmt);
+                }
                 ctx.exit_scope(scope_mark);
 
                 Some(CatchClause {
@@ -1229,6 +1559,7 @@ pub(crate) fn lower_stmt(
         ast::Stmt::Switch(switch_stmt) => {
             let discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
             let mut cases = Vec::new();
+            let switch_scope_mark = ctx.push_block_scope();
 
             for case in &switch_stmt.cases {
                 let test = case.test.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
@@ -1241,6 +1572,8 @@ pub(crate) fn lower_stmt(
                 cases.push(SwitchCase { test, body });
             }
 
+            ctx.pop_block_scope(switch_scope_mark);
+
             module.init.push(Stmt::Switch {
                 discriminant,
                 cases,
@@ -1251,6 +1584,35 @@ pub(crate) fn lower_stmt(
         }
         ast::Stmt::ForIn(for_in_stmt) => {
             lower_stmt_for_in(ctx, module, for_in_stmt)?;
+        }
+        ast::Stmt::With(with_stmt) => {
+            if ctx.current_strict_mode() || ctx.current_strict {
+                crate::lower_bail!(
+                    with_stmt.span,
+                    "`with` statement is forbidden in strict mode"
+                );
+            }
+            let insert_at = module.init.len();
+            let env_id = ctx.define_local("__perry_with_env".to_string(), Type::Any);
+            module.init.push(Stmt::Let {
+                id: env_id,
+                name: format!("__perry_with_env_{}", env_id),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(lower_expr(ctx, &with_stmt.obj)?),
+            });
+            ctx.push_with_env(env_id);
+            let body_result = lower_body_stmt(ctx, &with_stmt.body);
+            ctx.pop_with_env();
+            module.init.extend(body_result?);
+            // Sentinel slots for implicit globals minted by with-set
+            // fallbacks inside this body (see with_set_fallback_for_ident).
+            for (i, (id, name)) in ctx.pending_with_implicit_inits.drain(..).enumerate() {
+                module.init.insert(
+                    insert_at + i,
+                    crate::lower::with_implicit_unset_let(id, name),
+                );
+            }
         }
         _ => {}
     }

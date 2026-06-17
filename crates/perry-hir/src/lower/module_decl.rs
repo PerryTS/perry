@@ -14,15 +14,51 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
+
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     matches!(
         module_name,
         "async_hooks"
             | "child_process"
+            | "cluster"
             | "constants"
             | "dns"
             | "dns/promises"
             | "events"
+            | "inspector"
+            | "inspector/promises"
+            | "module"
             | "os"
             | "path"
             | "path/posix"
@@ -33,6 +69,13 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
             | "url"
             | "util"
     )
+}
+
+fn node_submodule_default_export_key(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "test/reporters" => Some("test_reporters"),
+        _ => None,
+    }
 }
 
 pub(crate) fn lower_module_decl(
@@ -191,6 +234,8 @@ pub(crate) fn lower_module_decl(
                                     ("util.types".to_string(), None)
                                 } else if source == "punycode" && imported == "ucs2" {
                                     ("punycode.ucs2".to_string(), None)
+                                } else if source == "inspector" && imported == "Network" {
+                                    ("inspector.Network".to_string(), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
@@ -231,6 +276,13 @@ pub(crate) fn lower_module_decl(
                                 }
                             }
                         } else {
+                            if is_node_builtin_module(&source) {
+                                ctx.register_builtin_named_import(
+                                    local.clone(),
+                                    source.clone(),
+                                    imported.clone(),
+                                );
+                            }
                             // Register as imported function. Issue #35 (#321):
                             // use the LOCAL name as the original-name marker
                             // (identity registration) — mirroring the Default
@@ -285,32 +337,32 @@ pub(crate) fn lower_module_decl(
                                 source.clone(),
                                 native_method,
                             );
-                        } else if is_node_builtin_module(&source) {
-                            // #3906: a CJS-backed Node builtin *submodule* that
-                            // isn't in NATIVE_MODULES (e.g. `node:timers/promises`,
-                            // `node:stream/promises`). Its default export is the
-                            // module object — CJS `default === module.exports`,
-                            // the same value as the `import * as` namespace shape.
-                            // Without this it fell to the JS-module default path
-                            // below and resolved to an `ExternFuncRef` boolean
-                            // stub (`typeof === "boolean"`). Mirror the namespace
-                            // handling so the default binding is the module object.
+                            if source == "process" {
+                                ctx.register_builtin_module_alias(local.clone(), source.clone());
+                            }
+                        } else if node_submodule_default_export_key(&source).is_some() {
                             ctx.register_imported_func(local.clone(), local.clone());
-                            ctx.namespace_import_locals.insert(local.clone());
+                            specifiers.push(ImportSpecifier::Default { local });
+                            continue;
+                        } else if is_node_builtin_module(&source) {
+                            if source == "diagnostics_channel" {
+                                ctx.register_imported_func(local.clone(), local.clone());
+                                specifiers.push(ImportSpecifier::Default { local });
+                                continue;
+                            }
+                            // #3906: a CJS-backed Node builtin *submodule* that
+                            // isn't in NATIVE_MODULES (e.g.
+                            // `node:timers/promises`, `node:stream/promises`).
+                            // Its default import is an actual `default` binding,
+                            // not the module namespace object. Register it as an
+                            // imported function so the compile driver can route
+                            // the binding through the known-node-submodule
+                            // default export path instead of the generic JS
+                            // module fallback.
+                            ctx.register_imported_func(local.clone(), local.clone());
                             if source == "fs/promises" {
                                 ctx.register_builtin_module_alias(local.clone(), source.clone());
                             }
-                            // Treat the default binding as the module-namespace
-                            // object (CJS default === module.exports). Pushing a
-                            // Namespace specifier (not Default) puts `local` into
-                            // the driver's `namespace_imports`, so `typeof local`
-                            // folds to "object" and `local.member(...)` dispatches
-                            // through the submodule namespace — exactly like the
-                            // `import * as local` shape.
-                            specifiers.push(ImportSpecifier::Namespace {
-                                local: local.clone(),
-                            });
-                            continue;
                         } else {
                             // Default import from JS module — register so calls resolve to
                             // ExternFuncRef. Use the LOCAL name as the original-name marker
@@ -342,6 +394,13 @@ pub(crate) fn lower_module_decl(
                             // `perry_fn_<src>__default` — matching what the origin module
                             // actually emits. Closes #901.
                             ctx.register_imported_func(local.clone(), local.clone());
+                            // #4950: remember the react default-import binding
+                            // so JSX in this module lowers to
+                            // `<local>.createElement(...)` instead of Perry's
+                            // eager `js_jsx` adapter (see jsx.rs).
+                            if source == "react" {
+                                ctx.react_default_import_local = Some(local.clone());
+                            }
                         }
                         specifiers.push(ImportSpecifier::Default { local });
                     }
@@ -350,7 +409,12 @@ pub(crate) fn lower_module_decl(
                         if is_native {
                             // Namespace import of native module (e.g., import * as mysql from 'mysql2')
                             // Methods are called via the namespace, so no specific method name
-                            ctx.register_native_module(local.clone(), source.clone(), None);
+                            let native_source = if source == "process" {
+                                "process.namespace".to_string()
+                            } else {
+                                source.clone()
+                            };
+                            ctx.register_native_module(local.clone(), native_source, None);
                             // Also register as builtin module alias so method-level
                             // recognition works (child_process, fs, os, etc.)
                             ctx.register_builtin_module_alias(local.clone(), source.clone());
@@ -365,6 +429,11 @@ pub(crate) fn lower_module_decl(
                             // not lower to StaticMethodCall — see the heuristic
                             // in expr_call::static_and_instance.
                             ctx.namespace_import_locals.insert(local.clone());
+                            // Remember the source so a later bare `export { local }`
+                            // re-exports the namespace itself rather than a bare
+                            // function symbol (see the local-export branch below).
+                            ctx.namespace_import_sources
+                                .insert(local.clone(), source.clone());
                         }
                         specifiers.push(ImportSpecifier::Namespace { local });
                     }
@@ -389,6 +458,8 @@ pub(crate) fn lower_module_decl(
                 type_only: whole_decl_type_only,
                 is_dynamic: false,
                 is_dynamic_target: false,
+                is_deferred_require: false,
+                is_adopted_require: false,
             });
         }
         ast::ModuleDecl::ExportDecl(export) => {
@@ -415,7 +486,7 @@ pub(crate) fn lower_module_decl(
                     if let Some((module, class)) =
                         native_instance_from_return_type(&func.return_type)
                     {
-                        ctx.func_return_native_instances.push((
+                        ctx.push_func_return_native_instance((
                             func_name.clone(),
                             module.to_string(),
                             class.to_string(),
@@ -429,7 +500,7 @@ pub(crate) fn lower_module_decl(
                     let has_synth_args = func
                         .params
                         .last()
-                        .is_some_and(|p| p.is_rest && p.name == "arguments");
+                        .is_some_and(|p| p.arguments_object.is_some());
                     ctx.func_defaults.push((
                         func.id,
                         defaults,
@@ -449,6 +520,26 @@ pub(crate) fn lower_module_decl(
                 ast::Decl::Var(var_decl) => {
                     // Handle exported variables
                     for decl in &var_decl.decls {
+                        if is_destructuring_pattern(&decl.name) {
+                            let mut names = Vec::new();
+                            collect_binding_names(&decl.name, &mut names);
+                            if decl.init.is_some() {
+                                let mutable = var_decl.kind != ast::VarDeclKind::Const;
+                                let is_var = var_decl.kind == ast::VarDeclKind::Var;
+                                let stmts =
+                                    lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
+                                module.init.extend(stmts);
+                                for name in names {
+                                    module.exports.push(Export::Named {
+                                        local: name.clone(),
+                                        exported: name.clone(),
+                                    });
+                                    module.exported_objects.push(name);
+                                }
+                                continue;
+                            }
+                        }
+
                         let name = get_binding_name(&decl.name)?;
                         let ty = extract_binding_type(&decl.name);
                         if let Some(init) = &decl.init {
@@ -506,23 +597,21 @@ pub(crate) fn lower_module_decl(
                                             _ => None,
                                         }
                                     };
-                                    // Issue #848: StringDecoder runs entirely through
-                                    // HANDLE_METHOD_DISPATCH / HANDLE_PROPERTY_DISPATCH
-                                    // — registering it as a typed native instance would
-                                    // re-route `d.write` (property read) through the
-                                    // NativeMethodCall-with-empty-args path that
-                                    // pre-invokes the FFI as a getter, so
-                                    // `typeof d.write === "function"` would silently
-                                    // become `"number"` (the empty-string write return,
-                                    // misclassified). Skipping the registration lets
-                                    // the regular PropertyGet path fall into
-                                    // HANDLE_PROPERTY_DISPATCH which returns the bound-
-                                    // method closure built by `js_class_method_bind` —
-                                    // `typeof` reads `"function"`, and the eventual
-                                    // call routes through HANDLE_METHOD_DISPATCH back
-                                    // to the same `dispatch_string_decoder` impl.
+                                    // Handle-backed constructors dispatch through
+                                    // HANDLE_*_DISPATCH; don't register them as
+                                    // typed native instances or property reads can
+                                    // be routed through native-class method lowering.
                                     let module_name = match (class_name, module_name.as_deref()) {
-                                        ("StringDecoder", Some("string_decoder")) => None,
+                                        ("StringDecoder", Some("string_decoder"))
+                                        | ("Recoverable" | "REPLServer", Some("repl"))
+                                        | (
+                                            "DiffieHellman" | "DiffieHellmanGroup",
+                                            Some("crypto" | "node:crypto"),
+                                        )
+                                        | (
+                                            "ClientRequest" | "IncomingMessage" | "ServerResponse",
+                                            Some("http" | "node:http"),
+                                        ) => None,
                                         _ => module_name,
                                     };
                                     if let Some(native_module) = module_name {
@@ -576,15 +665,21 @@ pub(crate) fn lower_module_decl(
                                                 _ => None,
                                             }
                                         };
-                                        // Issue #848: StringDecoder runs entirely through
-                                        // HANDLE_*_DISPATCH (see the gate on the sync path
-                                        // above for the full rationale). Defensive mirror
-                                        // on this awaited-new branch so the same skip
-                                        // applies to `await new StringDecoder(...)` —
-                                        // which is unusual but legal TS.
+                                        // Mirror the handle-backed constructor skip
+                                        // on this awaited-new branch.
                                         let module_name = match (class_name, module_name.as_deref())
                                         {
-                                            ("StringDecoder", Some("string_decoder")) => None,
+                                            ("StringDecoder", Some("string_decoder"))
+                                            | ("Recoverable" | "REPLServer", Some("repl"))
+                                            | (
+                                                "DiffieHellman" | "DiffieHellmanGroup",
+                                                Some("crypto" | "node:crypto"),
+                                            )
+                                            | (
+                                                "ClientRequest" | "IncomingMessage"
+                                                | "ServerResponse",
+                                                Some("http" | "node:http"),
+                                            ) => None,
                                             _ => module_name,
                                         };
                                         if let Some(native_module) = module_name {
@@ -660,6 +755,8 @@ pub(crate) fn lower_module_decl(
                                                         ("https", "createServer") => {
                                                             Some("HttpsServer")
                                                         }
+                                                        ("tls", "createServer")
+                                                        | ("tls", "Server") => Some("Server"),
                                                         ("http2", "createSecureServer") => {
                                                             Some("Http2SecureServer")
                                                         }
@@ -672,18 +769,24 @@ pub(crate) fn lower_module_decl(
                                                         _ => None,
                                                     };
                                                     if let Some(class_name) = class_name {
+                                                        let class_module =
+                                                            if class_name == "ClientRequest" {
+                                                                "http".to_string()
+                                                            } else {
+                                                                module_name_owned.clone()
+                                                            };
                                                         ctx.register_native_instance(
                                                             name.clone(),
-                                                            module_name_owned.clone(),
+                                                            class_module.clone(),
                                                             class_name.to_string(),
                                                         );
                                                         // Also register as module-level native instance so it survives scope exits.
                                                         // Without this, pool = mysql.createPool() at module top level loses
                                                         // its native tracking when function scopes are entered/exited,
                                                         // causing pool.query() inside functions to miss the Pool dispatch.
-                                                        ctx.module_native_instances.push((
+                                                        ctx.push_module_native_instance((
                                                             name.clone(),
-                                                            module_name_owned,
+                                                            class_module,
                                                             class_name.to_string(),
                                                         ));
                                                     }
@@ -740,6 +843,8 @@ pub(crate) fn lower_module_decl(
                                                 ("https", Some("createServer")) => {
                                                     Some("HttpsServer")
                                                 }
+                                                ("tls", Some("createServer"))
+                                                | ("tls", Some("Server")) => Some("Server"),
                                                 ("http2", Some("createSecureServer")) => {
                                                     Some("Http2SecureServer")
                                                 }
@@ -763,7 +868,7 @@ pub(crate) fn lower_module_decl(
                                                 module.clone(),
                                                 class_name.to_string(),
                                             );
-                                            ctx.module_native_instances.push((
+                                            ctx.push_module_native_instance((
                                                 name.clone(),
                                                 module,
                                                 class_name.to_string(),
@@ -815,9 +920,15 @@ pub(crate) fn lower_module_decl(
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = class_name {
+                                                            let class_module =
+                                                                if class_name == "ClientRequest" {
+                                                                    "http"
+                                                                } else {
+                                                                    module_name
+                                                                };
                                                             ctx.register_native_instance(
                                                                 name.clone(),
-                                                                module_name.to_string(),
+                                                                class_module.to_string(),
                                                                 class_name.to_string(),
                                                             );
                                                         }
@@ -839,16 +950,31 @@ pub(crate) fn lower_module_decl(
                                         .lookup_native_module(class_name_str)
                                         .map(|(m, _)| m.to_string());
                                     if let Some(module_name) = native_info {
-                                        ctx.register_native_instance(
-                                            name.clone(),
-                                            module_name.clone(),
-                                            class_name_str.to_string(),
+                                        let is_handle_backed_constructor = matches!(
+                                            (class_name_str, module_name.as_str()),
+                                            (
+                                                "StringDecoder",
+                                                "string_decoder" | "node:string_decoder"
+                                            ) | (
+                                                "Recoverable" | "REPLServer",
+                                                "repl" | "node:repl"
+                                            ) | (
+                                                "DiffieHellman" | "DiffieHellmanGroup",
+                                                "crypto" | "node:crypto"
+                                            )
                                         );
-                                        ctx.module_native_instances.push((
-                                            name.clone(),
-                                            module_name,
-                                            class_name_str.to_string(),
-                                        ));
+                                        if !is_handle_backed_constructor {
+                                            ctx.register_native_instance(
+                                                name.clone(),
+                                                module_name.clone(),
+                                                class_name_str.to_string(),
+                                            );
+                                            ctx.push_module_native_instance((
+                                                name.clone(),
+                                                module_name,
+                                                class_name_str.to_string(),
+                                            ));
+                                        }
                                     }
                                 } else if let ast::Expr::Member(member) = new_expr.callee.as_ref() {
                                     if let (
@@ -869,6 +995,10 @@ pub(crate) fn lower_module_decl(
                                                     "AsyncLocalStorage" | "AsyncResource"
                                                 ) | ("dns" | "dns/promises", "Resolver")
                                                     | (
+                                                        "inspector" | "inspector/promises",
+                                                        "Session"
+                                                    )
+                                                    | (
                                                         "sqlite",
                                                         "DatabaseSync"
                                                             | "Session"
@@ -881,7 +1011,7 @@ pub(crate) fn lower_module_decl(
                                                     module_name.clone(),
                                                     class_name_str.to_string(),
                                                 );
-                                                ctx.module_native_instances.push((
+                                                ctx.push_module_native_instance((
                                                     name.clone(),
                                                     module_name,
                                                     class_name_str.to_string(),
@@ -1011,7 +1141,7 @@ pub(crate) fn lower_module_decl(
                                             }
                                         };
                                         if let Some((module, class)) = module_info {
-                                            ctx.func_return_native_instances.push((
+                                            ctx.push_func_return_native_instance((
                                                 name.clone(),
                                                 module.to_string(),
                                                 class.to_string(),
@@ -1039,6 +1169,7 @@ pub(crate) fn lower_module_decl(
 
                             let expr = lower_expr(ctx, init)?;
                             let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                ctx.pre_registered_module_var_decls.remove(&name);
                                 let id = ctx.lookup_local(&name).unwrap();
                                 if let Some((_, _, existing_ty)) =
                                     ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
@@ -1081,6 +1212,64 @@ pub(crate) fn lower_module_decl(
                                     module.exported_objects.push(name.clone());
                                 }
                             }
+                        } else {
+                            // `export var X;` / `export let X;` with NO
+                            // initializer. The canonical TypeScript-emitted
+                            // enum/namespace IIFE pattern relies on this:
+                            //
+                            //   export var Color;
+                            //   (function (Color) { Color["RED"]="red"; … })
+                            //       (Color || (Color = {}));
+                            //
+                            // declares the binding uninitialized, then a
+                            // following module-scope statement assigns it
+                            // (`Color = {}` plus member writes). Pre-fix this
+                            // arm did nothing: no `Stmt::Let` (so no backing
+                            // module global / value-getter), no `Export` entry,
+                            // and no `exported_objects` entry. The binding then
+                            // wasn't in any consumer's `imported_vars`, so a
+                            // consumer reading `Color` as a value fell through
+                            // to the closure-wrapper path and referenced an
+                            // undefined `__perry_wrap_perry_fn_<src>__Color`
+                            // symbol → "Undefined symbols … Linking failed"
+                            // (#5239). This pattern appears in nearly every
+                            // TypeScript-compiled JS package, so it broadly
+                            // gated native compilation of real npm trees.
+                            //
+                            // Fix: treat it like a hoisted `var` declared
+                            // `undefined` — emit a `Stmt::Let { init: None }`
+                            // backed by the (already pre-registered) local id,
+                            // and register the export. The later module-scope
+                            // assignments (`Color = {}`, `Color["RED"]="red"`)
+                            // already lower to `LocalSet`/`PutValueSet` on the
+                            // same id, so they flow into the exported binding
+                            // and importers observe the populated object.
+                            let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                ctx.pre_registered_module_var_decls.remove(&name);
+                                let id = ctx.lookup_local(&name).unwrap();
+                                if let Some((_, _, existing_ty)) =
+                                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
+                                {
+                                    *existing_ty = ty.clone();
+                                }
+                                id
+                            } else if let Some(id) = ctx.lookup_local(&name) {
+                                id
+                            } else {
+                                ctx.define_local(name.clone(), ty.clone())
+                            };
+                            module.init.push(Stmt::Let {
+                                id,
+                                name: name.clone(),
+                                ty,
+                                mutable: true,
+                                init: None,
+                            });
+                            module.exports.push(Export::Named {
+                                local: name.clone(),
+                                exported: name.clone(),
+                            });
+                            module.exported_objects.push(name.clone());
                         }
                     }
                 }
@@ -1097,6 +1286,14 @@ pub(crate) fn lower_module_decl(
                                 class_name: class_name.clone(),
                                 parent_expr: extends_expr.clone(),
                             }));
+                    }
+                    for member in &class.computed_members {
+                        module
+                            .init
+                            .push(Stmt::Expr(class_computed_member_registration_expr(
+                                &class_name,
+                                member,
+                            )));
                     }
                     // Inject static-field-init statements in source order
                     // (see non-export class arm below for rationale).
@@ -1265,6 +1462,24 @@ pub(crate) fn lower_module_decl(
                                 }
                             })
                             .unwrap_or_else(|| local.clone());
+
+                        // When the re-exported local is a namespace import
+                        // (`import * as z from "src"; export { z }`), it is NOT a
+                        // plain binding — it is the module namespace of `src`.
+                        // Emit it as a NamespaceReExport (the same lowering as
+                        // `export * as z from "src"`, #310) so the importer
+                        // receives the namespace object with all its members,
+                        // not a bare `perry_fn_<mod>__z` function symbol. This is
+                        // exactly how zod re-exports `z`, so without this every
+                        // `z.object` / `z.coerce` in consumer code is undefined.
+                        if let Some(ns_source) = ctx.namespace_import_sources.get(&local).cloned() {
+                            module.exports.push(Export::NamespaceReExport {
+                                source: ns_source,
+                                name: exported.clone(),
+                            });
+                            continue;
+                        }
+
                         module.exports.push(Export::Named {
                             local: local.clone(),
                             exported: exported.clone(),
@@ -1346,6 +1561,17 @@ pub(crate) fn lower_module_decl(
                                             | Expr::FuncRef(_)
                                             | Expr::ExternFuncRef { .. }
                                             | Expr::PropertyGet { .. }
+                                            // A const aliasing a class STATIC field value
+                                            // (`const stringType = ZodString.create;
+                                            // export { stringType as string }`) lowers its
+                                            // init to `StaticFieldGet`. Like `PropertyGet`
+                                            // above it must flow through `exported_objects`
+                                            // so the importer reads the const's value via the
+                                            // module getter instead of link-failing to a
+                                            // nonexistent `perry_fn_<src>__<name>` symbol
+                                            // (which made the call return `undefined`). zod's
+                                            // `z.string`/`z.number`/… are all this shape.
+                                            | Expr::StaticFieldGet { .. }
                                             // #421 fix (v0.5.574): primitive literals must
                                             // also flow through `exported_objects` so the
                                             // importing module's `imported_vars` set picks
@@ -1473,7 +1699,7 @@ pub(crate) fn lower_module_decl(
                             if let Some((mod_name, class)) =
                                 native_instance_from_return_type(&func.return_type)
                             {
-                                ctx.func_return_native_instances.push((
+                                ctx.push_func_return_native_instance((
                                     func_name.clone(),
                                     mod_name.to_string(),
                                     class.to_string(),
@@ -1487,7 +1713,7 @@ pub(crate) fn lower_module_decl(
                             let has_synth_args = func
                                 .params
                                 .last()
-                                .is_some_and(|p| p.is_rest && p.name == "arguments");
+                                .is_some_and(|p| p.arguments_object.is_some());
                             ctx.func_defaults.push((
                                 func.id,
                                 defaults,
@@ -1566,7 +1792,7 @@ pub(crate) fn lower_module_decl(
                         let has_synth_args = func
                             .params
                             .last()
-                            .is_some_and(|p| p.is_rest && p.name == "arguments");
+                            .is_some_and(|p| p.arguments_object.is_some());
                         ctx.func_defaults.push((
                             func.id,
                             defaults,
@@ -1590,13 +1816,85 @@ pub(crate) fn lower_module_decl(
                     }
                 }
                 ast::DefaultDecl::Class(class_expr) => {
-                    if let Some(ref ident) = class_expr.ident {
-                        let class_name = ident.sym.to_string();
-                        module.exports.push(Export::Named {
-                            local: class_name,
-                            exported: "default".to_string(),
-                        });
+                    // Issue #4976: pre-fix this arm only recorded the export
+                    // name and dropped the class body — the class never
+                    // entered `module.classes`, so the importer's
+                    // `exported_classes` lookup missed and `import Widget
+                    // from 'pkg'; new Widget()` fell through to the
+                    // synthetic-default / empty-object placeholder: an
+                    // instance whose prototype holds only `constructor`,
+                    // with every method and field initializer gone (ink's
+                    // `export default class Ink { render() {…} }`).
+                    //
+                    // Synthesize a `ClassDecl` (ident `default` for the
+                    // anonymous `export default class { … }` form, mirroring
+                    // the anonymous-default-function branch above) and run
+                    // it through the same flow as `ExportDecl::Class` so
+                    // methods, field initializers, statics, computed
+                    // members, and decorators are all installed normally.
+                    let synth_ident = class_expr.ident.clone().unwrap_or_else(|| {
+                        ast::Ident::new(
+                            "default".to_string().into(),
+                            swc_common::DUMMY_SP,
+                            Default::default(),
+                        )
+                    });
+                    let synth_class_decl = ast::ClassDecl {
+                        ident: synth_ident,
+                        declare: false,
+                        class: class_expr.class.clone(),
+                    };
+                    let class = lower_class_decl(ctx, &synth_class_decl, true)?;
+                    let class_name = class.name.clone();
+                    // Issue #711: dynamic parent-class registration at the
+                    // source position (see non-export class arm for
+                    // rationale).
+                    if let Some(extends_expr) = &class.extends_expr {
+                        module
+                            .init
+                            .push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                                class_name: class_name.clone(),
+                                parent_expr: extends_expr.clone(),
+                            }));
                     }
+                    for member in &class.computed_members {
+                        module
+                            .init
+                            .push(Stmt::Expr(class_computed_member_registration_expr(
+                                &class_name,
+                                member,
+                            )));
+                    }
+                    // Inject static-field-init statements in source order
+                    // (see non-export class arm for rationale).
+                    for sf in &class.static_fields {
+                        if let Some(init) = &sf.init {
+                            if let Some(key) = sf.key_expr.as_ref() {
+                                module.init.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
+                                    class_name: class_name.clone(),
+                                    key: Box::new(key.clone()),
+                                    value: Box::new(init.clone()),
+                                }));
+                            } else {
+                                module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+                                    class_name: class_name.clone(),
+                                    field_name: sf.name.clone(),
+                                    value: Box::new(init.clone()),
+                                }));
+                            }
+                        }
+                    }
+                    append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
+                    push_class_dedup(module, class);
+                    // The `local != exported` shape lets the #485 alias loop
+                    // in compile.rs register the class under `(path,
+                    // "default")` so default-importers resolve full class
+                    // metadata (same machinery the working `class X {};
+                    // export default X` form uses via #665).
+                    module.exports.push(Export::Named {
+                        local: class_name,
+                        exported: "default".to_string(),
+                    });
                 }
                 _ => {}
             }
@@ -1685,6 +1983,62 @@ pub(crate) fn lower_module_decl(
 /// with a static method `create`. Exported namespace variables are lowered as module-level
 /// locals (not static fields) and accessed via compile-time namespace resolution.
 /// Private namespace members (non-exported) are lowered as module-level variables.
+/// #5130: the simple-ident name of a (non-dotted) nested namespace, if it has a
+/// body. `namespace A.B {}` (dotted form) and bodiless `declare` modules return
+/// `None`.
+fn nested_namespace_name(ts_module: &ast::TsModuleDecl) -> Option<String> {
+    if ts_module.body.is_none() {
+        return None;
+    }
+    match &ts_module.id {
+        ast::TsModuleName::Ident(ident) => Some(ident.sym.to_string()),
+        ast::TsModuleName::Str(_) => None,
+    }
+}
+
+/// #5130: lower a namespace nested inside another (`namespace Outer { export
+/// namespace Inner { ... } }`). The inner namespace becomes its own synthetic
+/// class registered under the qualified name `Outer.Inner`, and the outer
+/// namespace gains a static field `Inner` holding a `ClassRef` to it — so
+/// `Outer.Inner` resolves to the inner namespace object and `Outer.Inner.member`
+/// reads its statics (a runtime property/method access on a class-ref resolves
+/// static fields/methods). Nesting recurses to any depth.
+fn lower_nested_namespace(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    outer_ns_name: &str,
+    ts_module: &ast::TsModuleDecl,
+    ns_static_fields: &mut Vec<crate::ir::ClassField>,
+) -> Result<()> {
+    let Some(inner_name) = nested_namespace_name(ts_module) else {
+        return Ok(());
+    };
+    let Some(body) = &ts_module.body else {
+        return Ok(());
+    };
+    let qualified = format!("{outer_ns_name}.{inner_name}");
+    let class = lower_namespace_as_class(ctx, module, &qualified, body, true)?;
+    push_class_dedup(module, class);
+
+    // Surface the inner namespace as a static field of the outer one, set to a
+    // ClassRef to the inner class. Mirrors the const-member wiring above.
+    ns_static_fields.push(crate::ir::ClassField {
+        name: inner_name.clone(),
+        key_expr: None,
+        ty: Type::Any,
+        init: None,
+        is_private: false,
+        is_readonly: true,
+        decorators: Vec::new(),
+    });
+    module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+        class_name: outer_ns_name.to_string(),
+        field_name: inner_name,
+        value: Box::new(Expr::ClassRef(qualified)),
+    }));
+    Ok(())
+}
+
 pub(crate) fn lower_namespace_as_class(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -1718,8 +2072,11 @@ pub(crate) fn lower_namespace_as_class(
                 methods: Vec::new(),
                 getters: Vec::new(),
                 setters: Vec::new(),
+                static_accessor_names: Vec::new(),
+                static_accessor_fn_ids: Vec::new(),
                 static_fields: Vec::new(),
                 static_methods: Vec::new(),
+                computed_members: Vec::new(),
                 decorators: Vec::new(),
                 is_exported,
                 aliases: Vec::new(),
@@ -1729,6 +2086,21 @@ pub(crate) fn lower_namespace_as_class(
 
     let mut static_methods = Vec::new();
     let mut static_method_names = Vec::new();
+    // #5130: nested namespace names (`namespace G { export namespace Nested {} }`).
+    // Each is surfaced as a static field on the outer namespace class holding a
+    // `ClassRef` to the (recursively lowered) inner namespace class, so
+    // `G.Nested` resolves to the inner namespace and `G.Nested.value` /
+    // `G.Nested.f()` read its statics. Registered as static fields up-front so
+    // `has_static_field` routes `G.Nested` to `StaticFieldGet`.
+    let mut nested_ns_names: Vec<String> = Vec::new();
+    // Namespace `export const` members surfaced as static fields so `Ns.member`
+    // resolves CROSS-MODULE (the per-module `namespace_vars` local is invisible
+    // to importers; only namespace FUNCTIONS — lowered as static methods —
+    // crossed the boundary). The field's VALUE is copied from the const's local
+    // by a `StaticFieldSet` appended to `module.init` right after the const's
+    // own `Let`, so it is evaluated exactly once and in the right order. zod's
+    // `util` namespace (`util.objectKeys`, …) is imported this way.
+    let mut ns_static_fields: Vec<crate::ir::ClassField> = Vec::new();
 
     // First pass: collect exported function names, pre-register all functions and variables
     // (so namespace members can reference each other regardless of declaration order)
@@ -1754,12 +2126,31 @@ pub(crate) fn lower_namespace_as_class(
                                 if ctx.lookup_local(&name).is_none() {
                                     let ty = extract_binding_type(&decl.name);
                                     ctx.define_local(name.clone(), ty);
-                                    ctx.pre_registered_module_vars.insert(name);
+                                    ctx.pre_registered_module_vars.insert(name.clone());
+                                    if var_decl.kind == ast::VarDeclKind::Var {
+                                        ctx.pre_registered_module_var_decls.insert(name);
+                                    }
                                 }
                             }
                         }
                     }
+                    // #5130: nested `export namespace Inner { ... }`.
+                    ast::Decl::TsModule(ts_module) => {
+                        if !ts_module.declare {
+                            if let Some(name) = nested_namespace_name(ts_module) {
+                                nested_ns_names.push(name);
+                            }
+                        }
+                    }
                     _ => {}
+                }
+            }
+            // #5130: nested non-exported `namespace Inner { ... }`.
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsModule(ts_module))) => {
+                if !ts_module.declare {
+                    if let Some(name) = nested_namespace_name(ts_module) {
+                        nested_ns_names.push(name);
+                    }
                 }
             }
             // Pre-register non-exported functions (hoisted like JS)
@@ -1784,7 +2175,10 @@ pub(crate) fn lower_namespace_as_class(
                                 .map(|ann| extract_ts_type(&ann.type_ann))
                                 .unwrap_or(Type::Any);
                             ctx.define_local(name.clone(), ty);
-                            ctx.pre_registered_module_vars.insert(name);
+                            ctx.pre_registered_module_vars.insert(name.clone());
+                            if var_decl.kind == ast::VarDeclKind::Var {
+                                ctx.pre_registered_module_var_decls.insert(name);
+                            }
                         }
                     }
                 }
@@ -1793,8 +2187,14 @@ pub(crate) fn lower_namespace_as_class(
         }
     }
 
-    // Register class and statics early so method bodies can reference them
-    ctx.register_class_statics(ns_name.to_string(), Vec::new(), static_method_names.clone());
+    // Register class and statics early so method bodies can reference them.
+    // Nested namespace names are registered as static fields so `Outer.Inner`
+    // resolves via `has_static_field` → `StaticFieldGet` (#5130).
+    ctx.register_class_statics(
+        ns_name.to_string(),
+        nested_ns_names.clone(),
+        static_method_names.clone(),
+    );
 
     // Set current namespace so internal function calls resolve as StaticMethodCall
     let prev_namespace = ctx.current_namespace.take();
@@ -1803,6 +2203,15 @@ pub(crate) fn lower_namespace_as_class(
     // Second pass: lower all items
     for item in items {
         match item {
+            // #5130: nested non-exported `namespace Inner { ... }` — surface as a
+            // static field of the outer namespace (same as the exported form)
+            // rather than letting `lower_stmt` register it as a top-level
+            // namespace with an unqualified name.
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::TsModule(ts_module)))
+                if !ts_module.declare && nested_namespace_name(ts_module).is_some() =>
+            {
+                lower_nested_namespace(ctx, module, ns_name, ts_module, &mut ns_static_fields)?;
+            }
             // Non-exported items → module-level variables/functions
             ast::ModuleItem::Stmt(stmt) => {
                 lower_stmt(ctx, module, stmt)?;
@@ -1825,7 +2234,7 @@ pub(crate) fn lower_namespace_as_class(
                         if let Some((module, class)) =
                             native_instance_from_return_type(&func.return_type)
                         {
-                            ctx.func_return_native_instances.push((
+                            ctx.push_func_return_native_instance((
                                 func.name.clone(),
                                 module.to_string(),
                                 class.to_string(),
@@ -1836,12 +2245,42 @@ pub(crate) fn lower_namespace_as_class(
                     ast::Decl::Var(var_decl) => {
                         // Lower exported namespace variables as module-level locals
                         let mutable = var_decl.kind != ast::VarDeclKind::Const;
+                        let is_var = var_decl.kind == ast::VarDeclKind::Var;
                         for decl in &var_decl.decls {
+                            if is_destructuring_pattern(&decl.name) {
+                                let mut names = Vec::new();
+                                collect_binding_names(&decl.name, &mut names);
+                                if decl.init.is_some() {
+                                    let stmts = lower_var_decl_with_destructuring(
+                                        ctx, decl, mutable, is_var,
+                                    )?;
+                                    module.init.extend(stmts);
+                                    for name in names {
+                                        if let Some(id) = ctx.lookup_local(&name) {
+                                            ctx.namespace_vars.push((
+                                                ns_name.to_string(),
+                                                name.clone(),
+                                                id,
+                                            ));
+                                        }
+                                        if is_exported {
+                                            module.exported_objects.push(name.clone());
+                                            module.exports.push(Export::Named {
+                                                local: name.clone(),
+                                                exported: name,
+                                            });
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
+
                             let name = get_binding_name(&decl.name)?;
                             let ty = extract_binding_type(&decl.name);
                             if let Some(init) = &decl.init {
                                 let expr = lower_expr(ctx, init)?;
                                 let id = if ctx.pre_registered_module_vars.remove(&name) {
+                                    ctx.pre_registered_module_var_decls.remove(&name);
                                     let id = ctx.lookup_local(&name).unwrap();
                                     if let Some((_, _, existing_ty)) =
                                         ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
@@ -1859,9 +2298,32 @@ pub(crate) fn lower_namespace_as_class(
                                     mutable,
                                     init: Some(expr),
                                 });
-                                // Track as namespace variable for Ns.member access resolution
+                                // Track as namespace variable for `Ns.member`
+                                // access AND intra-namespace bare references.
                                 ctx.namespace_vars
                                     .push((ns_name.to_string(), name.clone(), id));
+                                // Surface as a static field of the namespace class
+                                // and copy the const's value into it (after the Let
+                                // above), so `Ns.member` resolves cross-module via
+                                // the static-field global. The field carries no
+                                // initializer of its own — the value is set once,
+                                // here, from the already-evaluated local.
+                                if is_exported {
+                                    ns_static_fields.push(crate::ir::ClassField {
+                                        name: name.clone(),
+                                        key_expr: None,
+                                        ty: Type::Any,
+                                        init: None,
+                                        is_private: false,
+                                        is_readonly: !mutable,
+                                        decorators: Vec::new(),
+                                    });
+                                    module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+                                        class_name: ns_name.to_string(),
+                                        field_name: name.clone(),
+                                        value: Box::new(Expr::LocalGet(id)),
+                                    }));
+                                }
                                 // Export the variable for cross-module access
                                 if is_exported {
                                     module.exported_objects.push(name.clone());
@@ -1876,6 +2338,16 @@ pub(crate) fn lower_namespace_as_class(
                     ast::Decl::Class(class_decl) => {
                         let class = lower_class_decl(ctx, class_decl, is_exported)?;
                         push_class_dedup(module, class);
+                    }
+                    // #5130: nested `export namespace Inner { ... }`.
+                    ast::Decl::TsModule(ts_module) => {
+                        lower_nested_namespace(
+                            ctx,
+                            module,
+                            ns_name,
+                            ts_module,
+                            &mut ns_static_fields,
+                        )?;
                     }
                     _ => {}
                 }
@@ -1900,8 +2372,11 @@ pub(crate) fn lower_namespace_as_class(
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
-        static_fields: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: ns_static_fields,
         static_methods,
+        computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported,
         aliases: Vec::new(),

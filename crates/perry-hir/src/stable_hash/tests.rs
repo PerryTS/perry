@@ -251,6 +251,8 @@ fn module_metadata_affects_hash() {
         type_only: false,
         is_dynamic: false,
         is_dynamic_target: false,
+        is_deferred_require: false,
+        is_adopted_require: false,
     });
     assert_ne!(base_hash, hash_module(&m_imp));
 
@@ -269,8 +271,11 @@ fn module_metadata_affects_hash() {
         methods: vec![],
         getters: vec![],
         setters: vec![],
+        static_accessor_names: vec![],
+        static_accessor_fn_ids: vec![],
         static_fields: vec![],
         static_methods: vec![],
+        computed_members: vec![],
         decorators: vec![],
         is_exported: false,
         aliases: vec![],
@@ -350,6 +355,7 @@ pub(crate) fn canonical_module() -> Module {
                 ty: Type::Number,
                 default: None,
                 is_rest: false,
+                arguments_object: None,
                 decorators: vec![],
             },
             Param {
@@ -358,6 +364,7 @@ pub(crate) fn canonical_module() -> Module {
                 ty: Type::Number,
                 default: None,
                 is_rest: false,
+                arguments_object: None,
                 decorators: vec![],
             },
         ],

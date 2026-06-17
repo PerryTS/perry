@@ -210,12 +210,410 @@ pub(super) fn has_invalid_repeated_quantifier(pattern: &str) -> bool {
     false
 }
 
+#[inline]
+fn is_surrogate(v: u32) -> bool {
+    (0xD800..=0xDFFF).contains(&v)
+}
+#[inline]
+fn is_high_surrogate(v: u32) -> bool {
+    (0xD800..=0xDBFF).contains(&v)
+}
+#[inline]
+fn is_low_surrogate(v: u32) -> bool {
+    (0xDC00..=0xDFFF).contains(&v)
+}
+
+/// Parse a `\uXXXX` (exactly four hex digits, no braces) escape at `chars[i]`.
+/// Returns the code-unit value and the index just past the escape.
+fn parse_u4_escape(chars: &[char], i: usize) -> Option<(u32, usize)> {
+    if chars.get(i) != Some(&'\\') || chars.get(i + 1) != Some(&'u') {
+        return None;
+    }
+    let mut v = 0u32;
+    for k in 0..4 {
+        let d = chars.get(i + 2 + k)?.to_digit(16)?;
+        v = v * 16 + d;
+    }
+    Some((v, i + 6))
+}
+
+/// Parse a "surrogate unit" at `chars[i]`: either a single `\uXXXX` escape or a
+/// `[...]` class whose every element is a `\uXXXX` escape (singletons or
+/// `\uA-\uB` ranges). Returns the code-unit ranges and the index just past the
+/// unit — but ONLY when *every* code unit is a UTF-16 surrogate
+/// (`0xD800..=0xDFFF`). Returns `None` for anything else, so ordinary escapes
+/// and character classes pass through `fold_surrogate_pairs` untouched.
+fn parse_surrogate_unit(chars: &[char], i: usize) -> Option<(Vec<(u32, u32)>, usize)> {
+    if let Some((v, j)) = parse_u4_escape(chars, i) {
+        return is_surrogate(v).then_some((vec![(v, v)], j));
+    }
+    if chars.get(i) != Some(&'[') {
+        return None;
+    }
+    let mut k = i + 1;
+    if chars.get(k) == Some(&'^') {
+        return None; // negated class is never a plain surrogate set
+    }
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    while chars.get(k).is_some_and(|c| *c != ']') {
+        let (lo, k2) = parse_u4_escape(chars, k)?;
+        if chars.get(k2) == Some(&'-') && chars.get(k2 + 1) == Some(&'\\') {
+            let (hi, k3) = parse_u4_escape(chars, k2 + 1)?;
+            ranges.push((lo, hi));
+            k = k3;
+        } else {
+            ranges.push((lo, lo));
+            k = k2;
+        }
+    }
+    if chars.get(k) != Some(&']') || ranges.is_empty() {
+        return None;
+    }
+    ranges
+        .iter()
+        .all(|(a, b)| is_surrogate(*a) && is_surrogate(*b))
+        .then_some((ranges, k + 1))
+}
+
+/// Combine adjacent high-surrogate ranges with low-surrogate ranges into the
+/// equivalent astral (supplementary-plane) scalar ranges, coalescing the
+/// result. `cp = 0x10000 + (high - 0xD800) * 0x400 + (low - 0xDC00)`.
+fn combine_surrogate_ranges(hi: &[(u32, u32)], lo: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut pts: Vec<(u32, u32)> = Vec::new();
+    for &(h1, h2) in hi {
+        for h in h1..=h2 {
+            let base = 0x10000 + (h - 0xD800) * 0x400;
+            for &(l1, l2) in lo {
+                pts.push((base + (l1 - 0xDC00), base + (l2 - 0xDC00)));
+            }
+        }
+    }
+    pts.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::new();
+    for (a, b) in pts {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 + 1 => {
+                if b > last.1 {
+                    last.1 = b;
+                }
+            }
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
+}
+
+/// Emit astral scalar ranges as a Rust-regex `\x{..}` class (or a bare `\x{..}`
+/// for a single scalar).
+fn emit_astral_class(out: &mut String, ranges: &[(u32, u32)]) {
+    if let [(a, b)] = ranges {
+        if a == b {
+            out.push_str(&format!("\\x{{{a:x}}}"));
+            return;
+        }
+    }
+    out.push('[');
+    for &(a, b) in ranges {
+        if a == b {
+            out.push_str(&format!("\\x{{{a:x}}}"));
+        } else {
+            out.push_str(&format!("\\x{{{a:x}}}-\\x{{{b:x}}}"));
+        }
+    }
+    out.push(']');
+}
+
+/// Parse a character-class member at `chars[i]` that is a lone-surrogate
+/// `\uXXXX` escape or a `\uXXXX-\uYYYY` range of them. Returns the astral
+/// scalar ranges the member matches (see `surrogate_units_to_astral`) and the
+/// index just past the member. `None` leaves the escape untouched.
+fn parse_class_surrogate_member(chars: &[char], i: usize) -> Option<(Vec<(u32, u32)>, usize)> {
+    let (lo, j) = parse_u4_escape(chars, i)?;
+    if !is_surrogate(lo) {
+        return None;
+    }
+    if chars.get(j) == Some(&'-') && chars.get(j + 1) != Some(&']') {
+        // Range form: only rewrite when the upper bound is also a surrogate
+        // escape; a mixed `\ud800-z` range passes through unchanged (and fails
+        // downstream exactly as before) rather than mis-translating.
+        let (hi, k) = parse_u4_escape(chars, j + 1)?;
+        if !is_surrogate(hi) || lo > hi {
+            return None;
+        }
+        return Some((surrogate_units_to_astral(lo, hi), k));
+    }
+    Some((surrogate_units_to_astral(lo, lo), j))
+}
+
+/// Map a UTF-16 surrogate code-unit range `[a, b]` to the Unicode scalar
+/// values whose UTF-16 encoding contains a unit in that range — the set a
+/// non-`u` JS class member like `[\ud800-\udfff]` matches when run over a
+/// well-formed string. A unit in the high half (`D800-DBFF`) selects the
+/// contiguous astral block it leads; a unit in the low half (`DC00-DFFF`)
+/// selects one offset out of every 0x400-wide astral block (a striped set,
+/// emitted exactly; the full low half collapses to "all astral"). Lone
+/// surrogates in the *subject* string remain unmatchable — the Rust `regex`
+/// crate only matches scalar values (the WTF-8 categorical gap).
+fn surrogate_units_to_astral(a: u32, b: u32) -> Vec<(u32, u32)> {
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    let (h1, h2) = (a.max(0xD800), b.min(0xDBFF));
+    if h1 <= h2 {
+        out.push((
+            0x10000 + (h1 - 0xD800) * 0x400,
+            0x10000 + (h2 - 0xD800) * 0x400 + 0x3FF,
+        ));
+    }
+    let (l1, l2) = (a.max(0xDC00), b.min(0xDFFF));
+    if l1 <= l2 {
+        if (l1, l2) == (0xDC00, 0xDFFF) {
+            out.push((0x10000, 0x10FFFF));
+        } else {
+            for block in 0..0x400u32 {
+                let base = 0x10000 + block * 0x400;
+                out.push((base + (l1 - 0xDC00), base + (l2 - 0xDC00)));
+            }
+        }
+    }
+    out.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::new();
+    for (x, y) in out {
+        match merged.last_mut() {
+            Some(last) if x <= last.1.saturating_add(1) => {
+                if y > last.1 {
+                    last.1 = y;
+                }
+            }
+            _ => merged.push((x, y)),
+        }
+    }
+    merged
+}
+
+/// Emit astral ranges as members of an already-open character class.
+fn emit_astral_class_members(out: &mut String, ranges: &[(u32, u32)]) {
+    for &(x, y) in ranges {
+        if x == y {
+            out.push_str(&format!("\\x{{{x:x}}}"));
+        } else {
+            out.push_str(&format!("\\x{{{x:x}}}-\\x{{{y:x}}}"));
+        }
+    }
+}
+
+/// Rewrite UTF-16 surrogate-pair escape sequences into the astral scalar values
+/// they encode, so the Rust `regex` crate (which works on Unicode scalars and
+/// rejects lone-surrogate code points) can compile them.
+///
+/// JS regexes that target the supplementary planes without the `u` flag spell
+/// each astral code point as a high-surrogate escape immediately followed by a
+/// low-surrogate escape — either as bare `\uXXXX` escapes or as `[...]` classes
+/// of them, e.g. `\uD800[\uDC00-\uDC0B]` or
+/// `[\uD80C\uD81C-\uD820][\uDC00-\uDFFF]`. Test262's `nativeFunctionMatcher.js`
+/// (the `\p{ID_Start}` / `\p{ID_Continue}` shims used across `built-ins/`)
+/// relies on this form; before this fold every `Function.prototype.toString`
+/// conformance case threw `SyntaxError: invalid pattern` at regex-literal
+/// evaluation. The transform only fires when a high-surrogate unit is directly
+/// followed by a low-surrogate unit (a genuine pair); anything else is left
+/// byte-for-byte unchanged, so patterns that compile today are unaffected.
+fn fold_surrogate_pairs(pattern: &str) -> String {
+    if !pattern.contains("\\u") {
+        return pattern.to_string();
+    }
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(pattern.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let at_unit_start = (chars[i] == '\\' && chars.get(i + 1) == Some(&'u')) || chars[i] == '[';
+        if at_unit_start {
+            if let Some((hi, j)) = parse_surrogate_unit(&chars, i) {
+                if hi
+                    .iter()
+                    .all(|(a, b)| is_high_surrogate(*a) && is_high_surrogate(*b))
+                {
+                    if let Some((lo, k)) = parse_surrogate_unit(&chars, j) {
+                        if lo
+                            .iter()
+                            .all(|(a, b)| is_low_surrogate(*a) && is_low_surrogate(*b))
+                        {
+                            emit_astral_class(&mut out, &combine_surrogate_ranges(&hi, &lo));
+                            i = k;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Parse a `\p{...}` / `\P{...}` Unicode property escape starting at `chars[i]`
+/// (which must be the backslash, with `chars[i+1]` a `p`/`P` and `chars[i+2]` a
+/// `{`). Returns `(property_value, negated, end)` where `end` is the index just
+/// past the closing `}` and `property_value` is the lowercased value with any
+/// `gc=` / `general_category=` prefix stripped and `_`/spaces removed (loose
+/// matching). Returns `None` if the brace form is malformed.
+fn parse_unicode_property(chars: &[char], i: usize) -> Option<(String, bool, usize)> {
+    let negated = match chars.get(i + 1) {
+        Some('p') => false,
+        Some('P') => true,
+        _ => return None,
+    };
+    if chars.get(i + 2) != Some(&'{') {
+        return None;
+    }
+    let mut k = i + 3;
+    let mut body = String::new();
+    while let Some(&c) = chars.get(k) {
+        if c == '}' {
+            break;
+        }
+        body.push(c);
+        k += 1;
+    }
+    if chars.get(k) != Some(&'}') {
+        return None;
+    }
+    let lower = body.to_ascii_lowercase();
+    // Strip a `gc=` / `general_category=` prefix; leave other `key=value`
+    // properties (e.g. `script=greek`) intact so they pass through unchanged.
+    let value = match lower.split_once('=') {
+        Some((key, val))
+            if matches!(
+                key.trim().replace(['_', ' '], "").as_str(),
+                "gc" | "generalcategory"
+            ) =>
+        {
+            val.to_string()
+        }
+        _ => lower,
+    };
+    Some((value.trim().replace(['_', ' '], ""), negated, k + 1))
+}
+
+/// `\p{Surrogate}` / `\p{gc=Cs}` — the only general category consisting entirely
+/// of UTF-16 surrogate code points (U+D800..=U+DFFF). The Rust `regex` crate
+/// matches over Unicode *scalar values*, which exclude surrogates, so it rejects
+/// this property outright instead of treating it as never-matching.
+fn is_surrogate_property(value: &str) -> bool {
+    value == "surrogate" || value == "cs"
+}
+
+/// ES2024 Unicode *properties of strings* (`/v` / unicodeSets mode, UTS #51
+/// emoji sequence sets). Unlike ordinary `\p{…}` character properties these
+/// can match a multi-code-point cluster (ZWJ sequences, flag pairs, keycaps,
+/// skin-tone modifier sequences). The Rust `regex` crate has no notion of
+/// properties of strings, so it rejects them as `invalid pattern`. Expand each
+/// set into an alternation over the single-code-point emoji properties the
+/// crate does support (`Emoji`, `Emoji_Presentation`, `Emoji_Modifier`,
+/// `Emoji_Modifier_Base`).
+///
+/// The expansion follows the UTS #51 sequence *grammar*, not the enumerated
+/// RGI sequence data files, so it over-matches at rare edges (unlisted flag
+/// pairs / ZWJ combinations) but classifies real emoji clusters the way Node
+/// does — which is what `string-width@7+` (→ ink, #348) needs for its
+/// module-top-level `/^\p{RGI_Emoji}$/v` "is this cluster one emoji → width 2"
+/// predicate (#4889). Takes the already-normalized (lowercased, `_`/space
+/// stripped) property value; returns `None` for everything else.
+fn emoji_string_property_expansion(value: &str) -> Option<String> {
+    // One emoji-sequence element: a skin-tone modifier sequence, an emoji
+    // presentation sequence (text-default emoji + VS16), or a character with
+    // default emoji presentation. Regional indicators are excluded — they
+    // only count in pairs, as a flag sequence.
+    const ELEMENT: &str = "(?:\\p{Emoji_Modifier_Base}\\p{Emoji_Modifier}\
+         |\\p{Emoji}\\x{FE0F}\
+         |[\\p{Emoji_Presentation}&&[^\\x{1F1E6}-\\x{1F1FF}]])";
+    const FLAG_SEQ: &str = "[\\x{1F1E6}-\\x{1F1FF}]{2}";
+    const KEYCAP_SEQ: &str = "[0-9#*]\\x{FE0F}\\x{20E3}";
+    const TAG_SEQ: &str = "\\x{1F3F4}[\\x{E0020}-\\x{E007E}]+\\x{E007F}";
+    Some(match value {
+        // RGI_Emoji = Basic_Emoji | Emoji_Keycap_Sequence |
+        // RGI_Emoji_Flag_Sequence | RGI_Emoji_Tag_Sequence |
+        // RGI_Emoji_Modifier_Sequence | RGI_Emoji_ZWJ_Sequence. The trailing
+        // ELEMENT(ZWJ ELEMENT)* branch covers Basic_Emoji, modifier sequences,
+        // and ZWJ sequences in one.
+        "rgiemoji" => {
+            format!("(?:{FLAG_SEQ}|{KEYCAP_SEQ}|{TAG_SEQ}|{ELEMENT}(?:\\x{{200D}}{ELEMENT})*)")
+        }
+        // ELEMENT minus the modifier-sequence branch: a default-presentation
+        // emoji (incl. standalone skin tones) or text-default emoji + VS16.
+        "basicemoji" => "(?:\\p{Emoji}\\x{FE0F}\
+             |[\\p{Emoji_Presentation}&&[^\\x{1F1E6}-\\x{1F1FF}]])"
+            .to_string(),
+        "emojikeycapsequence" => format!("(?:{KEYCAP_SEQ})"),
+        "rgiemojiflagsequence" => format!("(?:{FLAG_SEQ})"),
+        "rgiemojitagsequence" => format!("(?:{TAG_SEQ})"),
+        "rgiemojimodifiersequence" => "(?:\\p{Emoji_Modifier_Base}\\p{Emoji_Modifier})".to_string(),
+        "rgiemojizwjsequence" => format!("(?:{ELEMENT}(?:\\x{{200D}}{ELEMENT})+)"),
+        _ => return None,
+    })
+}
+
+/// Does the already-emitted translation `out` end in a character-class
+/// shorthand (`\d`/`\w`/`\s` and their negations, or a `\p{…}`/`\P{…}` Unicode
+/// property)? Such an element cannot be the bound of a range, so a `-`
+/// immediately after it is a *literal* hyphen in JS, not a range operator.
+fn out_ends_with_class_shorthand(out: &str) -> bool {
+    let b = out.as_bytes();
+    // `\p{…}` / `\P{…}` property: ends with `}` preceded by a `{…` opened by
+    // an unescaped `\p` / `\P`.
+    if b.last() == Some(&b'}') {
+        if let Some(open) = out.rfind('{') {
+            let pre = &out[..open];
+            let pb = pre.as_bytes();
+            if pb.len() >= 2
+                && matches!(pb[pb.len() - 1], b'p' | b'P')
+                && pb[pb.len() - 2] == b'\\'
+                && !is_escaped_backslash(pb, pb.len() - 2)
+            {
+                return true;
+            }
+        }
+    }
+    if b.len() < 2 {
+        return false;
+    }
+    let last = b[b.len() - 1];
+    b[b.len() - 2] == b'\\'
+        && !is_escaped_backslash(b, b.len() - 2)
+        && matches!(last, b'd' | b'D' | b'w' | b'W' | b's' | b'S')
+}
+
+/// Is the backslash at `b[bs]` itself escaped (i.e. preceded by an odd run of
+/// backslashes)? Used so `\\d` (literal backslash + `d`) isn't mistaken for the
+/// `\d` shorthand.
+fn is_escaped_backslash(b: &[u8], bs: usize) -> bool {
+    let mut count = 0usize;
+    let mut k = bs;
+    while k > 0 && b[k - 1] == b'\\' {
+        count += 1;
+        k -= 1;
+    }
+    count % 2 == 1
+}
+
+/// Will the next class member at `chars[i..]` (where `chars[i]` is a `\`) be a
+/// shorthand class (`\d`/`\w`/`\s` & negations, or `\p{…}`/`\P{…}`)? A `-`
+/// directly before such an element is a literal hyphen in JS.
+fn next_is_class_shorthand(chars: &[char], i: usize) -> bool {
+    if chars.get(i) != Some(&'\\') {
+        return false;
+    }
+    matches!(
+        chars.get(i + 1),
+        Some('d' | 'D' | 'w' | 'W' | 's' | 'S' | 'p' | 'P')
+    )
+}
+
 /// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
 /// Handles JS-specific escape sequences not supported by the Rust regex crate.
 /// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
 pub(super) fn js_regex_to_rust(pattern: &str) -> String {
-    let mut result = String::with_capacity(pattern.len());
-    let chars: Vec<char> = pattern.chars().collect();
+    let folded = fold_surrogate_pairs(pattern);
+    let mut result = String::with_capacity(folded.len());
+    let chars: Vec<char> = folded.chars().collect();
     let capture_spans = collect_capture_spans(&chars);
     let mut i = 0;
     // Track whether we're inside a `[...]` character class. JS and the Rust
@@ -256,8 +654,82 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                         i += 1 + digits;
                     }
                 }
+                'p' | 'P' if chars.get(i + 2) == Some(&'{') => {
+                    // `\p{Surrogate}` / `\p{gc=Cs}` (and the `\P{...}` negation)
+                    // name the UTF-16 surrogate code points, which can't occur in
+                    // the Unicode *scalar values* the Rust `regex` crate matches
+                    // over — so the crate rejects them as `invalid pattern`. Treat
+                    // the positive form as a never-matching class and the negated
+                    // form as "any scalar value". `string-width@7+` builds two
+                    // module-top-level regexes that include `\p{Surrogate}`, so
+                    // without this rewrite importing it (→ ink) throws at init.
+                    //
+                    // Properties of strings (`\p{RGI_Emoji}` and friends, #4889)
+                    // are likewise unrepresentable in the crate and expand to an
+                    // alternation over supported emoji properties. Negated or
+                    // in-class uses stay unsupported and pass through, so RegExp
+                    // construction throws a clear SyntaxError instead of
+                    // mis-compiling (Node also rejects `\P{RGI_Emoji}`).
+                    // All other properties pass through to the crate unchanged.
+                    match parse_unicode_property(&chars, i) {
+                        Some((value, negated, end)) if is_surrogate_property(&value) => {
+                            if in_class {
+                                // A never-matching member contributes nothing to a
+                                // class union; the negation matches every scalar.
+                                if negated {
+                                    result.push_str("\\s\\S");
+                                }
+                            } else if negated {
+                                result.push_str("[\\s\\S]");
+                            } else {
+                                result.push_str("[^\\s\\S]");
+                            }
+                            i = end;
+                        }
+                        Some((value, false, end))
+                            if !in_class && emoji_string_property_expansion(&value).is_some() =>
+                        {
+                            result.push_str(&emoji_string_property_expansion(&value).unwrap());
+                            i = end;
+                        }
+                        _ => {
+                            result.push('\\');
+                            result.push(chars[i + 1]);
+                            i += 2;
+                        }
+                    }
+                }
+                // A lone-surrogate `\uXXXX` (or `\uXXXX-\uYYYY` range) inside a
+                // character class: the crate rejects surrogate code points, so
+                // rewrite to the astral scalars whose UTF-16 encoding contains
+                // such a unit. es-toolkit's `truncate.js` builds
+                // `[‍\ud800-\udfff̀-...]` at module init (→ ink/#348);
+                // before this rewrite importing it threw `SyntaxError: invalid
+                // pattern`. Pairs (`💍`) were already folded by
+                // `fold_surrogate_pairs` and never reach this arm.
+                'u' if in_class => {
+                    if let Some((ranges, end)) = parse_class_surrogate_member(&chars, i) {
+                        emit_astral_class_members(&mut result, &ranges);
+                        i = end;
+                    } else {
+                        result.push('\\');
+                        result.push('u');
+                        i += 2;
+                    }
+                }
                 ch if is_regex_identity_escape(ch) => {
-                    push_escaped_literal(&mut result, ch);
+                    // Inside a character class an escaped hyphen `\-` is always a
+                    // literal hyphen, but the Rust `regex` crate reads a bare `-`
+                    // flanked by members as a range operator (so `[a\- ]` would
+                    // become the invalid range `[a- ]`). Keep the escape so it
+                    // stays a literal regardless of position. `marked`'s GFM
+                    // table-delimiter regex `[:\- ]` relies on this.
+                    if in_class && ch == '-' {
+                        result.push('\\');
+                        result.push('-');
+                    } else {
+                        push_escaped_literal(&mut result, ch);
+                    }
                     i += 2;
                 }
                 // Pass through all other backslash sequences as-is. (An escaped
@@ -277,11 +749,24 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
             if in_class {
                 result.push('\\');
                 result.push('[');
+                i += 1;
+            } else if chars.get(i + 1) == Some(&']') {
+                // JS: `[]` is an *empty* character class that never matches
+                // (the `]` immediately after `[` closes the class). The Rust
+                // `regex` crate rejects `[]`, so emit an unsatisfiable class.
+                result.push_str("[^\\s\\S]");
+                i += 2;
+            } else if chars.get(i + 1) == Some(&'^') && chars.get(i + 2) == Some(&']') {
+                // JS: `[^]` is a negated empty class — it matches *any* code
+                // point, including line terminators. Rust rejects `[^]`, so
+                // emit the equivalent `[\s\S]`.
+                result.push_str("[\\s\\S]");
+                i += 3;
             } else {
                 in_class = true;
                 result.push('[');
+                i += 1;
             }
-            i += 1;
         } else if chars[i] == ']' {
             // An unescaped `]` closes the current class (an escaped `\]` was
             // consumed by the backslash branch above and never reaches here).
@@ -303,10 +788,252 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                 result.push(chars[i]);
                 i += 1;
             }
+        } else if in_class
+            && chars[i] == '-'
+            && (out_ends_with_class_shorthand(&result) || next_is_class_shorthand(&chars, i + 1))
+        {
+            // Inside a class, a `-` adjacent to a shorthand class (`\d`, `\w`,
+            // `\s`, …, or a `\p{…}` property) is a *literal* hyphen in JS — a
+            // shorthand can't be a range bound. The Rust `regex` crate instead
+            // tries to read `\w-\.` / `\d-z` as a range and rejects it with a
+            // `ClassRangeLiteral` parse error. Escape the hyphen so it stays a
+            // literal. joi's URI validator (`[\w-\.~%\dA-Fa-f…]`, IPv6 host)
+            // and many other real-world classes rely on this.
+            result.push('\\');
+            result.push('-');
+            i += 1;
         } else {
             result.push(chars[i]);
             i += 1;
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::js_regex_to_rust;
+
+    #[test]
+    fn surrogate_property_rewrites_to_never_match() {
+        // #4884: the Rust `regex` crate matches Unicode scalar values, which
+        // exclude surrogate code points, so it rejects `\p{Surrogate}` outright.
+        // The positive form is rewritten to a never-matching class and the
+        // negation to "any scalar value".
+        assert_eq!(js_regex_to_rust(r"\p{Surrogate}"), r"[^\s\S]");
+        assert_eq!(js_regex_to_rust(r"\P{Surrogate}"), r"[\s\S]");
+        // The `gc=Cs` / `General_Category=Surrogate` spellings normalize the same.
+        assert_eq!(js_regex_to_rust(r"\p{gc=Cs}"), r"[^\s\S]");
+        assert_eq!(
+            js_regex_to_rust(r"\p{General_Category=Surrogate}"),
+            r"[^\s\S]"
+        );
+        // Inside a class the positive form drops (a never-matching member adds
+        // nothing to the union); the negation contributes "any scalar value".
+        assert_eq!(
+            js_regex_to_rust(r"[\p{Control}\p{Surrogate}]"),
+            r"[\p{Control}]"
+        );
+        assert_eq!(js_regex_to_rust(r"[\P{Surrogate}]"), r"[\s\S]");
+        // Every other property passes through to the crate unchanged.
+        assert_eq!(js_regex_to_rust(r"\p{Control}"), r"\p{Control}");
+        assert_eq!(js_regex_to_rust(r"\p{Script=Greek}"), r"\p{Script=Greek}");
+        assert_eq!(js_regex_to_rust(r"\pL"), r"\pL");
+
+        // The two `string-width@7+` module-top-level regexes (→ ink, #348) that
+        // threw `SyntaxError: invalid pattern` at import must now compile under
+        // the Rust `regex` crate.
+        for pat in [
+            r"^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Format}|\p{Mark}|\p{Surrogate})+$",
+            r"^[\p{Default_Ignorable_Code_Point}\p{Control}\p{Format}\p{Mark}\p{Surrogate}]+",
+        ] {
+            let translated = js_regex_to_rust(pat);
+            assert!(
+                regex::Regex::new(&translated).is_ok(),
+                "string-width pattern failed to compile: {pat} -> {translated}"
+            );
+        }
+    }
+
+    #[test]
+    fn class_lone_surrogate_range_rewrites_to_astral() {
+        // es-toolkit `truncate.js` (→ ink, #348/#4950 verification): a class
+        // mixing BMP members with the full surrogate range must compile and
+        // detect astral characters like Node does (over well-formed strings).
+        let pat =
+            "[\\u200d\\ud800-\\udfff\\u0300-\\u036f\\ufe20-\\ufe2f\\u20d0-\\u20ff\\ufe0e\\ufe0f]";
+        let translated = js_regex_to_rust(pat);
+        let re = regex::Regex::new(&translated)
+            .unwrap_or_else(|e| panic!("es-toolkit class failed to compile: {translated}: {e}"));
+        assert!(re.is_match("a\u{1F48D}b"), "astral char must match");
+        assert!(re.is_match("a\u{200D}b"), "ZWJ member must still match");
+        assert!(!re.is_match("plain ascii"), "ASCII must not match");
+
+        // Full surrogate range alone → all astral scalars.
+        assert_eq!(
+            js_regex_to_rust("[\\ud800-\\udfff]"),
+            "[\\x{10000}-\\x{10ffff}]"
+        );
+        // High-only subrange → the contiguous astral block(s) it leads.
+        assert_eq!(
+            js_regex_to_rust("[\\ud800-\\ud801]"),
+            "[\\x{10000}-\\x{107ff}]"
+        );
+        // A high singleton matches the astral block led by that unit:
+        // `/[\ud83d]/.test("💍")` is true in JS.
+        let high_single = js_regex_to_rust("[\\ud83d]");
+        let re = regex::Regex::new(&high_single).unwrap();
+        assert!(re.is_match("\u{1F48D}"));
+        assert!(!re.is_match("\u{10000}"));
+        // Low-only subranges are striped sets, emitted exactly:
+        // `/[\udc8d]/.test("💍")` is true in JS (matches the low unit).
+        let low_single = js_regex_to_rust("[\\udc8d]");
+        let re = regex::Regex::new(&low_single).unwrap();
+        assert!(re.is_match("\u{1F48D}"));
+        assert!(!re.is_match("\u{1F48E}"));
+        // Surrogate-to-nonsurrogate ranges stay untouched (still invalid).
+        assert_eq!(js_regex_to_rust("[\\ud800-z]"), "[\\ud800-z]");
+    }
+
+    #[test]
+    fn rgi_emoji_string_property_expands_and_matches_like_node() {
+        // #4889: `string-width@7+` builds `/^\p{RGI_Emoji}$/v` at module top
+        // level (→ ink, #348). The expected values below were verified against
+        // Node's /v implementation.
+        let translated = js_regex_to_rust(r"^\p{RGI_Emoji}$");
+        let re = regex::Regex::new(&translated)
+            .unwrap_or_else(|e| panic!("RGI_Emoji expansion failed to compile: {translated}: {e}"));
+        for s in [
+            "\u{1F44D}",                                   // 👍 default presentation
+            "\u{1F600}",                                   // 😀
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", // 👨‍👩‍👧 ZWJ family
+            "\u{1F1EC}\u{1F1E7}",                          // 🇬🇧 flag pair
+            "1\u{FE0F}\u{20E3}",                           // 1️⃣ keycap
+            "#\u{FE0F}\u{20E3}",                           // #️⃣ keycap
+            "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}", // 🏴󠁧󠁢󠁥󠁮󠁧󠁿 tag seq
+            "\u{1F44D}\u{1F3FB}",                          // 👍🏻 skin tone
+            "\u{2764}\u{FE0F}",                            // ❤️ text-default + VS16
+            "\u{2764}\u{FE0F}\u{200D}\u{1F525}",           // ❤️‍🔥 VS16 inside ZWJ seq
+            "\u{1F3F4}\u{200D}\u{2620}\u{FE0F}",           // 🏴‍☠️ pirate flag
+            "\u{1F9D4}\u{200D}\u{2640}\u{FE0F}",           // 🧔‍♀️ modifier-base, unmodified
+            "\u{1F3FB}",                                   // 🏻 lone skin tone IS Basic_Emoji
+        ] {
+            assert!(re.is_match(s), "expected RGI_Emoji match for {s:?}");
+        }
+        for s in [
+            "ab",
+            "a",
+            "0", // keycap base alone is not an emoji
+            "#",
+            "\u{1F1EC}",  // 🇬 lone regional indicator
+            "\u{1F44D}x", // anchored: emoji + trailing char
+            "",
+            "\u{2601}", // ☁ text-default without VS16
+            "\u{A9}",   // © text-default without VS16
+        ] {
+            assert!(!re.is_match(s), "expected no RGI_Emoji match for {s:?}");
+        }
+
+        // The sibling properties of strings expand too.
+        let zwj = regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_ZWJ_Sequence}$")).unwrap();
+        assert!(zwj.is_match("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"));
+        assert!(!zwj.is_match("\u{1F44D}")); // a ZWJ sequence needs ≥2 elements
+        let keycap = regex::Regex::new(&js_regex_to_rust(r"^\p{Emoji_Keycap_Sequence}$")).unwrap();
+        assert!(keycap.is_match("1\u{FE0F}\u{20E3}"));
+        assert!(!keycap.is_match("1"));
+        let basic = regex::Regex::new(&js_regex_to_rust(r"^\p{Basic_Emoji}$")).unwrap();
+        assert!(basic.is_match("\u{2601}\u{FE0F}"));
+        assert!(!basic.is_match("\u{2601}"));
+        let flag = regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_Flag_Sequence}$")).unwrap();
+        assert!(flag.is_match("\u{1F1EC}\u{1F1E7}"));
+        let tag = regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_Tag_Sequence}$")).unwrap();
+        assert!(tag.is_match("\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}"));
+        let modseq =
+            regex::Regex::new(&js_regex_to_rust(r"^\p{RGI_Emoji_Modifier_Sequence}$")).unwrap();
+        assert!(modseq.is_match("\u{1F44D}\u{1F3FB}"));
+
+        // Negated / in-class forms stay unsupported: they pass through
+        // unchanged so RegExp construction throws a clear SyntaxError instead
+        // of mis-compiling. (Node rejects `\P{RGI_Emoji}` too.)
+        assert_eq!(js_regex_to_rust(r"\P{RGI_Emoji}"), r"\P{RGI_Emoji}");
+        assert_eq!(js_regex_to_rust(r"[\p{RGI_Emoji}]"), r"[\p{RGI_Emoji}]");
+        assert!(regex::Regex::new(r"\P{RGI_Emoji}").is_err());
+        assert!(fancy_regex::Regex::new(r"\P{RGI_Emoji}").is_err());
+    }
+
+    #[test]
+    fn trivial_char_class_compiles_and_matches() {
+        // Regression for the winston/`@colors/colors` tail: a trivial, valid
+        // character class must translate and compile (and *not* be rejected by
+        // the invalid-pattern guard). `[0m]` matches `0` or `m`.
+        let translated = js_regex_to_rust("[0m]");
+        let re = regex::Regex::new(&translated).expect("[0m] must compile");
+        assert!(re.is_match("0"));
+        assert!(re.is_match("m"));
+        assert!(!re.is_match("x"));
+        // The `@colors/colors` ANSI-strip literal `\x1B\[\d+m` and the
+        // escaped-bracket form `\x1B\[0m` (`escapeStringRegexp` output) compile.
+        for pat in [r"\x1B\[\d+m", r"\x1B\[0m"] {
+            assert!(
+                regex::Regex::new(&js_regex_to_rust(pat)).is_ok(),
+                "ANSI pattern must compile: {pat}"
+            );
+        }
+        // Neither trips the bounded-quantifier false-positive guard.
+        assert!(!super::has_invalid_repeated_quantifier("[0m]"));
+        assert!(!super::has_invalid_repeated_quantifier(r"\x1B\[\d+m"));
+    }
+
+    #[test]
+    fn bounded_quantifier_in_class_not_rejected() {
+        // semver's ReDoS-hardened `safeRe` rewrites `\d+`→`\d{1,N}`,
+        // `\s*`→`\s{0,1}`, `[…]*`→`[…]{0,N}`. These bounded quantifiers are
+        // valid and must NOT be flagged by `has_invalid_repeated_quantifier`.
+        for pat in [
+            r"\d{1,16}",
+            r"\s{0,1}",
+            r"\d{0,256}",
+            r"[a-zA-Z0-9-]{0,250}",
+            r"(?:<|>)?=?",
+            r"a{0,1}",
+        ] {
+            assert!(
+                !super::has_invalid_repeated_quantifier(pat),
+                "valid bounded quantifier wrongly rejected: {pat}"
+            );
+        }
+        // A genuinely-dangling quantifier (no preceding atom) is still caught.
+        assert!(super::has_invalid_repeated_quantifier("{0,1}"));
+        assert!(super::has_invalid_repeated_quantifier("*abc"));
+    }
+
+    #[test]
+    fn class_hyphen_adjacent_to_shorthand_is_literal() {
+        // joi's URI validator builds classes like `[\w-\.~%\dA-Fa-f…]` where a
+        // `-` sits next to a `\w`/`\d` shorthand. In JS that `-` is a literal
+        // hyphen (a shorthand can't bound a range); the Rust `regex` crate
+        // would otherwise reject `\w-` as `ClassRangeLiteral`. The hyphen must
+        // be escaped to `\-`.
+        for (src, expect) in [
+            (r"[\w-\.]", r"[\w\-\.]"),
+            (r"[\d-z]", r"[\d\-z]"),
+            (r"[a\w-]", r"[a\w\-]"),
+            (r"[a-\d]", r"[a\-\d]"),
+            (r"[\p{L}-x]", r"[\p{L}\-x]"),
+        ] {
+            assert_eq!(js_regex_to_rust(src), expect, "src={src}");
+            assert!(
+                regex::Regex::new(&js_regex_to_rust(src)).is_ok(),
+                "must compile: {src}"
+            );
+        }
+        // An ordinary `a-z` range between two single literals is untouched.
+        assert_eq!(js_regex_to_rust("[a-z]"), "[a-z]");
+        // Outside a class, `-` is never escaped.
+        assert_eq!(js_regex_to_rust(r"\d-\w"), r"\d-\w");
+        // A `\w-\.` member must match `\w`, a literal `-`, and `.`.
+        let re = regex::Regex::new(&js_regex_to_rust(r"^[\w-\.]+$")).unwrap();
+        assert!(re.is_match("a-b.c_d"));
+        assert!(!re.is_match("a b"));
+    }
 }

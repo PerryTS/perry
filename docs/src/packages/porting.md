@@ -8,10 +8,34 @@ Perry compiles a practical subset of TypeScript. Most pure TS/JS packages can be
 
 | Situation | Try this first |
 |-----------|---------------|
-| Package uses native addons (`.node` files, `binding.gyp`, `node-gyp`) | **Don't port** — no path forward. Find an alternative package or use the [QuickJS fallback](../stdlib/overview.md#javascript-runtime-fallback). |
+| Package uses Node native addons (`.node` files, `binding.gyp`, `prebuilds/`, `node-gyp`) | **Don't put it in `compilePackages`.** Find a pure JS/TS alternative, or replace the native boundary with a Perry native binding (`perry.nativeLibrary`). |
 | Package is pure TS/JS with only light use of dynamic features | **Good candidate.** Add to `compilePackages`, patch whatever trips the compiler. |
 | Package's core API is built on `Proxy` (ORMs, validation DSLs, reactive stores) | **Probably not portable.** The surface Perry-users touch is the Proxy. |
 | Package is pure TS/JS but uses lookbehind regex, `Symbol`, `WeakMap`, etc. | **Patchable.** See [Common gaps](#common-gaps) below. |
+
+## Native addon packages
+
+`compilePackages` is only for JavaScript and TypeScript packages. It
+does not make Node native addons portable.
+
+Packages that ship `.node` files, `binding.gyp`, `prebuilds/`, or a
+`"gypfile"` package marker are compiled against Node's native addon
+ABI. The JavaScript entry point is usually just loader glue around a
+shared library that expects Node-API/N-API, NAN, V8, libuv, or Node
+internals. Perry does not host that ABI as part of `compilePackages`.
+Common examples in this category include `node-pty`, `sharp`,
+`better-sqlite3`, and `sqlite3`.
+
+For those packages, use one of these paths instead:
+
+- choose a pure JS/TS dependency that Perry can compile;
+- keep the feature unsupported for the native Perry build;
+- write or install a thin Perry native binding that exposes the public
+  package API through `perry.nativeLibrary`.
+
+The last option should replace only the native boundary. It should not
+rewrite a whole npm package in Rust unless the package is already just a
+small native facade.
 
 ### Known-working packages
 

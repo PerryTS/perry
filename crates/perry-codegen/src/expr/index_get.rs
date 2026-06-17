@@ -30,11 +30,12 @@ use crate::type_analysis::{
     is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
+use super::arrays_finds::lower_buffer_index_get_i32;
 #[allow(unused_imports)]
 use super::{
-    buffer_access_materialization_reason, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
+    buffer_access_materialization_reason, buffer_alias_metadata_suffix,
     emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
     emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
@@ -66,6 +67,123 @@ fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool
                 | "Float64Array"
         )
     )
+}
+
+fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(
+        receiver_class_name(ctx, object).as_deref(),
+        Some("Buffer" | "Uint8Array")
+    )
+}
+
+fn numeric_index_needs_runtime_key(index: &Expr) -> bool {
+    // Only a LITERAL numeric key that is not a clean array index in
+    // `0..=i32::MAX` needs the runtime key helper: out-of-range/negative
+    // integers (`a[2**32-1]`, `a[-1]`), non-integer floats (`a[1.5]`), and
+    // non-finite values (`a[NaN]`/`a[Infinity]`). These become string-keyed
+    // properties and must reach `js_array_*_index_or_string`.
+    //
+    // Computed/dynamic numeric indices are deliberately NOT rerouted here:
+    // they keep flowing through the typed-feedback numeric-array guard path,
+    // which already carries its own out-of-range/non-integer fallback. Sending
+    // them to the runtime key helper would defeat the native numeric-array hot
+    // path and drop the index guard (regressing the native-region proof and
+    // the typed-feedback hot-path tests). (#4557/#4543)
+    match index {
+        Expr::Integer(i) => *i < 0 || *i > i32::MAX as i64,
+        Expr::Number(n) => {
+            !(n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64)
+        }
+        _ => false,
+    }
+}
+
+fn is_async_dispose_symbol_index(index: &Expr) -> bool {
+    let Expr::SymbolFor(symbol_name) = index else {
+        return false;
+    };
+    match symbol_name.as_ref() {
+        Expr::String(name) => name == "@@__perry_wk_asyncDispose",
+        Expr::WtfString(name) => name.as_slice() == b"@@__perry_wk_asyncDispose",
+        _ => false,
+    }
+}
+
+/// True when `object` evaluates to an INT32-tagged class ref or class
+/// prototype ref (NaN-box tag `0x7FFE`) rather than a heap-pointer object.
+/// Such values must reach `js_object_get_field_by_name` with their tag bits
+/// intact — masking with `POINTER_MASK_I64` strips the `0x7FFE` tag and the
+/// runtime never routes to the class-static-accessor / prototype-vtable
+/// lookup, so `(class { static get 0(){} })['0']` reads `undefined`.
+///
+/// Covers three shapes:
+///   * `Expr::ClassRef` / imported-class `ExternFuncRef` — a class ref value.
+///   * `LocalGet` of a local aliased to a class (`var C = class {…}` lowers to
+///     `Let { init: ClassRef }`, recording `local_class_aliases["C"] = "C"`).
+///     A literal member name (`C.x`) folds to `PropertyGet` and resolves on its
+///     own, but an integer-like / empty key stays an `IndexGet` and lands here.
+///   * `C.prototype` of either of the above — a prototype ref value, so
+///     `C.prototype['']` reaches the instance-vtable getter.
+pub(crate) fn index_object_is_class_or_proto_ref(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    match object {
+        Expr::ClassRef(_) => true,
+        Expr::ExternFuncRef { name, .. } => ctx.class_ids.contains_key(name),
+        Expr::LocalGet(id) => ctx
+            .local_id_to_name
+            .get(id)
+            .and_then(|name| ctx.local_class_aliases.get(name))
+            .map(|cls| ctx.class_ids.contains_key(cls))
+            .unwrap_or(false),
+        Expr::PropertyGet {
+            object: inner,
+            property,
+        } if property.as_str() == "prototype" => {
+            index_object_is_class_or_proto_ref(ctx, inner.as_ref())
+        }
+        _ => false,
+    }
+}
+
+/// Compute the receiver handle to pass to `js_object_get_field_by_name`-family
+/// helpers from a NaN-boxed receiver value (`obj_bits`). Heap objects must be
+/// masked to a raw pointer, but an INT32-tagged class ref (`0x7FFE`) must keep
+/// its tag bits so the runtime routes to the static field / method / accessor
+/// tables. When the receiver's class-ref-ness is known at compile time
+/// (`static_known`), pass full bits unconditionally; otherwise branch at runtime
+/// on the tag so a runtime class-ref value (e.g. a function parameter bound to a
+/// class — `function f(C, k){ return C[k]; }`) is handled too. (test262
+/// class/elements propertyHelper `isWritable(C, name)` does `C[name]`.)
+pub(crate) fn classref_preserving_handle(
+    blk: &mut crate::block::LlBlock,
+    obj_bits: &str,
+    static_known: bool,
+) -> String {
+    if static_known {
+        return obj_bits.to_string();
+    }
+    let top16 = blk.lshr(I64, obj_bits, "48");
+    let is_classref = blk.icmp_eq(I64, &top16, "32766"); // 0x7FFE
+    let masked = blk.and(I64, obj_bits, POINTER_MASK_I64);
+    blk.select(crate::types::I1, &is_classref, I64, obj_bits, &masked)
+}
+
+fn lower_class_method_bind(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    method_name: &str,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    let key_idx = ctx.strings.intern(method_name);
+    let entry = ctx.strings.entry(key_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let len_str = entry.byte_len.to_string();
+    let blk = ctx.block();
+    let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+    Ok(blk.call(
+        DOUBLE,
+        "js_class_method_bind",
+        &[(DOUBLE, &recv_box), (I64, &bytes_i64), (I64, &len_str)],
+    ))
 }
 
 fn lower_guarded_array_index_get(
@@ -172,11 +290,20 @@ fn lower_guarded_array_index_get(
     let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
     let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
     let fast_val = if require_numeric_layout {
-        fast_blk.call(
-            DOUBLE,
-            "js_array_numeric_get_f64_unboxed",
-            &[(I64, &arr_handle), (I32, idx_i32)],
-        )
+        // The `numeric_array_index_get_guard` on the way into this block already
+        // proved: a plain, non-forwarded `Array`, in raw-f64 numeric layout,
+        // with `index` in bounds (`plain_array_index_guard(.., in_bounds=true)`
+        // && `js_array_is_numeric_f64_layout`). So load the slot inline instead
+        // of calling `js_array_numeric_get_f64_unboxed`, whose hot path
+        // re-validates exactly those same conditions and then does this load.
+        // Raw-f64 arrays are dense (no HOLE slots) and the slot holds a raw f64,
+        // matching the runtime helper's `return *elements_ptr.add(index)`.
+        let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
+        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
+        let with_header = fast_blk.add(I64, &byte_offset, "8");
+        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
+        fast_blk.load(DOUBLE, &element_ptr)
     } else {
         let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
         let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
@@ -260,6 +387,16 @@ fn lower_bounded_array_index_get(
     let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
     let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
     let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
+    // Index accessors / custom attribute descriptors (`Object.defineProperty
+    // (arr, i, { get })`) divert element reads through the descriptor tables —
+    // the raw slot load below would bypass them (test262 sort/precise-*).
+    // GcHeader._reserved (u16 at -6) carries OBJ_FLAG_ARRAY_DESCRIPTORS=0x400.
+    let obj_flags_addr = blk.sub(I64, &arr_handle, "6");
+    let obj_flags_ptr = blk.inttoptr(I64, &obj_flags_addr);
+    let obj_flags = blk.load(I16, &obj_flags_ptr);
+    let desc_bits = blk.and(I16, &obj_flags, "1024");
+    let has_desc = blk.icmp_ne(I16, &desc_bits, "0");
+    let needs_slow = blk.or(I1, &needs_slow, &has_desc);
 
     let lazy_idx = ctx.new_block("bidx.lazy");
     let fast_idx = ctx.new_block("bidx.fast");
@@ -325,6 +462,16 @@ fn lower_legacy_array_index_get(
     let fwd_bits = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
     let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
     let needs_slow = blk.or(I1, &is_lazy, &is_fwd);
+    // Index accessors / custom attribute descriptors (`Object.defineProperty
+    // (arr, i, { get })`) divert element reads through the descriptor tables —
+    // the raw slot load below would bypass them (test262 sort/precise-*).
+    // GcHeader._reserved (u16 at -6) carries OBJ_FLAG_ARRAY_DESCRIPTORS=0x400.
+    let obj_flags_addr = blk.sub(I64, &arr_handle, "6");
+    let obj_flags_ptr = blk.inttoptr(I64, &obj_flags_addr);
+    let obj_flags = blk.load(I16, &obj_flags_ptr);
+    let desc_bits = blk.and(I16, &obj_flags, "1024");
+    let has_desc = blk.icmp_ne(I16, &desc_bits, "0");
+    let needs_slow = blk.or(I1, &needs_slow, &has_desc);
 
     let lazy_idx = ctx.new_block("arr.lazy");
     let fast_idx = ctx.new_block("arr.fast");
@@ -389,6 +536,11 @@ fn lower_legacy_array_index_get(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::IndexGet { object, index } => {
+            if receiver_class_name(ctx, object).as_deref() == Some("Server")
+                && is_async_dispose_symbol_index(index)
+            {
+                return lower_class_method_bind(ctx, object, "@@__perry_wk_asyncDispose");
+            }
             // Issue #611: `globalThis[<key>]` reads from the persistent
             // global-this singleton. Pre-fix, `Expr::GlobalGet` lowered
             // to the `0.0` sentinel and the generic IndexGet path called
@@ -476,6 +628,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     vec!["typed_array_fallback=untracked_or_unproven".to_string()],
                 );
                 return Ok(result);
+            }
+            if is_uint8array_receiver(ctx, object) && !is_numeric_expr(ctx, index) {
+                let arr_box = lower_expr(ctx, object)?;
+                let key_box = lower_expr(ctx, index)?;
+                let blk = ctx.block();
+                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_typed_array_index_get_dynamic",
+                    &[(I64, &arr_i64), (DOUBLE, &key_box)],
+                ));
+            }
+            if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {
+                let value = lower_buffer_index_get_i32(ctx, object, index)?;
+                let reason = buffer_access_materialization_reason(ctx, object);
+                return Ok(materialize_js_value(ctx, value, reason));
             }
             // Scalar-replaced array literal: `arr[k]` where arr was bound to
             // `[...]` and never escaped, and k is a compile-time index in
@@ -600,6 +769,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
                     ));
                 }
+                if !is_numeric_expr(ctx, index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_double = lower_expr(ctx, index)?;
+                    let arr_handle = {
+                        let blk = ctx.block();
+                        unbox_to_i64(blk, &arr_box)
+                    };
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_array_get_index_or_string",
+                        &[(I64, &arr_handle), (DOUBLE, &idx_double)],
+                    ));
+                }
+                if numeric_index_needs_runtime_key(index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_double = lower_expr(ctx, index)?;
+                    let arr_handle = {
+                        let blk = ctx.block();
+                        unbox_to_i64(blk, &arr_box)
+                    };
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_array_get_index_or_string",
+                        &[(I64, &arr_handle), (DOUBLE, &idx_double)],
+                    ));
+                }
                 let require_numeric_layout =
                     expr_has_numeric_pointer_free_array_layout(ctx, object);
                 // Bounded-index fast path (mirrors the IndexSet
@@ -662,12 +857,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Expr::String(literal) = index.as_ref() {
                 // Static string key: use the interned StringPool entry
                 // so we get the same handle as obj["foo"].
+                let preserve_class_ref_bits =
+                    index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let obj_box = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                let obj_handle =
+                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -689,10 +887,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // key may be an SSO value (e.g. from JSON.parse, .slice, or
                 // any short-string-producing op); the runtime fn dereferences
                 // it as `*StringHeader`. Issue #214 SSO bug class.
+                let preserve_class_ref_bits =
+                    index_object_is_class_or_proto_ref(ctx, object.as_ref());
                 let obj_box = lower_expr(ctx, object)?;
                 let key_box = lower_expr(ctx, index)?;
                 let blk = ctx.block();
-                let obj_handle = unbox_to_i64(blk, &obj_box);
+                let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+                let obj_handle =
+                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
                 let key_handle = unbox_str_handle(blk, &key_box);
                 let site_id = emit_typed_feedback_register_site(
                     ctx,
@@ -710,10 +912,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // First runtime-check whether the index is a Symbol; if so,
             // dispatch to the symbol-property side table — mirrors the
             // IndexSet branch. Otherwise fall through to string/numeric.
+            let preserve_class_ref_bits = index_object_is_class_or_proto_ref(ctx, object.as_ref());
             let obj_box = lower_expr(ctx, object)?;
             let idx_box = lower_expr(ctx, index)?;
+            // RequireObjectCoercible(base): `null[k]` / `undefined[k]` must throw
+            // a TypeError per spec, NOT silently return undefined. The dotted
+            // PropertyGet path already guards nullish receivers; the computed
+            // form fell through to the by-name runtime helper (masked handle
+            // `2`/`1`) which returned undefined. The check fires here — after
+            // both the base and the property-key *expression* are evaluated but
+            // before ToPropertyKey (key coercion / `toString`) — matching the
+            // ECMAScript evaluation order (test262 compound-assignment S11.13.2_A7.*,
+            // prefix/postfix increment A6). A non-nullish receiver passes through
+            // unchanged. (#4918 non-class language remnant.)
+            let obj_box =
+                ctx.block()
+                    .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
             let blk = ctx.block();
-            let obj_handle = unbox_to_i64(blk, &obj_box);
+            let obj_bits = blk.bitcast_double_to_i64(&obj_box);
+            let obj_handle = classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
             let is_sym_i32 = blk.call(I32, "js_is_symbol", &[(DOUBLE, &idx_box)]);
             let is_sym_bit = blk.icmp_ne(I32, &is_sym_i32, "0");
             let sym_idx = ctx.new_block("iget.sym");

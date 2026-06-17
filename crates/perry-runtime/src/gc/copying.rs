@@ -193,7 +193,7 @@ pub(super) unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> 
         return false;
     }
     let size = (*header).size as usize;
-    if size < GC_HEADER_SIZE || size > (1usize << 34) {
+    if size < GC_HEADER_SIZE || size as u64 > (1u64 << 34) {
         return false;
     }
     let is_arena = (*header).gc_flags & GC_FLAG_ARENA != 0;
@@ -994,6 +994,7 @@ pub(super) fn gc_collect_minor_copying_fast_path_with_eligibility(
     }
     remembered_set_clear();
     collector.sticky.restore();
+    restore_surviving_dirty_coverage(&snapshot);
     let malloc_freed_bytes = if malloc_sweep_due {
         let phase_start = trace_phase_start(trace);
         let freed = sweep_malloc_objects();

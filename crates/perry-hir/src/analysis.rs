@@ -10,12 +10,27 @@ use crate::walker::{walk_expr_children, walk_expr_children_mut};
 
 mod builtins;
 pub(crate) use builtins::{
-    builtin_constructor_length, builtin_static_function_length, is_builtin_function,
-    is_builtin_global_value_name, is_builtin_static_function_member,
+    builtin_constructor_length, builtin_global_function_length, builtin_static_function_length,
+    is_builtin_function, is_builtin_global_value_name, is_builtin_static_function_member,
 };
 
 mod uses_this;
-pub(crate) use uses_this::{closure_uses_this, uses_this_expr, uses_this_stmt};
+pub(crate) use uses_this::{
+    closure_uses_new_target, closure_uses_this, uses_new_target_expr, uses_new_target_stmt,
+    uses_this_expr, uses_this_stmt,
+};
+
+/// Whether a function BODY reads the dynamic `this` binding — directly via
+/// `Expr::This`, or through a nested arrow that captures it. Plain
+/// (non-method) functions resolve `this` through the runtime's
+/// `IMPLICIT_THIS` slot, so codegen uses this to decide which bare-call
+/// sites must reset that slot to `undefined` for the duration of the call
+/// (OrdinaryCallBindThis with no receiver — #3576). Function expressions
+/// with their own `this` binding (`captures_this == false` closures) don't
+/// propagate, matching `uses_this_expr`.
+pub fn body_reads_dynamic_this(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(uses_this_stmt)
+}
 
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///
@@ -371,6 +386,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 match elem {
                     ArrayElement::Expr(e) => collect_assigned_locals_expr(e, assigned),
                     ArrayElement::Spread(e) => collect_assigned_locals_expr(e, assigned),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -405,6 +421,43 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for arg in args {
+                collect_assigned_locals_expr(arg, assigned);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(value, assigned);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(value, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_assigned_locals_expr(home, assigned);
+            collect_assigned_locals_expr(key, assigned);
+            collect_assigned_locals_expr(receiver, assigned);
             for arg in args {
                 collect_assigned_locals_expr(arg, assigned);
             }
@@ -570,6 +623,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(index, assigned);
             collect_assigned_locals_expr(value, assigned);
         }
+        Expr::ArrayReverseValue { receiver } => {
+            if let Expr::LocalGet(id) = receiver.as_ref() {
+                assigned.push(*id);
+            }
+            collect_assigned_locals_expr(receiver, assigned);
+        }
         Expr::ArrayCopyWithin {
             array_id,
             target,
@@ -577,6 +636,19 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             end,
         } => {
             assigned.push(*array_id); // copyWithin modifies array in-place
+            collect_assigned_locals_expr(target, assigned);
+            collect_assigned_locals_expr(start, assigned);
+            if let Some(e) = end {
+                collect_assigned_locals_expr(e, assigned);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_assigned_locals_expr(receiver, assigned);
             collect_assigned_locals_expr(target, assigned);
             collect_assigned_locals_expr(start, assigned);
             if let Some(e) = end {
@@ -619,7 +691,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             collect_assigned_locals_expr(string, assigned);
             collect_assigned_locals_expr(delimiter, assigned);
         }
-        Expr::StringFromCharCode(code) => {
+        Expr::StringFromCharCode(code) | Expr::StringFromCharCodeSpread(code) => {
             collect_assigned_locals_expr(code, assigned);
         }
         // Map operations
@@ -670,6 +742,8 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         Expr::MathFloor(expr)
         | Expr::MathCeil(expr)
         | Expr::MathRound(expr)
+        | Expr::MathTrunc(expr)
+        | Expr::MathSign(expr)
         | Expr::MathAbs(expr)
         | Expr::MathSqrt(expr)
         | Expr::MathLog(expr)
@@ -943,6 +1017,12 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
                 collect_assigned_locals_expr(base_expr, assigned);
             }
         }
+        Expr::UrlPatternNew { input, base } => {
+            collect_assigned_locals_expr(input, assigned);
+            if let Some(base_expr) = base {
+                collect_assigned_locals_expr(base_expr, assigned);
+            }
+        }
         Expr::UrlGetHref(url)
         | Expr::UrlGetPathname(url)
         | Expr::UrlGetProtocol(url)
@@ -1045,6 +1125,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
+        | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::Number(_)
         | Expr::Integer(_)
@@ -1066,14 +1147,19 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         | Expr::GlobalThisExpr
         | Expr::NativeModuleRef(_)
         | Expr::RegExp { .. } => {}
-        Expr::ObjectKeys(obj) | Expr::ObjectValues(obj) | Expr::ObjectEntries(obj) => {
+        Expr::ObjectKeys(obj)
+        | Expr::ForInKeys(obj)
+        | Expr::ObjectValues(obj)
+        | Expr::ObjectEntries(obj) => {
             collect_assigned_locals_expr(obj, assigned);
         }
         Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn } => {
             collect_assigned_locals_expr(items, assigned);
             collect_assigned_locals_expr(key_fn, assigned);
         }
-        Expr::ArrayIsArray(value) | Expr::ArrayFrom(value) => {
+        Expr::ArrayIsArray(value)
+        | Expr::ArrayFrom(value)
+        | Expr::ArrayFromArrayLikeHoley(value) => {
             collect_assigned_locals_expr(value, assigned);
         }
         Expr::ArrayFromMapped {
@@ -1320,7 +1406,7 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             }
         }
         // Dynamic new expression
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             collect_assigned_locals_expr(callee, assigned);
             for arg in args {
                 collect_assigned_locals_expr(arg, assigned);
@@ -1336,12 +1422,16 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             collect_assigned_locals_expr(url, assigned);
             collect_assigned_locals_expr(method, assigned);
             collect_assigned_locals_expr(body, assigned);
             for (_, v) in headers {
                 collect_assigned_locals_expr(v, assigned);
+            }
+            if let Some(hd) = headers_dynamic {
+                collect_assigned_locals_expr(hd, assigned);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {
@@ -1369,6 +1459,130 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
 ///
 /// Does NOT recurse into nested closures — those have their own `this`
 /// binding and should keep referencing the outer class context.
+/// Substitute every LEXICAL `this` in `expr` with `replacement` — including
+/// inside arrow / `this`-capturing closure bodies (whose `this` is lexical),
+/// but NOT inside ordinary function-expression closures (own dynamic `this`).
+///
+/// Used by the class-decl static-field-init inline emission: per
+/// ClassDefinitionEvaluation a static initializer runs with `this` bound to
+/// the class constructor, but the inline `StaticFieldSet` stmts evaluate in
+/// module-init context where `this_stack` is empty and `Expr::This` would
+/// read the module's implicit `this` (test262 class/elements
+/// static-field-init-this-inside-arrow-function, class-name-static-initializer).
+pub fn substitute_lexical_this_in_expr(expr: &mut Expr, replacement: &Expr) {
+    match expr {
+        Expr::This => *expr = replacement.clone(),
+        Expr::Closure {
+            body,
+            captures_this,
+            params,
+            ..
+        } => {
+            if *captures_this {
+                for p in params.iter_mut() {
+                    if let Some(d) = &mut p.default {
+                        substitute_lexical_this_in_expr(d, replacement);
+                    }
+                }
+                substitute_lexical_this_in_stmts(body, replacement);
+                // The body no longer reads `this`; drop the reserved capture
+                // slot so the closure-cache key doesn't include a stale
+                // implicit-this snapshot.
+                *captures_this = false;
+            }
+        }
+        _ => crate::walker::walk_expr_children_mut(expr, &mut |child| {
+            substitute_lexical_this_in_expr(child, replacement)
+        }),
+    }
+}
+
+pub fn substitute_lexical_this_in_stmts(stmts: &mut [Stmt], replacement: &Expr) {
+    for s in stmts {
+        substitute_lexical_this_in_stmt(s, replacement);
+    }
+}
+
+fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
+    let mut on_expr = |e: &mut Expr| substitute_lexical_this_in_expr(e, replacement);
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                on_expr(e);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => on_expr(e),
+        Stmt::Return(e) => {
+            if let Some(e) = e {
+                on_expr(e);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            on_expr(condition);
+            substitute_lexical_this_in_stmts(then_branch, replacement);
+            if let Some(eb) = else_branch {
+                substitute_lexical_this_in_stmts(eb, replacement);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            on_expr(condition);
+            substitute_lexical_this_in_stmts(body, replacement);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                substitute_lexical_this_in_stmt(i, replacement);
+            }
+            if let Some(c) = condition {
+                on_expr(c);
+            }
+            if let Some(u) = update {
+                on_expr(u);
+            }
+            substitute_lexical_this_in_stmts(body, replacement);
+        }
+        Stmt::Labeled { body, .. } => substitute_lexical_this_in_stmt(body, replacement),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            substitute_lexical_this_in_stmts(body, replacement);
+            if let Some(c) = catch {
+                substitute_lexical_this_in_stmts(&mut c.body, replacement);
+            }
+            if let Some(f) = finally {
+                substitute_lexical_this_in_stmts(f, replacement);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            on_expr(discriminant);
+            for case in cases {
+                if let Some(t) = &mut case.test {
+                    substitute_lexical_this_in_expr(t, replacement);
+                }
+                substitute_lexical_this_in_stmts(&mut case.body, replacement);
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => {}
+    }
+}
+
 pub fn replace_this_in_stmts(stmts: &mut Vec<Stmt>, this_id: LocalId) {
     for s in stmts {
         replace_this_in_stmt(s, this_id);
@@ -1839,7 +2053,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                 replace_this_in_expr(a, this_id);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             replace_this_in_expr(callee, this_id);
             for a in args {
                 replace_this_in_expr(a, this_id);
@@ -1856,6 +2070,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => {
                         replace_this_in_expr(e, this_id)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1914,6 +2129,43 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for a in args {
+                replace_this_in_expr(a, this_id);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(receiver, this_id);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(value, this_id);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(value, this_id);
+            replace_this_in_expr(receiver, this_id);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            replace_this_in_expr(home, this_id);
+            replace_this_in_expr(key, this_id);
+            replace_this_in_expr(receiver, this_id);
             for a in args {
                 replace_this_in_expr(a, this_id);
             }

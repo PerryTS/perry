@@ -16,11 +16,62 @@
 
 use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
+
+/// Maximum overall `lower_expr` recursion depth before lowering bails with a
+/// diagnostic instead of overflowing the native stack (#5259).
+///
+/// Object-literal lowering intentionally supports very deep nested shapes
+/// (see `nested_object_literal_lowers_in_linear_time`). Keep this broad cap
+/// high enough for those fixtures; stack-heavy chain forms are guarded by the
+/// lower `MAX_EXPR_CHAIN_LOWER_DEPTH` limit below.
+pub(crate) const MAX_EXPR_LOWER_DEPTH: u32 = 8192;
+
+/// Stack-heavy expression chains (`1+1+…`, `o.a.a.…`, `a||a||…`) recurse with
+/// larger lowerer frames than object literals. This lower shape-specific cap
+/// converts degenerate chain input into a diagnostic before debug/CI stacks can
+/// overflow, without rejecting supported deep object-literal fixtures.
+pub(crate) const MAX_EXPR_CHAIN_LOWER_DEPTH: u32 = 512;
+
+const EXPR_LOWER_STACK_RED_ZONE: usize = 256 * 1024;
+const EXPR_LOWER_STACK_SEGMENT: usize = 2 * 1024 * 1024;
+
+fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
+    match member.kind {
+        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            method_name: member.function.name.clone(),
+            is_static: member.is_static,
+            param_count: member.function.params.len() as u32,
+            has_rest: member
+                .function
+                .params
+                .last()
+                .map(|p| p.is_rest)
+                .unwrap_or(false),
+        },
+        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: Some(member.function.name.clone()),
+            setter_name: None,
+            is_static: member.is_static,
+        },
+        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
+            class_name: class_name.to_string(),
+            key_expr: Box::new(member.key_expr.clone()),
+            getter_name: None,
+            setter_name: Some(member.function.name.clone()),
+            is_static: member.is_static,
+        },
+    }
+}
 
 pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     Expr::Call {
@@ -31,6 +82,7 @@ pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
         }),
         args: Vec::new(),
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 
@@ -42,6 +94,7 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "globalThis"
             | "Buffer"
             | "Date"
+            | "Intl"
             | "JSON"
             | "Math"
             | "Object"
@@ -86,9 +139,12 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "URL"
             | "URLSearchParams"
             | "AbortController"
+            | "Blob"
             | "FormData"
             | "File"
             | "Headers"
+            | "Request"
+            | "Response"
             | "fetch"
             | "crypto"
             | "performance"
@@ -98,7 +154,17 @@ fn is_known_global_identifier_name(name: &str) -> bool {
             | "btoa"
             | "BigInt"
             | "WebAssembly"
+            // TC39 Temporal namespace (#4686) — a bare `Temporal` resolves to
+            // `globalThis.Temporal`.
+            | "Temporal"
     ) || is_builtin_global_value_name(name)
+}
+
+fn is_fetch_global_value_name(name: &str) -> bool {
+    matches!(
+        name,
+        "fetch" | "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
+    )
 }
 
 fn is_cjs_style_native_default_import(module_name: &str) -> bool {
@@ -106,10 +172,12 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
         module_name,
         "async_hooks"
             | "child_process"
+            | "cluster"
             | "constants"
             | "dns"
             | "dns/promises"
             | "events"
+            | "module"
             | "os"
             | "path"
             | "path/posix"
@@ -122,6 +190,83 @@ fn is_cjs_style_native_default_import(module_name: &str) -> bool {
     )
 }
 
+fn wrap_with_gets(property: &str, fallback: Expr, envs: Vec<LocalId>) -> Expr {
+    envs.into_iter()
+        .rev()
+        .fold(fallback, |fallback, env_id| Expr::WithGet {
+            object: Box::new(Expr::LocalGet(env_id)),
+            property: property.to_string(),
+            fallback: Box::new(fallback),
+        })
+}
+
+/// The HOLE-sentinel `Stmt::Let` for a with-fallback implicit global,
+/// emitted just ahead of the with statement that minted it.
+pub(crate) fn with_implicit_unset_let(id: LocalId, name: String) -> Stmt {
+    Stmt::Let {
+        id,
+        name,
+        ty: Type::Any,
+        mutable: true,
+        init: Some(Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_with_implicit_unset".to_string(),
+                param_types: vec![],
+                return_type: Type::Any,
+            }),
+            args: vec![],
+            type_args: vec![],
+            byte_offset: 0,
+        }),
+    }
+}
+
+pub(crate) fn with_set_fallback_for_ident(
+    ctx: &mut LoweringContext,
+    name: &str,
+) -> WithSetFallback {
+    if let Some(id) = ctx.lookup_local(name) {
+        if ctx.is_local_immutable(id) {
+            WithSetFallback::ThrowConstAssignment
+        } else {
+            WithSetFallback::Local(id)
+        }
+    } else if ctx.lookup_class(name).is_some() || ctx.lookup_func(name).is_some() {
+        WithSetFallback::Ignore
+    } else if ctx.current_strict {
+        WithSetFallback::ThrowReferenceError
+    } else {
+        eprintln!(
+            "  Warning: Assignment to undeclared variable '{}', creating implicit local",
+            name
+        );
+        // Sloppy implicit global — must survive the with-body block scope so
+        // reads AFTER the with statement resolve to the same binding
+        // (`with (o) { result = f(); } … use result` — test262 S13.2.2_A19).
+        // Whether the binding materialises is decided at RUNTIME (the env may
+        // own the property and take the write — with/12.10-0-7), so the local
+        // starts as a HOLE sentinel and reads check it.
+        let id = ctx.define_sloppy_implicit_global(name.to_string());
+        ctx.with_sloppy_implicit_ids.insert(id, name.to_string());
+        ctx.pending_with_implicit_inits.push((id, name.to_string()));
+        WithSetFallback::SloppyImplicit(id)
+    }
+}
+
+fn anonymous_class_has_static_name_member(class: &ast::Class) -> bool {
+    class.body.iter().any(|member| match member {
+        ast::ClassMember::Method(method) if method.is_static => {
+            matches!(&method.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&method.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        ast::ClassMember::ClassProp(prop) if prop.is_static => {
+            matches!(&prop.key, ast::PropName::Ident(ident) if ident.sym.as_ref() == "name")
+                || matches!(&prop.key, ast::PropName::Str(s) if s.value.as_str() == Some("name"))
+        }
+        _ => false,
+    })
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -130,6 +275,16 @@ pub(crate) fn lower_expr_assignment(
     match expr {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
+            if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
+                let fallback = with_set_fallback_for_ident(ctx, &name);
+                return Ok(Expr::WithSet {
+                    object: Box::new(Expr::LocalGet(env_id)),
+                    property: name,
+                    value,
+                    fallback,
+                    strict: ctx.current_strict,
+                });
+            }
             if let Some(id) = ctx.lookup_local(&name) {
                 Ok(Expr::LocalSet(id, value))
             } else if ctx.lookup_class(&name).is_some() || ctx.lookup_func(&name).is_some() {
@@ -151,11 +306,30 @@ pub(crate) fn lower_expr_assignment(
                     ]));
                 }
                 eprintln!(
-                    "  Warning: Assignment to undeclared variable '{}', creating implicit local",
+                    "  Warning: Assignment to undeclared variable '{}', creating sloppy global",
                     name
                 );
-                let id = ctx.define_local(name, Type::Any);
-                Ok(Expr::LocalSet(id, value))
+                // Sloppy implicit global: the binding IS a property of
+                // globalThis (spec CreateGlobalVarBinding on the global
+                // object), so `foo = 1` must be visible as
+                // `globalThis.foo`, write through to a pre-existing global
+                // property, and observe a later `delete globalThis.foo`.
+                // Reads of the name resolve through the
+                // `js_global_get_or_throw_unresolved` fallback, so no
+                // module-local shadow may be created here (a stale local
+                // would keep serving deleted/overwritten values).
+                // NOTE: `GlobalGet(0)` alone is a by-name routing SENTINEL in
+                // codegen (bare reads lower to 0.0) — the write must target
+                // the VALUE globalThis, which the `PropertyGet { GlobalGet(0),
+                // "globalThis" }` shape resolves to the real global object.
+                Ok(Expr::PropertySet {
+                    object: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: "globalThis".to_string(),
+                    }),
+                    property: name,
+                    value,
+                })
             }
         }
         ast::Expr::Member(member) => {
@@ -174,7 +348,8 @@ pub(crate) fn lower_expr_assignment(
                     }
                 }
             }
-            let object = Box::new(lower_expr(ctx, &member.obj)?);
+            let object_expr = lower_expr(ctx, &member.obj)?;
+            let object = Box::new(object_expr.clone());
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
@@ -197,22 +372,32 @@ pub(crate) fn lower_expr_assignment(
                             proto: value,
                         });
                     }
-                    Ok(Expr::PropertySet {
-                        object,
-                        property,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: Box::new(Expr::String(property)),
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                    Ok(Expr::IndexSet {
-                        object,
-                        index,
+                    Ok(Expr::PutValueSet {
+                        target: object.clone(),
+                        key: index,
                         value,
+                        receiver: object,
+                        strict: ctx.current_strict,
                     })
                 }
                 ast::MemberProp::PrivateName(private) => {
                     let property = format!("#{}", private.name);
+                    let object = expr_member::wrap_private_guard(
+                        ctx,
+                        object,
+                        &property,
+                        expr_member::PRIV_OP_WRITE,
+                    );
                     Ok(Expr::PropertySet {
                         object,
                         property,
@@ -234,74 +419,205 @@ pub(crate) fn lower_expr_assignment(
     }
 }
 
+/// Lower a bare identifier that is bound to a native module (via a named or
+/// namespace import — `import { relative } from 'path'`, `import * as os from
+/// 'os'`) to the value-expression it denotes.
+///
+/// Used both from the identifier expression path and from object-literal
+/// shorthand resolution (`{ relative }` — #5242), so a native-module-bound
+/// name produces the same callable/property value whether it appears as a
+/// standalone reference or as a shorthand property. The caller must ensure
+/// `ctx.lookup_native_module(name)` is `Some`.
+pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> Expr {
+    let (module_name, method_name) = match ctx.lookup_native_module(name) {
+        Some(v) => v,
+        None => return Expr::Undefined,
+    };
+    if module_name == "os" || module_name == "node:os" {
+        if let Some(method) = method_name {
+            match method {
+                "EOL" => return Expr::OsEOL,
+                "devNull" => return Expr::OsDevNull,
+                _ => {}
+            }
+        }
+    }
+    if module_name == "buffer" || module_name == "node:buffer" {
+        if let Some(method) = method_name {
+            if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
+                return Expr::PropertyGet {
+                    object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
+                    property: method.to_string(),
+                };
+            }
+        }
+    }
+    // Special handling for worker_threads named imports
+    if module_name == "worker_threads" {
+        if let Some(method) = method_name {
+            if method == "workerData" {
+                return Expr::PropertyGet {
+                    object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
+                    property: "workerData".to_string(),
+                };
+            }
+        }
+    }
+    if let Some(method) = method_name {
+        // #3946: a `node:process` *property* imported by name
+        // (`import { pid, arch } from "node:process"`) must read
+        // the live process value, not a generic native-module
+        // PropertyGet (which resolved to `undefined`). Methods
+        // fall through to the callable native-module ref below.
+        if module_name == "process" {
+            if let Some(e) = expr_member::lower_process_named_property(method) {
+                return e;
+            }
+        }
+        return Expr::PropertyGet {
+            object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+            property: method.to_string(),
+        };
+    }
+    if ctx.lookup_builtin_module_alias(name).is_none()
+        && is_cjs_style_native_default_import(module_name)
+    {
+        return Expr::PropertyGet {
+            object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+            property: "default".to_string(),
+        };
+    }
+    // Native module reference (e.g., mysql from 'mysql2/promise')
+    Expr::NativeModuleRef(module_name.to_string())
+}
+
+fn expr_uses_stack_heavy_chain_lowering(expr: &ast::Expr) -> bool {
+    matches!(expr, ast::Expr::Bin(_) | ast::Expr::Member(_))
+}
+
+/// Re-lowering diagnostics, fully gated behind the `PERRY_TRACE_RELOWER` env
+/// var (zero overhead unless set). Counts every `lower_expr` invocation keyed
+/// by source span, so a span lowered far more than once flags redundant
+/// re-lowering (the classic source of super-linear HIR-lowering blowup on
+/// minified bundles). On every N-million calls — and so still on a kill — it
+/// dumps the total/distinct counts and the top re-lowered spans to stderr.
+/// Kept (env-gated) as a standing diagnostic for future lowering perf work.
+pub(crate) mod relower_trace {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+    static INIT: AtomicBool = AtomicBool::new(false);
+    static TOTAL: AtomicU64 = AtomicU64::new(0);
+
+    thread_local! {
+        static SPANS: RefCell<HashMap<(u32, u32), u32>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn enabled() -> bool {
+        if !INIT.load(Ordering::Relaxed) {
+            let on = std::env::var("PERRY_TRACE_RELOWER").is_ok();
+            ENABLED.store(on, Ordering::Relaxed);
+            INIT.store(true, Ordering::Relaxed);
+        }
+        ENABLED.load(Ordering::Relaxed)
+    }
+
+    pub fn record(lo: u32, hi: u32) {
+        let n = TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+        SPANS.with(|m| {
+            *m.borrow_mut().entry((lo, hi)).or_insert(0) += 1;
+        });
+        if n % 5_000_000 == 0 {
+            dump(&format!("periodic@{n}"));
+        }
+    }
+
+    fn dump(tag: &str) {
+        SPANS.with(|m| {
+            let m = m.borrow();
+            let total = TOTAL.load(Ordering::Relaxed);
+            let distinct = m.len();
+            let mut v: Vec<_> = m.iter().map(|(k, c)| (*c, *k)).collect();
+            v.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            eprintln!(
+                "RELOWER[{tag}] total={total} distinct={distinct} ratio={:.2}",
+                total as f64 / distinct.max(1) as f64
+            );
+            for (c, (lo, hi)) in v.into_iter().take(20) {
+                eprintln!("RELOWER  span {lo}..{hi} count={c}");
+            }
+        });
+    }
+}
+
 pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
+    if relower_trace::enabled() {
+        let sp = expr.span();
+        relower_trace::record(sp.lo.0, sp.hi.0);
+    }
+    // #5259: guard the recursive descent. Without this, a pathologically
+    // nested expression (`1+1+…`, `o.a.a.…`, `a||a||…`) overflows the native
+    // stack and SIGABRTs with no diagnostic. The depth counter turns that into
+    // a clean "nested too deeply" error. It is decremented on every exit path,
+    // including the error returns inside `lower_expr_impl`, so a recoverable
+    // lowering error elsewhere doesn't leave the depth permanently inflated.
+    ctx.expr_lower_depth += 1;
+    let max_depth = if expr_uses_stack_heavy_chain_lowering(expr) {
+        MAX_EXPR_CHAIN_LOWER_DEPTH
+    } else {
+        MAX_EXPR_LOWER_DEPTH
+    };
+    if ctx.expr_lower_depth > max_depth {
+        ctx.expr_lower_depth -= 1;
+        crate::lower_bail!(
+            expr.span(),
+            "expression nested too deeply (exceeded {} levels); split the \
+             chain across statements or intermediate variables",
+            max_depth
+        );
+    }
+    let result = stacker::maybe_grow(EXPR_LOWER_STACK_RED_ZONE, EXPR_LOWER_STACK_SEGMENT, || {
+        lower_expr_impl(ctx, expr)
+    });
+    ctx.expr_lower_depth -= 1;
+    result
+}
+
+fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
     match expr {
         ast::Expr::Lit(lit) => lower_lit(lit),
         ast::Expr::Ident(ident) => {
             let name = ident.sym.to_string();
+            let with_envs = ctx.active_with_envs_for_ident(&name);
+            if !with_envs.is_empty() {
+                let saved_with_envs = std::mem::take(&mut ctx.with_env_stack);
+                let fallback = lower_expr(ctx, expr);
+                ctx.with_env_stack = saved_with_envs;
+                return Ok(wrap_with_gets(&name, fallback?, with_envs));
+            }
             if let Some(id) = ctx.lookup_local(&name) {
+                // A with-fallback implicit global may still be the HOLE
+                // sentinel (the with-env took the write) — reading it then
+                // is a ReferenceError, not undefined.
+                if let Some(n) = ctx.with_sloppy_implicit_ids.get(&id) {
+                    return Ok(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_with_implicit_read".to_string(),
+                            param_types: vec![Type::Any, Type::String],
+                            return_type: Type::Any,
+                        }),
+                        args: vec![Expr::LocalGet(id), Expr::String(n.clone())],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    });
+                }
                 Ok(Expr::LocalGet(id))
             } else if let Some(id) = ctx.lookup_func(&name) {
                 Ok(Expr::FuncRef(id))
-            } else if let Some((module_name, method_name)) = ctx.lookup_native_module(&name) {
-                if module_name == "os" || module_name == "node:os" {
-                    if let Some(method) = method_name {
-                        match method {
-                            "EOL" => return Ok(Expr::OsEOL),
-                            "devNull" => return Ok(Expr::OsDevNull),
-                            _ => {}
-                        }
-                    }
-                }
-                if module_name == "buffer" || module_name == "node:buffer" {
-                    if let Some(method) = method_name {
-                        if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
-                            return Ok(Expr::PropertyGet {
-                                object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
-                                property: method.to_string(),
-                            });
-                        }
-                    }
-                }
-                // Special handling for worker_threads named imports
-                if module_name == "worker_threads" {
-                    if let Some(method) = method_name {
-                        if method == "workerData" {
-                            return Ok(Expr::PropertyGet {
-                                object: Box::new(Expr::NativeModuleRef(
-                                    "worker_threads".to_string(),
-                                )),
-                                property: "workerData".to_string(),
-                            });
-                        }
-                    }
-                }
-                if let Some(method) = method_name {
-                    // #3946: a `node:process` *property* imported by name
-                    // (`import { pid, arch } from "node:process"`) must read
-                    // the live process value, not a generic native-module
-                    // PropertyGet (which resolved to `undefined`). Methods
-                    // fall through to the callable native-module ref below.
-                    if module_name == "process" {
-                        if let Some(e) = expr_member::lower_process_named_property(method) {
-                            return Ok(e);
-                        }
-                    }
-                    return Ok(Expr::PropertyGet {
-                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
-                        property: method.to_string(),
-                    });
-                }
-                if ctx.lookup_builtin_module_alias(&name).is_none()
-                    && is_cjs_style_native_default_import(module_name)
-                {
-                    return Ok(Expr::PropertyGet {
-                        object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
-                        property: "default".to_string(),
-                    });
-                }
-                // Native module reference (e.g., mysql from 'mysql2/promise')
-                Ok(Expr::NativeModuleRef(module_name.to_string()))
+            } else if ctx.lookup_native_module(&name).is_some() {
+                Ok(native_module_binding_value(ctx, &name))
             } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
                 // Imported function - reference by its original exported name
                 // Look up type information if available
@@ -324,6 +640,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             } else if ctx.lookup_class(&name).is_some() {
                 // Class used as a first-class value (e.g., { Point: Point })
                 Ok(Expr::ClassRef(name))
+            } else if ctx.forward_class_names.contains(&name) {
+                // Forward reference to a sibling class declared LATER in the
+                // same function body (vendored zod: ZodType.optional() →
+                // ZodOptional.create(...)). JS resolves this at call time;
+                // emit a ClassRef by name — codegen resolves it from the
+                // class registry, which has every pending class by then.
+                Ok(Expr::ClassRef(name))
             } else if name == "undefined" {
                 // Global undefined identifier
                 Ok(Expr::Undefined)
@@ -342,7 +665,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // which silently corrupts any path computation built on
                 // path.join(__dirname, ...). Mirrors the import.meta arm
                 // (expr_misc::import_meta_paths) so both surfaces agree.
-                let path = &ctx.source_file_path;
+                let path = ctx.source_file_path.replace('\\', "/");
                 let value = if name == "__filename" {
                     path.clone()
                 } else {
@@ -353,15 +676,48 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     }
                 };
                 Ok(Expr::String(value))
+            } else if matches!(name.as_str(), "Math" | "JSON" | "Reflect" | "Intl") {
+                // #4139: the built-in namespace objects used as VALUES (passed
+                // to `Object.getOwnPropertyDescriptor(Math, …)`, stored in a
+                // local, etc.) must resolve to the real
+                // `populate_global_this_builtins`-installed namespace object —
+                // not the bare `GlobalGet(0)` sentinel (which IS `globalThis`,
+                // so `Math === globalThis` and reflection reads the wrong
+                // object). Reuse the `PropertyGet { GlobalGet(0), <name> }`
+                // value-form (same as the built-in constructors above). When
+                // these names appear in member-OBJECT position (`Math.max(…)`,
+                // `Math.PI`), expr_member.rs's #973 reroute-undo resets the
+                // receiver back to `GlobalGet(0)`, so the intrinsic call /
+                // constant-fold paths are unchanged. A shadowing local would
+                // have matched `ctx.lookup_local` earlier and never reached
+                // here.
+                Ok(Expr::PropertyGet {
+                    object: Box::new(Expr::GlobalGet(0)),
+                    property: name,
+                })
             } else {
                 // GlobalGet(0) is a sentinel: codegen routes by name from the
                 // parent PropertyGet/Call/Member context. Bare uses lower to
                 // 0.0 (perry-codegen/src/expr.rs Expr::GlobalGet arm).
                 let known_global = is_known_global_identifier_name(&name);
                 if !known_global && !ctx.unresolved_ident_as_global {
-                    return Ok(throw_reference_error_expr(
-                        "js_throw_reference_error_unresolved_get",
-                    ));
+                    // A global created at RUNTIME (sloppy `this.y = 2` with
+                    // `this` = globalThis inside a dynamic function) is
+                    // invisible to compile-time resolution — look it up on
+                    // globalThis first; only a true miss throws the spec
+                    // ReferenceError, with the identifier in the message.
+                    return Ok(Expr::Call {
+                        callee: Box::new(Expr::ExternFuncRef {
+                            name: "js_global_get_or_throw_unresolved".to_string(),
+                            param_types: vec![Type::Any],
+                            return_type: Type::Any,
+                        }),
+                        args: vec![Expr::String(name.clone())],
+                        type_args: Vec::new(),
+                        // #5253: localize the `X is not defined` ReferenceError to
+                        // this identifier's source position (winston `module`).
+                        byte_offset: ident.span.lo.0,
+                    });
                 }
                 if !known_global {
                     eprintln!(
@@ -383,7 +739,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // `Expr::Date*Get(...)` — so they don't reach this arm.
                 // date-fns / drizzle / lodash duck-typing path.
                 if is_builtin_global_value_name(&name) {
-                    if name == "fetch" {
+                    if is_fetch_global_value_name(&name) {
                         ctx.uses_fetch = true;
                     }
                     return Ok(Expr::PropertyGet {
@@ -397,6 +753,18 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::Bin(bin) => {
             // Handle 'in' operator: property in object
             if matches!(bin.op, ast::BinaryOp::In) {
+                if let ast::Expr::PrivateName(private) = bin.left.as_ref() {
+                    let class_name = ctx.current_class.clone().ok_or_else(|| {
+                        anyhow!("Private name brand check is only supported inside a class")
+                    })?;
+                    let field_name = format!("#{}", private.name);
+                    let object = Box::new(lower_expr(ctx, &bin.right)?);
+                    return Ok(Expr::PrivateBrandCheck {
+                        class_name,
+                        field_name,
+                        object,
+                    });
+                }
                 // Proxy fast path: `key in proxy` routes through js_proxy_has.
                 if let ast::Expr::Ident(obj_ident) = bin.right.as_ref() {
                     let obj_name = obj_ident.sym.to_string();
@@ -464,6 +832,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 let ty_expr = match bin.right.as_ref() {
                     ast::Expr::Ident(ident) => {
                         let name = ident.sym.as_ref();
+                        // `x instanceof undefined`: `undefined` is the primitive
+                        // value, never a class name. Codegen would resolve `ty =
+                        // "undefined"` to class_id 0 and silently return `false`;
+                        // ECMAScript requires evaluating the RHS and throwing a
+                        // TypeError because it is not an object (test262
+                        // instanceof/S11.8.6_A3 #4). Lower it to the undefined
+                        // value so it routes through `js_instanceof_dynamic`.
+                        if name == "undefined" {
+                            Some(Box::new(Expr::Undefined))
+                        } else
                         // A local holding a class ref (drizzle's `is(value, type)`),
                         // OR a top-level ES5 function constructor (`function Foo(){…}`
                         // used as `x instanceof Foo`). The latter has no class entry,
@@ -474,7 +852,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         // route through `js_instanceof_dynamic`, which derives the same
                         // `synthetic_class_id_for_function` that `new Foo()` stamps onto
                         // the instance (see js_new_function_construct).
-                        if ctx.lookup_local(name).is_some() || ctx.lookup_func(name).is_some() {
+                        if ctx.lookup_local(name).is_some()
+                            || ctx.lookup_func(name).is_some()
+                            || ctx.lookup_native_module(name).is_some()
+                        {
                             match lower_expr(ctx, &bin.right) {
                                 Ok(e) => Some(Box::new(e)),
                                 Err(_) => None,
@@ -487,7 +868,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         let native_module = if let ast::Expr::Ident(obj_ident) = member.obj.as_ref()
                         {
                             let obj_name = obj_ident.sym.as_ref();
-                            ctx.lookup_builtin_module_alias(obj_name).is_some()
+                            // `Temporal.<X>` constructors dispatch via brand arms,
+                            // not a class chain, so route them through the runtime
+                            // dynamic path (`js_instanceof_dynamic` →
+                            // `temporal_ctor_kind`) by lowering the constructor to
+                            // its closure value here.
+                            obj_name == "Temporal"
+                                || ctx.lookup_builtin_module_alias(obj_name).is_some()
                                 || matches!(ctx.lookup_native_module(obj_name), Some((_, None)))
                         } else {
                             false
@@ -501,7 +888,21 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             None
                         }
                     }
-                    _ => None,
+                    // Any other right-hand side (a primitive literal like
+                    // `x instanceof true`, `this`, a call `x instanceof f()`,
+                    // a parenthesized/conditional class ref, …) is NOT a
+                    // statically-resolvable class name. The old `_ => "Object"`
+                    // `ty` substitution silently treated these as
+                    // `instanceof Object` and returned `false`; ECMAScript
+                    // requires evaluating the operand and throwing a TypeError
+                    // when it is not a constructor (`true instanceof true`,
+                    // `({}) instanceof this`). Lower the operand to a value and
+                    // route through `js_instanceof_dynamic`, which both resolves
+                    // every constructor shape and throws on a non-callable RHS.
+                    _ => match lower_expr(ctx, &bin.right) {
+                        Ok(e) => Some(Box::new(e)),
+                        Err(_) => None,
+                    },
                 };
                 return Ok(Expr::InstanceOf { expr, ty, ty_expr });
             }
@@ -665,11 +1066,25 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             // checks fail). The static methods are real functions in
             // Node, so fold to the literal "function" string here.
             if matches!(unary.op, ast::UnaryOp::TypeOf) {
+                // `typeof(x)` parenthesizes the operand, so the AST-level folds
+                // below — which match a bare `Ident` / `Member` — would miss it
+                // and fall through to a normal operand lowering. For an
+                // unresolved identifier that means `typeof(zzz)` emitted a
+                // ReferenceError-throwing get instead of folding to "undefined"
+                // (the spec's GetValue-skips-on-typeof rule). Peel transparent
+                // `Paren` wrappers so the operand-shape folds see through them.
+                let typeof_arg = {
+                    let mut e = unary.arg.as_ref();
+                    while let ast::Expr::Paren(p) = e {
+                        e = p.expr.as_ref();
+                    }
+                    e
+                };
                 // #677: bare `typeof Function` — Function is a JS built-in
                 // constructor, so typeof is "function". Without this fold,
                 // the bare ident lowers to `GlobalGet(0)` and typeof reads
                 // "object" via the global-this short-circuit.
-                if let ast::Expr::Ident(id) = unary.arg.as_ref() {
+                if let ast::Expr::Ident(id) = typeof_arg {
                     if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
                         return Ok(Expr::String("function".to_string()));
                     }
@@ -696,6 +1111,14 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             | "clearInterval"
                             | "clearImmediate"
                             | "fetch"
+                            // Callable global helpers that otherwise resolve to
+                            // `GlobalGet(0)` (globalThis) for a bare read, so a
+                            // value `typeof` reported "object" despite being
+                            // fully callable. (#3986)
+                            | "queueMicrotask"
+                            | "structuredClone"
+                            | "btoa"
+                            | "atob"
                     ) && ctx.lookup_local(n).is_none()
                     {
                         return Ok(Expr::String("function".to_string()));
@@ -734,14 +1157,28 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         && !is_known_global_identifier_name(n)
                         && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
                     {
-                        return Ok(Expr::String("undefined".to_string()));
+                        // Not foldable to a compile-time "undefined": sloppy
+                        // implicit globals are runtime globalThis properties
+                        // (#3575), so `g = 5; typeof g` must observe the live
+                        // binding. Non-throwing lookup per the spec's
+                        // GetValue-skips-on-typeof rule.
+                        return Ok(Expr::TypeOf(Box::new(Expr::Call {
+                            callee: Box::new(Expr::ExternFuncRef {
+                                name: "js_global_get_optional".to_string(),
+                                param_types: vec![Type::Any],
+                                return_type: Type::Any,
+                            }),
+                            args: vec![Expr::String(n.to_string())],
+                            type_args: Vec::new(),
+                            byte_offset: 0,
+                        })));
                     }
                 }
                 // #1395: `typeof process.memoryUsage.rss` is a nested member
                 // (`(process.memoryUsage).rss`) so it bypasses the
                 // ident-receiver fold below. Node exposes `rss` as a fast-path
                 // function hung off `process.memoryUsage`; fold to "function".
-                if let ast::Expr::Member(outer) = unary.arg.as_ref() {
+                if let ast::Expr::Member(outer) = typeof_arg {
                     if let ast::MemberProp::Ident(outer_prop) = &outer.prop {
                         if outer_prop.sym.as_ref() == "rss" {
                             if let ast::Expr::Member(inner) = outer.obj.as_ref() {
@@ -759,7 +1196,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         }
                     }
                 }
-                if let ast::Expr::Member(member) = unary.arg.as_ref() {
+                if let ast::Expr::Member(member) = typeof_arg {
                     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                         if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                             let obj_name = obj_ident.sym.as_ref();
@@ -796,6 +1233,27 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
+                            let is_process_object = ctx.lookup_local(obj_name).is_none()
+                                && (obj_name == "process"
+                                    || matches!(
+                                        ctx.lookup_builtin_module_alias(obj_name),
+                                        Some("process" | "node:process")
+                                    )
+                                    || matches!(
+                                        ctx.lookup_native_module(obj_name),
+                                        Some((
+                                            "process"
+                                                | "node:process"
+                                                | "process.namespace"
+                                                | "node:process.namespace"
+                                                | "process.default"
+                                                | "node:process.default",
+                                            None
+                                        ))
+                                    ));
+                            if is_process_object && prop_name == "sourceMapsEnabled" {
+                                return Ok(Expr::String("boolean".to_string()));
+                            }
                             // #1410 / #1400 / #1398 / #1409: `typeof
                             // process.ref` / `typeof process.unref` /
                             // `typeof process.setSourceMapsEnabled` /
@@ -806,7 +1264,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             // through to the generic process member path
                             // (returns 0 / "number" typeof), so fold to
                             // "function" here to match Node.
-                            if obj_name == "process"
+                            if is_process_object
                                 && matches!(
                                     prop_name,
                                     "ref"
@@ -818,7 +1276,6 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                         | "setUncaughtExceptionCaptureCallback"
                                         | "loadEnvFile"
                                 )
-                                && ctx.lookup_local("process").is_none()
                             {
                                 return Ok(Expr::String("function".to_string()));
                             }
@@ -1072,16 +1529,26 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     }
                 }
             }
-            if unary.op == ast::UnaryOp::Delete {
-                if let ast::Expr::Member(member) = unary.arg.as_ref() {
+            // Static `delete` folding only applies when no `with` environment
+            // is active: inside `with(o) { delete x }`, `x` may resolve to a
+            // configurable property of `o` and must be deleted at runtime
+            // (Test262 11.4.1-4.a-6), so we leave those to the dynamic path.
+            if unary.op == ast::UnaryOp::Delete && ctx.with_env_stack.is_empty() {
+                // Peel parens: `delete (x)` deletes the inner reference.
+                let mut bare = unary.arg.as_ref();
+                while let ast::Expr::Paren(p) = bare {
+                    bare = p.expr.as_ref();
+                }
+                if let ast::Expr::Member(member) = bare {
                     if let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
                         (member.obj.as_ref(), &member.prop)
                     {
                         let obj_name = obj.sym.as_ref();
                         let prop_name = prop.sym.as_ref();
-                        if obj_name == "Number"
-                            && ctx.lookup_local(obj_name).is_none()
-                            && ctx.lookup_func(obj_name).is_none()
+                        let is_global = ctx.lookup_local(obj_name).is_none()
+                            && ctx.lookup_func(obj_name).is_none();
+                        if is_global
+                            && obj_name == "Number"
                             && matches!(
                                 prop_name,
                                 "NaN"
@@ -1096,6 +1563,75 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         {
                             return Ok(Expr::Bool(false));
                         }
+                        // `Math`'s numeric constants are non-configurable, so
+                        // `delete Math.PI` is `false` (Math's *methods* stay
+                        // configurable, hence `delete Math.abs` is `true` and
+                        // is left to the generic path). Test262 S8.12.7_A1.
+                        if is_global
+                            && obj_name == "Math"
+                            && matches!(
+                                prop_name,
+                                "E" | "LN10"
+                                    | "LN2"
+                                    | "LOG10E"
+                                    | "LOG2E"
+                                    | "PI"
+                                    | "SQRT1_2"
+                                    | "SQRT2"
+                            )
+                        {
+                            return Ok(Expr::Bool(false));
+                        }
+                    }
+                }
+                // `delete <BindingIdentifier>` — deleting a reference to a
+                // resolvable binding (var / let / const / function / param /
+                // class / import) is non-configurable, so it evaluates to
+                // `false` without removing anything (spec 13.5.1.2). The bare
+                // globals `undefined` / `NaN` / `Infinity` are likewise
+                // non-configurable global properties → `false`. Any other
+                // unresolvable bare identifier (an implicit global from
+                // `x = 1`, or a configurable global builtin) is `true` in
+                // sloppy mode — lowering it as a literal avoids the spurious
+                // ReferenceError the operand-evaluation path would throw.
+                if let ast::Expr::Ident(id) = bare {
+                    let name = id.sym.as_ref();
+                    // Bare globals that are non-configurable → false.
+                    if name == "arguments" || matches!(name, "undefined" | "NaN" | "Infinity") {
+                        return Ok(Expr::Bool(false));
+                    }
+                    if let Some(lid) = ctx.lookup_local(name) {
+                        // `x = 1` with no declaration creates a *configurable*
+                        // global property (`delete x` → true); a real
+                        // var/let/const/param binding is non-configurable
+                        // (→ false). Distinguish via the implicit-global set.
+                        if ctx.sloppy_implicit_global_ids.contains(&lid) {
+                            return Ok(Expr::Bool(true));
+                        }
+                        // At module top level a bare `x = 1` becomes an ordinary
+                        // module-level local indistinguishable from `var x = 1`
+                        // (the implicit-global path isn't taken there), so we
+                        // can't statically tell a non-configurable `var`/`let`
+                        // binding from a configurable implicit global — defer to
+                        // the runtime delete (Test262 S11.4.1_A3.2_T1). Inside a
+                        // function, an implicit global *does* go through the
+                        // sloppy-global set, so a plain local here is a genuine
+                        // binding → false.
+                        if !ctx.module_level_ids.contains(&lid) {
+                            return Ok(Expr::Bool(false));
+                        }
+                        // module-level local: fall through to the dynamic path.
+                    } else if ctx.lookup_func(name).is_some()
+                        || ctx.lookup_class(name).is_some()
+                        || ctx.lookup_imported_func(name).is_some()
+                    {
+                        return Ok(Expr::Bool(false));
+                    } else {
+                        // Truly unresolvable bare identifier (no binding, no
+                        // known global) → `true` in sloppy mode; lowering it as
+                        // a literal avoids a spurious ReferenceError from the
+                        // operand-evaluation path.
+                        return Ok(Expr::Bool(true));
                     }
                 }
             }
@@ -1145,6 +1681,24 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     Ok(Expr::TypeOf(operand))
                 }
                 ast::UnaryOp::Delete => {
+                    // `delete super.prop` / `delete super[expr]` is always a
+                    // ReferenceError (the operand is a SuperProperty reference,
+                    // which `delete` rejects). Peel parens to catch
+                    // `delete (super.x)`. Args of a computed super key are
+                    // evaluated first for side effects.
+                    let mut del_arg = unary.arg.as_ref();
+                    while let ast::Expr::Paren(p) = del_arg {
+                        del_arg = p.expr.as_ref();
+                    }
+                    if let ast::Expr::SuperProp(super_prop) = del_arg {
+                        let throw =
+                            throw_reference_error_expr("js_throw_reference_error_super_delete");
+                        if let ast::SuperProp::Computed(computed) = &super_prop.prop {
+                            let key = lower_expr(ctx, computed.expr.as_ref())?;
+                            return Ok(Expr::Sequence(vec![key, throw]));
+                        }
+                        return Ok(throw);
+                    }
                     // Proxy delete: rewrite `delete proxy.key` as ProxyDelete.
                     if let Expr::ProxyGet { proxy, key } = &*operand {
                         return Ok(Expr::ProxyDelete {
@@ -1167,25 +1721,27 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         ast::Expr::Assign(assign) => expr_assign::lower_assign(ctx, assign),
         ast::Expr::Cond(cond) => expr_misc::lower_cond(ctx, cond),
         ast::Expr::Array(array) => {
-            // Check if any elements are spread elements
+            // Check if any elements need the spread-aware representation.
             let has_spread = array
                 .elems
                 .iter()
                 .filter_map(|elem| elem.as_ref())
                 .any(|elem| elem.spread.is_some());
+            let has_hole = array.elems.iter().any(|elem| elem.is_none());
 
-            if has_spread {
-                // Use ArraySpread for arrays with spread elements.
-                // If a spread source is a generator call, wrap it in IteratorToArray
-                // so the codegen gets a real array to iterate.
+            if has_spread || has_hole {
+                // Use ArraySpread for arrays with spread elements or elisions.
+                // Elisions must remain holes, not explicit undefined values:
+                // own-property checks and iteration observe the difference.
                 let elements = array
                     .elems
                     .iter()
-                    .filter_map(|elem| elem.as_ref())
                     .map(|elem| {
+                        let Some(elem) = elem.as_ref() else {
+                            return Ok(ArrayElement::Hole);
+                        };
                         let expr = lower_expr(ctx, &elem.expr)?;
                         if elem.spread.is_some() {
-                            // Wrap generator calls in IteratorToArray
                             if is_generator_call_expr(ctx, &expr) {
                                 Ok(ArrayElement::Spread(Expr::IteratorToArray(Box::new(expr))))
                             } else {
@@ -1198,21 +1754,27 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Expr::ArraySpread(elements))
             } else {
-                // No spread elements, use regular Array
                 let elements = array
                     .elems
                     .iter()
-                    .map(|elem| match elem.as_ref() {
-                        Some(elem) => lower_expr(ctx, &elem.expr),
-                        None => Ok(Expr::Undefined),
-                    })
+                    .map(|elem| lower_expr(ctx, &elem.as_ref().unwrap().expr))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Expr::Array(elements))
             }
         }
         ast::Expr::Object(obj) => expr_object::lower_object(ctx, obj),
         ast::Expr::This(_) => {
-            // Always use Expr::This - the codegen will handle it with ThisContext
+            // Module TOP-LEVEL `this` is Node-CJS `module.exports` — a fresh
+            // plain object, not `globalThis` (the oracle runs assembled test
+            // files as CommonJS). Function/class/with bodies keep dynamic
+            // `Expr::This` semantics, handled by codegen's ThisContext.
+            if ctx.scope_depth == 0
+                && ctx.current_class.is_none()
+                && ctx.with_env_stack.is_empty()
+                && !ctx.is_external_module
+            {
+                return Ok(Expr::ModuleTopThis);
+            }
             Ok(Expr::This)
         }
         ast::Expr::New(new_expr) => expr_new::lower_new(ctx, new_expr),
@@ -1241,13 +1803,17 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                         if matches!(mp.kind, ast::MetaPropKind::NewTarget) {
                             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                                 let prop_name = prop_ident.sym.as_ref();
-                                if let Some(class_name) = ctx.in_constructor_class.clone() {
-                                    return Ok(match prop_name {
-                                        "name" => Expr::String(class_name),
-                                        _ => Expr::Undefined,
-                                    });
-                                }
-                                return Ok(Expr::Undefined);
+                                // #2768: `new.target?.<prop>` reads off the
+                                // runtime new.target (a leaf class ref inside a
+                                // constructor, `undefined` outside). Inside a
+                                // ctor it's non-null so `?.` resolves the
+                                // property; outside it yields undefined. The old
+                                // fold hardcoded the enclosing class name (wrong
+                                // leaf) and undefined for `.prototype`.
+                                return Ok(Expr::PropertyGet {
+                                    object: Box::new(Expr::NewTarget),
+                                    property: prop_name.to_string(),
+                                });
                             }
                         }
                     }
@@ -1258,44 +1824,15 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     let prop_expr = match &member.prop {
                         ast::MemberProp::Ident(ident) => {
                             let prop_name = ident.sym.to_string();
-                            // Mirror the eager-fold from
-                            // `expr_member::lower_member` for `m.index` /
-                            // `m.groups` when `m` is a tracked
-                            // regex.exec()/string.match() result. The
-                            // standard `lower_member` fires when the
-                            // AST is `m.groups`; for the optional-chain
-                            // form `m?.groups` SWC routes here, the
-                            // `member.obj` has already been lowered to
-                            // `LocalGet(...)`, so `lower_member`'s
-                            // `ast::Expr::Ident` check fails. Intercept
-                            // here so the optional-chain shape also
-                            // resolves to the thread-local groups
-                            // object instead of a generic property
-                            // read that returns undefined.
-                            if (prop_name == "groups" || prop_name == "index")
-                                && match member.obj.as_ref() {
-                                    ast::Expr::Ident(ident) => {
-                                        ctx.regex_exec_locals.contains(&ident.sym.to_string())
-                                    }
-                                    ast::Expr::TsNonNull(nn) => match nn.expr.as_ref() {
-                                        ast::Expr::Ident(ident) => {
-                                            ctx.regex_exec_locals.contains(&ident.sym.to_string())
-                                        }
-                                        _ => false,
-                                    },
-                                    _ => false,
-                                }
-                            {
-                                if prop_name == "groups" {
-                                    Expr::RegExpExecGroups
-                                } else {
-                                    Expr::RegExpExecIndex
-                                }
-                            } else {
-                                Expr::PropertyGet {
-                                    object: Box::new(obj_expr.clone()),
-                                    property: prop_name,
-                                }
+                            // RegExp exec/match `.index` / `.groups` / `.input`
+                            // are real own properties on the result array
+                            // (regex.rs), so they resolve as a generic
+                            // PropertyGet — no thread-local fold. This keeps a
+                            // stored result correct after an intervening match
+                            // on another regex.
+                            Expr::PropertyGet {
+                                object: Box::new(obj_expr.clone()),
+                                property: prop_name,
                             }
                         }
                         ast::MemberProp::Computed(comp) => {
@@ -1305,7 +1842,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 index: Box::new(index),
                             }
                         }
-                        _ => return Err(anyhow!("Unsupported optional chain property type")),
+                        ast::MemberProp::PrivateName(private) => {
+                            let property = format!("#{}", private.name);
+                            let object = expr_member::wrap_private_guard(
+                                ctx,
+                                Box::new(obj_expr.clone()),
+                                &property,
+                                expr_member::PRIV_OP_READ,
+                            );
+                            Expr::PropertyGet { object, property }
+                        }
                     };
 
                     // Issue #388: optional chaining short-circuits on
@@ -1348,6 +1894,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     // Lower callee as plain MemberExpr, unwrapping inner OptChain.
                     // SWC may wrap the callee member access in an OptChain too.
                     // We must NOT re-lower via lower_expr which would nest Conditionals.
+                    //
+                    // `callee_from_chain` records the `foo?.bar?.(args)` shape: the
+                    // callee is itself an optional chain, so `check_expr` is the
+                    // *receiver* (`foo`) rather than the function value. In that
+                    // case the receiver short-circuit alone is not enough — the
+                    // function value (`foo.bar`) must ALSO be null-checked before
+                    // the call, or an `undefined` property is invoked and throws
+                    // "X is not a function" (issue #4699: zod `safeParse`'s
+                    // `iss.inst?._zod.def?.error?.(iss)` error-map probe).
+                    let mut callee_from_chain = false;
                     let (check_expr, callee_expr) = {
                         let mut lower_member_flat =
                             |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
@@ -1364,7 +1920,19 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                             index: Box::new(idx),
                                         }
                                     }
-                                    _ => return Err(anyhow!("Unsupported optional chain member")),
+                                    ast::MemberProp::PrivateName(private) => {
+                                        let property = format!("#{}", private.name);
+                                        let guarded = expr_member::wrap_private_guard(
+                                            ctx,
+                                            Box::new(obj.clone()),
+                                            &property,
+                                            expr_member::PRIV_OP_READ,
+                                        );
+                                        Expr::PropertyGet {
+                                            object: guarded,
+                                            property,
+                                        }
+                                    }
                                 };
                                 Ok((obj, prop))
                             };
@@ -1377,12 +1945,34 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                                 (prop.clone(), prop)
                             }
                             ast::Expr::OptChain(inner) => match &*inner.base {
-                                // Chained `foo?.bar?.(args)`: keep checking the
-                                // receiver (foo) so the inner `?.` short-circuit
-                                // still works. A separate null-check on the
-                                // function value (foo.bar) is a known gap — see
-                                // the comment above the final Conditional below.
-                                ast::OptChainBase::Member(m) => lower_member_flat(m)?,
+                                // The callee is itself an optional chain. Two
+                                // distinct shapes land here, told apart by whether
+                                // THIS chain link's call is optional
+                                // (`opt_chain.optional`, the `?.(` token):
+                                //
+                                //  • `foo?.bar?.(args)` (optional call): check the
+                                //    receiver (foo) so the inner `?.` short-circuit
+                                //    works, AND flag that the function value
+                                //    (foo.bar) needs its own null-check before the
+                                //    call (#4699 — an `undefined` property must
+                                //    short-circuit, not throw "X is not a function").
+                                //
+                                //  • `foo?.bar(args)` (non-optional call, only the
+                                //    member is optional): this is an ordinary method
+                                //    call guarded by the receiver. It must NOT get a
+                                //    function-value guard — `s?.at(-1)` reads `s.at`
+                                //    as a bare PropertyGet, which is `undefined` for
+                                //    builtin (string/array) methods that only resolve
+                                //    through the call path, so the guard would wrongly
+                                //    short-circuit the whole call (#4814). Leaving
+                                //    `callee_from_chain` false yields the plain
+                                //    `recv == null ? undefined : recv.method(args)`,
+                                //    and codegen binds `this` from the PropertyGet
+                                //    callee + dispatches the builtin normally.
+                                ast::OptChainBase::Member(m) => {
+                                    callee_from_chain = opt_chain.optional;
+                                    lower_member_flat(m)?
+                                }
                                 _ => {
                                     let ce = lower_expr(ctx, callee)?;
                                     (ce.clone(), ce)
@@ -1417,16 +2007,42 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             other => other,
                         };
                         let outer_call = Expr::Call {
-                            callee: Box::new(fixed_callee),
+                            callee: Box::new(fixed_callee.clone()),
                             args,
                             type_args: Vec::new(),
+                            byte_offset: 0,
+                        };
+                        // For `foo?.bar?.(args)` the function value (`bar` on the
+                        // un-short-circuited receiver) must itself be null-checked
+                        // before calling — otherwise an `undefined` property is
+                        // invoked and throws "X is not a function" (#4699).
+                        let else_expr: Box<Expr> = if callee_from_chain {
+                            Box::new(Expr::Conditional {
+                                condition: Box::new(Expr::Compare {
+                                    op: CompareOp::LooseEq,
+                                    left: Box::new(fixed_callee),
+                                    right: Box::new(Expr::Null),
+                                }),
+                                then_expr: Box::new(Expr::Undefined),
+                                else_expr: Box::new(outer_call),
+                            })
+                        } else {
+                            Box::new(outer_call)
                         };
                         return Ok(Expr::Conditional {
                             condition: inner_cond,
                             then_expr: inner_then,
-                            else_expr: Box::new(outer_call),
+                            else_expr,
                         });
                     }
+
+                    // Keep the function value for the `foo?.bar?.(args)` guard
+                    // (see callee_from_chain) before it is moved into the call.
+                    let func_value_for_guard = if callee_from_chain {
+                        Some(callee_expr.clone())
+                    } else {
+                        None
+                    };
 
                     // Build the call expression
                     let call_expr = if has_spread {
@@ -1457,7 +2073,25 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             callee: Box::new(callee_expr),
                             args,
                             type_args: Vec::new(),
+                            byte_offset: 0,
                         })
+                    };
+
+                    // For `foo?.bar?.(args)` the receiver check below guards `foo`,
+                    // but the function value `foo.bar` must ALSO be null-checked
+                    // before the call — otherwise an `undefined` property is
+                    // invoked and throws "X is not a function" (#4699).
+                    let else_expr: Box<Expr> = match func_value_for_guard {
+                        Some(func_value) => Box::new(Expr::Conditional {
+                            condition: Box::new(Expr::Compare {
+                                op: CompareOp::LooseEq,
+                                left: Box::new(func_value),
+                                right: Box::new(Expr::Null),
+                            }),
+                            then_expr: Box::new(Expr::Undefined),
+                            else_expr: Box::new(call_expr),
+                        }),
+                        None => Box::new(call_expr),
                     };
 
                     // Issue #388: optional chaining short-circuits on
@@ -1474,7 +2108,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                             right: Box::new(Expr::Null),
                         }),
                         then_expr: Box::new(Expr::Undefined),
-                        else_expr: Box::new(call_expr),
+                        else_expr,
                     })
                 }
             }
@@ -1570,9 +2204,10 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             // strings array carries the cooked text (escapes processed) AS
             // the array elements AND the raw text (escapes preserved) via
             // a thread-local side table populated at the call site —
-            // `TaggedTemplateStrings` codegen emits both arrays + a
-            // `js_tagged_template_register_raw` call so `strings.raw` reads
-            // can resolve via the matching `Expr::TemplateRaw` fold below.
+            // `TaggedTemplateStrings` codegen emits both arrays, then asks
+            // the runtime for the cached frozen template object so
+            // `strings.raw` reads can resolve via the matching
+            // `Expr::TemplateRaw` fold below.
             let cooked_strings: Vec<Expr> = tpl
                 .quasis
                 .iter()
@@ -1591,6 +2226,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 .map(|q| q.raw.as_ref().to_string())
                 .collect();
             let strings_array = Expr::TaggedTemplateStrings {
+                site_id: ctx.fresh_tagged_template_site_id(),
                 cooked: cooked_strings,
                 raw: raw_strings,
             };
@@ -1606,6 +2242,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 callee: Box::new(callee),
                 args: call_args,
                 type_args: vec![],
+                byte_offset: 0,
             })
         }
         // Class expression used as a value (not in `new` context) —
@@ -1620,8 +2257,16 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         // back up.
         ast::Expr::Class(class_expr) => {
             let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
-            let synthetic_name =
-                ident_name.unwrap_or_else(|| format!("__anon_class_{}", ctx.fresh_class()));
+            let synthetic_name = ident_name.unwrap_or_else(|| {
+                if !anonymous_class_has_static_name_member(&class_expr.class) {
+                    if let Some(name) = ctx.assignment_inferred_name.as_ref() {
+                        if !name.is_empty() {
+                            return name.clone();
+                        }
+                    }
+                }
+                format!("__anon_class_{}", ctx.fresh_class())
+            });
             let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
             // Mixin factories like `function WithA(B) { return class extends B {} }`
             // produce a class whose super is the function-parameter `B` — a
@@ -1671,15 +2316,46 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     _ => None,
                 })
                 .collect();
+            let computed_member_registrations: Vec<Expr> = class
+                .computed_members
+                .iter()
+                .map(|member| class_computed_member_registration_expr(&synthetic_name, member))
+                .collect();
+            let captured_args: Vec<Expr> = ctx
+                .lookup_class_captures(&synthetic_name)
+                .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
+                .unwrap_or_default();
+            // Static block synthetic-method names (`__perry_static_init_N`), in
+            // source order — emitted as inline `StaticMethodCall`s on the
+            // shared-template path so blocks run at class-evaluation time (the
+            // same treatment the class-declaration path gives them).
+            let static_block_names: Vec<String> = class
+                .static_methods
+                .iter()
+                .filter(|m| m.name.starts_with("__perry_static_init_"))
+                .map(|m| m.name.clone())
+                .collect();
             ctx.pending_classes.push(class);
             // #1772: a class EXPRESSION that carries per-evaluation static
             // fields and is NOT a mixin (`class extends <expr>`) lowers to a
             // fresh heap class object per evaluation (`ClassExprFresh`), so
             // `make(a) !== make(b)` and each holds its own statics as own
-            // properties. Mixins and static-less class expressions keep the
-            // historical (shared-template) path.
-            if parent_expr.is_none()
-                && (!named_statics.is_empty() || !static_symbol_registrations.is_empty())
+            // properties. Mixins and class expressions without statics/captures
+            // keep the historical (shared-template) path.
+            // A class expression evaluated at module top level runs exactly
+            // once, so it needs no per-evaluation freshness — route it through
+            // the shared-template `ClassRef` path (identical to a class
+            // declaration), where static field/element initializers run via
+            // `init_static_fields_late` and a static method's `this` resolves
+            // to the class-ref. The `ClassExprFresh` path is reserved for class
+            // expressions inside a function body (factories like effect's
+            // `make()`), which produce a distinct class object per call.
+            let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
+            if !at_module_top
+                && parent_expr.is_none()
+                && (!named_statics.is_empty()
+                    || !static_symbol_registrations.is_empty()
+                    || !captured_args.is_empty())
             {
                 // #1787: snapshot the class's captured outer-scope values so a
                 // later `new <classObjectValue>()` can run the instance-field
@@ -1689,16 +2365,18 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 // captured outer id, in `captures_vec` order — read them back in
                 // that same order as `LocalGet(outer_id)`, evaluated here where
                 // the captures are still live.
-                let captured_args: Vec<Expr> = ctx
-                    .lookup_class_captures(&synthetic_name)
-                    .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
-                    .unwrap_or_default();
-                return Ok(Expr::ClassExprFresh {
+                let fresh_expr = Expr::ClassExprFresh {
                     template: synthetic_name,
                     named_statics,
                     symbol_statics: static_symbol_registrations,
                     captured_args,
-                });
+                };
+                if computed_member_registrations.is_empty() {
+                    return Ok(fresh_expr);
+                }
+                let mut seq = computed_member_registrations;
+                seq.push(fresh_expr);
+                return Ok(Expr::Sequence(seq));
             }
             let mut seq: Vec<Expr> = Vec::new();
             if let Some(p) = parent_expr {
@@ -1707,11 +2385,36 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     parent_expr: p,
                 });
             }
+            seq.extend(computed_member_registrations);
             for (k, v) in static_symbol_registrations {
                 seq.push(Expr::RegisterClassStaticSymbol {
                     class_name: synthetic_name.clone(),
                     key_expr: Box::new(k),
                     value_expr: Box::new(v),
+                });
+            }
+            // Inline the named static field/element initializers at the point
+            // the class expression evaluates (source order), mirroring the
+            // class-declaration path. Without this the shared-template path
+            // relied solely on the late `init_static_fields_late` pass, which
+            // runs AFTER the surrounding top-level statements — so a read like
+            // `C.x` immediately after `var C = class { static x = 1 }` saw the
+            // uninitialized (0.0) slot. (Private statics carry a `#`-prefixed
+            // name and flow through the same StaticFieldSet path.)
+            for (name, v) in named_statics {
+                seq.push(Expr::StaticFieldSet {
+                    class_name: synthetic_name.clone(),
+                    field_name: name,
+                    value: Box::new(v),
+                });
+            }
+            // Static blocks run right after the static-field initializers, in
+            // source order, with the class as `this`.
+            for block_name in static_block_names {
+                seq.push(Expr::StaticMethodCall {
+                    class_name: synthetic_name.clone(),
+                    method_name: block_name,
+                    args: Vec::new(),
                 });
             }
             if seq.is_empty() {
@@ -1907,6 +2610,7 @@ pub(crate) fn try_desugar_reactive_text(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         };
         let fresh_concat = lower_tpl_to_concat(ctx, tpl)?;
         let set_text_call = Expr::NativeMethodCall {
@@ -1940,7 +2644,9 @@ pub(crate) fn try_desugar_reactive_text(
             captures: inner_captures,
             mutable_captures: Vec::new(),
             captures_this: false,
+            captures_new_target: false,
             enclosing_class: None,
+            is_arrow: false,
             is_async: false,
             is_generator: false,
             is_strict: ctx.current_strict,
@@ -1979,7 +2685,9 @@ pub(crate) fn try_desugar_reactive_text(
         captures: outer_captures,
         mutable_captures: Vec::new(),
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: ctx.current_strict,
@@ -1989,5 +2697,6 @@ pub(crate) fn try_desugar_reactive_text(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }))
 }

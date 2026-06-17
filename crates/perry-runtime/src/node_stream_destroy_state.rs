@@ -23,8 +23,7 @@ pub(super) extern "C" fn ns_destroy_error_microtask(closure: *const ClosureHeade
             let _ = super::event_emitter::emit_stream_event(stream, error, &[err]);
         }
     }
-    super::mark_stream_closed(stream);
-    let _ = super::event_emitter::emit_stream_event(stream, super::string_value(b"close"), &[]);
+    super::mark_stream_closed_and_emit_close(stream);
     f64::from_bits(TAG_UNDEFINED)
 }
 

@@ -4,18 +4,33 @@
 use super::*;
 
 /// JS index coercion for the String character-access methods (#2787).
-/// Applies `ToIntegerOrInfinity`: `undefined`, `null`, and `NaN` are all NaN /
-/// non-numeric bit patterns that map to `0`; finite values truncate toward
-/// zero; the result is clamped into `i32` so the integer-index helpers below
-/// see a safe value (a far-out-of-range magnitude clamps to a still-OOB index,
-/// which the helpers already handle). Codegen routes the raw NaN-boxed index
-/// through here instead of `fptosi`, which is undefined behavior on a NaN.
+/// Applies `ToIntegerOrInfinity`: a non-numeric argument is first run through
+/// the full `ToNumber` (`js_number_coerce`) so an object index with a custom
+/// `valueOf`/`toString` (`"lego".charAt({toString:()=>1})` → `"e"`), a numeric
+/// string (`"1"`), a boolean, `null`, etc. coerce per spec — and a `Symbol`
+/// index throws `TypeError` (ToNumber(Symbol)). `undefined`/`NaN` map to `0`;
+/// finite values truncate toward zero; the result is clamped into `i32` so the
+/// integer-index helpers below see a safe value (a far-out-of-range magnitude
+/// clamps to a still-OOB index, which the helpers already handle). Codegen
+/// routes the raw NaN-boxed index through here instead of `fptosi`, which is
+/// undefined behavior on a NaN.
 #[no_mangle]
 pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
-    if index.is_nan() {
+    let jsval = crate::value::JSValue::from_bits(index.to_bits());
+    // Fast path: a real number / int32 needs no ToNumber. Anything else
+    // (object, string, bool, null, undefined, bigint, symbol) goes through
+    // `ToNumber` first (may throw on Symbol, may run user `valueOf`/`toString`).
+    let n = if jsval.is_int32() {
+        jsval.as_int32() as f64
+    } else if jsval.is_number() {
+        index
+    } else {
+        crate::builtins::js_number_coerce(index)
+    };
+    if n.is_nan() {
         return 0;
     }
-    let truncated = index.trunc();
+    let truncated = n.trunc();
     if truncated <= i32::MIN as f64 {
         i32::MIN
     } else if truncated >= i32::MAX as f64 {
@@ -23,6 +38,19 @@ pub extern "C" fn js_string_index_to_i32(index: f64) -> i32 {
     } else {
         truncated as i32
     }
+}
+
+/// `end`-argument coercion for `slice`/`substring`. Per ECMA-262 §22.1.3.20 /
+/// §22.1.3.24, an `undefined` `end` (whether the arg is omitted or explicitly
+/// `undefined`) means "to the end of the string" — `len`, NOT `ToInteger(
+/// undefined) === 0`. So `"abc".substring(0, undefined)` is `"abc"`, not `""`.
+/// Any other value goes through the ordinary `ToIntegerOrInfinity`.
+#[no_mangle]
+pub extern "C" fn js_string_end_index_to_i32(value: f64, len: i32) -> i32 {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        return len;
+    }
+    js_string_index_to_i32(value)
 }
 
 /// Get character code at index (returns UTF-16 code unit, or NaN if out of bounds).
@@ -158,16 +186,63 @@ pub extern "C" fn js_string_char_at(s: *const StringHeader, index: i32) -> *mut 
         }
     }
 
-    // UTF-16 path: find the UTF-8 bytes for the character at this UTF-16 index
-    let str_data = string_as_str(s);
-    let byte_off = utf16_offset_to_byte_offset(str_data, index as usize);
-    let remaining = &str_data[byte_off..];
-    if let Some(ch) = remaining.chars().next() {
-        let ch_len = ch.len_utf8();
-        js_string_from_bytes(remaining.as_ptr(), ch_len as u32)
-    } else {
-        js_string_from_bytes(std::ptr::null(), 0)
+    // UTF-16 path: walk the raw (WTF-8) bytes counting UTF-16 code units and
+    // return the single code unit at `index`. Astral code points split into
+    // their surrogate halves, so `"😀"[0]` is the lone high surrogate (length
+    // 1) — matching JS UTF-16 indexing (#4793). Walking bytes directly (rather
+    // than `str::chars()`) keeps this sound on inputs that already hold lone
+    // surrogates.
+    let target = index as usize;
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
+    let mut u16_pos = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Decode one WTF-8 sequence into its code point and UTF-16 width.
+        let (seq_len, units, cp) = if b < 0x80 {
+            (1usize, 1usize, b as u32)
+        } else if b < 0xE0 {
+            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
+            (2, 1, ((b as u32 & 0x1F) << 6) | (b1 as u32 & 0x3F))
+        } else if b < 0xF0 {
+            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
+            let b2 = bytes.get(i + 2).copied().unwrap_or(0);
+            (
+                3,
+                1,
+                ((b as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F),
+            )
+        } else {
+            let b1 = bytes.get(i + 1).copied().unwrap_or(0);
+            let b2 = bytes.get(i + 2).copied().unwrap_or(0);
+            let b3 = bytes.get(i + 3).copied().unwrap_or(0);
+            (
+                4,
+                2,
+                ((b as u32 & 0x07) << 18)
+                    | ((b1 as u32 & 0x3F) << 12)
+                    | ((b2 as u32 & 0x3F) << 6)
+                    | (b3 as u32 & 0x3F),
+            )
+        };
+        if target < u16_pos + units {
+            let unit = if units == 2 {
+                // Astral: emit the requested surrogate half.
+                let v = cp - 0x10000;
+                if target == u16_pos {
+                    0xD800 + (v >> 10) as u16
+                } else {
+                    0xDC00 + (v & 0x3FF) as u16
+                }
+            } else {
+                cp as u16
+            };
+            return string_from_code_unit(unit);
+        }
+        u16_pos += units;
+        i += seq_len;
     }
+    js_string_from_bytes(std::ptr::null(), 0)
 }
 
 /// Split a string into an array of single-character strings.
@@ -210,27 +285,161 @@ fn to_uint16(code: f64) -> u16 {
     code.trunc().rem_euclid(65536.0) as u16
 }
 
+/// `String.fromCharCode` per-argument coercion (ECMA-262 §22.1.2.1):
+/// `nextCU = ToUint16(next)`, where `ToUint16` first applies the abstract
+/// `ToNumber`. A bare numeric value short-circuits; everything else is run
+/// through the full `ToNumber` so a boxed `new Boolean(true)` / a `{ valueOf }`
+/// object coerce (→ 1 / their numeric value) instead of mapping to `0`. A
+/// `BigInt` throws `TypeError` (abstract `ToNumber(BigInt)`, unlike the lenient
+/// `Number(bigint)`); a `Symbol` throws via `js_number_coerce`.
+fn fromcharcode_arg_to_uint16(code: f64) -> u16 {
+    let jv = crate::value::JSValue::from_bits(code.to_bits());
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else if jv.is_number() {
+        code
+    } else if jv.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    } else {
+        crate::builtins::js_number_coerce(code)
+    };
+    to_uint16(n)
+}
+
+/// Generic 3-byte WTF-8 encoding of a single BMP code point / lone surrogate
+/// (`0x800..=0xFFFF`). For a lone surrogate (`0xD800..=0xDFFF`) this is the
+/// same byte layout the UTF-8 encoder would produce if surrogates were scalar
+/// values, which is exactly the WTF-8 representation Perry round-trips.
+#[inline]
+fn encode_3byte_wtf8(unit: u16) -> [u8; 3] {
+    [
+        0xE0 | (unit >> 12) as u8,
+        0x80 | ((unit >> 6) & 0x3F) as u8,
+        0x80 | (unit & 0x3F) as u8,
+    ]
+}
+
+/// Build a fresh string holding exactly one UTF-16 code unit. Lone surrogates
+/// (`0xD800..=0xDFFF`) are encoded as WTF-8 and the result is flagged
+/// `HAS_LONE_SURROGATES` (so `isWellFormed()` / `JSON.stringify` see them);
+/// every other unit is ordinary UTF-8. This is the round-tripping replacement
+/// for the old `char::from_u32(..).unwrap_or('\u{FFFD}')` lossy path.
+pub(crate) fn string_from_code_unit(unit: u16) -> *mut StringHeader {
+    if unit < 0x80 {
+        let byte = unit as u8;
+        return js_string_from_bytes(&byte as *const u8, 1);
+    }
+    if (0xD800..=0xDFFF).contains(&unit) {
+        let buf = encode_3byte_wtf8(unit);
+        return crate::string::js_string_from_wtf8_bytes(buf.as_ptr(), 3);
+    }
+    // BMP, non-surrogate → a valid Unicode scalar value.
+    let ch = unsafe { char::from_u32_unchecked(unit as u32) };
+    let mut buf = [0u8; 4];
+    let encoded = ch.encode_utf8(&mut buf);
+    js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
+}
+
+/// Append the WTF-8/UTF-8 bytes of one UTF-16 code unit to `out`, returning
+/// `true` if a lone surrogate was appended (so the caller knows to use the
+/// WTF-8 string-construction path that sets `HAS_LONE_SURROGATES`).
+#[inline]
+fn push_code_unit_wtf8(out: &mut Vec<u8>, unit: u16) -> bool {
+    if unit < 0x80 {
+        out.push(unit as u8);
+        false
+    } else if (0xD800..=0xDFFF).contains(&unit) {
+        out.extend_from_slice(&encode_3byte_wtf8(unit));
+        true
+    } else {
+        let ch = unsafe { char::from_u32_unchecked(unit as u32) };
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        false
+    }
+}
+
+/// Append the WTF-8/UTF-8 bytes of one (range-validated) code point to `out`,
+/// for `String.fromCodePoint`. A BMP surrogate code point is emitted as a lone
+/// surrogate (returns `true`); astral code points encode as ordinary UTF-8.
+#[inline]
+fn push_code_point_wtf8(out: &mut Vec<u8>, cp: u32) -> bool {
+    if cp <= 0xFFFF {
+        push_code_unit_wtf8(out, cp as u16)
+    } else {
+        let ch = unsafe { char::from_u32_unchecked(cp) };
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        false
+    }
+}
+
+/// Encode a sequence of code points / UTF-16 code units as canonical WTF-8.
+/// A high surrogate immediately followed by a low surrogate is combined into
+/// its astral code point and emitted as ordinary 4-byte UTF-8 (so
+/// `String.fromCharCode(0xD83D, 0xDE00)` is the emoji, with `codePointAt(0)`
+/// = 0x1F600). Only a *genuinely lone* surrogate stays as a 3-byte WTF-8
+/// sequence. Returns the bytes and whether any lone surrogate was emitted
+/// (so the caller can pick the flag-setting construction path). (#4793)
+fn encode_code_points_wtf8(cps: &[u32]) -> (Vec<u8>, bool) {
+    let mut out: Vec<u8> = Vec::with_capacity(cps.len());
+    let mut has_lone_surrogate = false;
+    let mut i = 0;
+    while i < cps.len() {
+        let cp = cps[i];
+        if (0xD800..=0xDBFF).contains(&cp)
+            && i + 1 < cps.len()
+            && (0xDC00..=0xDFFF).contains(&cps[i + 1])
+        {
+            let astral = 0x10000 + ((cp - 0xD800) << 10) + (cps[i + 1] - 0xDC00);
+            let ch = unsafe { char::from_u32_unchecked(astral) };
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+            i += 2;
+            continue;
+        }
+        has_lone_surrogate |= push_code_point_wtf8(&mut out, cp);
+        i += 1;
+    }
+    (out, has_lone_surrogate)
+}
+
 /// Create a string from a character code (String.fromCharCode).
 /// The argument is coerced with `ToUint16` (#2788), so out-of-range and
 /// negative values wrap modulo 65536 rather than returning `""`. Codegen
 /// passes the raw NaN-boxed `f64` (not `fptosi`, which is UB on a NaN).
+/// Lone surrogates (`0xD800..=0xDFFF`) round-trip via WTF-8 (#4793).
 #[no_mangle]
 pub extern "C" fn js_string_from_char_code(code: f64) -> *mut StringHeader {
-    let unit = to_uint16(code);
+    let unit = fromcharcode_arg_to_uint16(code);
+    string_from_code_unit(unit)
+}
 
-    // For ASCII characters, create a simple 1-byte string.
-    if unit < 128 {
-        let byte = unit as u8;
-        return js_string_from_bytes(&byte as *const u8, 1);
+/// Create a string from a spread/apply argument source:
+/// `String.fromCharCode(...arrayLike)` / `String.fromCharCode.apply(_, bytes)`.
+#[no_mangle]
+pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeader {
+    let arr = crate::object::js_array_like_to_array(value);
+    if arr.is_null() {
+        return js_string_from_bytes(std::ptr::null(), 0);
     }
 
-    // For non-ASCII, encode as UTF-8. Lone surrogates (0xD800..=0xDFFF) are
-    // not valid Rust `char`s; emit U+FFFD (the documented WTF-8 / lone-
-    // surrogate categorical gap — Node would emit the lone surrogate).
-    let ch = char::from_u32(unit as u32).unwrap_or('\u{FFFD}');
-    let mut buf = [0u8; 4];
-    let encoded = ch.encode_utf8(&mut buf);
-    js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
+    let len = crate::array::js_array_length(arr) as usize;
+    if len == 0 {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
+
+    let mut cps: Vec<u32> = Vec::with_capacity(len);
+    for i in 0..len {
+        let unit = fromcharcode_arg_to_uint16(crate::array::js_array_get_f64(arr, i as u32));
+        cps.push(unit as u32);
+    }
+    let (out, has_lone_surrogate) = encode_code_points_wtf8(&cps);
+    if has_lone_surrogate {
+        crate::string::js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32)
+    } else {
+        js_string_from_bytes(out.as_ptr(), out.len() as u32)
+    }
 }
 
 /// Throw `RangeError: Invalid code point <n>` for `String.fromCodePoint`,
@@ -257,15 +466,45 @@ pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
         throw_invalid_code_point(code);
     }
     let cp = code as u32;
-    let ch = match char::from_u32(cp) {
-        Some(c) => c,
-        // Lone surrogate: a valid code point for fromCodePoint but not a Rust
-        // `char`. Emit U+FFFD (WTF-8 categorical gap); do NOT throw.
-        None => '\u{FFFD}',
-    };
+    // A surrogate code point (`0xD800..=0xDFFF`) is a valid `fromCodePoint`
+    // argument but not a Rust `char`; `string_from_code_unit` round-trips it
+    // through WTF-8 instead of substituting U+FFFD (#4793). Astral code points
+    // (`> 0xFFFF`) are ordinary scalar values.
+    if cp <= 0xFFFF {
+        return string_from_code_unit(cp as u16);
+    }
+    let ch = unsafe { char::from_u32_unchecked(cp) };
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
     js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
+}
+
+/// `String.fromCodePoint(...codePoints)` — variadic form. Builds a string from
+/// an array-like of code points, validating each (RangeError on a non-integer /
+/// negative / > 0x10FFFF value) per ECMAScript. A lone surrogate emits U+FFFD
+/// (WTF-8 categorical gap), matching `js_string_from_code_point`. Used by the
+/// reified `String.fromCodePoint` constructor static so value reads / spread
+/// calls work. (#4627)
+pub fn js_string_from_code_point_array(value: f64) -> *mut StringHeader {
+    let arr = crate::object::js_array_like_to_array(value);
+    if arr.is_null() {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
+    let len = crate::array::js_array_length(arr) as usize;
+    let mut cps: Vec<u32> = Vec::with_capacity(len);
+    for i in 0..len {
+        let code = crate::array::js_array_get_f64(arr, i as u32);
+        if !code.is_finite() || code.fract() != 0.0 || code < 0.0 || code > 0x10FFFF as f64 {
+            throw_invalid_code_point(code);
+        }
+        cps.push(code as u32);
+    }
+    let (out, has_lone_surrogate) = encode_code_points_wtf8(&cps);
+    if has_lone_surrogate {
+        crate::string::js_string_from_wtf8_bytes(out.as_ptr(), out.len() as u32)
+    } else {
+        js_string_from_bytes(out.as_ptr(), out.len() as u32)
+    }
 }
 
 /// String.prototype.at(index) — supports negative indices.

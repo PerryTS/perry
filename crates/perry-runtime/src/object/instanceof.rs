@@ -9,19 +9,46 @@ use super::*;
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
 const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
+const CLASS_ID_NET_SOCKET: u32 = 0xFFFF00B4;
 const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
 const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
 const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
+/// `value instanceof Function` reserved id (see `js_instanceof`).
+const CLASS_ID_FUNCTION: u32 = 0xFFFF00F0;
+
+/// Whether `value` is callable — the predicate behind `x instanceof Function`
+/// and `Function[Symbol.hasInstance]`. Covers every Perry function
+/// representation: heap closures (declarations / expressions / arrows /
+/// methods / bound functions / built-in constructors, all carrying
+/// `CLOSURE_MAGIC`) and small native function handles.
+pub(crate) fn value_is_callable(value: f64) -> bool {
+    if crate::value::is_js_handle(value) && crate::value::js_handle_is_function(value) {
+        return true;
+    }
+    let jv = crate::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    crate::closure::is_closure_ptr((jv.bits() & crate::value::POINTER_MASK) as usize)
+}
 
 fn small_native_handle_id(value: f64) -> Option<i64> {
+    use crate::value::addr_class;
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
         let raw = (bits & crate::value::POINTER_MASK) as i64;
-        if raw > 0 && raw < 0x100000 {
+        if addr_class::is_small_handle(raw as usize) {
             return Some(raw);
         }
     }
-    if value.is_finite() && value > 0.0 && value.fract() == 0.0 && value < 0x100000 as f64 {
+    if addr_class::is_small_handle(bits as usize) {
+        return Some(bits as i64);
+    }
+    if value.is_finite()
+        && value > 0.0
+        && value.fract() == 0.0
+        && value < addr_class::HANDLE_BAND_MAX as f64
+    {
         return Some(value as i64);
     }
     None
@@ -63,6 +90,31 @@ fn is_native_module_namespace_value(value: f64, expected: &str) -> bool {
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // `proxy instanceof C` uses the proxy's `[[GetPrototypeOf]]`, which (absent a
+    // trap) forwards to the target — so it is equivalent to `target instanceof
+    // C`. The proxy itself is a small registered id with no class chain, so
+    // without this it always returned false. Unwrap nested proxies (drizzle
+    // aliases columns as `new Proxy(column, …)` and its `is(value, type)` brand
+    // check relies on `value instanceof type`). Bounded to guard a cycle.
+    let mut value = value;
+    {
+        let mut depth = 0;
+        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
+            value = crate::proxy::js_proxy_target(value);
+            depth += 1;
+        }
+    }
+    // `temporalValue instanceof Temporal.<X>` — Temporal values dispatch via
+    // brand arms (not a real prototype chain), so resolve the constructor to
+    // its kind and compare against the value's brand. A non-Temporal value, or
+    // a Temporal value of a different kind, yields `false`.
+    if let Some(kind) = super::global_this::temporal_ctor_kind(type_ref) {
+        return if crate::temporal::temporal_kind(value) == Some(kind) {
+            f64::from_bits(crate::value::TAG_TRUE)
+        } else {
+            f64::from_bits(TAG_FALSE)
+        };
+    }
     let bits = type_ref.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFE {
@@ -130,6 +182,16 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "repl" {
+            let matched = match method.as_str() {
+                "Recoverable" => crate::node_repl::is_recoverable_value(value),
+                "REPLServer" => crate::node_repl::is_repl_server_value(value),
+                _ => false,
+            };
+            if matched {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+        }
         // #2689: `net.Stream` is an alias for `net.Socket`; both should match
         // a live socket handle via the runtime probe.
         if module == "net" && matches!(method.as_str(), "Socket" | "Stream") {
@@ -147,6 +209,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             && crate::builtins::is_console_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        if module == "crypto" && method == "KeyObject" {
+            let addr = value_addr(value);
+            return if addr != 0
+                && (crate::buffer::is_secret_key(addr)
+                    || crate::buffer::asymmetric_key_meta(addr).is_some())
+            {
+                f64::from_bits(crate::value::TAG_TRUE)
+            } else {
+                f64::from_bits(TAG_FALSE)
+            };
         }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
@@ -196,24 +269,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             }
             _ => {}
         }
-        let class_id = match name {
-            "Error" => crate::error::CLASS_ID_ERROR,
-            "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
-            "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,
-            "ReferenceError" => crate::error::CLASS_ID_REFERENCE_ERROR,
-            "SyntaxError" => crate::error::CLASS_ID_SYNTAX_ERROR,
-            "EvalError" => crate::error::CLASS_ID_EVAL_ERROR,
-            "URIError" => crate::error::CLASS_ID_URI_ERROR,
-            "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
-            "Promise" => CLASS_ID_PROMISE,
-            "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
-            "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
-            "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
-            "Event" => crate::event_target::CLASS_ID_EVENT,
-            "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
-            "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
-            _ => 0,
-        };
+        let class_id = global_builtin_constructor_class_id(name);
         if class_id != 0 {
             return js_instanceof(value, class_id);
         }
@@ -225,6 +281,71 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    return js_instanceof_dynamic_tail(value, type_ref);
+}
+
+/// Runtime class id for a globalThis built-in constructor *name*.
+///
+/// Reference-type global constructors used as runtime values (e.g.
+/// `Function.prototype[Symbol.hasInstance].call(Map, m)`, or a dynamic
+/// `x instanceof ctorVar`). These mirror the synthetic ids the compile-time
+/// `instanceof` operator emits — see perry-codegen/src/expr/instance_misc1.rs
+/// — which `js_instanceof` resolves via the per-type registries (#3662).
+/// `Array`/`Object`/`Date` carry their own coercion thunks rather than the
+/// shared noop thunk; #4102 added those thunks to the
+/// `identify_global_builtin_constructor` allow-list so the dynamic /
+/// reflective path resolves them just like the literal-RHS operator does at
+/// compile time. Also consulted by `js_register_class_parent_dynamic` so a
+/// user `class X extends Event` registers the `X → Event` chain edge.
+/// Returns 0 for names without a runtime class id.
+pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
+    match name {
+        "Map" => 0xFFFF0022,
+        "Set" => 0xFFFF0023,
+        "RegExp" => 0xFFFF0021,
+        "ArrayBuffer" => 0xFFFF0025,
+        "Array" => 0xFFFF0024,
+        "Object" => 0xFFFF0050,
+        "Function" => CLASS_ID_FUNCTION,
+        "Number" => 0xFFFF00D0,
+        "String" => 0xFFFF00D1,
+        "Boolean" => 0xFFFF00D2,
+        "BigInt" => 0xFFFF00D3,
+        "Symbol" => 0xFFFF00D4,
+        "Date" => 0xFFFF0020,
+        "Error" => crate::error::CLASS_ID_ERROR,
+        "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
+        "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,
+        "ReferenceError" => crate::error::CLASS_ID_REFERENCE_ERROR,
+        "SyntaxError" => crate::error::CLASS_ID_SYNTAX_ERROR,
+        "EvalError" => crate::error::CLASS_ID_EVAL_ERROR,
+        "URIError" => crate::error::CLASS_ID_URI_ERROR,
+        "AggregateError" => crate::error::CLASS_ID_AGGREGATE_ERROR,
+        "Promise" => CLASS_ID_PROMISE,
+        "Navigator" => crate::navigator::NAVIGATOR_CLASS_ID,
+        "TextEncoderStream" => crate::object::CLASS_ID_TEXT_ENCODER_STREAM,
+        "TextDecoderStream" => crate::object::CLASS_ID_TEXT_DECODER_STREAM,
+        "CompressionStream" => crate::object::CLASS_ID_COMPRESSION_STREAM,
+        "DecompressionStream" => crate::object::CLASS_ID_DECOMPRESSION_STREAM,
+        "Event" => crate::event_target::CLASS_ID_EVENT,
+        "CustomEvent" => crate::event_target::CLASS_ID_CUSTOM_EVENT,
+        "DOMException" => crate::event_target::CLASS_ID_DOM_EXCEPTION,
+        // TypedArray constructors used as runtime *values* (a dynamic
+        // `x instanceof TA` where `TA` is a variable — e.g. test262's
+        // `testWithTypedArrayConstructors`). Mirrors the per-kind synthetic
+        // ids the compile-time `instanceof Float64Array` operator resolves.
+        "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+        | "Int32Array" | "Uint32Array" | "Float16Array" | "Float32Array" | "Float64Array"
+        | "BigInt64Array" | "BigUint64Array" => crate::typedarray::kind_for_name(name)
+            .map(crate::typedarray::class_id_for_kind)
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+#[inline]
+fn js_instanceof_dynamic_tail(value: f64, type_ref: f64) -> f64 {
+    use crate::value::TAG_FALSE;
     if crate::node_submodules::is_diagnostics_bounded_channel_constructor_value(type_ref) {
         return if crate::node_submodules::diagnostics_bounded_channel_is_instance_value(value) {
             f64::from_bits(crate::value::TAG_TRUE)
@@ -255,6 +376,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     // (Callable RHS values never reach here — they resolve to a synthetic
     // class id above — so we don't need to model the arrow-`.prototype`
     // case at this site.)
+    //
+    // #3662: `OrdinaryHasInstance` (the `@@hasInstance` reflective path) wants
+    // `false` here, not a `TypeError`; it sets this flag for the call.
+    if SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.get()) {
+        return f64::from_bits(TAG_FALSE);
+    }
     throw_invalid_instanceof_rhs(type_ref)
 }
 
@@ -264,6 +391,49 @@ fn throw_invalid_instanceof_rhs(type_ref: f64) -> ! {
         throw_type_error(b"Right-hand side of 'instanceof' is not callable");
     }
     throw_type_error(b"Right-hand side of 'instanceof' is not an object");
+}
+
+/// `%Function.prototype% [ @@hasInstance ]` (#3662). Spec: return
+/// `OrdinaryHasInstance(this, V)`. Unlike the `instanceof` *operator* — which
+/// throws a `TypeError` on a non-callable right-hand side — `OrdinaryHasInstance`
+/// returns `false` when `this` is not callable, so `Function.prototype[Symbol
+/// .hasInstance].call(undefined, {})` is `false` (not a throw). Installed on
+/// `Function.prototype` under the `@@hasInstance` key; the receiver flows in
+/// through `IMPLICIT_THIS` set by the `.call`/member dispatch.
+pub(crate) extern "C" fn function_prototype_has_instance_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let constructor = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    let result = ordinary_has_instance(constructor, value);
+    f64::from_bits(if result {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+/// `OrdinaryHasInstance(C, O)` without the throwing semantics of the operator:
+/// a non-callable `C` (or one whose constructor identity Perry cannot resolve)
+/// yields `false` rather than a `TypeError`. Delegates to the operator's full
+/// constructor-resolution path (`js_instanceof_dynamic`) with the unresolved-RHS
+/// throw suppressed for the duration of the call, so every constructor shape the
+/// operator understands (class objects, bound natives like `Array`/`Map`,
+/// INT32 class-refs, synthetic function class ids, …) resolves identically.
+fn ordinary_has_instance(constructor: f64, value: f64) -> bool {
+    let prev = SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.replace(true));
+    let result = js_instanceof_dynamic(value, constructor);
+    SUPPRESS_INSTANCEOF_RHS_THROW.with(|c| c.set(prev));
+    result.to_bits() == crate::value::TAG_TRUE
+}
+
+thread_local! {
+    /// When set, `js_instanceof_dynamic` returns `false` instead of throwing on
+    /// an unresolved / non-callable right-hand side. Used by
+    /// `OrdinaryHasInstance` (#3662), whose spec returns `false` there rather
+    /// than the `TypeError` the `instanceof` operator raises.
+    static SUPPRESS_INSTANCEOF_RHS_THROW: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// Whether `value` is a (non-callable) object for the purposes of the
@@ -287,7 +457,9 @@ fn rhs_is_object_value(value: f64) -> bool {
         // Symbols are primitives; small registry handles aren't real objects
         // here either, but they're still object-typed in JS (`typeof` is
         // "object"), so a "not callable" message is the right one for them.
-        if ptr >= 0x100000 && crate::symbol::is_registered_symbol(ptr) {
+        if crate::value::addr_class::is_above_handle_band(ptr)
+            && crate::symbol::is_registered_symbol(ptr)
+        {
             return false;
         }
         return true;
@@ -314,23 +486,17 @@ fn throw_type_error(message: &[u8]) -> ! {
 }
 
 fn is_event_emitter_instance_value(value: f64) -> bool {
+    if let Some(handle) = small_native_handle_id(value) {
+        if let Some(probe) = crate::object::event_emitter_handle_probe() {
+            return unsafe { probe(handle) };
+        }
+        return false;
+    }
+
     if crate::node_stream::is_classic_stream_instance_value(value)
         || is_stream_event_emitter_prototype_value(value)
     {
         return true;
-    }
-
-    let bits = value.to_bits();
-    let jsval = crate::JSValue::from_bits(bits);
-    if !jsval.is_pointer() {
-        return false;
-    }
-    let handle = (bits & crate::value::POINTER_MASK) as i64;
-    if handle <= 0 || handle >= 0x100000 {
-        return false;
-    }
-    if let Some(probe) = crate::object::event_emitter_handle_probe() {
-        return unsafe { probe(handle) };
     }
     false
 }
@@ -357,6 +523,82 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
     if class_id == 0 {
         return false_val;
+    }
+    // `proxy instanceof C` follows the proxy's prototype chain, which forwards
+    // to the target (absent a `getPrototypeOf` trap) — so unwrap to the target
+    // before walking the class chain. The proxy is a small id with no chain of
+    // its own. (drizzle's aliased-column proxies + `is(value, type)`.)
+    let mut value = value;
+    {
+        let mut depth = 0;
+        while depth < 16 && crate::proxy::js_proxy_is_proxy(value) != 0 {
+            value = crate::proxy::js_proxy_target(value);
+            depth += 1;
+        }
+    }
+    // Subclass-of-built-in: `class S extends Array {}` produces a real
+    // ObjectHeader instance whose class-id chain reaches the built-in's
+    // reserved class id (a parent edge registered at module init). The
+    // per-built-in probes below short-circuit to `false` for such an
+    // instance (it isn't a *real* Array/Map/Error/…), so walk the object's
+    // own class chain up front. Only genuine `GC_TYPE_OBJECT` instances carry
+    // a `class_id` field — real Arrays/Maps/Errors have other GC types and
+    // fall through to their dedicated probes unchanged. Refs
+    // class/subclass-builtins/* and class/subclass/builtin-objects/*.
+    {
+        let jv = crate::JSValue::from_bits(value.to_bits());
+        if jv.is_pointer() {
+            let obj = jv.as_pointer::<ObjectHeader>();
+            if crate::value::addr_class::is_above_handle_band(obj as usize) {
+                let gc_header = unsafe {
+                    (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
+                };
+                if unsafe { (*gc_header).obj_type } == crate::gc::GC_TYPE_OBJECT {
+                    let mut cur = unsafe { (*obj).class_id };
+                    if cur != 0 {
+                        if cur == class_id {
+                            return true_val;
+                        }
+                        let mut depth = 0;
+                        while let Some(pid) = get_parent_class_id(cur) {
+                            if pid == 0 || depth > 64 {
+                                break;
+                            }
+                            if pid == class_id {
+                                return true_val;
+                            }
+                            cur = pid;
+                            depth += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Temporal reference types (`d instanceof Temporal.Duration`, …). A Temporal
+    // value is a NaN-boxed pointer to a brand-tagged cell, not an ObjectHeader
+    // with a class chain, so probe the cell's brand kind directly. Keep the band
+    // in sync with perry-runtime/src/temporal/mod.rs.
+    if (crate::temporal::CLASS_ID_TEMPORAL_FIRST..=crate::temporal::CLASS_ID_TEMPORAL_LAST)
+        .contains(&class_id)
+    {
+        return if crate::temporal::temporal_value_matches_class_id(value, class_id) {
+            true_val
+        } else {
+            false_val
+        };
+    }
+    // `value instanceof Function` — true for any callable value. Per
+    // `OrdinaryHasInstance`, every Perry function (declaration, expression,
+    // arrow, method, bound function, native handle, built-in constructor)
+    // has `Function.prototype` in its prototype chain. Keep `CLASS_ID_FUNCTION`
+    // in sync with perry-codegen/src/expr/instance_misc1.rs.
+    if class_id == CLASS_ID_FUNCTION {
+        return if value_is_callable(value) {
+            true_val
+        } else {
+            false_val
+        };
     }
     // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
     let classic_stream_name = match class_id {
@@ -385,6 +627,20 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     if class_id == CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE {
         return if is_event_emitter_async_resource_instance_value(value) {
             true_val
+        } else {
+            false_val
+        };
+    }
+    if class_id == CLASS_ID_NET_SOCKET {
+        return if let (Some(handle), Some(probe)) = (
+            small_native_handle_id(value),
+            crate::object::net_socket_handle_probe(),
+        ) {
+            if unsafe { probe(handle) } {
+                true_val
+            } else {
+                false_val
+            }
         } else {
             false_val
         };
@@ -571,16 +827,30 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         || class_id == CLASS_ID_HEADERS
         || class_id == CLASS_ID_BLOB
     {
+        let want = match class_id {
+            CLASS_ID_RESPONSE => 1u8,
+            CLASS_ID_REQUEST => 2,
+            CLASS_ID_HEADERS => 3,
+            _ => 4, // CLASS_ID_BLOB
+        };
         if let Some(handle) = small_native_handle_id(value) {
             if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-                let want = match class_id {
-                    CLASS_ID_RESPONSE => 1u8,
-                    CLASS_ID_REQUEST => 2,
-                    CLASS_ID_HEADERS => 3,
-                    _ => 4, // CLASS_ID_BLOB
-                };
                 if unsafe { probe(handle as usize) } == want {
                     return true_val;
+                }
+            }
+        }
+        // `class X extends Request/Response` instance: a heap object that
+        // stashes the underlying native fetch handle id under
+        // `__perry_fetch_handle__`. Unwrap and probe so `sub instanceof
+        // Request` is true, matching a bare handle.
+        if jsval.is_pointer() {
+            let raw = jsval.as_pointer::<u8>() as usize;
+            if let Some(id) = unsafe { crate::object::fetch_subclass_handle_id(raw) } {
+                if let Some(probe) = crate::object::fetch_handle_kind_probe() {
+                    if unsafe { probe(id as usize) } == want {
+                        return true_val;
+                    }
                 }
             }
         }
@@ -590,7 +860,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         // `blob instanceof Blob` is true for that representation too.
         if class_id == CLASS_ID_BLOB && jsval.is_pointer() {
             let obj = jsval.as_pointer::<ObjectHeader>();
-            if (obj as usize) >= 0x100000 && unsafe { (*obj).class_id } == CLASS_ID_BLOB {
+            if crate::value::addr_class::is_above_handle_band(obj as usize)
+                && unsafe { (*obj).class_id } == CLASS_ID_BLOB
+            {
                 return true_val;
             }
         }
@@ -748,7 +1020,7 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // are NOT real ObjectHeader pointers — reading the GC header at
     // `obj_ptr - 8` would SIGSEGV on unmapped memory. They aren't instances
     // of any user-defined class either, so return false unconditionally.
-    if (obj_ptr as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj_ptr as usize) {
         return false_val;
     }
 

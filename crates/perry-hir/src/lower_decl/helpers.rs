@@ -12,10 +12,12 @@ use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr,
+    throw_reference_error_expr, LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
+use crate::walker::walk_expr_children_mut;
 
 fn strip_for_await_expr_wrappers(mut expr: &ast::Expr) -> &ast::Expr {
     loop {
@@ -49,6 +51,7 @@ pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -163,27 +166,102 @@ pub fn init_is_webassembly_instantiate(expr: &ast::Expr) -> bool {
 
 pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
     let mut out: Vec<Stmt> = Vec::new();
-    for param in params {
+    for (idx, param) in params.iter().enumerate() {
         if param.is_rest {
             continue;
         }
         let Some(default_expr) = param.default.as_ref() else {
             continue;
         };
+        let tdz_param_ids: std::collections::HashSet<LocalId> = params[idx..]
+            .iter()
+            .filter(|p| p.arguments_object.is_none())
+            .map(|p| p.id)
+            .collect();
+        let default_is_throw_helper = matches!(
+            default_expr,
+            Expr::Call { callee, .. }
+                if matches!(
+                    callee.as_ref(),
+                    Expr::ExternFuncRef { name, .. } if name.starts_with("js_throw_")
+                )
+        );
+        let default_is_eval_syntax_error = matches!(
+            default_expr,
+            Expr::SyntaxErrorNew(msg)
+                if matches!(
+                    msg.as_ref(),
+                    Expr::String(message)
+                        if message.starts_with("eval var declaration conflicts with")
+                )
+        );
         out.push(Stmt::If {
             condition: Expr::Compare {
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(param.id)),
                 right: Box::new(Expr::Undefined),
             },
-            then_branch: vec![Stmt::Expr(Expr::LocalSet(
-                param.id,
-                Box::new(default_expr.clone()),
-            ))],
+            then_branch: if default_is_throw_helper || default_is_eval_syntax_error {
+                vec![Stmt::Throw(default_expr.clone())]
+            } else {
+                let mut default_value = default_expr.clone();
+                rewrite_default_param_tdz_refs(&mut default_value, &tdz_param_ids);
+                vec![Stmt::Expr(Expr::LocalSet(
+                    param.id,
+                    Box::new(default_value),
+                ))]
+            },
             else_branch: None,
         });
     }
     out
+}
+
+fn rewrite_default_param_tdz_refs(
+    expr: &mut Expr,
+    tdz_param_ids: &std::collections::HashSet<LocalId>,
+) {
+    match expr {
+        Expr::LocalGet(id) if tdz_param_ids.contains(id) => {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::LocalSet(id, value) if tdz_param_ids.contains(id) => {
+            rewrite_default_param_tdz_refs(value, tdz_param_ids);
+            let value = std::mem::replace(value.as_mut(), Expr::Undefined);
+            *expr = Expr::Sequence(vec![
+                value,
+                throw_reference_error_expr("js_throw_reference_error_unresolved_assignment"),
+            ]);
+            return;
+        }
+        Expr::Update { id, .. } | Expr::ArrayPop(id) | Expr::ArrayShift(id)
+            if tdz_param_ids.contains(id) =>
+        {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::ArrayPush { array_id, .. }
+        | Expr::ArrayPushSpread { array_id, .. }
+        | Expr::ArrayUnshift { array_id, .. }
+        | Expr::ArraySplice { array_id, .. }
+        | Expr::ArrayCopyWithin { array_id, .. }
+            if tdz_param_ids.contains(array_id) =>
+        {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::SetAdd { set_id, .. } if tdz_param_ids.contains(set_id) => {
+            *expr = throw_reference_error_expr("js_throw_reference_error_unresolved_get");
+            return;
+        }
+        Expr::Closure { .. } => return,
+        _ => {}
+    }
+
+    walk_expr_children_mut(expr, &mut |child| {
+        rewrite_default_param_tdz_refs(child, tdz_param_ids)
+    });
 }
 
 /// Detect the computed key `[Symbol.iterator]` in a class method / object
@@ -357,7 +435,9 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
                 || expr_uses_arguments(&c.cons)
                 || expr_uses_arguments(&c.alt)
         }
-        ast::Expr::Assign(a) => expr_uses_arguments(&a.right),
+        ast::Expr::Assign(a) => {
+            assign_target_uses_arguments(&a.left) || expr_uses_arguments(&a.right)
+        }
         ast::Expr::Paren(p) => expr_uses_arguments(&p.expr),
         ast::Expr::TsAs(t) => expr_uses_arguments(&t.expr),
         ast::Expr::TsNonNull(t) => expr_uses_arguments(&t.expr),
@@ -378,11 +458,13 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
                 }
             }
         }),
-        ast::Expr::New(n) => n
-            .args
-            .as_ref()
-            .map(|args| args.iter().any(|a| expr_uses_arguments(&a.expr)))
-            .unwrap_or(false),
+        ast::Expr::New(n) => {
+            expr_uses_arguments(&n.callee)
+                || n.args
+                    .as_ref()
+                    .map(|args| args.iter().any(|a| expr_uses_arguments(&a.expr)))
+                    .unwrap_or(false)
+        }
         // Arrows inherit `arguments` from the enclosing function (per spec).
         // If an inner arrow references `arguments`, the enclosing non-arrow
         // function must synthesize the binding so the arrow's closure
@@ -391,6 +473,28 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
             ast::BlockStmtOrExpr::BlockStmt(b) => body_uses_arguments(&b.stmts),
             ast::BlockStmtOrExpr::Expr(e) => expr_uses_arguments(e),
         },
+        // Sequence (comma) expressions: `return n.date = t, n.args = arguments, x`.
+        // Minified bundlers (e.g. dayjs) hide `arguments` inside these, so the
+        // synthetic-arguments pre-scan must descend through every operand.
+        ast::Expr::Seq(s) => s.exprs.iter().any(|e| expr_uses_arguments(e)),
+        ast::Expr::Await(a) => expr_uses_arguments(&a.arg),
+        ast::Expr::Yield(y) => y.arg.as_deref().map(expr_uses_arguments).unwrap_or(false),
+        ast::Expr::OptChain(o) => match &*o.base {
+            ast::OptChainBase::Member(m) => {
+                expr_uses_arguments(&m.obj)
+                    || matches!(&m.prop, ast::MemberProp::Computed(c) if expr_uses_arguments(&c.expr))
+            }
+            ast::OptChainBase::Call(c) => {
+                expr_uses_arguments(&c.callee)
+                    || c.args.iter().any(|a| expr_uses_arguments(&a.expr))
+            }
+        },
+        ast::Expr::SuperProp(sp) => {
+            matches!(&sp.prop, ast::SuperProp::Computed(c) if expr_uses_arguments(&c.expr))
+        }
+        ast::Expr::TaggedTpl(t) => {
+            expr_uses_arguments(&t.tag) || t.tpl.exprs.iter().any(|e| expr_uses_arguments(e))
+        }
         // Don't descend into nested function declarations or function
         // expressions — those have their own `arguments` binding that
         // shadows the enclosing scope.
@@ -398,18 +502,146 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
     }
 }
 
-/// Synthesize a trailing `...arguments` rest parameter. Call after lowering
-/// the user's parameters, before lowering the body, when the body references
-/// `arguments` and the user hasn't already bound it (either explicitly or via
-/// their own rest param).
-pub fn append_synthetic_arguments_param(ctx: &mut LoweringContext, params: &mut Vec<Param>) {
+fn assign_target_uses_arguments(target: &ast::AssignTarget) -> bool {
+    match target {
+        ast::AssignTarget::Simple(simple) => simple_assign_target_uses_arguments(simple),
+        ast::AssignTarget::Pat(pat) => pat_uses_arguments(pat),
+    }
+}
+
+fn simple_assign_target_uses_arguments(target: &ast::SimpleAssignTarget) -> bool {
+    match target {
+        ast::SimpleAssignTarget::Ident(i) => i.id.sym.as_ref() == "arguments",
+        ast::SimpleAssignTarget::Member(m) => {
+            expr_uses_arguments(&m.obj)
+                || matches!(&m.prop, ast::MemberProp::Computed(c) if expr_uses_arguments(&c.expr))
+        }
+        ast::SimpleAssignTarget::Paren(p) => expr_uses_arguments(&p.expr),
+        ast::SimpleAssignTarget::TsAs(t) => expr_uses_arguments(&t.expr),
+        ast::SimpleAssignTarget::TsNonNull(t) => expr_uses_arguments(&t.expr),
+        ast::SimpleAssignTarget::TsTypeAssertion(t) => expr_uses_arguments(&t.expr),
+        ast::SimpleAssignTarget::TsSatisfies(t) => expr_uses_arguments(&t.expr),
+        _ => false,
+    }
+}
+
+fn pat_uses_arguments(pat: &ast::AssignTargetPat) -> bool {
+    match pat {
+        ast::AssignTargetPat::Array(a) => a.elems.iter().flatten().any(binding_pat_uses_arguments),
+        ast::AssignTargetPat::Object(o) => o.props.iter().any(|prop| match prop {
+            ast::ObjectPatProp::KeyValue(kv) => binding_pat_uses_arguments(&kv.value),
+            ast::ObjectPatProp::Assign(a) => {
+                a.key.sym.as_ref() == "arguments"
+                    || a.value.as_deref().map(expr_uses_arguments).unwrap_or(false)
+            }
+            ast::ObjectPatProp::Rest(r) => binding_pat_uses_arguments(&r.arg),
+        }),
+        ast::AssignTargetPat::Invalid(_) => false,
+    }
+}
+
+fn binding_pat_uses_arguments(pat: &ast::Pat) -> bool {
+    match pat {
+        ast::Pat::Ident(i) => i.id.sym.as_ref() == "arguments",
+        ast::Pat::Array(a) => a.elems.iter().flatten().any(binding_pat_uses_arguments),
+        ast::Pat::Rest(r) => binding_pat_uses_arguments(&r.arg),
+        ast::Pat::Object(o) => o.props.iter().any(|prop| match prop {
+            ast::ObjectPatProp::KeyValue(kv) => binding_pat_uses_arguments(&kv.value),
+            ast::ObjectPatProp::Assign(a) => {
+                a.key.sym.as_ref() == "arguments"
+                    || a.value.as_deref().map(expr_uses_arguments).unwrap_or(false)
+            }
+            ast::ObjectPatProp::Rest(r) => binding_pat_uses_arguments(&r.arg),
+        }),
+        ast::Pat::Assign(a) => binding_pat_uses_arguments(&a.left) || expr_uses_arguments(&a.right),
+        ast::Pat::Expr(e) => expr_uses_arguments(e),
+        ast::Pat::Invalid(_) => false,
+    }
+}
+
+pub fn body_has_use_strict(body: &[ast::Stmt]) -> bool {
+    for stmt in body {
+        let Some(directive) = crate::lower::string_directive_stmt_lit(stmt) else {
+            return false;
+        };
+        if crate::lower::is_raw_use_strict_directive(directive) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn params_are_simple_arguments_list(params: &[ast::Param]) -> bool {
+    params.iter().all(|param| match &param.pat {
+        ast::Pat::Ident(ident) => ident.id.sym.as_ref() == "this" || !ident.id.sym.is_empty(),
+        _ => false,
+    })
+}
+
+pub fn mapped_argument_parameter_ids(params: &[Param]) -> Vec<(u32, LocalId)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut mapped = Vec::new();
+    for (idx, param) in params.iter().enumerate().rev() {
+        if param.is_rest || param.arguments_object.is_some() {
+            continue;
+        }
+        if seen.insert(param.name.clone()) {
+            mapped.push((idx as u32, param.id));
+        }
+    }
+    mapped
+}
+
+/// True when any parameter's DEFAULT expression references `arguments`
+/// (`method(x = arguments[2], y) {}`). Parameter defaults evaluate in the
+/// function's own scope, so they see the same arguments object as the body —
+/// the synthetic-arguments check must include them (test262
+/// class/params-dflt-meth-ref-arguments).
+pub fn params_use_arguments(params: &[ast::Param]) -> bool {
+    params.iter().any(|p| param_pat_uses_arguments(&p.pat))
+}
+
+fn param_pat_uses_arguments(pat: &ast::Pat) -> bool {
+    match pat {
+        ast::Pat::Assign(a) => expr_uses_arguments(&a.right) || param_pat_uses_arguments(&a.left),
+        ast::Pat::Array(arr) => arr.elems.iter().flatten().any(param_pat_uses_arguments),
+        ast::Pat::Object(obj) => obj.props.iter().any(|p| match p {
+            ast::ObjectPatProp::Assign(a) => {
+                a.value.as_deref().map(expr_uses_arguments).unwrap_or(false)
+            }
+            ast::ObjectPatProp::KeyValue(kv) => param_pat_uses_arguments(&kv.value),
+            ast::ObjectPatProp::Rest(r) => param_pat_uses_arguments(&r.arg),
+        }),
+        ast::Pat::Rest(r) => param_pat_uses_arguments(&r.arg),
+        _ => false,
+    }
+}
+
+/// Synthesize a hidden raw-arguments parameter. Call after lowering the user's
+/// parameters, before lowering the body, when the body references `arguments`
+/// and the user hasn't already bound it explicitly.
+pub fn append_synthetic_arguments_param(
+    ctx: &mut LoweringContext,
+    params: &mut Vec<Param>,
+    strict: bool,
+    simple_parameters: bool,
+    restricted_callee: bool,
+    mapped_parameter_ids: Vec<(u32, LocalId)>,
+) {
     let arguments_id = ctx.define_local("arguments".to_string(), Type::Any);
+    let has_user_rest = params.iter().any(|p| p.is_rest);
     params.push(Param {
         id: arguments_id,
         name: "arguments".to_string(),
         ty: Type::Any,
         default: None,
         decorators: Vec::new(),
-        is_rest: true,
+        is_rest: !has_user_rest,
+        arguments_object: Some(ArgumentsObjectMeta {
+            strict,
+            simple_parameters,
+            mapped_parameter_ids,
+            restricted_callee,
+        }),
     });
 }

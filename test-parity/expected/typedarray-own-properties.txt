@@ -1,0 +1,11 @@
+define length ok
+own length {"read":1,"tail":4,"desc":{"value":1,"writable":false,"enumerable":false,"configurable":false},"names":["0","1","2","length"],"keys":["0","1","2"],"hasOwn":true,"enumerable":false}
+define foo ok
+ordinary props {"foo":5,"fooDesc":{"value":5,"writable":false,"enumerable":false,"configurable":false},"bar":7,"barDesc":{"value":7,"writable":true,"enumerable":true,"configurable":true},"names":["0","1","2","length","foo","bar"],"keys":["0","1","2","bar"]}
+accessor prop {"accRead":11,"getterCalls":1,"seen":88,"accDesc":{"get":"function","set":"function","enumerable":true,"configurable":true},"seenDesc":{"value":88,"writable":true,"enumerable":true,"configurable":true},"keys":["0","1","2","bar","acc","seen"]}
+non canonical key {"value":9,"names":["0","1","00"],"keys":["0","1","00"]}
+define index ok
+index props {"zero":9,"one":8,"zeroDesc":{"value":9,"writable":true,"enumerable":true,"configurable":true},"names":["0","1"],"keys":["0","1"]}
+define oob index TypeError
+define negative index TypeError
+invalid index state {"negativeDesc":null,"names":["0","1"]}

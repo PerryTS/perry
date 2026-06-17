@@ -9,6 +9,7 @@
 
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -26,12 +27,65 @@ thread_local! {
     static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
     static TIMERS_PROMISES_PARENT_NAMESPACE: Cell<u64> = const { Cell::new(0) };
     static ZLIB_CODES_OBJECT: Cell<u64> = const { Cell::new(0) };
+    static WORKER_THREADS_LOCKS_VALUE: Cell<u64> = const { Cell::new(0) };
+    static WORKER_THREADS_WEB_LOCKS: RefCell<WebLocksState> =
+        RefCell::new(WebLocksState::default());
+    static MODULE_CJS_CACHE_VALUE: Cell<u64> = const { Cell::new(0) };
+    static MODULE_CJS_EXTENSIONS_VALUE: Cell<u64> = const { Cell::new(0) };
+    static MODULE_CJS_PATH_CACHE_VALUE: Cell<u64> = const { Cell::new(0) };
+    static MODULE_CJS_GLOBAL_PATHS_VALUE: Cell<u64> = const { Cell::new(0) };
     static NATIVE_MODULE_NAMESPACES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+    /// User overrides of native-module namespace properties, keyed
+    /// `"{module}\0{prop}"`. CommonJS module exports are MUTABLE in Node —
+    /// monkey-patching like Next.js's
+    /// `require('node:timers').setImmediate = patched` must store and win
+    /// subsequent property reads instead of throwing read-only.
+    static NATIVE_NAMESPACE_PROP_OVERRIDES: RefCell<HashMap<String, u64>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Store a user override for a native-module namespace property
+/// (`require('node:timers').setImmediate = fn`). Wins subsequent reads via
+/// `vt_get_own_field`.
+pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, value: f64) {
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow_mut()
+            .insert(format!("{module}\0{prop}"), value.to_bits());
+    });
+}
+
+/// Read back a stored native-namespace property override, if any.
+pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Option<f64> {
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow()
+            .get(&format!("{module}\0{prop}"))
+            .map(|bits| f64::from_bits(*bits))
+    })
+}
+
+fn bound_native_method_length(name: &str) -> Option<u32> {
+    match name {
+        "keepSocketAlive" => Some(1),
+        "reuseSocket" => Some(2),
+        "getName" | "destroy" | "close" => Some(0),
+        _ => None,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_vm_create_context(sandbox: f64) -> f64 {
+    crate::node_vm::create_context(sandbox)
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     NATIVE_CALLABLE_EXPORTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        for value_bits in cache.values_mut() {
+            visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
             visitor.visit_nanbox_u64_slot(value_bits);
@@ -99,6 +153,52 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
             slot.set(value_bits);
         }
     });
+    WORKER_THREADS_LOCKS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_CACHE_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_EXTENSIONS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_PATH_CACHE_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    MODULE_CJS_GLOBAL_PATHS_VALUE.with(|slot| {
+        let mut value_bits = slot.get();
+        if value_bits != 0 {
+            visitor.visit_nanbox_u64_slot(&mut value_bits);
+            slot.set(value_bits);
+        }
+    });
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        for held in &mut state.held {
+            visitor.visit_raw_mut_ptr_slot(&mut held.source_promise);
+            visitor.visit_raw_mut_ptr_slot(&mut held.output_promise);
+        }
+        for pending in &mut state.pending {
+            visitor.visit_nanbox_u64_slot(&mut pending.callback_bits);
+            visitor.visit_raw_mut_ptr_slot(&mut pending.output_promise);
+        }
+    });
     NATIVE_MODULE_NAMESPACES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
@@ -113,6 +213,7 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
 /// This is used to identify objects that represent native module namespaces
 pub const NATIVE_MODULE_CLASS_ID: u32 = 0xFFFFFFFE;
 const WORKER_THREADS_LOCK_MANAGER_CLASS_ID: u32 = 0xFFFF_00B1;
+const WORKER_THREADS_LOCK_CLASS_ID: u32 = 0xFFFF_00B2;
 
 static BUFFER_POOL_SIZE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(8192f64.to_bits());
@@ -122,16 +223,22 @@ type WorkerThreadsValueGetter = extern "C" fn() -> f64;
 static WORKER_THREADS_WORKER_DATA_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_IS_MAIN_THREAD_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static WORKER_THREADS_PARENT_PORT_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_THREAD_NAME_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static WORKER_THREADS_RESOURCE_LIMITS_GETTER: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 #[no_mangle]
 pub extern "C" fn js_register_worker_threads_namespace_getters(
     worker_data: WorkerThreadsValueGetter,
     is_main_thread: WorkerThreadsValueGetter,
     parent_port: WorkerThreadsValueGetter,
+    thread_name: WorkerThreadsValueGetter,
+    resource_limits: WorkerThreadsValueGetter,
 ) {
     WORKER_THREADS_WORKER_DATA_GETTER.store(worker_data as *mut (), Ordering::Release);
     WORKER_THREADS_IS_MAIN_THREAD_GETTER.store(is_main_thread as *mut (), Ordering::Release);
     WORKER_THREADS_PARENT_PORT_GETTER.store(parent_port as *mut (), Ordering::Release);
+    WORKER_THREADS_THREAD_NAME_GETTER.store(thread_name as *mut (), Ordering::Release);
+    WORKER_THREADS_RESOURCE_LIMITS_GETTER.store(resource_limits as *mut (), Ordering::Release);
 }
 
 fn call_worker_threads_getter(slot: &AtomicPtr<()>, fallback: impl FnOnce() -> f64) -> f64 {
@@ -151,7 +258,265 @@ pub(crate) fn set_buffer_pool_size(value: f64) {
     BUFFER_POOL_SIZE_BITS.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebLockMode {
+    Exclusive,
+    Shared,
+}
+
+impl WebLockMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            WebLockMode::Exclusive => "exclusive",
+            WebLockMode::Shared => "shared",
+        }
+    }
+}
+
+struct WebLockHeld {
+    id: u64,
+    name: String,
+    mode: WebLockMode,
+    client_id: String,
+    source_promise: *mut crate::promise::Promise,
+    output_promise: *mut crate::promise::Promise,
+}
+
+struct WebLockPending {
+    id: u64,
+    name: String,
+    mode: WebLockMode,
+    client_id: String,
+    if_available: bool,
+    steal: bool,
+    callback_bits: u64,
+    output_promise: *mut crate::promise::Promise,
+}
+
+#[derive(Default)]
+struct WebLocksState {
+    next_id: u64,
+    held: Vec<WebLockHeld>,
+    pending: VecDeque<WebLockPending>,
+}
+
+enum WebLocksProcessItem {
+    Grant(WebLockPending),
+    Unavailable(WebLockPending),
+}
+
+fn worker_threads_web_locks_client_id() -> String {
+    "node-perry-0".to_string()
+}
+
+fn web_locks_string_value(value: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn web_locks_object_value<T>(ptr: *mut T) -> f64 {
+    crate::value::js_nanbox_pointer(ptr as i64)
+}
+
+fn web_locks_named_key(name: &str) -> *mut crate::string::StringHeader {
+    crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+}
+
+fn web_locks_set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
+    let key = web_locks_named_key(name);
+    crate::object::js_object_set_field_by_name(obj, key, value);
+}
+
+fn web_locks_get_field(value: f64, name: &str) -> f64 {
+    let ptr = crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader;
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = web_locks_named_key(name);
+    crate::object::js_object_get_field_by_name_f64(ptr, key)
+}
+
+fn web_locks_value_to_string(value: f64) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(value);
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
+}
+
+fn web_locks_is_object_like(value: f64) -> bool {
+    unsafe { crate::object::object_ops::value_is_object_like(value) }
+}
+
+fn web_locks_is_callable(value: f64) -> bool {
+    let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
+    ptr >= 0x1000 && crate::closure::is_closure_ptr(ptr)
+}
+
+fn web_locks_undefined() -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn web_locks_null() -> f64 {
+    f64::from_bits(crate::value::TAG_NULL)
+}
+
+fn web_locks_is_undefined(value: f64) -> bool {
+    value.to_bits() == crate::value::TAG_UNDEFINED
+}
+
+fn web_locks_is_nullish(value: f64) -> bool {
+    let bits = value.to_bits();
+    bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL
+}
+
+fn web_locks_type_error_value(message: &str, code: &'static str) -> f64 {
+    crate::fs::validate::build_type_error_with_code_value(message, code)
+}
+
+fn web_locks_dom_not_supported_value(message: &str) -> f64 {
+    let msg = web_locks_string_value(message);
+    let name = web_locks_string_value("NotSupportedError");
+    let err = crate::event_target::js_dom_exception_new(msg, name);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn web_locks_callback_type_error(callback: f64) -> f64 {
+    let received = if web_locks_is_undefined(callback) {
+        "undefined".to_string()
+    } else {
+        format!("type {}", web_locks_value_to_string(callback))
+    };
+    let message =
+        format!("The \"callback\" argument must be of type function. Received {received}");
+    web_locks_type_error_value(&message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn web_locks_parse_mode(options: f64) -> Result<WebLockMode, f64> {
+    if web_locks_is_nullish(options) {
+        return Ok(WebLockMode::Exclusive);
+    }
+    if !web_locks_is_object_like(options) {
+        return Err(web_locks_type_error_value(
+            "Value cannot be converted to a dictionary",
+            "ERR_INVALID_ARG_TYPE",
+        ));
+    }
+    let mode_value = web_locks_get_field(options, "mode");
+    if web_locks_is_undefined(mode_value) {
+        return Ok(WebLockMode::Exclusive);
+    }
+    let mode = web_locks_value_to_string(mode_value);
+    match mode.as_str() {
+        "exclusive" => Ok(WebLockMode::Exclusive),
+        "shared" => Ok(WebLockMode::Shared),
+        _ => {
+            let message =
+                format!("mode value '{mode}' is not a valid enum value of type LockMode.");
+            Err(web_locks_type_error_value(
+                &message,
+                "ERR_INVALID_ARG_VALUE",
+            ))
+        }
+    }
+}
+
+fn web_locks_parse_bool_option(options: f64, name: &str) -> bool {
+    if web_locks_is_nullish(options) || !web_locks_is_object_like(options) {
+        return false;
+    }
+    let value = web_locks_get_field(options, name);
+    if web_locks_is_undefined(value) {
+        return false;
+    }
+    crate::value::js_is_truthy(value) != 0
+}
+
+fn web_locks_signal_rejection(options: f64) -> Result<Option<f64>, f64> {
+    if web_locks_is_nullish(options) || !web_locks_is_object_like(options) {
+        return Ok(None);
+    }
+    let signal = web_locks_get_field(options, "signal");
+    if web_locks_is_nullish(signal) {
+        return Ok(None);
+    }
+    if !web_locks_is_object_like(signal) {
+        return Err(web_locks_type_error_value(
+            "Value is not an object",
+            "ERR_INVALID_ARG_TYPE",
+        ));
+    }
+    let aborted = web_locks_get_field(signal, "aborted");
+    if web_locks_is_undefined(aborted) {
+        return Err(web_locks_type_error_value(
+            "The \"options.signal\" property must be an instance of AbortSignal. Received an instance of Object",
+            "ERR_INVALID_ARG_TYPE",
+        ));
+    }
+    if crate::value::js_is_truthy(aborted) != 0 {
+        let reason = web_locks_get_field(signal, "reason");
+        if web_locks_is_undefined(reason) {
+            Ok(Some(crate::event_target::abort_dom_exception_value()))
+        } else {
+            Ok(Some(reason))
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+fn web_locks_make_function(
+    name: &str,
+    func_ptr: *const u8,
+    call_arity: u32,
+    exposed_length: u32,
+) -> f64 {
+    crate::closure::js_register_closure_arity(func_ptr, call_arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    set_bound_native_closure_name(closure, name);
+    set_builtin_closure_length(closure as usize, exposed_length);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+extern "C" fn worker_threads_lock_manager_to_string_tag(_this: f64) -> f64 {
+    web_locks_string_value("LockManager")
+}
+
+extern "C" fn worker_threads_lock_to_string_tag(_this: f64) -> f64 {
+    web_locks_string_value("Lock")
+}
+
+fn worker_threads_locks_proto_value() -> f64 {
+    let proto = crate::object::js_object_alloc(0, 0);
+    let request =
+        web_locks_make_function("request", worker_threads_locks_request as *const u8, 3, 2);
+    crate::object::class_prototype_method_root_store(
+        WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+        "request".to_string(),
+        request.to_bits(),
+    );
+    web_locks_set_field(proto, "request", request);
+    let query = web_locks_make_function("query", worker_threads_locks_query as *const u8, 0, 0);
+    crate::object::class_prototype_method_root_store(
+        WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+        "query".to_string(),
+        query.to_bits(),
+    );
+    web_locks_set_field(proto, "query", query);
+    web_locks_object_value(proto)
+}
+
 fn worker_threads_locks_value() -> f64 {
+    if let Some(bits) = WORKER_THREADS_LOCKS_VALUE.with(|slot| {
+        let bits = slot.get();
+        (bits != 0).then_some(bits)
+    }) {
+        return f64::from_bits(bits);
+    }
     let name = "LockManager";
     unsafe {
         js_register_class_id(WORKER_THREADS_LOCK_MANAGER_CLASS_ID);
@@ -160,12 +525,488 @@ fn worker_threads_locks_value() -> f64 {
             name.as_ptr(),
             name.len() as u32,
         );
+        crate::object::js_register_class_to_string_tag(
+            WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
+            worker_threads_lock_manager_to_string_tag as *const u8 as i64,
+        );
+    }
+    let lock_name = "Lock";
+    unsafe {
+        js_register_class_id(WORKER_THREADS_LOCK_CLASS_ID);
+        js_register_class_name(
+            WORKER_THREADS_LOCK_CLASS_ID,
+            lock_name.as_ptr(),
+            lock_name.len() as u32,
+        );
+        crate::object::js_register_class_to_string_tag(
+            WORKER_THREADS_LOCK_CLASS_ID,
+            worker_threads_lock_to_string_tag as *const u8 as i64,
+        );
     }
     let obj = js_object_alloc(WORKER_THREADS_LOCK_MANAGER_CLASS_ID, 0);
-    crate::value::js_nanbox_pointer(obj as i64)
+    let obj_value = crate::value::js_nanbox_pointer(obj as i64);
+    crate::object::js_object_set_prototype_of(obj_value, worker_threads_locks_proto_value());
+    WORKER_THREADS_LOCKS_VALUE.with(|slot| slot.set(obj_value.to_bits()));
+    obj_value
 }
 
-/// Create a native module namespace object
+fn web_locks_new_id(state: &mut WebLocksState) -> u64 {
+    state.next_id = state.next_id.saturating_add(1);
+    state.next_id
+}
+
+fn web_locks_is_grantable(state: &WebLocksState, name: &str, mode: WebLockMode) -> bool {
+    let mut has_same_name = false;
+    for held in &state.held {
+        if held.name != name {
+            continue;
+        }
+        has_same_name = true;
+        if mode == WebLockMode::Exclusive || held.mode == WebLockMode::Exclusive {
+            return false;
+        }
+    }
+    !has_same_name || mode == WebLockMode::Shared
+}
+
+fn web_locks_has_pending_same_name(state: &WebLocksState, name: &str) -> bool {
+    state.pending.iter().any(|pending| pending.name == name)
+}
+
+fn web_locks_lock_info_object(name: &str, mode: WebLockMode, client_id: &str) -> f64 {
+    let obj = crate::object::js_object_alloc(0, 0);
+    web_locks_set_field(obj, "name", web_locks_string_value(name));
+    web_locks_set_field(obj, "mode", web_locks_string_value(mode.as_str()));
+    web_locks_set_field(obj, "clientId", web_locks_string_value(client_id));
+    web_locks_object_value(obj)
+}
+
+fn web_locks_lock_object(name: &str, mode: WebLockMode) -> f64 {
+    let obj = crate::object::js_object_alloc(WORKER_THREADS_LOCK_CLASS_ID, 0);
+    web_locks_set_field(obj, "name", web_locks_string_value(name));
+    web_locks_set_field(obj, "mode", web_locks_string_value(mode.as_str()));
+    web_locks_object_value(obj)
+}
+
+fn web_locks_snapshot_array<'a>(
+    items: impl Iterator<Item = (&'a String, WebLockMode, &'a String)>,
+) -> *mut crate::array::ArrayHeader {
+    let mut array = crate::array::js_array_alloc(0);
+    for (name, mode, client_id) in items {
+        array = crate::array::js_array_push_f64(
+            array,
+            web_locks_lock_info_object(name, mode, client_id),
+        );
+    }
+    array
+}
+
+fn web_locks_query_snapshot() -> f64 {
+    let (held, pending) = WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let state = state.borrow();
+        let held = web_locks_snapshot_array(
+            state
+                .held
+                .iter()
+                .map(|item| (&item.name, item.mode, &item.client_id)),
+        );
+        let pending = web_locks_snapshot_array(
+            state
+                .pending
+                .iter()
+                .map(|item| (&item.name, item.mode, &item.client_id)),
+        );
+        (held, pending)
+    });
+    let snapshot = crate::object::js_object_alloc(0, 0);
+    web_locks_set_field(snapshot, "held", web_locks_object_value(held));
+    web_locks_set_field(snapshot, "pending", web_locks_object_value(pending));
+    web_locks_object_value(snapshot)
+}
+
+fn web_locks_reject_promise(reason: f64) -> *mut crate::promise::Promise {
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_reject(promise, reason);
+    promise
+}
+
+fn web_locks_rejected_error(error: f64) -> f64 {
+    web_locks_object_value(web_locks_reject_promise(error))
+}
+
+fn web_locks_request_args(callback: f64, arg: f64) -> *mut crate::array::ArrayHeader {
+    let _ = callback;
+    let mut args = crate::array::js_array_alloc(1);
+    args = crate::array::js_array_push_f64(args, arg);
+    args
+}
+
+fn web_locks_release_callback_value(
+    id: u64,
+    output_promise: *mut crate::promise::Promise,
+    reject: bool,
+) -> *const crate::closure::ClosureHeader {
+    let func_ptr = if reject {
+        worker_threads_locks_release_reject as *const u8
+    } else {
+        worker_threads_locks_release_fulfill as *const u8
+    };
+    crate::closure::js_register_closure_arity(func_ptr, 1);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 2);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 1, output_promise as i64);
+    closure
+}
+
+fn web_locks_call_callback(
+    id: u64,
+    callback_bits: u64,
+    arg: f64,
+    output_promise: *mut crate::promise::Promise,
+) -> *mut crate::promise::Promise {
+    let callback = f64::from_bits(callback_bits);
+    let args = web_locks_request_args(callback, arg);
+    let source = crate::promise::js_promise_try(callback, args as *const crate::array::ArrayHeader);
+    let on_fulfilled = web_locks_release_callback_value(id, output_promise, false);
+    let on_rejected = web_locks_release_callback_value(id, output_promise, true);
+    crate::promise::js_promise_then(source, on_fulfilled, on_rejected);
+    source
+}
+
+fn web_locks_grant_request(request: WebLockPending) {
+    let lock_arg = web_locks_lock_object(&request.name, request.mode);
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        state.held.push(WebLockHeld {
+            id: request.id,
+            name: request.name.clone(),
+            mode: request.mode,
+            client_id: request.client_id.clone(),
+            source_promise: null_mut(),
+            output_promise: request.output_promise,
+        });
+    });
+    let source = web_locks_call_callback(
+        request.id,
+        request.callback_bits,
+        lock_arg,
+        request.output_promise,
+    );
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        if let Some(held) = state.held.iter_mut().find(|held| held.id == request.id) {
+            held.source_promise = source;
+        }
+    });
+}
+
+fn web_locks_run_unavailable_request(request: WebLockPending) {
+    web_locks_call_callback(
+        0,
+        request.callback_bits,
+        web_locks_null(),
+        request.output_promise,
+    );
+}
+
+fn web_locks_steal_locked(
+    state: &mut WebLocksState,
+    name: &str,
+) -> Vec<*mut crate::promise::Promise> {
+    let mut rejected = Vec::new();
+    let mut i = 0;
+    while i < state.held.len() {
+        if state.held[i].name == name {
+            let held = state.held.remove(i);
+            rejected.push(held.output_promise);
+        } else {
+            i += 1;
+        }
+    }
+    rejected
+}
+
+fn web_locks_steal_reason() -> f64 {
+    let msg = web_locks_string_value("The lock request was stolen");
+    let name = web_locks_string_value("AbortError");
+    let err = crate::event_target::js_dom_exception_new(msg, name);
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+fn web_locks_reject_stolen(promises: Vec<*mut crate::promise::Promise>) {
+    if promises.is_empty() {
+        return;
+    }
+    let reason = web_locks_steal_reason();
+    for promise in promises {
+        crate::promise::js_promise_reject(promise, reason);
+    }
+}
+
+fn web_locks_take_next_process_item(
+) -> Option<(WebLocksProcessItem, Vec<*mut crate::promise::Promise>)> {
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        for index in 0..state.pending.len() {
+            let name = state.pending[index].name.clone();
+            if state
+                .pending
+                .iter()
+                .take(index)
+                .any(|pending| pending.name == name)
+            {
+                continue;
+            }
+            if state.pending[index].steal {
+                let request = state.pending.remove(index)?;
+                let rejected = web_locks_steal_locked(&mut state, &request.name);
+                return Some((WebLocksProcessItem::Grant(request), rejected));
+            }
+            if web_locks_is_grantable(&state, &name, state.pending[index].mode) {
+                let request = state.pending.remove(index)?;
+                return Some((WebLocksProcessItem::Grant(request), Vec::new()));
+            }
+            if state.pending[index].if_available {
+                let request = state.pending.remove(index)?;
+                return Some((WebLocksProcessItem::Unavailable(request), Vec::new()));
+            }
+        }
+        None
+    })
+}
+
+fn web_locks_process_queue() {
+    while let Some((item, stolen)) = web_locks_take_next_process_item() {
+        web_locks_reject_stolen(stolen);
+        match item {
+            WebLocksProcessItem::Grant(request) => web_locks_grant_request(request),
+            WebLocksProcessItem::Unavailable(request) => web_locks_run_unavailable_request(request),
+        }
+    }
+}
+
+fn web_locks_release(id: u64) {
+    if id == 0 {
+        return;
+    }
+    WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        state.held.retain(|held| held.id != id);
+    });
+    web_locks_process_queue();
+}
+
+extern "C" fn worker_threads_locks_release_fulfill(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let output =
+        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    web_locks_release(id);
+    crate::promise::js_promise_resolve(output, value);
+    web_locks_undefined()
+}
+
+extern "C" fn worker_threads_locks_release_reject(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    let id = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let output =
+        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    web_locks_release(id);
+    crate::promise::js_promise_reject(output, reason);
+    web_locks_undefined()
+}
+
+extern "C" fn worker_threads_locks_request(
+    _closure: *const crate::closure::ClosureHeader,
+    name_value: f64,
+    options_or_callback: f64,
+    maybe_callback: f64,
+) -> f64 {
+    let has_options = !web_locks_is_undefined(maybe_callback);
+    let callback = if has_options {
+        maybe_callback
+    } else {
+        options_or_callback
+    };
+    if !web_locks_is_callable(callback) {
+        return web_locks_rejected_error(web_locks_callback_type_error(callback));
+    }
+
+    let options = if has_options {
+        options_or_callback
+    } else {
+        web_locks_undefined()
+    };
+    let name = web_locks_value_to_string(name_value);
+    let mode = match web_locks_parse_mode(options) {
+        Ok(mode) => mode,
+        Err(error) => return web_locks_rejected_error(error),
+    };
+    let if_available = web_locks_parse_bool_option(options, "ifAvailable");
+    let steal = web_locks_parse_bool_option(options, "steal");
+    if if_available && steal {
+        return web_locks_rejected_error(web_locks_dom_not_supported_value(
+            "ifAvailable and steal are mutually exclusive",
+        ));
+    }
+
+    match web_locks_signal_rejection(options) {
+        Ok(Some(reason)) => return web_locks_object_value(web_locks_reject_promise(reason)),
+        Ok(None) => {}
+        Err(error) => return web_locks_rejected_error(error),
+    }
+
+    let output_promise = crate::promise::js_promise_new();
+    let client_id = worker_threads_web_locks_client_id();
+    let callback_bits = callback.to_bits();
+
+    let immediate = WORKER_THREADS_WEB_LOCKS.with(|state| {
+        let mut state = state.borrow_mut();
+        let id = web_locks_new_id(&mut state);
+        let request = WebLockPending {
+            id,
+            name,
+            mode,
+            client_id,
+            if_available,
+            steal,
+            callback_bits,
+            output_promise,
+        };
+        if request.steal {
+            let rejected = web_locks_steal_locked(&mut state, &request.name);
+            return (Some(WebLocksProcessItem::Grant(request)), rejected);
+        }
+        if !web_locks_has_pending_same_name(&state, &request.name)
+            && web_locks_is_grantable(&state, &request.name, request.mode)
+        {
+            return (Some(WebLocksProcessItem::Grant(request)), Vec::new());
+        }
+        if request.if_available {
+            return (Some(WebLocksProcessItem::Unavailable(request)), Vec::new());
+        }
+        state.pending.push_back(request);
+        (None, Vec::new())
+    });
+
+    web_locks_reject_stolen(immediate.1);
+    if let Some(item) = immediate.0 {
+        match item {
+            WebLocksProcessItem::Grant(request) => web_locks_grant_request(request),
+            WebLocksProcessItem::Unavailable(request) => web_locks_run_unavailable_request(request),
+        }
+        web_locks_process_queue();
+    }
+
+    web_locks_object_value(output_promise)
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_locks_request(
+    name_value: f64,
+    options_or_callback: f64,
+    maybe_callback: f64,
+) -> f64 {
+    worker_threads_locks_request(
+        std::ptr::null(),
+        name_value,
+        options_or_callback,
+        maybe_callback,
+    )
+}
+
+extern "C" fn worker_threads_locks_query(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let snapshot = web_locks_query_snapshot();
+    web_locks_object_value(crate::promise::js_promise_resolved(snapshot))
+}
+
+#[no_mangle]
+pub extern "C" fn js_worker_threads_locks_query() -> f64 {
+    worker_threads_locks_query(std::ptr::null())
+}
+
+/// Linker-strippability vtable for every native-module behavior reachable
+/// from the always-linked generic object paths (method dispatch, own-field
+/// reads, Object.keys, has/in checks). All of these bottom out in large
+/// static (module, method) tables that reference every module's runtime
+/// implementation; a direct call from a generic path pins all of it in
+/// every binary, `-dead_strip` notwithstanding. Namespace-class objects
+/// (NATIVE_MODULE_CLASS_ID) are only created by
+/// `js_create_native_module_namespace` and a handful of in-crate
+/// allocators (node_v8 serializer, perf_hooks observer), all of which
+/// install this vtable first — so a program that never creates one lets
+/// the linker drop the tables wholesale. Relaxed ordering is sufficient:
+/// the store happens-before any namespace object can reach a call site on
+/// the creating thread, and cross-thread publication of the object
+/// pointer itself already synchronizes.
+pub(crate) struct NativeModuleVtable {
+    pub dispatch: unsafe fn(*const ObjectHeader, &str, *const f64, usize) -> f64,
+    pub get_own_field:
+        unsafe fn(*const ObjectHeader, *const crate::StringHeader) -> Option<JSValue>,
+    pub own_keys_array: unsafe fn(*const ObjectHeader) -> Option<*mut crate::array::ArrayHeader>,
+    pub has_enumerable_key: fn(&str, &str) -> bool,
+}
+
+static NATIVE_MODULE_VTABLE_IMPL: NativeModuleVtable = NativeModuleVtable {
+    dispatch: dispatch_native_module_method,
+    get_own_field: vt_get_own_field,
+    own_keys_array: vt_own_keys_array,
+    has_enumerable_key: native_module_has_enumerable_key,
+};
+
+static NATIVE_MODULE_VTABLE_PTR: AtomicPtr<NativeModuleVtable> =
+    AtomicPtr::new(std::ptr::null_mut());
+
+/// Make the native-module vtable reachable. Must be called by every code
+/// path that creates a NATIVE_MODULE_CLASS_ID object — this is the only
+/// static reference to the dispatch/table machinery in the crate.
+pub(crate) fn install_native_module_vtable() {
+    NATIVE_MODULE_VTABLE_PTR.store(
+        &NATIVE_MODULE_VTABLE_IMPL as *const NativeModuleVtable as *mut NativeModuleVtable,
+        Ordering::Relaxed,
+    );
+}
+
+/// `None` until the first namespace object exists; generic paths treat
+/// that as "no native module can be involved" and fall through to their
+/// default behavior.
+#[inline]
+pub(crate) fn native_module_vtable() -> Option<&'static NativeModuleVtable> {
+    let p = NATIVE_MODULE_VTABLE_PTR.load(Ordering::Relaxed);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { &*(p as *const NativeModuleVtable) })
+    }
+}
+
+/// Route a NATIVE_MODULE_CLASS_ID method call through the vtable. A null
+/// vtable means no namespace object was ever created, so no such object
+/// can exist to dispatch on — unreachable in practice.
+#[inline]
+pub(crate) unsafe fn call_native_module_dispatch_hook(
+    obj: *const ObjectHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    match native_module_vtable() {
+        Some(vt) => (vt.dispatch)(obj, method_name, args_ptr, args_len),
+        None => {
+            debug_assert!(
+                false,
+                "native-module method call before any namespace was created"
+            );
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        }
+    }
+}
+
+/// Create a native module namespace object/// Create a native module namespace object
 /// This is used for `import * as X from 'module'` patterns
 /// The returned object identifies itself as an object (typeof returns "object")
 /// and stores the module name for debugging purposes
@@ -178,6 +1019,9 @@ pub extern "C" fn js_create_native_module_namespace(
     module_name_ptr: *const u8,
     module_name_len: usize,
 ) -> f64 {
+    // Install the vtable the moment the first namespace exists — the only
+    // static reference to the dispatch/table machinery in the crate.
+    install_native_module_vtable();
     let module_name = unsafe {
         std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
             .unwrap_or("")
@@ -687,6 +1531,32 @@ const ASYNC_HOOKS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"triggerAsyncId",
 ];
 
+const STREAM_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Duplex",
+    b"PassThrough",
+    b"Readable",
+    b"Stream",
+    b"Transform",
+    b"Writable",
+    b"_isArrayBufferView",
+    b"_isUint8Array",
+    b"_uint8ArrayToBuffer",
+    b"addAbortSignal",
+    b"compose",
+    b"default",
+    b"duplexPair",
+    b"finished",
+    b"getDefaultHighWaterMark",
+    b"isDestroyed",
+    b"isDisturbed",
+    b"isErrored",
+    b"isReadable",
+    b"isWritable",
+    b"pipeline",
+    b"promises",
+    b"setDefaultHighWaterMark",
+];
+
 const DNS_DEFAULT_KEYS: &[&[u8]] = &[
     b"lookup",
     b"lookupService",
@@ -895,6 +1765,7 @@ const DNS_PROMISES_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
     b"ChildProcess",
+    b"_forkChild",
     b"exec",
     b"execFile",
     b"execFileSync",
@@ -906,6 +1777,7 @@ const CHILD_PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
 
 const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"ChildProcess",
+    b"_forkChild",
     b"default",
     b"exec",
     b"execFile",
@@ -914,6 +1786,212 @@ const CHILD_PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"fork",
     b"spawn",
     b"spawnSync",
+];
+
+const CLUSTER_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"SCHED_NONE",
+    b"SCHED_RR",
+    b"Worker",
+    b"_events",
+    b"_eventsCount",
+    b"_maxListeners",
+    b"default",
+    b"disconnect",
+    b"fork",
+    b"isMaster",
+    b"isPrimary",
+    b"isWorker",
+    b"schedulingPolicy",
+    b"settings",
+    b"setupMaster",
+    b"setupPrimary",
+    b"workers",
+];
+
+const CLUSTER_DEFAULT_KEYS: &[&[u8]] = &[
+    b"_events",
+    b"_eventsCount",
+    b"_maxListeners",
+    b"isWorker",
+    b"isMaster",
+    b"isPrimary",
+    b"Worker",
+    b"workers",
+    b"settings",
+    b"SCHED_NONE",
+    b"SCHED_RR",
+    b"schedulingPolicy",
+    b"setupPrimary",
+    b"setupMaster",
+    b"fork",
+    b"disconnect",
+];
+
+const PROCESS_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"_debugEnd",
+    b"_debugProcess",
+    b"_events",
+    b"_eventsCount",
+    b"_exiting",
+    b"_fatalException",
+    b"_getActiveHandles",
+    b"_getActiveRequests",
+    b"_kill",
+    b"_linkedBinding",
+    b"_maxListeners",
+    b"_preload_modules",
+    b"_rawDebug",
+    b"_startProfilerIdleNotifier",
+    b"_stopProfilerIdleNotifier",
+    b"_tickCallback",
+    b"abort",
+    b"addListener",
+    b"addUncaughtExceptionCaptureCallback",
+    b"allowedNodeEnvironmentFlags",
+    b"argv",
+    b"argv0",
+    b"arch",
+    b"binding",
+    b"channel",
+    b"chdir",
+    b"config",
+    b"connected",
+    b"cpuUsage",
+    b"cwd",
+    b"debugPort",
+    b"default",
+    b"disconnect",
+    b"dlopen",
+    b"domain",
+    b"env",
+    b"eventNames",
+    b"execve",
+    b"execArgv",
+    b"execPath",
+    b"features",
+    b"finalization",
+    b"getActiveResourcesInfo",
+    b"getBuiltinModule",
+    b"getMaxListeners",
+    b"hrtime",
+    b"kill",
+    b"listenerCount",
+    b"listeners",
+    b"memoryUsage",
+    b"moduleLoadList",
+    b"nextTick",
+    b"off",
+    b"on",
+    b"once",
+    b"openStdin",
+    b"pid",
+    b"platform",
+    b"ppid",
+    b"prependListener",
+    b"prependOnceListener",
+    b"rawListeners",
+    b"ref",
+    b"release",
+    b"removeAllListeners",
+    b"removeListener",
+    b"report",
+    b"resourceUsage",
+    b"reallyExit",
+    b"setMaxListeners",
+    b"setSourceMapsEnabled",
+    b"send",
+    b"sourceMapsEnabled",
+    b"stderr",
+    b"stdin",
+    b"stdout",
+    b"title",
+    b"unref",
+    b"uptime",
+    b"version",
+    b"versions",
+];
+
+const PROCESS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"_debugEnd",
+    b"_debugProcess",
+    b"_events",
+    b"_eventsCount",
+    b"_exiting",
+    b"_fatalException",
+    b"_getActiveHandles",
+    b"_getActiveRequests",
+    b"_kill",
+    b"_linkedBinding",
+    b"_maxListeners",
+    b"_preload_modules",
+    b"_rawDebug",
+    b"_startProfilerIdleNotifier",
+    b"_stopProfilerIdleNotifier",
+    b"_tickCallback",
+    b"abort",
+    b"addListener",
+    b"addUncaughtExceptionCaptureCallback",
+    b"allowedNodeEnvironmentFlags",
+    b"argv",
+    b"argv0",
+    b"arch",
+    b"binding",
+    b"channel",
+    b"chdir",
+    b"config",
+    b"connected",
+    b"cpuUsage",
+    b"cwd",
+    b"debugPort",
+    b"disconnect",
+    b"dlopen",
+    b"domain",
+    b"env",
+    b"eventNames",
+    b"execve",
+    b"ref",
+    b"unref",
+    b"execArgv",
+    b"execPath",
+    b"features",
+    b"finalization",
+    b"getActiveResourcesInfo",
+    b"getBuiltinModule",
+    b"getMaxListeners",
+    b"hrtime",
+    b"kill",
+    b"listenerCount",
+    b"listeners",
+    b"memoryUsage",
+    b"moduleLoadList",
+    b"nextTick",
+    b"off",
+    b"on",
+    b"once",
+    b"openStdin",
+    b"pid",
+    b"platform",
+    b"ppid",
+    b"prependListener",
+    b"prependOnceListener",
+    b"rawListeners",
+    b"release",
+    b"removeAllListeners",
+    b"removeListener",
+    b"report",
+    b"resourceUsage",
+    b"reallyExit",
+    b"setMaxListeners",
+    b"setSourceMapsEnabled",
+    b"send",
+    b"sourceMapsEnabled",
+    b"stderr",
+    b"stdin",
+    b"stdout",
+    b"title",
+    b"uptime",
+    b"version",
+    b"versions",
 ];
 
 const BUFFER_NAMESPACE_KEYS: &[&[u8]] = &[
@@ -1078,6 +2156,28 @@ const PUNYCODE_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const PUNYCODE_UCS2_KEYS: &[&[u8]] = &[b"decode", b"encode"];
 
+const INSPECTOR_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"open",
+    b"close",
+    b"url",
+    b"waitForDebugger",
+    b"console",
+    b"Session",
+    b"Network",
+];
+
+const INSPECTOR_NETWORK_KEYS: &[&[u8]] = &[
+    b"requestWillBeSent",
+    b"responseReceived",
+    b"loadingFinished",
+    b"loadingFailed",
+    b"dataSent",
+    b"dataReceived",
+    b"webSocketCreated",
+    b"webSocketClosed",
+    b"webSocketHandshakeResponseReceived",
+];
+
 const FS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"_toUnixTimestamp",
     b"access",
@@ -1183,6 +2283,7 @@ const URL_DEFAULT_KEYS: &[&[u8]] = &[
     b"format",
     b"URL",
     b"URLSearchParams",
+    b"URLPattern",
     b"domainToASCII",
     b"domainToUnicode",
     b"pathToFileURL",
@@ -1194,6 +2295,7 @@ const URL_DEFAULT_KEYS: &[&[u8]] = &[
 const URL_NAMESPACE_KEYS: &[&[u8]] = &[
     b"URL",
     b"URLSearchParams",
+    b"URLPattern",
     b"Url",
     b"default",
     b"domainToASCII",
@@ -1295,6 +2397,15 @@ const EVENTS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"setMaxListeners",
 ];
 
+const REPL_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"REPLServer",
+    b"REPL_MODE_SLOPPY",
+    b"REPL_MODE_STRICT",
+    b"Recoverable",
+    b"builtinModules",
+    b"start",
+];
+
 const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"BroadcastChannel",
     b"MessageChannel",
@@ -1318,6 +2429,37 @@ const WORKER_THREADS_NAMESPACE_KEYS: &[&[u8]] = &[
     b"threadName",
     b"workerData",
 ];
+
+const VM_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Script",
+    b"createContext",
+    b"createScript",
+    b"runInContext",
+    b"runInNewContext",
+    b"runInThisContext",
+    b"isContext",
+    b"compileFunction",
+    b"measureMemory",
+    b"constants",
+];
+
+const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"Script",
+    b"createContext",
+    b"createScript",
+    b"runInContext",
+    b"runInNewContext",
+    b"runInThisContext",
+    b"isContext",
+    b"compileFunction",
+    b"measureMemory",
+    b"constants",
+    b"Module",
+    b"SourceTextModule",
+    b"SyntheticModule",
+];
+
+const VM_CONSTANTS_KEYS: &[&[u8]] = &[b"USE_MAIN_CONTEXT_DEFAULT_LOADER", b"DONT_CONTEXTIFY"];
 
 // Linux-only open() flags: Node only enumerates these on platforms whose libc
 // defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
@@ -1578,6 +2720,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "async_hooks" => Some(ASYNC_HOOKS_NAMESPACE_KEYS),
         "async_hooks.default" => Some(ASYNC_HOOKS_DEFAULT_KEYS),
         "assert/strict" => Some(&[
+            b"Assert",
             b"AssertionError",
             b"ok",
             b"fail",
@@ -1609,6 +2752,8 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"default",
         ]),
         "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
+        "sea" => Some(SEA_NAMESPACE_KEYS),
+        "sea.default" => Some(SEA_DEFAULT_KEYS),
         "domain" => Some(&[b"_stack", b"Domain", b"createDomain", b"create", b"active"]),
         // #3677: zlib.constants enumerates the full Z_*/BROTLI_*/ZSTD_* table.
         "zlib.constants" => Some(ZLIB_CONSTANTS_KEYS),
@@ -1626,12 +2771,47 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "dns/promises.default" => Some(DNS_PROMISES_DEFAULT_KEYS),
         "child_process" => Some(CHILD_PROCESS_NAMESPACE_KEYS),
         "child_process.default" => Some(CHILD_PROCESS_DEFAULT_KEYS),
+        "cluster" => Some(CLUSTER_NAMESPACE_KEYS),
+        "cluster.default" => Some(CLUSTER_DEFAULT_KEYS),
+        "stream" => Some(STREAM_NAMESPACE_KEYS),
+        "process" => Some(PROCESS_DEFAULT_KEYS),
+        "process.namespace" => Some(PROCESS_NAMESPACE_KEYS),
+        "process.default" => Some(PROCESS_DEFAULT_KEYS),
         "buffer" => Some(BUFFER_NAMESPACE_KEYS),
         "querystring" => Some(QUERYSTRING_NAMESPACE_KEYS),
         "querystring.default" => Some(QUERYSTRING_DEFAULT_KEYS),
+        "console" | "console.default" => Some(&[
+            b"log",
+            b"info",
+            b"debug",
+            b"warn",
+            b"error",
+            b"dir",
+            b"time",
+            b"timeEnd",
+            b"timeLog",
+            b"trace",
+            b"assert",
+            b"clear",
+            b"count",
+            b"countReset",
+            b"group",
+            b"groupEnd",
+            b"table",
+            b"dirxml",
+            b"groupCollapsed",
+            b"Console",
+            b"profile",
+            b"profileEnd",
+            b"timeStamp",
+            b"context",
+            b"createTask",
+        ]),
         "punycode" => Some(PUNYCODE_NAMESPACE_KEYS),
         "punycode.default" => Some(PUNYCODE_DEFAULT_KEYS),
         "punycode.ucs2" => Some(PUNYCODE_UCS2_KEYS),
+        "inspector" | "inspector.default" => Some(INSPECTOR_NAMESPACE_KEYS),
+        "inspector.Network" => Some(INSPECTOR_NETWORK_KEYS),
         "timers" => Some(TIMERS_NAMESPACE_KEYS),
         "os" => Some(OS_NAMESPACE_KEYS),
         "os.default" => Some(OS_DEFAULT_KEYS),
@@ -1640,6 +2820,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "util" => Some(UTIL_NAMESPACE_KEYS),
         "util.default" => Some(UTIL_DEFAULT_KEYS),
         "net" => Some(&[
+            b"BlockList",
             b"_createServerHandle",
             b"_normalizeArgs",
             b"connect",
@@ -1650,11 +2831,33 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"isIPv6",
             b"Server",
             b"Socket",
+            b"SocketAddress",
             b"Stream",
             b"getDefaultAutoSelectFamily",
             b"setDefaultAutoSelectFamily",
             b"getDefaultAutoSelectFamilyAttemptTimeout",
             b"setDefaultAutoSelectFamilyAttemptTimeout",
+        ]),
+        "http" | "http.default" => Some(&[
+            b"METHODS",
+            b"STATUS_CODES",
+            b"createServer",
+            b"Server",
+            b"IncomingMessage",
+            b"OutgoingMessage",
+            b"ServerResponse",
+            b"ClientRequest",
+            b"Agent",
+            b"WebSocket",
+            b"_connectionListener",
+            b"get",
+            b"request",
+            b"maxHeaderSize",
+            b"globalAgent",
+            b"validateHeaderName",
+            b"validateHeaderValue",
+            b"setMaxIdleHTTPParsers",
+            b"setGlobalProxyFromEnv",
         ]),
         "https" => Some(&[
             b"Agent",
@@ -1666,15 +2869,151 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         ]),
         "http2" => Some(crate::node_http2_constants::HTTP2_NAMESPACE_KEYS),
         "http2.constants" => Some(crate::node_http2_constants::HTTP2_CONSTANTS_KEYS),
+        // #3906: native-module default/namespace objects previously enumerated
+        // only the internal `__module__` sentinel. List each module's supported
+        // export surface (the same set the api-manifest / docs / DTS expose and
+        // that `hasOwnProperty` / named imports agree on) so `Object.keys(mod)`
+        // matches Node. tty / perf_hooks / util.types are byte-identical to
+        // Node; v8 lists the exports Perry implements. Key order follows Node's.
+        "tty" => Some(&[b"isatty", b"ReadStream", b"WriteStream"]),
+        "v8" => Some(&[
+            b"cachedDataVersionTag",
+            b"getHeapSnapshot",
+            b"getHeapStatistics",
+            b"getHeapSpaceStatistics",
+            b"getHeapCodeStatistics",
+            b"setFlagsFromString",
+            b"Serializer",
+            b"Deserializer",
+            b"DefaultSerializer",
+            b"DefaultDeserializer",
+            b"deserialize",
+            b"takeCoverage",
+            b"stopCoverage",
+            b"serialize",
+            b"writeHeapSnapshot",
+            b"promiseHooks",
+            b"startupSnapshot",
+            b"setHeapSnapshotNearHeapLimit",
+            b"GCProfiler",
+        ]),
+        "perf_hooks" => Some(&[
+            b"Performance",
+            b"PerformanceEntry",
+            b"PerformanceMark",
+            b"PerformanceMeasure",
+            b"PerformanceObserver",
+            b"PerformanceObserverEntryList",
+            b"PerformanceResourceTiming",
+            b"monitorEventLoopDelay",
+            b"eventLoopUtilization",
+            b"timerify",
+            b"createHistogram",
+            b"performance",
+            b"constants",
+        ]),
+        // The util/types namespace object is tagged `util.types` internally
+        // (see the `callable_module_name` remap below); accept both spellings.
+        "util/types" | "util.types" => Some(&[
+            b"isArgumentsObject",
+            b"isArrayBuffer",
+            b"isAsyncFunction",
+            b"isBigIntObject",
+            b"isBooleanObject",
+            b"isDate",
+            b"isExternal",
+            b"isGeneratorFunction",
+            b"isGeneratorObject",
+            b"isMap",
+            b"isMapIterator",
+            b"isModuleNamespaceObject",
+            b"isNativeError",
+            b"isNumberObject",
+            b"isPromise",
+            b"isProxy",
+            b"isRegExp",
+            b"isSet",
+            b"isSetIterator",
+            b"isSharedArrayBuffer",
+            b"isStringObject",
+            b"isSymbolObject",
+            b"isWeakMap",
+            b"isWeakSet",
+            b"isAnyArrayBuffer",
+            b"isBoxedPrimitive",
+            b"isArrayBufferView",
+            b"isDataView",
+            b"isTypedArray",
+            b"isUint8Array",
+            b"isUint8ClampedArray",
+            b"isUint16Array",
+            b"isUint32Array",
+            b"isInt8Array",
+            b"isInt16Array",
+            b"isInt32Array",
+            b"isFloat16Array",
+            b"isFloat32Array",
+            b"isFloat64Array",
+            b"isBigInt64Array",
+            b"isBigUint64Array",
+            b"isKeyObject",
+            b"isCryptoKey",
+        ]),
         "events" => Some(EVENTS_NAMESPACE_KEYS),
+        "repl" | "repl.default" => Some(REPL_NAMESPACE_KEYS),
         "worker_threads" => Some(WORKER_THREADS_NAMESPACE_KEYS),
+        "vm" => Some(if crate::node_vm::vm_modules_enabled() {
+            VM_MODULE_NAMESPACE_KEYS
+        } else {
+            VM_NAMESPACE_KEYS
+        }),
+        "vm.constants" => Some(VM_CONSTANTS_KEYS),
+        // Plain `timers` was missing — `require('node:timers').setImmediate`
+        // read undefined (Next.js's fast-set-immediate extension reads and
+        // patches it at module init).
+        "timers" => Some(&[
+            b"setTimeout",
+            b"clearTimeout",
+            b"setInterval",
+            b"clearInterval",
+            b"setImmediate",
+            b"clearImmediate",
+            b"promises",
+        ]),
         "timers/promises" => Some(&[b"setTimeout", b"setImmediate", b"setInterval", b"scheduler"]),
+        "readline/promises" => Some(&[b"Interface", b"Readline", b"createInterface"]),
         "zlib" => Some(&[b"codes"]),
+        "tls" => Some(&[
+            b"checkServerIdentity",
+            b"connect",
+            b"createServer",
+            b"createSecureContext",
+            b"getCACertificates",
+            b"getCiphers",
+            b"setDefaultCACertificates",
+            b"Server",
+            b"SecureContext",
+            b"TLSSocket",
+            b"DEFAULT_ECDH_CURVE",
+            b"DEFAULT_MAX_VERSION",
+            b"DEFAULT_MIN_VERSION",
+            b"DEFAULT_CIPHERS",
+            b"rootCertificates",
+            b"CLIENT_RENEG_LIMIT",
+            b"CLIENT_RENEG_WINDOW",
+        ]),
         _ => None,
     }
 }
 
 pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> bool {
+    if matches!(
+        module_name,
+        "process" | "process.namespace" | "process.default"
+    ) && key == "permission"
+    {
+        return crate::process::process_permission_enabled();
+    }
     native_module_enumerable_keys(module_name)
         .is_some_and(|keys| keys.iter().any(|candidate| *candidate == key.as_bytes()))
 }
@@ -1683,15 +3022,22 @@ fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks.default" => Some("async_hooks"),
         "child_process.default" => Some("child_process"),
+        "cluster.default" => Some("cluster"),
         "constants.default" => Some("constants"),
         "dns.default" => Some("dns"),
         "dns/promises.default" => Some("dns/promises"),
+        "inspector.default" => Some("inspector"),
+        "inspector/promises.default" => Some("inspector/promises"),
+        "module.default" => Some("module"),
         "os.default" => Some("os"),
         "path.default" => Some("path"),
         "path.posix.default" => Some("path.posix"),
         "path.win32.default" => Some("path.win32"),
+        "process.default" => Some("process"),
         "punycode.default" => Some("punycode"),
         "querystring.default" => Some("querystring"),
+        "repl.default" => Some("repl"),
+        "sea.default" => Some("sea"),
         "url.default" => Some("url"),
         "util.default" => Some("util"),
         _ => None,
@@ -1702,15 +3048,22 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
     match module_name {
         "async_hooks" => Some("async_hooks.default"),
         "child_process" => Some("child_process.default"),
+        "cluster" => Some("cluster.default"),
         "constants" => Some("constants.default"),
         "dns" => Some("dns.default"),
         "dns/promises" => Some("dns/promises.default"),
+        "inspector" => Some("inspector.default"),
+        "inspector/promises" => Some("inspector/promises.default"),
+        "module" => Some("module.default"),
         "os" => Some("os.default"),
         "path" => Some("path.default"),
         "path.posix" => Some("path.posix.default"),
         "path.win32" => Some("path.win32.default"),
+        "process" => Some("process.default"),
         "punycode" => Some("punycode.default"),
         "querystring" => Some("querystring.default"),
+        "repl" => Some("repl.default"),
+        "sea" => Some("sea.default"),
         "url" => Some("url.default"),
         "util" => Some("util.default"),
         _ => None,
@@ -1725,15 +3078,41 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
+        // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
+        // bare `import * as` namespace).
+        "cluster" => create_cjs_default_namespace("cluster"),
+        // #3693: `node:dgram` default === the module namespace (CJS
+        // `module.exports`); a cached singleton makes `dgram === ns.default`.
+        "dgram" => Some(js_create_native_module_namespace(
+            b"dgram".as_ptr(),
+            "dgram".len(),
+        )),
+        "module" => Some(bound_native_callable_export_value("module", "Module")),
+        "process" => Some(js_create_native_module_namespace(
+            b"process".as_ptr(),
+            "process".len(),
+        )),
+        "module" => Some(bound_native_callable_export_value("module", "Module")),
         "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "os" | "path"
-        | "path.posix" | "path.win32" | "punycode" | "querystring" | "url" | "util" => {
-            create_cjs_default_namespace(module_name)
-        }
+        | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl" | "sea" | "url"
+        | "util" | "inspector" | "inspector/promises" => create_cjs_default_namespace(module_name),
         _ => None,
     }
 }
 
 pub(crate) fn native_module_get_builtin_module_value(module_name: &str) -> f64 {
+    // Devirt: this is the runtime-dynamic builtin resolver (`require(spec)`,
+    // `process.getBuiltinModule(spec)`) — `module_name` is only known at runtime,
+    // so codegen could not emit the per-module dispatch install. Run the
+    // install-all hook so a dynamically-resolved namespace can dispatch methods.
+    // The hook is an INDIRECT pointer (null unless codegen emitted
+    // `js_nm_enable_install_all()` because the program actually uses dynamic
+    // require/getBuiltinModule) — so this resolver, which is linked into every
+    // program via the always-present `process.getBuiltinModule` method table,
+    // does NOT statically reference `js_nm_install_all` and therefore does not
+    // pin every bucket. Static imports keep their precise per-module installs.
+    super::native_module_registry::nm_run_install_all_hook();
     cjs_default_export_value(module_name).unwrap_or_else(|| {
         js_create_native_module_namespace(module_name.as_ptr(), module_name.len())
     })
@@ -1750,6 +3129,14 @@ fn canonical_native_callable_property<'a>(module_name: &str, property_name: &'a 
     }
 }
 
+fn assert_instance_base_module(module_name: &str) -> Option<&'static str> {
+    match module_name {
+        "assert.instance" | "assert.instance.skip" => Some("assert"),
+        "assert/strict.instance" | "assert/strict.instance.skip" => Some("assert/strict"),
+        _ => None,
+    }
+}
+
 fn should_cache_native_module_namespace(module_name: &str) -> bool {
     matches!(
         module_name,
@@ -1758,11 +3145,31 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "async_hooks.default"
             | "constants"
             | "constants.default"
+            // #5263: cache the top-level namespace objects whose dynamic
+            // member access is now allowed by default. A stable (cached)
+            // namespace object means a user-set symbol property
+            // (`fs[Symbol.for('graceful-fs.queue')] = queue`, keyed by object
+            // pointer in `SYMBOL_PROPERTIES`) round-trips on reads — otherwise
+            // each `NativeModuleRef` mints a fresh object and the write is lost.
+            // String-keyed writes already persist via the module-keyed
+            // `NATIVE_NAMESPACE_PROP_OVERRIDES` side-table. These are pure
+            // tag+name holders (all real dispatch keys off the module name, not
+            // object state), so caching only affects object identity.
+            | "fs"
             | "dns.default"
             | "dns/promises.default"
             | "child_process.default"
+            | "cluster"
+            | "cluster.default"
+            | "dgram"
             | "events"
             | "fs.constants"
+            | "inspector"
+            | "inspector.default"
+            | "inspector.Network"
+            | "inspector/promises"
+            | "inspector/promises.default"
+            | "module"
             | "os"
             | "os.default"
             | "path"
@@ -1774,7 +3181,13 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "punycode.ucs2"
             | "querystring"
             | "querystring.default"
+            | "repl"
+            | "repl.default"
+            | "sea"
+            | "sea.default"
             | "process"
+            | "process.namespace"
+            | "process.default"
             | "url"
             | "url.default"
             | "util"
@@ -1782,7 +3195,10 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "util.types"
             | "path.posix"
             | "path.win32"
+            | "readline/promises"
             | "timers/promises"
+            | "vm"
+            | "vm.constants"
             | "crypto.webcrypto"
             | "crypto.subtle"
     )
@@ -1824,6 +3240,10 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
+    // Codegen NativeModuleRef fast path — can mint native-module-backed
+    // values without a namespace object; the vtable must be live for the
+    // generic paths that later touch them.
+    install_native_module_vtable();
     let module_name =
         std::str::from_utf8(std::slice::from_raw_parts(module_name_ptr, module_name_len))
             .unwrap_or("");
@@ -1833,6 +3253,30 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
         property_name_len,
     ))
     .unwrap_or("");
+    // #5263 / monkey-patch parity: a user-stored override of a namespace
+    // property (`fs[k] = v`, `require('node:timers').setImmediate = fn`) wins
+    // all built-in resolution below — CJS exports are mutable in Node, and
+    // dynamic stdlib member writes are allowed by default. This mirrors
+    // `vt_get_own_field`, which the generic object-by-name read path uses; the
+    // codegen `NativeModuleRef` fast-path landed here without consulting the
+    // side-table, so writes via `PutValueSet` didn't round-trip on reads.
+    if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
+        return value;
+    }
+    if module_name == "process.namespace" && property_name == "default" {
+        return cjs_default_export_value("process")
+            .unwrap_or_else(|| js_create_native_module_namespace(b"process".as_ptr(), 7));
+    }
+    let module_name = if module_name == "process.namespace" {
+        "process"
+    } else {
+        module_name
+    };
+    if matches!(module_name, "process" | "process.default") {
+        if let Some(value) = crate::process::process_ipc_property(property_name) {
+            return value;
+        }
+    }
     // node:perf_hooks — `performance` and `constants` are object-valued
     // exports. Resolve them to a `perf_hooks`-tagged namespace object so
     // `typeof performance === "object"`, `performance.timeOrigin` (a
@@ -1886,23 +3330,29 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
             "URLSearchParams".len(),
         );
     }
+    if module_name == "url" && property_name == "URLPattern" {
+        return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
+    }
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
             return value;
         }
     }
+    if module_name == "crypto.subtle" {
+        if let Some(value) = super::global_this::subtle_crypto_method_value(property_name) {
+            return value;
+        }
+    }
 
-    // #3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
-    // `v8.promiseHooks` are object-valued exports; resolve them to
-    // dedicated native-module namespace objects so `typeof === "object"` and
-    // their methods dispatch through `dispatch_native_module_method`.
-    if module_name == "v8" && matches!(property_name, "startupSnapshot" | "promiseHooks") {
-        let submodule = if property_name == "startupSnapshot" {
-            "v8.startupSnapshot"
-        } else {
-            "v8.promiseHooks"
-        };
-        return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+    // #3687: `node:cluster` is a singleton EventEmitter. Its EventEmitter
+    // method surface is exposed ONLY on the default import (the distinct
+    // `cluster.default` namespace) — `import * as cluster` reads these as
+    // `undefined` (they live on EventEmitter.prototype, not as named exports).
+    // Resolve them to bound methods here, before the generic
+    // `get_native_module_constant` path (where `cluster_property` would return
+    // `undefined` for `on`/`addListener`).
+    if module_name == "cluster.default" && is_cluster_emitter_method(property_name) {
+        return bound_native_callable_export_value("cluster.default", property_name);
     }
 
     if let Some(val) = get_native_module_constant(module_name, property_name, 0.0) {
@@ -1926,12 +3376,23 @@ pub unsafe extern "C" fn js_native_module_property_by_name(
 }
 
 pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+    // Bound-native closures carry (module, method) metadata that the
+    // generic property/call paths resolve through the vtable — and they
+    // can be minted via the codegen NativeModuleRef fast path without any
+    // namespace object existing. Install here too.
+    install_native_module_vtable();
     let module_name = cjs_default_base_module(module_name).unwrap_or(module_name);
+    let module_name = assert_instance_base_module(module_name).unwrap_or(module_name);
     let property_name = canonical_native_callable_property(module_name, property_name);
-    let callable_module_name = if module_name == "util.types" {
-        "util/types"
+    let export_module_name = if property_name == "Assert" && module_name == "assert/strict" {
+        "assert"
     } else {
         module_name
+    };
+    let callable_module_name = if export_module_name == "util.types" {
+        "util/types"
+    } else {
+        export_module_name
     };
     let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
@@ -1947,32 +3408,40 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     crate::closure::js_closure_set_capture_f64(closure, 0, ns);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_bytes.as_ptr() as i64);
     crate::closure::js_closure_set_capture_ptr(closure, 2, method_bytes.len() as i64);
-    let exposed_name = if module_name == "fs" {
-        native_callable_export_display_name(module_name, property_name)
-    } else if module_name == "url" && property_name == "resolveObject" {
+    let exposed_name = if export_module_name == "fs" {
+        native_callable_export_display_name(export_module_name, property_name)
+    } else if export_module_name == "url" && property_name == "resolveObject" {
         "urlResolveObject"
-    } else if module_name == "fs" && property_name == "_toUnixTimestamp" {
+    } else if export_module_name == "http" && property_name == "_connectionListener" {
+        "connectionListener"
+    } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
         "toUnixTimestamp"
     } else {
         property_name
     };
     set_bound_native_closure_name(closure, exposed_name);
+    if let Some(length) = native_callable_export_arity(export_module_name, property_name) {
+        set_builtin_closure_length(closure as usize, length);
+    }
     let value = crate::value::js_nanbox_pointer(closure as i64);
     let closure_addr = closure as usize;
 
-    if module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
+    if export_module_name == "module" && property_name == "Module" {
+        attach_module_cjs_constructor_statics(closure_addr);
+    }
+    if export_module_name == "tty" && matches!(property_name, "ReadStream" | "WriteStream") {
         attach_tty_stream_prototype(value, property_name);
     }
-    if module_name == "tls" && property_name == "SecureContext" {
+    if export_module_name == "tls" && property_name == "SecureContext" {
         attach_tls_secure_context_prototype(value);
     }
-    if module_name == "wasi" && property_name == "WASI" {
+    if export_module_name == "wasi" && property_name == "WASI" {
         crate::wasi::attach_wasi_constructor_prototype(value);
     }
-    if module_name == "stream" && property_name == "Stream" {
+    if export_module_name == "stream" && property_name == "Stream" {
         attach_stream_legacy_prototype(value);
     }
-    if module_name == "stream"
+    if export_module_name == "stream"
         && matches!(
             property_name,
             "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
@@ -1980,23 +3449,68 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
     {
         attach_stream_constructor_prototype(value, property_name);
     }
-    if module_name == "sqlite" && property_name == "DatabaseSync" {
+    if export_module_name == "sqlite" && property_name == "DatabaseSync" {
         attach_sqlite_database_sync_prototype(value);
     }
-    if module_name == "sqlite" && property_name == "Session" {
+    if export_module_name == "sqlite" && property_name == "Session" {
         attach_sqlite_session_prototype(value);
+    }
+    if export_module_name == "assert" && property_name == "Assert" {
+        attach_assert_prototype(value);
+    }
+    if export_module_name == "crypto" && property_name == "KeyObject" {
+        attach_crypto_key_object_shape(closure_addr, value);
+    }
+    if export_module_name == "crypto" && property_name == "X509Certificate" {
+        attach_crypto_x509_certificate_shape(closure_addr, value);
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a static array on the
     // constructor. `PerformanceObserver` is a function value (a bound-method
     // closure), so hang the array off it as a dynamic property — keeps
     // `typeof PerformanceObserver === "function"` while the static read works.
-    if module_name == "perf_hooks" && property_name == "PerformanceObserver" {
+    if export_module_name == "perf_hooks" && property_name == "PerformanceObserver" {
         let arr = crate::perf_hooks::js_perf_supported_entry_types();
         crate::closure::closure_set_dynamic_prop(closure_addr, "supportedEntryTypes", arr);
     }
 
-    if module_name == "events" && property_name == "EventEmitter" {
+    if export_module_name == "async_hooks" && property_name == "AsyncLocalStorage" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "bind",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_local_storage_static_bind_method as *const u8,
+                "bind",
+                1,
+                1,
+            ),
+        );
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "snapshot",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_local_storage_static_snapshot_method as *const u8,
+                "snapshot",
+                0,
+                0,
+            ),
+        );
+    }
+
+    if export_module_name == "async_hooks" && property_name == "AsyncResource" {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            "bind",
+            async_hooks_static_method_value(
+                crate::async_hooks::js_async_resource_static_bind_method as *const u8,
+                "bind",
+                3,
+                3,
+            ),
+        );
+    }
+
+    if export_module_name == "events" && property_name == "EventEmitter" {
         let async_resource_ctor =
             bound_native_callable_export_value("events", "EventEmitterAsyncResource");
         for method in [
@@ -2045,14 +3559,14 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         );
     }
 
-    if module_name == "util" && property_name == "promisify" {
+    if export_module_name == "util" && property_name == "promisify" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
             crate::util_promisify::promisify_custom_symbol(),
         );
     }
-    if module_name == "util" && property_name == "inspect" {
+    if export_module_name == "util" && property_name == "inspect" {
         crate::closure::closure_set_dynamic_prop(
             closure_addr,
             "custom",
@@ -2072,6 +3586,22 @@ pub(crate) fn bound_native_callable_export_value(module_name: &str, property_nam
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     });
     value
+}
+
+fn async_hooks_static_method_value(
+    func_ptr: *const u8,
+    name: &str,
+    fixed_arity: u32,
+    length: u32,
+) -> f64 {
+    crate::closure::js_register_closure_rest(func_ptr, fixed_arity);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    set_bound_native_closure_name(closure, name);
+    set_builtin_closure_length(closure as usize, length);
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 extern "C" fn fs_namespace_descriptor_getter_thunk(
@@ -2138,8 +3668,42 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
     value
 }
 
+/// The EventEmitter method names `node:cluster`'s default import exposes
+/// (#3687). Kept narrow so a typo'd `cluster.foo` still reads `undefined`.
+pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
+    matches!(
+        prop,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "off"
+            | "removeListener"
+            | "removeAllListeners"
+            | "emit"
+            | "eventNames"
+            | "listenerCount"
+    )
+}
+
 fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // #3687: node:cluster — module-method `.length` matches Node.
+        ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
+        ("cluster", "emit") => Some(1),
+        ("cluster", "eventNames") => Some(0),
+        (
+            "cluster",
+            "on"
+            | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "removeListener"
+            | "off"
+            | "listenerCount",
+        ) => Some(2),
+        ("cluster", "removeAllListeners") => Some(1),
         ("events", "EventEmitter") => Some(1),
         ("events", "EventEmitterAsyncResource") => Some(0),
         ("events", "addAbortListener") => Some(2),
@@ -2152,7 +3716,14 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("querystring", "unescapeBuffer" | "unescape") => Some(2),
         ("querystring", "escape") => Some(1),
         ("querystring", "stringify" | "parse") => Some(4),
+        ("async_hooks", "AsyncLocalStorage") => Some(0),
+        ("async_hooks", "AsyncResource") => Some(2),
+        ("async_hooks", "createHook") => Some(1),
+        ("async_hooks", "executionAsyncId") => Some(0),
+        ("async_hooks", "triggerAsyncId") => Some(0),
+        ("async_hooks", "executionAsyncResource") => Some(0),
         ("url", "URL") => Some(1),
+        ("url", "URLPattern") => Some(0),
         ("tls", "getCiphers") => Some(0),
         ("tls", "getCACertificates" | "setDefaultCACertificates" | "createSecureContext") => {
             Some(1)
@@ -2162,9 +3733,59 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         // #3726: `crypto.Cipheriv` / `crypto.Decipheriv` constructor exports —
         // `(cipher, key, iv, options)` arity matches Node's length 4.
         ("crypto", "Cipheriv" | "Decipheriv") => Some(4),
+        ("crypto", "X509Certificate") => Some(1),
+        ("crypto", "KeyObject") => Some(2),
+        ("crypto.KeyObject", "from") => Some(1),
+        // #2706/#2716 and #2694: crypto module-level callable exports.
+        ("crypto", "DiffieHellman") => Some(4),
+        ("crypto", "DiffieHellmanGroup") => Some(1),
+        ("crypto", "diffieHellman") => Some(2),
+        ("crypto", "encapsulate") => Some(2),
+        ("crypto", "decapsulate") => Some(3),
+        ("crypto", "generateKey" | "generateKeyPair" | "generatePrime") => Some(3),
+        ("crypto", "generateKeySync" | "generateKeyPairSync") => Some(2),
+        ("crypto", "generatePrimeSync" | "checkPrime" | "checkPrimeSync" | "setFips") => Some(1),
+        ("crypto", "secureHeapUsed") => Some(0),
+        ("crypto", "hkdf") => Some(6),
+        ("crypto", "hkdfSync") => Some(5),
+        ("crypto", "scrypt") => Some(4),
+        ("crypto", "scryptSync") => Some(3),
+        ("crypto", "argon2") => Some(3),
+        ("crypto", "argon2Sync") => Some(2),
         ("url", "Url") => Some(0),
         ("url", "resolveObject") => Some(2),
+        ("process", "binding" | "_linkedBinding") => Some(1),
+        (
+            "process",
+            "dlopen"
+            | "_rawDebug"
+            | "_debugProcess"
+            | "_debugEnd"
+            | "_startProfilerIdleNotifier"
+            | "_stopProfilerIdleNotifier"
+            | "reallyExit"
+            | "_tickCallback"
+            | "_getActiveHandles"
+            | "_getActiveRequests"
+            | "openStdin"
+            | "_kill",
+        ) => Some(0),
+        ("process", "_fatalException") => Some(2),
+        ("process", "execve") => Some(1),
+        ("process", "ref" | "unref") => Some(1),
         ("process", "setSourceMapsEnabled") => Some(1),
+        (
+            "inspector.Network",
+            "requestWillBeSent"
+            | "responseReceived"
+            | "loadingFinished"
+            | "loadingFailed"
+            | "dataSent"
+            | "dataReceived"
+            | "webSocketCreated"
+            | "webSocketClosed"
+            | "webSocketHandshakeResponseReceived",
+        ) => Some(1),
         (
             "process",
             "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback",
@@ -2172,27 +3793,102 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("process", "hasUncaughtExceptionCaptureCallback") => Some(0),
         ("fs", "_toUnixTimestamp") => Some(1),
         ("util", "debug" | "debuglog" | "inherits") => Some(2),
+        ("console", "context") => Some(1),
+        ("console", "createTask") => Some(0),
         ("util", "MIMEParams") => Some(0),
         ("util", "MIMEType") => Some(1),
+        ("sea", "isSea" | "getAssetKeys") => Some(0),
+        ("sea", "getRawAsset") => Some(1),
+        ("sea", "getAsset" | "getAssetAsBlob") => Some(2),
+        ("stream", "pipeline" | "compose") => Some(0),
+        ("stream", "finished") => Some(3),
+        (
+            "stream",
+            "duplexPair"
+            | "isDisturbed"
+            | "isErrored"
+            | "isReadable"
+            | "isWritable"
+            | "getDefaultHighWaterMark"
+            | "_isArrayBufferView"
+            | "_isUint8Array"
+            | "_uint8ArrayToBuffer"
+            | "isDestroyed",
+        ) => Some(1),
+        ("stream", "setDefaultHighWaterMark" | "addAbortSignal") => Some(2),
         ("net", "createServer" | "Server") => Some(2),
         ("net", "Socket") => Some(1),
+        ("net", "BlockList" | "SocketAddress") => Some(0),
         // #3720: `http2.performServerHandshake(socket[, options])` — length 1.
         ("http2", "performServerHandshake") => Some(1),
+        ("http2", "getDefaultSettings") => Some(0),
+        ("http2", "getPackedSettings" | "getUnpackedSettings") => Some(1),
         // #3905: Node `.length` — connect(authority,options,listener)=3,
         // createServer(options,handler)=2.
         ("http2", "connect") => Some(3),
-        ("http2", "createServer") => Some(2),
+        ("http2", "createServer" | "createSecureServer") => Some(2),
+        ("http", "OutgoingMessage") => Some(1),
+        // #4904: Node `.length` — Agent(options)=1, ClientRequest(input,
+        // options, cb)=3, IncomingMessage(socket)=1, ServerResponse(req)=1.
+        ("http", "Agent" | "IncomingMessage" | "ServerResponse") => Some(1),
+        ("http", "ClientRequest") => Some(3),
         // #3697: node:https module-level exports (Node `.length`).
         ("https", "request") => Some(0),
         ("https", "get") => Some(3),
         ("https", "Agent") => Some(1),
+        // #4904: http twins of the https entries above.
+        ("http", "request") => Some(0),
+        ("http", "get") => Some(3),
+        (
+            "stream",
+            "isDestroyed"
+            | "isDisturbed"
+            | "isErrored"
+            | "isReadable"
+            | "isWritable"
+            | "getDefaultHighWaterMark"
+            | "_isArrayBufferView"
+            | "_isUint8Array"
+            | "_uint8ArrayToBuffer",
+        ) => Some(1),
+        ("stream", "finished") => Some(3),
+        ("stream", "addAbortSignal" | "destroy" | "setDefaultHighWaterMark") => Some(2),
+        ("stream", "compose" | "pipeline") => Some(0),
+        ("stream", "duplexPair") => Some(1),
         // #3712: node:http module-level helper exports.
         ("http", "validateHeaderName" | "validateHeaderValue") => Some(2),
         ("http", "setMaxIdleHTTPParsers" | "setGlobalProxyFromEnv") => Some(1),
+        ("http", "_connectionListener") => Some(1),
+        ("module", "register" | "registerHooks") => Some(1),
         // #3904: modern V8 diagnostics/profiler exports (Node .length values).
-        ("v8", "getCppHeapStatistics" | "startCpuProfile") => Some(0),
-        ("v8", "getHeapSnapshot" | "isStringOneByteRepresentation" | "queryObjects") => Some(1),
+        ("v8", "getCppHeapStatistics") => Some(0),
+        (
+            "v8",
+            "getHeapSnapshot"
+            | "isStringOneByteRepresentation"
+            | "queryObjects"
+            | "startCpuProfile",
+        ) => Some(1),
         ("v8", "writeHeapSnapshot") => Some(2),
+        // #3906: implemented top-level v8 helpers reachable as bound callables.
+        ("v8", "serialize" | "deserialize") => Some(1),
+        (
+            "v8",
+            "getHeapStatistics"
+            | "getHeapSpaceStatistics"
+            | "getHeapCodeStatistics"
+            | "cachedDataVersionTag"
+            | "GCProfiler",
+        ) => Some(0),
+        // #3127/#3128/#3130/#3284: node:vm no-flag export lengths.
+        ("vm", "Script") => Some(1),
+        ("vm", "Module") => Some(1),
+        ("vm", "SourceTextModule") => Some(1),
+        ("vm", "SyntheticModule") => Some(2),
+        ("vm", "createContext" | "measureMemory") => Some(0),
+        ("vm", "createScript" | "runInThisContext" | "compileFunction") => Some(2),
+        ("vm", "runInContext" | "runInNewContext") => Some(3),
+        ("vm", "isContext") => Some(1),
         ("net", "_normalizeArgs") => Some(1),
         ("net", "_createServerHandle") => Some(5),
         ("domain", "Domain" | "createDomain" | "create") => Some(0),
@@ -2201,11 +3897,13 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("fs", "ReadStream" | "WriteStream") => Some(2),
         ("fs", "Utf8Stream") => Some(0),
         ("fs", "Dir" | "Dirent") => Some(3),
-        ("fs", "Stats") => Some(14),
+        ("fs", "Stats") => Some(18),
         ("fs", "mkdtempDisposableSync") => Some(2),
         ("fs", "openAsBlob") => Some(1),
         ("fs", "_toUnixTimestamp") => Some(1),
         ("events", "init") => Some(1),
+        ("repl", "Recoverable") => Some(1),
+        ("repl", "REPLServer" | "start") => Some(6),
         ("wasi", "WASI") => Some(0),
         ("perf_hooks", "Performance") => Some(0),
         ("perf_hooks", "PerformanceEntry") => Some(0),
@@ -2216,14 +3914,27 @@ fn native_callable_export_arity(module: &str, prop: &str) -> Option<u32> {
         ("perf_hooks", "PerformanceResourceTiming") => Some(0),
         // #3119/#3126/#3263 node:module helpers.
         ("module", "createRequire") => Some(1),
+        ("module", "Module") => Some(0),
         ("module", "enableCompileCache") => Some(1),
         ("module", "flushCompileCache") => Some(0),
         ("module", "getCompileCacheDir") => Some(0),
         ("module", "getSourceMapsSupport") => Some(0),
+        ("module", "Module") => Some(0),
+        ("module", "_findPath") => Some(3),
+        ("module", "_initPaths") => Some(0),
+        ("module", "_load") => Some(3),
+        ("module", "_nodeModulePaths") => Some(1),
+        ("module", "_preloadModules") => Some(1),
+        ("module", "_resolveFilename") => Some(4),
+        ("module", "_resolveLookupPaths") => Some(2),
         ("module", "setSourceMapsSupport") => Some(1),
         ("module", "stripTypeScriptTypes") => Some(1),
         ("module", "syncBuiltinESMExports") => Some(0),
         ("module", "runMain") => Some(0),
+        ("tls", "connect") => Some(4),
+        ("tls", "createServer" | "Server") => Some(2),
+        ("tls", "TLSSocket") => Some(2),
+        ("child_process", "_forkChild") => Some(2),
         _ => None,
     }
 }
@@ -2390,6 +4101,89 @@ const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
 ];
 
 const SQLITE_SESSION_PROTOTYPE_METHODS: &[&str] = &["changeset", "patchset", "close"];
+
+const SEA_NAMESPACE_KEYS: &[&[u8]] = &[
+    b"default",
+    b"getAsset",
+    b"getAssetAsBlob",
+    b"getAssetKeys",
+    b"getRawAsset",
+    b"isSea",
+];
+
+const SEA_DEFAULT_KEYS: &[&[u8]] = &[
+    b"isSea",
+    b"getAsset",
+    b"getRawAsset",
+    b"getAssetAsBlob",
+    b"getAssetKeys",
+];
+
+const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
+    "fail",
+    "ok",
+    "equal",
+    "notEqual",
+    "deepEqual",
+    "notDeepEqual",
+    "deepStrictEqual",
+    "notDeepStrictEqual",
+    "strictEqual",
+    "notStrictEqual",
+    "partialDeepStrictEqual",
+    "throws",
+    "rejects",
+    "doesNotThrow",
+    "doesNotReject",
+    "ifError",
+    "match",
+    "doesNotMatch",
+];
+
+fn attach_assert_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    for method in ASSERT_PROTOTYPE_METHODS {
+        let method_value = bound_native_callable_export_value("assert", method);
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        js_object_set_field_by_name(proto, key, method_value);
+        super::set_builtin_property_attrs(
+            proto as usize,
+            (*method).to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
+    }
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
 
 extern "C" fn sqlite_database_sync_prototype_method_thunk(
     closure: *const crate::closure::ClosureHeader,
@@ -2618,6 +4412,81 @@ pub(crate) fn is_buffer_constructor_value(value: f64) -> bool {
     })
 }
 
+fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
+    let from_value = bound_native_callable_export_value("crypto.KeyObject", "from");
+    crate::closure::closure_set_dynamic_prop(closure_addr, "from", from_value);
+    super::set_builtin_property_attrs(
+        closure_addr,
+        "from".to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure_addr,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
+
+extern "C" fn x509_issuer_certificate_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: f64) {
+    let proto = js_object_alloc(0, 0);
+    if proto.is_null() {
+        return;
+    }
+    let constructor = "constructor";
+    let constructor_key =
+        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
+    js_object_set_field_by_name(proto, constructor_key, constructor_value);
+    super::set_builtin_property_attrs(
+        proto as usize,
+        constructor.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+
+    unsafe {
+        crate::closure::js_register_closure_arity(
+            x509_issuer_certificate_getter_thunk as *const u8,
+            0,
+        );
+        let getter =
+            crate::closure::js_closure_alloc(x509_issuer_certificate_getter_thunk as *const u8, 0);
+        if !getter.is_null() {
+            let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+            super::object_ops::install_builtin_getter(proto, "issuerCertificate", getter_bits);
+        }
+    }
+
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure_addr,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(true, false, false),
+    );
+}
+
 fn native_string_value(value: &str) -> f64 {
     let ptr = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
@@ -2634,6 +4503,141 @@ fn native_object_value(obj: *mut ObjectHeader) -> f64 {
 fn native_set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     js_object_set_field_by_name(obj, key, value);
+}
+
+extern "C" fn module_cjs_extension_noop_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _module: f64,
+    _filename: f64,
+) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn module_cjs_extension_function(name: &str) -> f64 {
+    let func_ptr = module_cjs_extension_noop_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func_ptr, 2);
+    crate::closure::js_register_closure_length(func_ptr, 2);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, 2);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+fn store_module_cjs_root(slot: &Cell<u64>, value: f64) -> f64 {
+    slot.set(value.to_bits());
+    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    value
+}
+
+pub(crate) fn module_cjs_cache_value() -> f64 {
+    MODULE_CJS_CACHE_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+        let obj = crate::object::js_object_alloc_null_proto(0, 0);
+        store_module_cjs_root(slot, native_object_value(obj))
+    })
+}
+
+pub(crate) fn module_cjs_path_cache_value() -> f64 {
+    MODULE_CJS_PATH_CACHE_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+        let obj = crate::object::js_object_alloc_null_proto(0, 0);
+        store_module_cjs_root(slot, native_object_value(obj))
+    })
+}
+
+pub(crate) fn module_cjs_extensions_value() -> f64 {
+    MODULE_CJS_EXTENSIONS_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+        let obj = js_object_alloc(0, 3);
+        native_set_field(obj, ".js", module_cjs_extension_function(".js"));
+        native_set_field(obj, ".json", module_cjs_extension_function(".json"));
+        native_set_field(obj, ".node", module_cjs_extension_function(".node"));
+        store_module_cjs_root(slot, native_object_value(obj))
+    })
+}
+
+pub(crate) fn module_cjs_global_paths_value() -> f64 {
+    MODULE_CJS_GLOBAL_PATHS_VALUE.with(|slot| {
+        let bits = slot.get();
+        if bits != 0 {
+            return f64::from_bits(bits);
+        }
+
+        let mut paths = Vec::new();
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::PathBuf::from(home);
+            paths.push(home.join(".node_modules").to_string_lossy().into_owned());
+            paths.push(home.join(".node_libraries").to_string_lossy().into_owned());
+        }
+        let prefix = std::env::var("PREFIX").unwrap_or_else(|_| "/usr/local".to_string());
+        paths.push(format!("{prefix}/lib/node"));
+
+        let arr = crate::array::js_array_alloc_with_length(paths.len() as u32);
+        for (i, path) in paths.iter().enumerate() {
+            crate::array::js_array_set_f64(arr, i as u32, native_string_value(path));
+        }
+        store_module_cjs_root(slot, f64::from_bits(JSValue::array_ptr(arr).bits()))
+    })
+}
+
+fn attach_module_cjs_constructor_statics(closure_addr: usize) {
+    crate::closure::closure_set_dynamic_prop(closure_addr, "_cache", module_cjs_cache_value());
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "_extensions",
+        module_cjs_extensions_value(),
+    );
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "_pathCache",
+        module_cjs_path_cache_value(),
+    );
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "globalPaths",
+        module_cjs_global_paths_value(),
+    );
+    for name in [
+        "_findPath",
+        "_initPaths",
+        "_load",
+        "_nodeModulePaths",
+        "_preloadModules",
+        "_resolveFilename",
+        "_resolveLookupPaths",
+    ] {
+        crate::closure::closure_set_dynamic_prop(
+            closure_addr,
+            name,
+            bound_native_callable_export_value("module", name),
+        );
+    }
+    // `Module.prototype` — Node's require-hook pattern (Next.js):
+    // `const mod = require('module'); const orig = mod.prototype.require;
+    // mod.prototype.require = function(request) {…}`. Expose a plain object
+    // carrying a `require` method so the read+patch round-trips; the patch
+    // is inert under AOT compilation (Perry resolves modules at compile
+    // time), but startup must not throw on the access.
+    let proto = js_object_alloc(0, 1);
+    native_set_field(
+        proto,
+        "require",
+        bound_native_callable_export_value("module", "_load"),
+    );
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr,
+        "prototype",
+        crate::value::js_nanbox_pointer(proto as i64),
+    );
 }
 
 fn native_color_tuple(open: i32, close: i32) -> f64 {
@@ -2825,12 +4829,13 @@ pub(crate) unsafe fn bound_native_callable_module_and_method(
 
 pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32> {
     let (module, method) = bound_native_callable_module_and_method(value)?;
-    match (module.as_str(), method.as_str()) {
+    let module = normalize_native_module_alias(&module);
+    match (module, method.as_str()) {
         ("console", "Console") => Some(1),
         ("util", "isArray") => Some(1),
         ("module", "isBuiltin") => Some(1),
         ("process", "getBuiltinModule") => Some(1),
-        _ => native_callable_export_arity(module.as_str(), method.as_str()),
+        _ => native_callable_export_arity(module, method.as_str()),
     }
 }
 
@@ -2841,6 +4846,21 @@ pub(crate) fn set_bound_native_closure_name(
     let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_value = f64::from_bits(JSValue::string_ptr(ptr).bits());
     crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    // Spec: a function's `name` property is { writable:false, enumerable:false,
+    // configurable:true }. Storing it as a plain dynamic prop left it ENUMERABLE
+    // by default, so `for (k in Buffer)` yielded "name" — even though
+    // `getOwnPropertyDescriptor(Buffer,'name').enumerable` correctly reported
+    // false via the function-name special case. The inconsistency broke
+    // safe-buffer's `copyProps(Buffer, SafeBuffer)` (`for (k in Buffer)
+    // SafeBuffer[k] = Buffer[k]`): it copied "name" onto SafeBuffer, whose own
+    // `name` is read-only, throwing `Cannot assign to read only property 'name'`
+    // in strict mode (jsonwebtoken → Next.js). Pin the proper descriptor so
+    // enumeration matches reflection.
+    crate::object::set_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
 }
 
 thread_local! {
@@ -2856,6 +4876,13 @@ thread_local! {
     /// the spec count. #3143.
     static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<std::collections::HashMap<usize, u32>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+
+    /// Built-in method closures are callable but lack ECMAScript
+    /// `[[Construct]]`. Track the installed closure values so the dynamic
+    /// `new` / `Reflect.construct` paths can reject them without changing
+    /// ordinary user closures or global constructor closures.
+    static BUILTIN_CLOSURE_NON_CONSTRUCTABLE: std::cell::RefCell<std::collections::HashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
 }
 
 /// Record the spec `.length` for a built-in prototype-method closure. See
@@ -2870,6 +4897,28 @@ pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
 /// closure, or `None` if this closure isn't one. See [`BUILTIN_CLOSURE_LENGTH`].
 pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
     BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
+}
+
+pub(crate) fn set_builtin_closure_non_constructable(closure: usize) {
+    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| {
+        m.borrow_mut().insert(closure);
+    });
+}
+
+pub(crate) fn builtin_closure_is_non_constructable(closure: usize) -> bool {
+    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&closure))
+}
+
+pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+    if ptr.is_null() {
+        return false;
+    }
+    builtin_closure_is_non_constructable(ptr as usize)
 }
 
 /// Whitelist of (module, property) pairs for which property-read should
@@ -2893,7 +4942,11 @@ pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
 /// `EventEmitterHandle`, so dispatch coherence is preserved.
 pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool {
     let module = cjs_default_base_module(module).unwrap_or(module);
+    let module = assert_instance_base_module(module).unwrap_or(module);
     let prop = canonical_native_callable_property(module, prop);
+    if module == "vm" && matches!(prop, "Module" | "SourceTextModule" | "SyntheticModule") {
+        return crate::node_vm::vm_modules_enabled();
+    }
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
     }
@@ -2967,12 +5020,27 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
                 "readline/promises",
                 "createInterface" | "Interface" | "Readline",
             )
-            // #3698: node:tls.connect import-surface fix — the manifest-claimed
-            // named/namespace import must be function-valued (typeof ===
-            // "function"). Deeper TLS behavior is tracked separately
-            // (#3196-#3200); only `connect` is in the api-manifest today, so
-            // it's the only tls symbol exposed here.
-            | ("tls", "connect")
+            | (
+                "inspector",
+                "open" | "close" | "url" | "waitForDebugger" | "Session",
+            )
+            | (
+                "inspector.Network",
+                "requestWillBeSent"
+                    | "responseReceived"
+                    | "loadingFinished"
+                    | "loadingFailed"
+                    | "dataSent"
+                    | "dataReceived"
+                    | "webSocketCreated"
+                    | "webSocketClosed"
+                    | "webSocketHandshakeResponseReceived",
+            )
+            | ("inspector/promises", "Session")
+            | (
+                "inspector.Session" | "inspector/promises.Session",
+                "connect" | "connectToMainThread" | "disconnect" | "post" | "on" | "once",
+            )
             // #3712: node:http module-level helper exports. `validateHeaderName`
             // / `validateHeaderValue` perform Node's HTTP-token / header-value
             // validation (throwing the matching error codes); the parser/proxy
@@ -2981,12 +5049,22 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http", "validateHeaderValue")
             | ("http", "setMaxIdleHTTPParsers")
             | ("http", "setGlobalProxyFromEnv")
+            | ("http", "_connectionListener")
+            | ("module", "Module")
             | ("module", "createRequire")
+            | ("module", "Module")
             | ("module", "findPackageJSON")
             | ("module", "findSourceMap")
             | ("module", "flushCompileCache")
             | ("module", "getCompileCacheDir")
             | ("module", "getSourceMapsSupport")
+            | ("module", "_findPath")
+            | ("module", "_initPaths")
+            | ("module", "_load")
+            | ("module", "_nodeModulePaths")
+            | ("module", "_preloadModules")
+            | ("module", "_resolveFilename")
+            | ("module", "_resolveLookupPaths")
             | ("module", "register")
             | ("module", "registerHooks")
             | ("module", "runMain")
@@ -3048,6 +5126,24 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("process", "setMaxListeners")
             | ("process", "getMaxListeners")
             | ("process", "getBuiltinModule")
+            | ("process", "execve")
+            | ("process", "ref")
+            | ("process", "unref")
+            | ("process", "binding")
+            | ("process", "_linkedBinding")
+            | ("process", "dlopen")
+            | ("process", "_rawDebug")
+            | ("process", "_debugProcess")
+            | ("process", "_debugEnd")
+            | ("process", "_startProfilerIdleNotifier")
+            | ("process", "_stopProfilerIdleNotifier")
+            | ("process", "reallyExit")
+            | ("process", "_fatalException")
+            | ("process", "_tickCallback")
+            | ("process", "_getActiveHandles")
+            | ("process", "_getActiveRequests")
+            | ("process", "openStdin")
+            | ("process", "_kill")
             | ("process", "cpuUsage")
             | ("process", "resourceUsage")
             | ("process", "getActiveResourcesInfo")
@@ -3077,8 +5173,14 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("net", "createServer")
             | ("net", "Server")
             | ("net", "Socket")
+            | ("net", "BlockList")
+            | ("net", "SocketAddress")
             | ("net", "_normalizeArgs")
             | ("net", "_createServerHandle")
+            | ("tls", "connect")
+            | ("tls", "createServer")
+            | ("tls", "Server")
+            | ("tls", "TLSSocket")
             // #1856: `child_process.ChildProcess` reads as `[Function: ChildProcess]`.
             | ("child_process", "ChildProcess")
             // #1857 / #2130: every exported function reads as a bound-method
@@ -3088,6 +5190,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // (`cp.spawn(...)`) already lowers through a dedicated codegen path;
             // this just keeps the value-read form coherent so it dispatches
             // through dispatch_native_module_method.
+            | ("child_process", "_forkChild")
             | ("child_process", "exec")
             | ("child_process", "execFile")
             | ("child_process", "execSync")
@@ -3115,6 +5218,18 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream", "compose")
             | ("stream", "duplexPair")
             | ("stream", "pipeline")
+            | ("stream", "finished")
+            | ("stream", "isDisturbed")
+            | ("stream", "isErrored")
+            | ("stream", "isReadable")
+            | ("stream", "isWritable")
+            | ("stream", "getDefaultHighWaterMark")
+            | ("stream", "setDefaultHighWaterMark")
+            | ("stream", "addAbortSignal")
+            | ("stream", "_isArrayBufferView")
+            | ("stream", "_isUint8Array")
+            | ("stream", "_uint8ArrayToBuffer")
+            | ("stream", "isDestroyed")
             | ("stream", "Readable")
             | ("stream", "Writable")
             | ("stream", "Duplex")
@@ -3122,6 +5237,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("stream", "PassThrough")
             | ("stream", "Stream")
             | ("string_decoder", "StringDecoder")
+            | ("assert", "Assert")
             | ("assert", "ok")
             | ("assert", "fail")
             | ("assert", "equal")
@@ -3140,6 +5256,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("assert", "rejects")
             | ("assert", "doesNotReject")
             | ("assert", "ifError")
+            | ("assert/strict", "Assert")
             | ("assert/strict", "ok")
             | ("assert/strict", "fail")
             | ("assert/strict", "equal")
@@ -3405,6 +5522,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util", "setTraceSigInt")
             | ("util", "MIMEParams")
             | ("util", "MIMEType")
+            | ("sea", "isSea")
+            | ("sea", "getAsset")
+            | ("sea", "getAssetAsBlob")
+            | ("sea", "getRawAsset")
+            | ("sea", "getAssetKeys")
             | ("zlib", "Deflate")
             | ("zlib", "DeflateRaw")
             | ("zlib", "Gzip")
@@ -3515,6 +5637,7 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("util/types", "isBoxedPrimitive")
             | ("url", "URL")
             | ("url", "URLSearchParams")
+            | ("url", "URLPattern")
             | ("url", "Url")
             | ("url", "fileURLToPath")
             | ("url", "fileURLToPathBuffer")
@@ -3559,6 +5682,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("console", "profile")
             | ("console", "profileEnd")
             | ("console", "timeStamp")
+            | ("console", "context")
+            | ("console", "createTask")
             | ("crypto", "createHash")
             | ("crypto", "Hash")
             | ("crypto", "createSign")
@@ -3568,8 +5693,13 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "ECDH")
             | ("crypto", "createECDH")
             | ("crypto", "createDiffieHellman")
+            | ("crypto", "DiffieHellman")
             | ("crypto", "createDiffieHellmanGroup")
+            | ("crypto", "DiffieHellmanGroup")
             | ("crypto", "getDiffieHellman")
+            | ("crypto", "diffieHellman")
+            | ("crypto", "encapsulate")
+            | ("crypto", "decapsulate")
             | ("crypto", "createPrivateKey")
             | ("crypto", "createPublicKey")
             | ("crypto", "generateKeyPairSync")
@@ -3580,6 +5710,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("crypto", "Hmac")
             | ("crypto", "pbkdf2Sync")
             | ("crypto", "pbkdf2")
+            | ("crypto", "argon2Sync")
+            | ("crypto", "argon2")
             | ("crypto", "hash")
             | ("crypto", "hkdfSync")
             | ("crypto", "hkdf")
@@ -3616,6 +5748,11 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // callable functions so `typeof crypto.Cipheriv === "function"`.
             | ("crypto", "Cipheriv")
             | ("crypto", "Decipheriv")
+            | ("crypto", "X509Certificate")
+            // #2565: public KeyObject constructor shape plus the supported
+            // secret-key `KeyObject.from(CryptoKey)` static helper.
+            | ("crypto", "KeyObject")
+            | ("crypto.KeyObject", "from")
             | ("crypto", "createSecretKey")
             | ("crypto.Certificate", "verifySpkac")
             | ("crypto.Certificate", "exportPublicKey")
@@ -3639,6 +5776,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("zlib", "unzipSync")
             | ("zlib", "brotliCompressSync")
             | ("zlib", "brotliDecompressSync")
+            | ("zlib", "zstdCompressSync")
+            | ("zlib", "zstdDecompressSync")
             | ("zlib", "crc32")
             | ("zlib", "gzip")
             | ("zlib", "gunzip")
@@ -3649,6 +5788,8 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("zlib", "unzip")
             | ("zlib", "brotliCompress")
             | ("zlib", "brotliDecompress")
+            | ("zlib", "zstdCompress")
+            | ("zlib", "zstdDecompress")
             | ("zlib", "createGzip")
             | ("zlib", "createGunzip")
             | ("zlib", "createDeflate")
@@ -3676,6 +5817,22 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             // already lowers through the codegen NATIVE_MODULE_TABLE.
             | ("http", "createServer")
             | ("http", "Server")
+            | ("http", "OutgoingMessage")
+            // #4904: Node exposes these as constructable classes on the
+            // `http` module (`new http.Agent(opts)`, `new ClientRequest(...)`,
+            // `new IncomingMessage(socket)`, `new ServerResponse(req)`), and
+            // tests/userland grab them as values first (`const { Agent } =
+            // require('http')`). Construction routes through
+            // `js_new_function_construct` → the http arm in
+            // class_registry.rs → JS_NATIVE_HTTP_DISPATCH.
+            | ("http", "Agent")
+            | ("http", "ClientRequest")
+            | ("http", "IncomingMessage")
+            | ("http", "ServerResponse")
+            // #4904: `const { get, request } = require('http')` — the https
+            // twins below were already exported; the http side was missed.
+            | ("http", "request")
+            | ("http", "get")
             | ("https", "createServer")
             | ("https", "Server")
             // #3697: `https.request` / `https.get` / `https.Agent` value reads
@@ -3688,6 +5845,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("http2", "createServer")
             | ("http2", "createSecureServer")
             | ("http2", "Server")
+            | ("http2", "getDefaultSettings")
+            | ("http2", "getPackedSettings")
+            | ("http2", "getUnpackedSettings")
             // #3905: `http2.connect(authority[, options][, listener])` client
             // session factory reads as a function.
             | ("http2", "connect")
@@ -3705,6 +5865,20 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "takeCoverage")
             | ("v8", "stopCoverage")
             | ("v8", "setHeapSnapshotNearHeapLimit")
+            // #3906: the implemented serialize/heap-introspection helpers read
+            // as bound callables too, so `const s = v8.serialize` / `v8[k]`
+            // (and `Object.keys(v8).map(k => v8[k])`) match Node instead of
+            // returning undefined. Invocation routes through
+            // dispatch_native_module_method. `GCProfiler` is a constructor
+            // (construction lowers via new_dynamic.rs); the value read is a
+            // function per Node.
+            | ("v8", "serialize")
+            | ("v8", "deserialize")
+            | ("v8", "getHeapStatistics")
+            | ("v8", "getHeapSpaceStatistics")
+            | ("v8", "getHeapCodeStatistics")
+            | ("v8", "cachedDataVersionTag")
+            | ("v8", "GCProfiler")
             // #3904: modern V8 diagnostics/profiler named exports (function-valued).
             | ("v8", "getCppHeapStatistics")
             | ("v8", "getHeapSnapshot")
@@ -3712,6 +5886,16 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8", "queryObjects")
             | ("v8", "startCpuProfile")
             | ("v8", "writeHeapSnapshot")
+            // #3127/#3128/#3130/#3284: no-flag node:vm export shape.
+            | ("vm", "Script")
+            | ("vm", "createContext")
+            | ("vm", "createScript")
+            | ("vm", "runInContext")
+            | ("vm", "runInNewContext")
+            | ("vm", "runInThisContext")
+            | ("vm", "isContext")
+            | ("vm", "compileFunction")
+            | ("vm", "measureMemory")
             // #3679: v8.startupSnapshot / v8.promiseHooks namespace methods read
             // as callable values (`typeof v8.startupSnapshot.isBuildingSnapshot
             // === "function"`). Invocation routes through
@@ -3725,6 +5909,9 @@ pub(crate) fn is_native_module_callable_export(module: &str, prop: &str) -> bool
             | ("v8.promiseHooks", "onAfter")
             | ("v8.promiseHooks", "onSettled")
             | ("v8.promiseHooks", "createHook")
+            | ("repl", "Recoverable")
+            | ("repl", "REPLServer")
+            | ("repl", "start")
     )
 }
 
@@ -3749,6 +5936,11 @@ pub extern "C" fn js_native_module_bind_method(
 
     if module_name == "crypto.webcrypto" {
         if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return value;
+        }
+    }
+    if module_name == "crypto.subtle" {
+        if let Some(value) = super::global_this::subtle_crypto_method_value(property_name) {
             return value;
         }
     }
@@ -3825,7 +6017,7 @@ pub extern "C" fn js_class_method_bind(
                 let bits = instance.to_bits();
                 if (bits >> 48) == 0x7FFD {
                     let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-                    if id > 0 && id < 0x100000 {
+                    if crate::value::addr_class::is_small_handle(id as usize) {
                         if let Some(dispatch) = handle_property_dispatch() {
                             let value = HANDLE_PROPERTY_BIND_REENTRY.with(|guard| {
                                 if guard.get() {
@@ -3850,6 +6042,84 @@ pub extern "C" fn js_class_method_bind(
         }
     }
 
+    // Method IDENTITY (test262 class/elements): a class method is a single
+    // shared function object, so `c.m`, `c2.m` and `C.prototype.m` must all be
+    // the IDENTICAL value. Route every user-class method-as-value read through
+    // the per-`(owner_class, name)` cached canonical built by
+    // `class_prototype_method_value_for_name` instead of minting a fresh
+    // per-receiver closure here. The canonical captures the OWNER class's
+    // prototype-ref (capture 0); `dispatch_bound_method` recognises that marker
+    // and supplies the call-site `this` (IMPLICIT_THIS) so invocations still see
+    // the right receiver — e.g. the `this.m = this.m.bind(this)` idiom rebinds
+    // correctly, and a bare `const f = c.m; f()` runs with the spec `this`.
+    //
+    // Guard against re-entry from `class_prototype_method_value_for_name`
+    // itself: it builds the canonical by calling `build_bound_method_closure`
+    // directly (NOT this function), so the cache is populated without looping.
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        if let Ok(name) = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
+        } {
+            if bound_native_method_length(name).is_none() {
+                if let Some(class_id) = class_id_from_method_receiver(instance) {
+                    if let Some(owner) =
+                        super::class_registry::method_owner_class_id(class_id, name)
+                    {
+                        // [[Get]] order: an OWN data property of this name
+                        // shadows the prototype method. The ubiquitous
+                        // `this.m = this.m.bind(this)` idiom installs an own `m`
+                        // (a bound function), so `obj.m` must read that own value
+                        // back — not the shared prototype method. Skipping this
+                        // both returned the wrong identity (`obj.m ===
+                        // C.prototype.m` where Node says false) and looped when
+                        // the canonical re-resolved `m` by name. A class
+                        // prototype-ref receiver has no own-property bag, so this
+                        // check is naturally a no-op there.
+                        let recv_jsv = JSValue::from_bits(instance.to_bits());
+                        if recv_jsv.is_pointer()
+                            && !super::class_registry::is_registered_class_prototype_object(
+                                crate::value::js_nanbox_get_pointer(instance) as usize,
+                            )
+                        {
+                            let obj = recv_jsv.as_pointer::<ObjectHeader>();
+                            if crate::value::addr_class::is_above_handle_band(obj as usize) {
+                                let key = crate::string::js_string_from_bytes(
+                                    method_name_ptr,
+                                    method_name_len as u32,
+                                );
+                                if let Some(own) =
+                                    unsafe { super::own_data_field_by_name(obj, key) }
+                                {
+                                    if own.bits() != crate::value::TAG_UNDEFINED {
+                                        return f64::from_bits(own.bits());
+                                    }
+                                }
+                            }
+                        }
+                        let canonical = class_prototype_method_value_for_name(owner, name);
+                        if canonical.to_bits() != crate::value::TAG_UNDEFINED {
+                            return canonical;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    build_bound_method_closure(instance, method_name_ptr, method_name_len)
+}
+
+/// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the
+/// named method, stamping its `.name`/`.length`. This is the raw builder used
+/// by both `js_class_method_bind` (after its canonical-identity short-circuit)
+/// and `class_prototype_method_value_for_name` (which caches one canonical per
+/// `(class_id, name)`). Keeping it separate breaks the recursion that an
+/// unconditional canonical lookup inside `js_class_method_bind` would create.
+pub(crate) fn build_bound_method_closure(
+    instance: f64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+) -> f64 {
     let closure = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 3);
     crate::closure::js_closure_set_capture_f64(closure, 0, instance);
     crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
@@ -3859,9 +6129,117 @@ pub extern "C" fn js_class_method_bind(
             std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len))
         } {
             set_bound_native_closure_name(closure, name);
+            if let Some(length) = bound_native_method_length(name) {
+                set_builtin_closure_length(closure as usize, length);
+            } else if let Some(class_id) = class_id_from_method_receiver(instance) {
+                // User class method bound as a value (`C.prototype.m`, `c.m`):
+                // stamp its spec `.length` from the registered param count so
+                // `C.prototype.m.length` reflects the declared arity instead of
+                // the closure's capture count (Test262 method `.length` tests).
+                if let Some(length) =
+                    super::class_registry::class_method_bind_length(class_id, name)
+                {
+                    set_builtin_closure_length(closure as usize, length);
+                }
+            }
         }
     }
     crate::value::js_nanbox_pointer(closure as i64)
+}
+
+/// Resolve the owning class id for a `js_class_method_bind` receiver: a class
+/// constructor/prototype ref (INT32-tagged) or a real class instance pointer.
+/// Resolve the effective receiver for a BOUND_METHOD dispatch. When the
+/// captured receiver is a canonical class-method marker (a class prototype-ref,
+/// produced by `class_prototype_method_value_for_name`), substitute the
+/// call-site `this` (IMPLICIT_THIS) provided it is itself a dispatchable class
+/// receiver (an instance or class ref). Otherwise the captured value is the real
+/// receiver and is returned unchanged. See `dispatch_bound_method`.
+/// Is `value` a bound STATIC-method value — a BOUND_METHOD closure whose
+/// captured receiver is a class constructor ref (`C.staticMethod` read as a
+/// value)? Used by the Function.prototype call/apply arms to arm the one-shot
+/// static-`this` override with the explicit thisArg, so the static method body
+/// sees the receiver (`C.m.call({})` → `this === {}`) and static private brand
+/// checks behave per spec.
+pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(raw) {
+        return false;
+    }
+    let closure = raw as *const crate::closure::ClosureHeader;
+    if unsafe { (*closure).func_ptr } as usize != crate::closure::BOUND_METHOD_FUNC_PTR as usize {
+        return false;
+    }
+    let captured = crate::closure::js_closure_get_capture_f64(closure, 0);
+    class_ref_id(captured).is_some() && class_prototype_ref_id(captured).is_none()
+}
+
+pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
+    if class_prototype_ref_id(captured).is_some() {
+        let call_this = super::js_implicit_this_get();
+        if class_id_from_method_receiver(call_this).is_some() {
+            return call_this;
+        }
+    }
+    captured
+}
+
+fn class_id_from_method_receiver(instance: f64) -> Option<u32> {
+    if let Some(cid) = class_ref_id(instance) {
+        return Some(cid);
+    }
+    let jsv = JSValue::from_bits(instance.to_bits());
+    if jsv.is_pointer() {
+        let obj = jsv.as_pointer::<ObjectHeader>();
+        if crate::value::addr_class::is_above_handle_band(obj as usize) {
+            // A callable (closure / function object) is never a class-method
+            // receiver for bound-method marker substitution. Its allocation is a
+            // `ClosureHeader`, so reading `class_id` off it as an `ObjectHeader`
+            // is a type confusion that can yield a stray non-zero id. Without
+            // this guard, a free call to a `C.prototype.method` bound-method
+            // value made from inside a function-object method body (e.g.
+            // test262's `assert.throws(…, function(){ m(...) })`, where
+            // `IMPLICIT_THIS` is the `assert` function) would mis-substitute the
+            // function object as the receiver and dispatch `assert.method(...)`
+            // instead of `C.prototype.method`, bypassing the generator wrapper's
+            // param prologue. See `canonical_bound_method_receiver`.
+            if crate::closure::is_closure_ptr(obj as usize) {
+                return None;
+            }
+            let cid = unsafe { (*obj).class_id };
+            if cid != 0 {
+                return Some(cid);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) const CLASS_PROTOTYPE_REF_FLAG: u64 = 1u64 << 32;
+
+pub(crate) fn class_constructor_ref_value(class_id: u32) -> f64 {
+    f64::from_bits(0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF))
+}
+
+pub(crate) fn class_prototype_ref_value(class_id: u32) -> f64 {
+    f64::from_bits(
+        0x7FFE_0000_0000_0000u64 | CLASS_PROTOTYPE_REF_FLAG | (class_id as u64 & 0xFFFF_FFFF),
+    )
+}
+
+pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
+    let bits = value.to_bits();
+    if (bits >> 48) == 0x7FFE && (bits & CLASS_PROTOTYPE_REF_FLAG) != 0 {
+        let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if class_id != 0 && is_class_id_registered(class_id) {
+            return Some(class_id);
+        }
+    }
+    None
 }
 
 pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
@@ -3917,9 +6295,12 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
     // total leak is bounded by the static set of decorated method
     // descriptors. The cache below short-circuits repeat queries.
     let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
-    let class_bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF);
-    let class_ref = f64::from_bits(class_bits);
-    let value = js_class_method_bind(class_ref, leaked.as_ptr(), leaked.len());
+    let class_ref = class_prototype_ref_value(class_id);
+    // Build the closure DIRECTLY (not via `js_class_method_bind`, whose
+    // canonical short-circuit would call back into this function and recurse).
+    // The captured receiver is the prototype-ref, which doubles as the
+    // "canonical class method" marker that `dispatch_bound_method` keys on.
+    let value = build_bound_method_closure(class_ref, leaked.as_ptr(), leaked.len());
     class_prototype_method_value_cache_root_store(
         class_id,
         method_name.to_string(),
@@ -3947,7 +6328,7 @@ pub(crate) unsafe fn get_module_name_from_namespace(namespace_obj: f64) -> &'sta
         return "";
     }
     let obj = jsval.as_pointer::<ObjectHeader>();
-    if obj.is_null() || (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         return "";
     }
     let module_field = js_object_get_field(obj as *mut _, 0);
@@ -4060,11 +6441,39 @@ pub(crate) unsafe fn get_native_module_constant(
     let cjs_default_base = cjs_default_base_module(module_name);
     let is_cjs_default_object = cjs_default_base.is_some();
     let module_name = cjs_default_base.unwrap_or(module_name);
+    if module_name == "process.namespace" && property == "default" {
+        return cjs_default_export_value("process");
+    }
 
-    if property == "default" && !is_cjs_default_object {
+    if property == "default" && !is_cjs_default_object && module_name != "process" {
         if let Some(value) = cjs_default_export_value(module_name) {
             return Some(value);
         }
+    }
+
+    let module_name = if module_name == "process.namespace" {
+        "process"
+    } else {
+        module_name
+    };
+
+    // #3906/#3679: node:v8 lifecycle namespaces. `v8.startupSnapshot` /
+    // `v8.promiseHooks` are object-valued exports; resolve them to dedicated
+    // native-module namespace objects so `typeof === "object"` and their
+    // methods dispatch through `dispatch_native_module_method`. Handled here
+    // (rather than only in the codegen `js_native_module_property_by_name`
+    // path) so dynamic reads — `v8["promiseHooks"]`, `const { promiseHooks } =
+    // v8` — resolve to the same object instead of `undefined`.
+    if module_name == "v8" && matches!(property, "startupSnapshot" | "promiseHooks") {
+        let submodule = if property == "startupSnapshot" {
+            "v8.startupSnapshot"
+        } else {
+            "v8.promiseHooks"
+        };
+        return Some(js_create_native_module_namespace(
+            submodule.as_ptr(),
+            submodule.len(),
+        ));
     }
 
     let o_nofollow: f64 = {
@@ -4858,14 +7267,38 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "module" => match property {
+            "Module" => Some(bound_native_callable_export_value("module", "Module")),
             "builtinModules" => Some(crate::process::js_module_builtin_modules()),
             "constants" => Some(crate::process::js_module_constants()),
+            "globalPaths" => Some(module_cjs_global_paths_value()),
+            "_cache" => Some(module_cjs_cache_value()),
+            "_extensions" => Some(module_cjs_extensions_value()),
+            "_pathCache" => Some(module_cjs_path_cache_value()),
+            "_resolveFilename"
+            | "_resolveLookupPaths"
+            | "_load"
+            | "_findPath"
+            | "_nodeModulePaths"
+            | "_initPaths"
+            | "_preloadModules" => Some(bound_native_callable_export_value("module", property)),
             _ => None,
         },
-        "process" => match property {
-            "sourceMapsEnabled" => Some(crate::process::js_process_source_maps_enabled()),
+        "inspector" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
+            "console" => Some(crate::node_inspector::js_node_inspector_console_object()),
+            "Network" => Some(create_sub_namespace("inspector.Network")),
+            "Session" => Some(bound_native_callable_export_value("inspector", "Session")),
             _ => None,
         },
+        "inspector/promises" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("inspector/promises"),
+            "Session" => Some(bound_native_callable_export_value(
+                "inspector/promises",
+                "Session",
+            )),
+            _ => None,
+        },
+        "process" => crate::process::process_metadata_property(property),
         "dns" => match property {
             "promises" => {
                 crate::dns::dns_promises_init_servers_from_callback_if_unset();
@@ -4877,26 +7310,30 @@ pub(crate) unsafe fn get_native_module_constant(
         "dns/promises" => dns_error_alias(property).map(|alias| str_val(alias)),
         "async_hooks" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("async_hooks"),
+            "asyncWrapProviders" => Some(crate::async_hooks::js_async_hooks_async_wrap_providers()),
             _ => None,
         },
         "querystring" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("querystring"),
             _ => None,
         },
-        "constants" => fs_const(property)
-            .or_else(|| fs_const_tail(property))
-            .or_else(|| os_signal_const(property))
-            .or_else(|| os_errno_const(property))
-            .or_else(|| os_priority_const(property))
-            .or_else(|| os_dlopen_const(property))
-            .or_else(|| crypto_const(property))
-            .or_else(|| {
-                if property == "defaultCoreCipherList" {
-                    Some(str_val(DEFAULT_CORE_CIPHER_LIST))
-                } else {
-                    None
-                }
-            }),
+        "constants" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("constants"),
+            _ => fs_const(property)
+                .or_else(|| fs_const_tail(property))
+                .or_else(|| os_signal_const(property))
+                .or_else(|| os_errno_const(property))
+                .or_else(|| os_priority_const(property))
+                .or_else(|| os_dlopen_const(property))
+                .or_else(|| crypto_const(property))
+                .or_else(|| {
+                    if property == "defaultCoreCipherList" {
+                        Some(str_val(DEFAULT_CORE_CIPHER_LIST))
+                    } else {
+                        None
+                    }
+                }),
+        },
         "sqlite" => match property {
             "constants" => Some(create_sub_namespace("sqlite.constants")),
             "Session" => Some(sqlite_session_constructor_value()),
@@ -5086,18 +7523,27 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "test" => crate::node_test::property(property),
-        "tls" => match property {
-            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
-            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
-            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
-            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
-            "CLIENT_RENEG_LIMIT" => Some(3.0),
-            "CLIENT_RENEG_WINDOW" => Some(600.0),
-            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
-            _ => None,
-        },
         "wasi" => match property {
             "default" => Some(native_namespace_or_create("wasi", namespace_obj)),
+            _ => None,
+        },
+        "vm" => match property {
+            "default" => Some(native_namespace_or_create("vm", namespace_obj)),
+            "constants" => Some(create_sub_namespace("vm.constants")),
+            "Module" | "SourceTextModule" | "SyntheticModule"
+                if crate::node_vm::vm_modules_enabled() =>
+            {
+                Some(bound_native_callable_export_value("vm", property))
+            }
+            _ => None,
+        },
+        "vm.constants" => match property {
+            "USE_MAIN_CONTEXT_DEFAULT_LOADER" => Some(crate::symbol::js_symbol_for(str_val(
+                "vm_dynamic_import_main_context_default",
+            ))),
+            "DONT_CONTEXTIFY" => Some(crate::symbol::js_symbol_for(str_val(
+                "vm_context_no_contextify",
+            ))),
             _ => None,
         },
         "stream" => match property {
@@ -5110,8 +7556,30 @@ pub(crate) unsafe fn get_native_module_constant(
             }),
             _ => None,
         },
+        "repl" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("repl"),
+            "builtinModules" => Some(crate::process::js_module_builtin_modules()),
+            "REPL_MODE_SLOPPY" => Some(crate::node_repl::repl_mode_sloppy()),
+            "REPL_MODE_STRICT" => Some(crate::node_repl::repl_mode_strict()),
+            "Recoverable" => Some(bound_native_callable_export_value("repl", "Recoverable")),
+            "REPLServer" => Some(bound_native_callable_export_value("repl", "REPLServer")),
+            "start" => Some(bound_native_callable_export_value("repl", "start")),
+            _ => None,
+        },
         "url" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("url"),
+            "URL" => Some(js_get_global_this_builtin_value(
+                b"URL".as_ptr(),
+                "URL".len(),
+            )),
+            "URLSearchParams" => Some(js_get_global_this_builtin_value(
+                b"URLSearchParams".as_ptr(),
+                "URLSearchParams".len(),
+            )),
+            "URLPattern" => Some(js_get_global_this_builtin_value(
+                b"URLPattern".as_ptr(),
+                "URLPattern".len(),
+            )),
             _ => None,
         },
         "net" => match property {
@@ -5172,6 +7640,16 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
+        "tls" => match property {
+            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
+            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
+            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
+            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
+            "CLIENT_RENEG_LIMIT" => Some(3.0),
+            "CLIENT_RENEG_WINDOW" => Some(600.0),
+            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
+            _ => None,
+        },
         "events" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("events"),
             "defaultMaxListeners" => Some(10.0),
@@ -5226,11 +7704,17 @@ pub(crate) unsafe fn get_native_module_constant(
                 || f64::from_bits(crate::value::TAG_NULL),
             )),
             "threadId" => Some(0.0),
-            "threadName" => Some(str_val("")),
-            "resourceLimits" => {
-                let obj = crate::object::js_object_alloc(0, 0);
-                Some(crate::value::js_nanbox_pointer(obj as i64))
-            }
+            "threadName" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_THREAD_NAME_GETTER,
+                || str_val(""),
+            )),
+            "resourceLimits" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_RESOURCE_LIMITS_GETTER,
+                || {
+                    let obj = crate::object::js_object_alloc(0, 0);
+                    crate::value::js_nanbox_pointer(obj as i64)
+                },
+            )),
             "locks" => Some(worker_threads_locks_value()),
             "SHARE_ENV" => Some(crate::symbol::js_symbol_for(str_val(
                 "nodejs.worker_threads.SHARE_ENV",
@@ -5256,6 +7740,10 @@ pub(crate) unsafe fn get_native_module_constant(
         // pointer) and hand it back for every read.
         "http" => match property {
             "METHODS" => Some(unsafe { http_methods_array() }),
+            "OutgoingMessage" => Some(bound_native_callable_export_value(
+                "http",
+                "OutgoingMessage",
+            )),
             // #3712: Node's `http.maxHeaderSize` default is 16 KiB (16384).
             "maxHeaderSize" => Some(16384.0),
             // #3712: `http.globalAgent` is an http.Agent with protocol "http:"
@@ -5263,6 +7751,19 @@ pub(crate) unsafe fn get_native_module_constant(
             "globalAgent" => Some(unsafe { http_global_agent_object() }),
             // #2519: `http.STATUS_CODES` maps status codes to reason phrases.
             "STATUS_CODES" => Some(unsafe { http_status_codes_object() }),
+            "WebSocket" => Some(js_get_global_this_builtin_value(
+                b"WebSocket".as_ptr(),
+                "WebSocket".len(),
+            )),
+            // #4974: `require('_http_server').kConnectionsCheckingInterval`
+            // (the module aliases to "http" in cjs_wrap). Node exports a
+            // Symbol used as `server[k]` to reach the connections-checking
+            // interval timer; Perry represents it as a sentinel string key
+            // the ext-http server handle dispatch recognizes, mirroring the
+            // `@@__perry_wk_*` well-known-symbol encoding.
+            "kConnectionsCheckingInterval" => {
+                Some(native_string_value("@@kConnectionsCheckingInterval"))
+            }
             _ => None,
         },
         "https" => match property {
@@ -5278,6 +7779,21 @@ pub(crate) unsafe fn get_native_module_constant(
         "http2" => match property {
             "constants" => Some(create_sub_namespace("http2.constants")),
             "sensitiveHeaders" => Some(crate::node_http2_constants::sensitive_headers_symbol()),
+            // `Http2ServerRequest` / `Http2ServerResponse` imported as VALUES are
+            // used by libraries purely for `req instanceof Http2ServerRequest`
+            // brand checks (e.g. @hono/node-server distinguishing HTTP/2 from
+            // HTTP/1 requests). Resolve them to callable class values so the
+            // `instanceof` RHS is a function (returns `false` for Perry's HTTP/1
+            // handles) instead of `undefined` — which threw "Right-hand side of
+            // 'instanceof' is not an object" and 400'd every request.
+            "Http2ServerRequest" => Some(bound_native_callable_export_value(
+                "http2",
+                "Http2ServerRequest",
+            )),
+            "Http2ServerResponse" => Some(bound_native_callable_export_value(
+                "http2",
+                "Http2ServerResponse",
+            )),
             // #3905: `import http2 from "node:http2"` — default is the module
             // namespace object.
             "default" => Some(native_namespace_or_create("http2", namespace_obj)),
@@ -5411,6 +7927,316 @@ unsafe fn http_methods_array() -> f64 {
     value
 }
 
+fn global_agent_string_value(s: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+unsafe fn global_agent_string_from_header(
+    ptr: *const crate::string::StringHeader,
+) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    std::str::from_utf8(std::slice::from_raw_parts(data, len))
+        .ok()
+        .map(|s| s.to_string())
+}
+
+unsafe fn global_agent_value_to_string(value: JSValue) -> String {
+    let ptr = crate::value::js_jsvalue_to_string(f64::from_bits(value.bits()));
+    global_agent_string_from_header(ptr).unwrap_or_default()
+}
+
+unsafe fn global_agent_value_to_json_string(value: JSValue) -> String {
+    let ptr = crate::json::js_json_stringify(f64::from_bits(value.bits()), 0);
+    global_agent_string_from_header(ptr).unwrap_or_default()
+}
+
+fn global_agent_is_truthy(value: JSValue) -> bool {
+    crate::value::js_is_truthy(f64::from_bits(value.bits())) != 0
+}
+
+fn global_agent_is_undefined(value: f64) -> bool {
+    value.to_bits() == crate::value::TAG_UNDEFINED
+}
+
+unsafe fn global_agent_object_ptr(value: f64) -> Option<*const ObjectHeader> {
+    let bits = value.to_bits();
+    let top16 = bits >> 48;
+    let ptr = if top16 == 0x7FFD {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader
+    } else if top16 == 0 && bits >= 0x10000 {
+        bits as *const ObjectHeader
+    } else {
+        return None;
+    };
+    (!ptr.is_null()).then_some(ptr)
+}
+
+unsafe fn global_agent_get_field_raw(value: f64, field: &str) -> Option<JSValue> {
+    let ptr = global_agent_object_ptr(value)?;
+    let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+    Some(js_object_get_field_by_name(ptr, key))
+}
+
+unsafe fn global_agent_get_string_field(value: f64, field: &str) -> Option<String> {
+    let field_value = global_agent_get_field_raw(value, field)?;
+    if field_value.is_undefined() || field_value.is_null() {
+        return None;
+    }
+    if field_value.is_any_string() {
+        let coerced = crate::builtins::js_string_coerce(f64::from_bits(field_value.bits()));
+        return global_agent_string_from_header(coerced);
+    }
+    if field_value.is_number() {
+        return Some(format!("{}", field_value.as_number() as i64));
+    }
+    None
+}
+
+unsafe fn global_agent_get_number_field(value: f64, field: &str) -> Option<f64> {
+    let field_value = global_agent_get_field_raw(value, field)?;
+    if field_value.is_undefined() || field_value.is_null() {
+        return None;
+    }
+    field_value.is_number().then(|| field_value.as_number())
+}
+
+unsafe fn global_agent_has_name_option(value: f64) -> bool {
+    for field in ["host", "port", "localAddress", "family", "socketPath"] {
+        if let Some(field_value) = global_agent_get_field_raw(value, field) {
+            if !field_value.is_undefined() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+unsafe fn global_agent_select_options(first: f64, second: f64) -> f64 {
+    if global_agent_is_undefined(second) {
+        return first;
+    }
+    if global_agent_has_name_option(first) {
+        first
+    } else {
+        second
+    }
+}
+
+unsafe fn global_agent_build_http_name(options: f64) -> String {
+    let bits = options.to_bits();
+    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+        return "localhost::".to_string();
+    }
+
+    let host =
+        global_agent_get_string_field(options, "host").unwrap_or_else(|| "localhost".to_string());
+    let port = global_agent_get_string_field(options, "port").unwrap_or_default();
+    let local_address = global_agent_get_string_field(options, "localAddress").unwrap_or_default();
+    let mut name = format!("{}:{}:{}", host, port, local_address);
+
+    if let Some(family) = global_agent_get_number_field(options, "family") {
+        let family = family as i64;
+        if family == 4 || family == 6 {
+            name.push(':');
+            name.push_str(&family.to_string());
+        }
+    }
+    if let Some(socket_path) = global_agent_get_string_field(options, "socketPath") {
+        name.push(':');
+        name.push_str(&socket_path);
+    }
+
+    name
+}
+
+unsafe fn global_agent_append_https_name_fields(name: &mut String, options: f64) {
+    let bits = options.to_bits();
+    if bits == JSValue::undefined().bits() || bits == JSValue::null().bits() {
+        for _ in 0..20 {
+            name.push(':');
+        }
+        return;
+    }
+
+    let host_value = global_agent_get_field_raw(options, "host");
+
+    let push_truthy_string = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(value) = global_agent_get_field_raw(options, field) {
+            if global_agent_is_truthy(value) {
+                name.push_str(&global_agent_value_to_string(value));
+            }
+        }
+    };
+    let push_defined = |name: &mut String, field: &str| {
+        name.push(':');
+        if let Some(value) = global_agent_get_field_raw(options, field) {
+            if !value.is_undefined() {
+                name.push_str(&global_agent_value_to_string(value));
+            }
+        }
+    };
+
+    push_truthy_string(name, "ca");
+    push_truthy_string(name, "cert");
+    push_truthy_string(name, "clientCertEngine");
+    push_truthy_string(name, "ciphers");
+    push_truthy_string(name, "key");
+    push_truthy_string(name, "pfx");
+    push_defined(name, "rejectUnauthorized");
+
+    name.push(':');
+    if let Some(servername) = global_agent_get_field_raw(options, "servername") {
+        if global_agent_is_truthy(servername) {
+            let same_as_host = match host_value {
+                Some(host) if global_agent_is_truthy(host) => {
+                    global_agent_value_to_string(host) == global_agent_value_to_string(servername)
+                }
+                _ => false,
+            };
+            if !same_as_host {
+                name.push_str(&global_agent_value_to_string(servername));
+            }
+        }
+    }
+
+    push_truthy_string(name, "minVersion");
+    push_truthy_string(name, "maxVersion");
+    push_truthy_string(name, "secureProtocol");
+    push_truthy_string(name, "crl");
+    push_defined(name, "honorCipherOrder");
+    push_truthy_string(name, "ecdhCurve");
+    push_truthy_string(name, "dhparam");
+    push_defined(name, "secureOptions");
+    push_truthy_string(name, "sessionIdContext");
+
+    name.push(':');
+    if let Some(value) = global_agent_get_field_raw(options, "sigalgs") {
+        if global_agent_is_truthy(value) {
+            name.push_str(&global_agent_value_to_json_string(value));
+        }
+    }
+
+    push_truthy_string(name, "privateKeyIdentifier");
+    push_truthy_string(name, "privateKeyEngine");
+}
+
+unsafe fn global_agent_build_name(options: f64, is_https: bool) -> String {
+    let mut name = global_agent_build_http_name(options);
+    if is_https {
+        global_agent_append_https_name_fields(&mut name, options);
+    }
+    name
+}
+
+extern "C" fn global_agent_get_name_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    first: f64,
+    second: f64,
+) -> f64 {
+    unsafe {
+        let is_https = crate::closure::js_closure_get_capture_ptr(closure, 0) != 0;
+        let options = global_agent_select_options(first, second);
+        global_agent_string_value(&global_agent_build_name(options, is_https))
+    }
+}
+
+extern "C" fn global_agent_keep_socket_alive_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _socket: f64,
+) -> f64 {
+    f64::from_bits(JSValue::bool(true).bits())
+}
+
+extern "C" fn global_agent_reuse_socket_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _socket: f64,
+    _request: f64,
+) -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+extern "C" fn global_agent_destroy_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+fn global_agent_method_value(
+    name: &str,
+    func_ptr: *const u8,
+    call_arity: u32,
+    exposed_length: u32,
+    is_https: Option<bool>,
+) -> f64 {
+    crate::closure::js_register_closure_arity(func_ptr, call_arity);
+    let captures = if is_https.is_some() { 1 } else { 0 };
+    let closure = crate::closure::js_closure_alloc(func_ptr, captures);
+    if let Some(is_https) = is_https {
+        crate::closure::js_closure_set_capture_ptr(closure, 0, i64::from(is_https));
+    }
+    set_bound_native_closure_name(closure, name);
+    set_builtin_closure_length(closure as usize, exposed_length);
+    set_builtin_closure_non_constructable(closure as usize);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+unsafe fn global_agent_prototype(is_https: bool) -> f64 {
+    let proto = js_object_alloc(0, 0);
+    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    let attrs = super::PropertyAttrs::new(true, false, true);
+    for (name, value) in [
+        (
+            "keepSocketAlive",
+            global_agent_method_value(
+                "keepSocketAlive",
+                global_agent_keep_socket_alive_thunk as *const u8,
+                1,
+                1,
+                None,
+            ),
+        ),
+        (
+            "reuseSocket",
+            global_agent_method_value(
+                "reuseSocket",
+                global_agent_reuse_socket_thunk as *const u8,
+                2,
+                2,
+                None,
+            ),
+        ),
+        (
+            "getName",
+            global_agent_method_value(
+                "getName",
+                global_agent_get_name_thunk as *const u8,
+                2,
+                0,
+                Some(is_https),
+            ),
+        ),
+        (
+            "destroy",
+            global_agent_method_value(
+                "destroy",
+                global_agent_destroy_thunk as *const u8,
+                0,
+                0,
+                None,
+            ),
+        ),
+    ] {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        js_object_set_field_by_name(proto, key, value);
+        set_property_attrs(proto as usize, name.to_string(), attrs);
+    }
+    proto_value
+}
+
 unsafe fn https_global_agent_object() -> f64 {
     if let Some(bits) =
         NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get("https.globalAgent").copied())
@@ -5443,6 +8269,7 @@ unsafe fn https_global_agent_object() -> f64 {
     js_object_set_field(obj, 4, JSValue::number(256.0));
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
+    crate::object::js_object_set_prototype_of(result, global_agent_prototype(true));
     NATIVE_MODULE_NAMESPACES.with(|cache| {
         cache
             .borrow_mut()
@@ -5487,6 +8314,7 @@ unsafe fn http_global_agent_object() -> f64 {
     js_object_set_field(obj, 4, JSValue::number(256.0));
 
     let result = crate::value::js_nanbox_pointer(obj as i64);
+    crate::object::js_object_set_prototype_of(result, global_agent_prototype(false));
     NATIVE_MODULE_NAMESPACES.with(|cache| {
         cache
             .borrow_mut()
@@ -5698,4 +8526,95 @@ unsafe fn create_fs_constants_object() -> f64 {
         Ordering::Relaxed,
     );
     result
+}
+
+// ─── Vtable impls relocated from field_get_set.rs (EN size work) ───────
+// Bodies moved verbatim so their table references are reachable only
+// through the installed vtable. See `NativeModuleVtable`.
+
+/// Own-field read on a namespace object (`fs.constants`, method values,
+/// process IPC props, …). Returns `None` when the receiver carries no
+/// module name — the caller falls through to the generic field scan.
+unsafe fn vt_get_own_field(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let nb_ptr = crate::value::js_nanbox_pointer(obj as i64);
+    let module_name = get_module_name_from_namespace(nb_ptr);
+    if module_name.is_empty() {
+        return None;
+    }
+    let property_name =
+        std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
+    // A user override (`require('node:timers').setImmediate = patched`)
+    // wins all built-in resolution below — CJS exports are mutable in Node.
+    if let Some(value) = native_namespace_prop_override_get(&module_name, property_name) {
+        return Some(JSValue::from_bits(value.to_bits()));
+    }
+    if matches!(
+        module_name,
+        "process" | "process.namespace" | "process.default"
+    ) {
+        if let Some(value) = crate::process::process_ipc_property(property_name) {
+            return Some(JSValue::from_bits(value.to_bits()));
+        }
+    }
+    if let Some(value) = super::field_get_set::native_module_own_field_by_key(obj, key) {
+        return Some(value);
+    }
+    // #3687: node:cluster default-import EventEmitter methods on the
+    // distinct `cluster.default` namespace (see original comment at the
+    // pre-relocation site in field_get_set.rs history).
+    if module_name == "cluster.default" && super::is_cluster_emitter_method(property_name) {
+        return Some(JSValue::from_bits(
+            bound_native_callable_export_value(module_name, property_name).to_bits(),
+        ));
+    }
+    if let Some(val) = get_native_module_constant(module_name, property_name, nb_ptr) {
+        return Some(JSValue::from_bits(val.to_bits()));
+    }
+    if module_name == "crypto.webcrypto" {
+        if let Some(value) = super::global_this::webcrypto_method_value(property_name) {
+            return Some(JSValue::from_bits(value.to_bits()));
+        }
+    }
+    if module_name == "crypto.subtle" {
+        if let Some(value) = super::global_this::subtle_crypto_method_value(property_name) {
+            return Some(JSValue::from_bits(value.to_bits()));
+        }
+    }
+    // Issue #894: callable exports (`("events", "EventEmitter")` …) get a
+    // bound-method closure for require-then-member-access parity.
+    if is_native_module_callable_export(module_name, property_name) {
+        return Some(JSValue::from_bits(
+            bound_native_callable_export_value(module_name, property_name).to_bits(),
+        ));
+    }
+    Some(JSValue::undefined())
+}
+
+/// `Object.keys(namespace)` — fresh array of the module's enumerable
+/// keys. `None` when the module is unknown; caller falls back to the
+/// generic keys_array path.
+unsafe fn vt_own_keys_array(obj: *const ObjectHeader) -> Option<*mut crate::array::ArrayHeader> {
+    let module_name = read_native_module_name(obj)?;
+    let keys = native_module_enumerable_keys(&module_name)?;
+    let include_permission = matches!(
+        module_name.as_str(),
+        "process" | "process.namespace" | "process.default"
+    ) && crate::process::process_permission_enabled();
+    let out = crate::array::js_array_alloc(keys.len() as u32 + include_permission as u32);
+    for key_bytes in keys {
+        let key_str =
+            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
+    }
+    if include_permission {
+        let key_str =
+            crate::string::js_string_from_bytes(b"permission".as_ptr(), b"permission".len() as u32);
+        crate::array::js_array_push(out, JSValue::string_ptr(key_str));
+    }
+    Some(out)
 }

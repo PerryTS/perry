@@ -128,6 +128,25 @@ fn merge_closure_prop_map(
     }
 }
 
+fn forwarded_heap_owner(owner: usize) -> Option<usize> {
+    if owner == 0 {
+        return None;
+    }
+    if matches!(
+        crate::arena::classify_heap_generation(owner),
+        crate::arena::HeapGeneration::Unknown
+    ) {
+        return None;
+    }
+    unsafe {
+        let header = crate::value::addr_class::try_read_gc_header(owner)?;
+        if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+            return None;
+        }
+        Some(crate::gc::forwarding_address(header as *const _) as usize)
+    }
+}
+
 pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usize) {
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;
@@ -207,46 +226,64 @@ pub(crate) fn visit_closure_static_prototype_slot_mut(
 /// ajv's `validate.errors = [{ msg }]`) had its element objects freed
 /// behind the still-live array.
 pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let mut moved = Vec::new();
-    if let Ok(mut props) = get_closure_props().lock() {
-        for (&owner, closure_props) in props.iter_mut() {
-            // Metadata key rewrite. Only fires in rewrite-phase modes;
-            // mark phases return `false` here without recording the key
-            // as a root (so the side-table entry doesn't itself keep
-            // the closure alive — same semantics as overflow-field
-            // metadata, see `visit_metadata_usize_slot`).
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-            // #1802: trace every stored value in every phase. In `Mark`
-            // / `CopyingMark` this keeps `fn.errors = [...]` and its
-            // transitive contents reachable; in rewrite phases it
-            // updates the slot bits when a value was forwarded.
-            for value in closure_props.values_mut() {
-                visitor.visit_nanbox_f64_slot(value);
-            }
+    let prop_owners = get_closure_props()
+        .lock()
+        .ok()
+        .map(|props| props.keys().copied().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for owner in prop_owners {
+        let Some(mut closure_props) = get_closure_props()
+            .lock()
+            .ok()
+            .and_then(|mut props| props.remove(&owner))
+        else {
+            continue;
+        };
+
+        // Metadata key rewrite. Only fires in rewrite-phase modes; mark phases
+        // return `false` here without recording the key as a root (so the
+        // side-table entry doesn't itself keep the closure alive).
+        let mut new_owner = owner;
+        visitor.visit_metadata_usize_slot(&mut new_owner);
+        // #1802: trace every stored value in every phase. In `Mark` /
+        // `CopyingMark` this keeps `fn.errors = [...]` and its transitive
+        // contents reachable; in rewrite phases it updates slot bits when a
+        // value was forwarded.
+        for value in closure_props.values_mut() {
+            visitor.visit_nanbox_f64_slot(value);
         }
-        for (old_owner, new_owner) in moved {
-            if let Some(old_props) = props.remove(&old_owner) {
-                merge_closure_prop_map(&mut props, new_owner, old_props);
-            }
+        if new_owner == owner {
+            new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
+        }
+
+        if let Ok(mut props) = get_closure_props().lock() {
+            merge_closure_prop_map(&mut props, new_owner, closure_props);
         }
     }
-    let mut moved_prototypes = Vec::new();
-    if let Ok(mut prototypes) = get_closure_prototypes().lock() {
-        for (owner, proto_bits) in prototypes.iter_mut() {
-            let old_owner = *owner;
-            let mut new_owner = old_owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved_prototypes.push((old_owner, new_owner));
-            }
-            visitor.visit_nanbox_u64_slot(proto_bits);
+
+    let prototype_owners = get_closure_prototypes()
+        .lock()
+        .ok()
+        .map(|prototypes| prototypes.keys().copied().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for owner in prototype_owners {
+        let Some(mut proto_bits) = get_closure_prototypes()
+            .lock()
+            .ok()
+            .and_then(|mut prototypes| prototypes.remove(&owner))
+        else {
+            continue;
+        };
+
+        let mut new_owner = owner;
+        visitor.visit_metadata_usize_slot(&mut new_owner);
+        visitor.visit_nanbox_u64_slot(&mut proto_bits);
+        if new_owner == owner {
+            new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
         }
-        for (old_owner, new_owner) in moved_prototypes {
-            if let Some(proto_bits) = prototypes.remove(&old_owner) {
-                prototypes.insert(new_owner, proto_bits);
-            }
+
+        if let Ok(mut prototypes) = get_closure_prototypes().lock() {
+            prototypes.insert(new_owner, proto_bits);
         }
     }
     // #3655: re-key the deleted-keys side table when a closure moves. The
@@ -271,7 +308,18 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
 /// Check if a raw pointer points to a ClosureHeader by checking CLOSURE_MAGIC at offset 12.
 /// Safe to call with any non-null, sufficiently aligned pointer >= 0x10000.
 pub fn is_closure_ptr(ptr: usize) -> bool {
-    if ptr < 0x10000 {
+    // Reject the native / Web-Fetch small-handle band (see
+    // `value::addr_class` for the band map). Fetch handles, node:http
+    // handles, and revocable-proxy ids are NaN-boxed POINTER_TAG values
+    // holding a small registry id, not heap pointers — a real closure is
+    // always a heap allocation above the band. The old 0x10000 floor let a
+    // 0x40000 Headers handle through, so the `*(ptr + 12)` CLOSURE_MAGIC
+    // probe below dereferenced unmapped low memory and SIGSEGVd on Linux
+    // (macOS masked it via the much higher is_valid_obj_ptr heap floor).
+    if crate::value::addr_class::is_handle_band(ptr) {
+        return false;
+    }
+    if ptr % std::mem::align_of::<ClosureHeader>() != 0 {
         return false;
     }
     unsafe {
@@ -305,6 +353,26 @@ pub extern "C" fn js_value_is_closure(value_bits: i64) -> i32 {
 /// Get a dynamic property stored on a closure.
 /// Returns TAG_UNDEFINED if not found.
 pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
+    if !is_closure_ptr(ptr) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
+        if acc.get == 0 {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        let closure =
+            (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        if closure.is_null() {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+        let prev = crate::object::js_implicit_this_set(receiver);
+        let result = crate::closure::js_closure_call0(closure);
+        crate::object::js_implicit_this_set(prev);
+        return result;
+    }
+
     if let Ok(props) = get_closure_props().lock() {
         if let Some(closure_props) = props.get(&ptr) {
             if let Some(&val) = closure_props.get(prop) {
@@ -331,6 +399,29 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         // regular object, read the named field via the field getter; for a
         // closure, recurse via its own props. Distinguish by CLOSURE_MAGIC.
         if is_closure_ptr(proto_ptr) {
+            // #5039: the proto may carry accessor properties — chalk's style
+            // proto is `Object.defineProperties(() => {}, styles)` where every
+            // style is `{ get() {...} }`. Invoke the getter with the ORIGINAL
+            // receiver (`ptr`, not the proto) so chalk's
+            // `Object.defineProperty(this, styleName, {value: builder})`
+            // caches the builder on the chalk instance, and nested builders
+            // chain their stylers off the right `this`.
+            if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+                if acc.get == 0 {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+                let getter_bits = clone_closure_rebind_this(acc.get, receiver);
+                let getter = (getter_bits & crate::value::POINTER_MASK)
+                    as *const crate::closure::ClosureHeader;
+                if getter.is_null() {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                let prev = crate::object::js_implicit_this_set(receiver);
+                let result = crate::closure::js_closure_call0(getter);
+                crate::object::js_implicit_this_set(prev);
+                return result;
+            }
             if let Ok(props) = get_closure_props().lock() {
                 if let Some(p) = props.get(&proto_ptr).and_then(|m| m.get(prop)) {
                     return *p;
@@ -339,6 +430,28 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             cur = proto_ptr;
             depth += 1;
             continue;
+        }
+        // #5039: an accessor on the proto object must run with the ORIGINAL
+        // closure as receiver, not the proto. chalk's style getters live on
+        // `createChalk.prototype` and cache the built style via
+        // `Object.defineProperty(this, styleName, {value: builder})` — with
+        // `this` = proto that's a TypeError (redefining the non-configurable
+        // accessor) instead of an own-property cache on the chalk instance.
+        if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+            if acc.get == 0 {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+            let getter_bits = clone_closure_rebind_this(acc.get, receiver);
+            let getter =
+                (getter_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+            if getter.is_null() {
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
+            let prev = crate::object::js_implicit_this_set(receiver);
+            let result = crate::closure::js_closure_call0(getter);
+            crate::object::js_implicit_this_set(prev);
+            return result;
         }
         unsafe {
             let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
@@ -351,6 +464,80 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             }
         }
         break;
+    }
+    // Every function's [[Prototype]] is %Function.prototype% — an expando
+    // installed there (`Function.prototype.property = 12`) must be readable
+    // through any closure (`fn.property`, `boundFn.property`,
+    // `Function.indicator`). Synthesized own slots (`prototype`/`name`/
+    // `length`/`caller`/`arguments`/`constructor`) never come from the
+    // expando walk; excluding `prototype` also breaks the recursion through
+    // `builtin_prototype_value` (which reads `Function.prototype` via this
+    // very function). A re-entrancy guard covers the rest of that resolution
+    // cycle.
+    if !matches!(
+        prop,
+        "prototype" | "name" | "length" | "caller" | "arguments" | "constructor"
+    ) && !prop.as_bytes().first().is_some_and(|b| b.is_ascii_digit())
+    {
+        thread_local! {
+            static IN_FN_PROTO_FALLBACK: std::cell::Cell<bool> =
+                const { std::cell::Cell::new(false) };
+        }
+        let reentrant = IN_FN_PROTO_FALLBACK.with(|c| c.replace(true));
+        if !reentrant {
+            let proto_val = crate::object::builtin_prototype_value("Function");
+            IN_FN_PROTO_FALLBACK.with(|c| c.set(false));
+            let proto_jv = crate::value::JSValue::from_bits(proto_val.to_bits());
+            if proto_jv.is_pointer() {
+                let proto_ptr = (proto_jv.bits() & crate::value::POINTER_MASK) as usize;
+                // ONLY user expandos walk through (a `Function.prototype.x
+                // = …` write records no attrs). Methods installed at init
+                // (`apply`, `call`, `hasOwnProperty`, …) stay excluded:
+                // serving those generic thunks to closure reads hijacks the
+                // dedicated dispatch arms (`p.call(...)`'s undefined-read
+                // fallback to method-dispatch-by-name is what routes the
+                // proxy APPLY trap). `fn.apply`-style VALUE reads through a
+                // proxy are reified receiver-correctly by `js_proxy_get`.
+                let routed_method = false;
+                if proto_ptr != 0
+                    && proto_ptr != ptr
+                    && !is_closure_ptr(proto_ptr)
+                    && (routed_method
+                        || crate::object::get_property_attrs(proto_ptr, prop).is_none())
+                {
+                    // A defineProperty accessor on Function.prototype
+                    // (`{ get: () => 12 }`) is invoked with the reading
+                    // closure as receiver.
+                    if !routed_method {
+                        if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+                            if acc.get != 0 {
+                                let getter = (acc.get & crate::value::POINTER_MASK)
+                                    as *const crate::closure::ClosureHeader;
+                                if !getter.is_null() {
+                                    let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+                                    let prev = crate::object::js_implicit_this_set(receiver);
+                                    let result = crate::closure::js_closure_call0(getter);
+                                    crate::object::js_implicit_this_set(prev);
+                                    return result;
+                                }
+                            }
+                            return f64::from_bits(crate::value::TAG_UNDEFINED);
+                        }
+                    }
+                    unsafe {
+                        let key_hdr =
+                            crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+                        let v = crate::object::js_object_get_field_by_name(
+                            proto_ptr as *const crate::object::ObjectHeader,
+                            key_hdr as *const crate::StringHeader,
+                        );
+                        if !v.is_undefined() {
+                            return f64::from_bits(v.bits());
+                        }
+                    }
+                }
+            }
+        }
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -368,6 +555,16 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
             keys.remove(prop);
         }
     }
+}
+
+/// Read an OWN dynamic property without any prototype/builtin fallback.
+/// Used by `bind` to honor an `Object.defineProperty(fn, "length", …)`
+/// override before falling back to the registered declared length.
+pub fn closure_get_own_dynamic_prop(ptr: usize, prop: &str) -> Option<f64> {
+    if let Ok(props) = get_closure_props().lock() {
+        return props.get(&ptr).and_then(|m| m.get(prop).copied());
+    }
+    None
 }
 
 /// #3655: remove an OWN user dynamic property from a closure (used by
@@ -480,6 +677,8 @@ pub extern "C" fn js_closure_unbind_this(val: f64) -> f64 {
 mod tests_1802 {
     use super::*;
 
+    static SIDE_TABLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// #1802: the side-table values must be visited in mark phases, not
     /// only during the metadata-rewrite tail. Pre-fix
     /// `scan_closure_dynamic_props_roots_mut` early-returned unless
@@ -489,6 +688,7 @@ mod tests_1802 {
     /// removed, the adapter sees every stored value's bits.
     #[test]
     fn dyn_prop_values_are_visited_in_mark_phase() {
+        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
         // A unique synthetic closure address (just an integer key — the
         // scanner doesn't deref it during value visitation; the
         // metadata-key visitor is a no-op for non-heap addresses).
@@ -517,6 +717,74 @@ mod tests_1802 {
         // Cleanup so other tests don't see the synthetic entry.
         if let Ok(mut props) = get_closure_props().lock() {
             props.remove(&owner);
+        }
+    }
+
+    #[test]
+    fn dyn_prop_scanner_visits_values_without_holding_props_lock() {
+        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let owner: usize = 0xC10C_AB1E_0000_1803;
+        let value_bits: u64 = 0x7FFD_AAAA_BBBB_CCCD;
+        closure_set_dynamic_prop(owner, "errors", f64::from_bits(value_bits));
+
+        let mut saw_value = false;
+        let mut lock_was_free = false;
+        {
+            let mut mark = |v: f64| {
+                if v.to_bits() == value_bits {
+                    saw_value = true;
+                    lock_was_free = get_closure_props().try_lock().is_ok();
+                }
+            };
+            let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
+            scan_closure_dynamic_props_roots_mut(&mut visitor);
+        }
+
+        assert!(
+            saw_value,
+            "scanner did not visit the stored closure prop value"
+        );
+        assert!(
+            lock_was_free,
+            "scanner must not hold CLOSURE_PROPS while visitor callbacks can move closures"
+        );
+
+        if let Ok(mut props) = get_closure_props().lock() {
+            props.remove(&owner);
+        }
+    }
+
+    #[test]
+    fn dyn_prop_get_ignores_non_closure_receivers() {
+        let _guard = SIDE_TABLE_TEST_LOCK.lock().unwrap();
+        let obj = crate::object::js_object_alloc(0, 0) as usize;
+
+        assert_eq!(
+            closure_get_dynamic_prop(obj, "payload").to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "ordinary objects must not enter closure-only Function.prototype fallback"
+        );
+    }
+
+    /// #4740: `is_closure_ptr` must NOT dereference an address in the
+    /// `[0x10000, 0x100000)` native-handle band. Web Fetch response handles
+    /// (`0x40000+`), node:http / axios / fastify ids live there and are not
+    /// real pointers — probing `*(ptr + 12)` for `CLOSURE_MAGIC` on one reads
+    /// a tiny unmapped address (the reported `0x4000c`) and SIGSEGVs on the
+    /// IC-miss property-lookup path. With the floor at `0x100000` the probe is
+    /// skipped and these return `false` without touching memory. Complements
+    /// the #4739 own-field-probe integration repro with a direct unit assertion
+    /// on the predicate's floor.
+    #[test]
+    fn small_handle_band_is_not_a_closure_ptr() {
+        // These would have dereferenced 0x4000c / 0x40014 / 0xF000c under the
+        // old 0x10000 floor; under the fix they short-circuit to false.
+        for handle in [0x10000usize, 0x40000, 0x40008, 0x4_0000, 0xF_0000, 0xF_FFF8] {
+            assert!(
+                !is_closure_ptr(handle),
+                "is_closure_ptr({handle:#x}) must be false (small-handle band) \
+                 without dereferencing the handle as a pointer",
+            );
         }
     }
 }

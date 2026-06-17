@@ -52,6 +52,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -105,6 +107,9 @@ fn module_with_classes_and_params(
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
 
@@ -202,6 +207,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     }
 }
 
@@ -231,6 +237,9 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
         static_fields: Vec::new(),
         static_methods: Vec::new(),
         decorators: Vec::new(),
@@ -460,6 +469,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         callee: Box::new(callee),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 
@@ -583,6 +593,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
             }),
             args: vec![int(0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         })),
     ];
 
@@ -666,6 +677,7 @@ fn artifact_records_buffer_read_double_as_f64() {
             }),
             args: vec![int(0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         })),
     ];
 
@@ -1265,7 +1277,9 @@ fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
                     captures: vec![3],
                     mutable_captures: Vec::new(),
                     captures_this: false,
+                    captures_new_target: false,
                     enclosing_class: None,
+                    is_arrow: false,
                     is_async: false,
                     is_generator: false,
                     is_strict: false,

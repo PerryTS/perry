@@ -8,6 +8,7 @@ pub mod app;
 pub mod audio;
 pub mod audio_playback;
 pub mod background;
+pub mod drag_drop;
 pub mod media_playback;
 pub mod state;
 pub mod tree;
@@ -367,6 +368,16 @@ pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
     });
 }
 
+/// Issue #3621 — watchOS Text horizontal alignment (0=left, 1=right,
+/// 2=center, 3=justified, 4=natural). SwiftUI host reads via
+/// `perry_watchos_node_text_alignment`.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.text_alignment = alignment;
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
     tree::with_node_mut(handle, |node| {
@@ -591,6 +602,16 @@ pub extern "C" fn perry_ui_state_bind_slider(state_handle: i64, slider_handle: i
 #[no_mangle]
 pub extern "C" fn perry_ui_state_bind_toggle(state_handle: i64, toggle_handle: i64) {
     state::bind_toggle(state_handle, toggle_handle);
+}
+
+/// Set an existing Toggle's on/off state (issue #5076). `on` is 0 for
+/// off, non-zero for on. Updates the node's `toggle_on` flag so the
+/// next host render reflects the new state.
+#[no_mangle]
+pub extern "C" fn perry_ui_toggle_set_state(handle: i64, on: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.toggle_on = on != 0;
+    });
 }
 
 #[no_mangle]
@@ -1030,6 +1051,19 @@ pub extern "C" fn perry_ui_calendar_create(_y: i64, _m: i64, _cb: f64) -> i64 {
 pub extern "C" fn perry_ui_calendar_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_calendar_get_selected_date(_h: i64) -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+// Issue #4772 — DatePicker widget stubs (watchOS screen real estate
+// makes an inline date field impractical).
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_create(_y: i64, _m: i64, _cb: f64) -> i64 {
+    0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_set_date(_h: i64, _y: i64, _m: i64, _d: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_get_selected_date(_h: i64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
 

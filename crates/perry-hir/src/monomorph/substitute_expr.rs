@@ -55,6 +55,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             callee,
             args,
             type_args,
+            byte_offset,
         } => Expr::Call {
             callee: Box::new(substitute_expr(callee, substitutions)),
             args: args
@@ -65,6 +66,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .iter()
                 .map(|t| substitute_type(t, substitutions))
                 .collect(),
+            byte_offset: *byte_offset,
         },
         Expr::PodLayoutSizeOf { ty } => Expr::PodLayoutSizeOf {
             ty: substitute_type(ty, substitutions),
@@ -216,6 +218,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                     ArrayElement::Spread(expr) => {
                         ArrayElement::Spread(substitute_expr(expr, substitutions))
                     }
+                    ArrayElement::Hole => ArrayElement::Hole,
                 })
                 .collect(),
         ),
@@ -256,6 +259,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             class_name,
             args,
             type_args,
+            byte_offset,
         } => Expr::New {
             class_name: class_name.clone(),
             args: args
@@ -266,6 +270,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .iter()
                 .map(|t| substitute_type(t, substitutions))
                 .collect(),
+            byte_offset: *byte_offset,
         },
 
         // Class/Enum references
@@ -317,6 +322,51 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         ),
         Expr::SuperMethodCall { method, args } => Expr::SuperMethodCall {
             method: method.clone(),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+        },
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => Expr::ObjectSuperPropertyGet {
+            home: Box::new(substitute_expr(home, substitutions)),
+            key: Box::new(substitute_expr(key, substitutions)),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+        },
+        Expr::SuperPropertySet {
+            parent_class_id,
+            parent_class_name,
+            key,
+            value,
+        } => Expr::SuperPropertySet {
+            parent_class_id: *parent_class_id,
+            parent_class_name: parent_class_name.clone(),
+            key: Box::new(substitute_expr(key, substitutions)),
+            value: Box::new(substitute_expr(value, substitutions)),
+        },
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => Expr::ObjectSuperPropertySet {
+            home: Box::new(substitute_expr(home, substitutions)),
+            key: Box::new(substitute_expr(key, substitutions)),
+            value: Box::new(substitute_expr(value, substitutions)),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+        },
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => Expr::ObjectSuperMethodCall {
+            home: Box::new(substitute_expr(home, substitutions)),
+            key: Box::new(substitute_expr(key, substitutions)),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
             args: args
                 .iter()
                 .map(|a| substitute_expr(a, substitutions))
@@ -550,6 +600,18 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .as_ref()
                 .map(|s| Box::new(substitute_expr(s, substitutions))),
         },
+        Expr::ArrayLikeMethod {
+            method,
+            receiver,
+            args,
+        } => Expr::ArrayLikeMethod {
+            method: method.clone(),
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+            args: args
+                .iter()
+                .map(|a| substitute_expr(a, substitutions))
+                .collect(),
+        },
         Expr::ArrayFlat { array } => Expr::ArrayFlat {
             array: Box::new(substitute_expr(array, substitutions)),
         },
@@ -585,6 +647,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
         },
+        Expr::ArrayReverseValue { receiver } => Expr::ArrayReverseValue {
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
+        },
         Expr::ArrayCopyWithin {
             array_id,
             target,
@@ -592,6 +657,19 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             end,
         } => Expr::ArrayCopyWithin {
             array_id: *array_id,
+            target: Box::new(substitute_expr(target, substitutions)),
+            start: Box::new(substitute_expr(start, substitutions)),
+            end: end
+                .as_ref()
+                .map(|e| Box::new(substitute_expr(e, substitutions))),
+        },
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => Expr::ArrayCopyWithinValue {
+            receiver: Box::new(substitute_expr(receiver, substitutions)),
             target: Box::new(substitute_expr(target, substitutions)),
             start: Box::new(substitute_expr(start, substitutions)),
             end: end
@@ -613,6 +691,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         ),
         Expr::StringFromCharCode(code) => {
             Expr::StringFromCharCode(Box::new(substitute_expr(code, substitutions)))
+        }
+        Expr::StringFromCharCodeSpread(code) => {
+            Expr::StringFromCharCodeSpread(Box::new(substitute_expr(code, substitutions)))
         }
 
         // Map operations
@@ -680,6 +761,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::MathFloor(expr) => Expr::MathFloor(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathCeil(expr) => Expr::MathCeil(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathRound(expr) => Expr::MathRound(Box::new(substitute_expr(expr, substitutions))),
+        Expr::MathTrunc(expr) => Expr::MathTrunc(Box::new(substitute_expr(expr, substitutions))),
+        Expr::MathSign(expr) => Expr::MathSign(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathAbs(expr) => Expr::MathAbs(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathSqrt(expr) => Expr::MathSqrt(Box::new(substitute_expr(expr, substitutions))),
         Expr::MathPow(base, exp) => Expr::MathPow(
@@ -768,7 +851,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             captures,
             mutable_captures,
             captures_this,
+            captures_new_target,
             enclosing_class,
+            is_arrow,
             is_async,
             is_generator,
             is_strict,
@@ -786,6 +871,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                         .map(|d| substitute_expr(d, substitutions)),
                     decorators: p.decorators.clone(),
                     is_rest: p.is_rest,
+                    arguments_object: p.arguments_object.clone(),
                 })
                 .collect(),
             return_type: substitute_type(return_type, substitutions),
@@ -793,7 +879,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             captures: captures.clone(),
             mutable_captures: mutable_captures.clone(),
             captures_this: *captures_this,
+            captures_new_target: *captures_new_target,
             enclosing_class: enclosing_class.clone(),
+            is_arrow: *is_arrow,
             is_async: *is_async,
             is_generator: *is_generator,
             is_strict: *is_strict,
@@ -824,6 +912,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
 
         // Object.keys/values/entries
         Expr::ObjectKeys(obj) => Expr::ObjectKeys(Box::new(substitute_expr(obj, substitutions))),
+        Expr::ForInKeys(obj) => Expr::ForInKeys(Box::new(substitute_expr(obj, substitutions))),
         Expr::ObjectValues(obj) => {
             Expr::ObjectValues(Box::new(substitute_expr(obj, substitutions)))
         }
@@ -836,6 +925,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             Expr::ArrayIsArray(Box::new(substitute_expr(value, substitutions)))
         }
         Expr::ArrayFrom(value) => Expr::ArrayFrom(Box::new(substitute_expr(value, substitutions))),
+        Expr::ArrayFromArrayLikeHoley(value) => {
+            Expr::ArrayFromArrayLikeHoley(Box::new(substitute_expr(value, substitutions)))
+        }
         Expr::ArrayFromMapped {
             iterable,
             map_fn,

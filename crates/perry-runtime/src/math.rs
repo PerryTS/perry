@@ -2,9 +2,73 @@
 
 use rand::Rng;
 
+/// Math built-ins apply ECMAScript ToNumber, where Symbol and BigInt throw.
+/// `Number(1n)` is allowed in JavaScript, so this stays separate from the
+/// shared `js_number_coerce` helper used by the Number constructor.
+#[no_mangle]
+pub extern "C" fn js_math_to_number(value: f64) -> f64 {
+    let jsval = crate::value::JSValue::from_bits(value.to_bits());
+    if jsval.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    if jsval.is_pointer() {
+        let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if crate::symbol::is_registered_symbol(ptr) {
+            crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+        }
+    }
+    crate::builtins::js_number_coerce(value)
+}
+
+/// Math.trunc(x) -> number
+#[no_mangle]
+pub extern "C" fn js_math_trunc(value: f64) -> f64 {
+    js_math_to_number(value).trunc()
+}
+
+/// Math.sign(x) -> number
+#[no_mangle]
+pub extern "C" fn js_math_sign(value: f64) -> f64 {
+    let n = js_math_to_number(value);
+    if n == 0.0 || n.is_nan() {
+        n
+    } else if n.is_sign_negative() {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+fn js_math_to_int32(value: f64) -> i32 {
+    let n = js_math_to_number(value);
+    if !n.is_finite() || n == 0.0 {
+        return 0;
+    }
+    const TWO_32: f64 = 4_294_967_296.0;
+    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+}
+
+/// Math.imul(a, b) -> number
+#[no_mangle]
+pub extern "C" fn js_math_imul(a: f64, b: f64) -> f64 {
+    js_math_to_int32(a).wrapping_mul(js_math_to_int32(b)) as f64
+}
+
 /// Math.pow(base, exponent) -> number
 #[no_mangle]
 pub extern "C" fn js_math_pow(base: f64, exp: f64) -> f64 {
+    // ECMAScript Math.pow deviates from IEEE-754 `pow` in two cases that Rust's
+    // `f64::powf` (libm pow) gets "wrong" for JS:
+    //  - a NaN exponent is always NaN (IEEE `pow(1, NaN)` = 1).
+    //  - |base| == 1 with a ±Infinity exponent is NaN (IEEE returns 1).
+    // A +0/-0 exponent still yields 1 (even for a NaN base), which `powf`
+    // already handles, so those fall through.
+    if exp.is_nan() {
+        return f64::NAN;
+    }
+    if exp.is_infinite() && base.abs() == 1.0 {
+        return f64::NAN;
+    }
     base.powf(exp)
 }
 
@@ -105,7 +169,7 @@ fn round_ties_to_even(value: f64) -> u64 {
 /// Math.f16round(x) -> number — nearest IEEE-754 binary16 value
 #[no_mangle]
 pub extern "C" fn js_math_f16round(value: f64) -> f64 {
-    let x = crate::builtins::js_number_coerce(value);
+    let x = js_math_to_number(value);
     if x == 0.0 || !x.is_finite() {
         return x;
     }
@@ -226,17 +290,41 @@ pub extern "C" fn js_math_min_array(arr_ptr: i64) -> f64 {
     if len == 0 {
         return f64::INFINITY;
     }
+    // Spec (sec-math.min) step 2: ToNumber EVERY arg first (observable via
+    // valueOf), then reduce. A NaN must not short-circuit before later args are
+    // coerced (test262 min/Math.min_each-element-coerced).
     let mut result = f64::INFINITY;
+    let mut saw_nan = false;
     for i in 0..len {
-        let num = crate::array::js_array_get_f64(arr, i as u32);
+        let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
-            return f64::NAN;
-        }
-        if num < result {
+            saw_nan = true;
+        } else if num < result || (num == 0.0 && result == 0.0 && num.is_sign_negative()) {
+            // ECMAScript Math.min treats -0 as smaller than +0; IEEE `<` treats
+            // them as equal, so add an explicit sign-of-zero tiebreaker.
             result = num;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
+}
+
+/// Math.min(a, b) -> number — fast path for the common two-arg form.
+#[no_mangle]
+pub extern "C" fn js_math_min2(a: f64, b: f64) -> f64 {
+    let a = js_math_to_number(a);
+    let b = js_math_to_number(b);
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a < b || (a == 0.0 && b == 0.0 && a.is_sign_negative()) {
+        a
+    } else {
+        b
+    }
 }
 
 /// Math.max(...array) -> number — find maximum value in an array
@@ -250,15 +338,112 @@ pub extern "C" fn js_math_max_array(arr_ptr: i64) -> f64 {
     if len == 0 {
         return f64::NEG_INFINITY;
     }
+    // Spec (sec-math.max) step 2: ToNumber EVERY arg first (observable via
+    // valueOf), then reduce — a NaN must not short-circuit before later args
+    // are coerced (test262 max/Math.max_each-element-coerced).
     let mut result = f64::NEG_INFINITY;
+    let mut saw_nan = false;
     for i in 0..len {
-        let num = crate::array::js_array_get_f64(arr, i as u32);
+        let num = js_math_to_number(crate::array::js_array_get_f64(arr, i as u32));
         if num.is_nan() {
-            return f64::NAN;
-        }
-        if num > result {
+            saw_nan = true;
+        } else if num > result || (num == 0.0 && result == 0.0 && num.is_sign_positive()) {
+            // ECMAScript Math.max treats +0 as greater than -0; IEEE `>` treats
+            // them as equal, so add an explicit sign-of-zero tiebreaker.
             result = num;
         }
     }
-    result
+    if saw_nan {
+        f64::NAN
+    } else {
+        result
+    }
+}
+
+/// Math.max(a, b) -> number — fast path for the common two-arg form.
+#[no_mangle]
+pub extern "C" fn js_math_max2(a: f64, b: f64) -> f64 {
+    let a = js_math_to_number(a);
+    let b = js_math_to_number(b);
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    if a > b || (a == 0.0 && b == 0.0 && a.is_sign_positive()) {
+        a
+    } else {
+        b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_neg_zero(value: f64) -> bool {
+        value == 0.0 && value.is_sign_negative()
+    }
+
+    #[test]
+    fn js_math_min2_basic_and_signed_zero() {
+        assert_eq!(js_math_min2(4.0, -2.0), -2.0);
+        assert_eq!(js_math_min2(-2.0, 4.0), -2.0);
+
+        let neg_zero = js_math_min2(-0.0, 0.0);
+        assert_eq!(neg_zero, 0.0);
+        assert!(neg_zero.is_sign_negative());
+
+        let neg_zero_reversed = js_math_min2(0.0, -0.0);
+        assert_eq!(neg_zero_reversed, 0.0);
+        assert!(neg_zero_reversed.is_sign_negative());
+    }
+
+    #[test]
+    fn js_math_max2_basic_and_signed_zero() {
+        assert_eq!(js_math_max2(4.0, -2.0), 4.0);
+        assert_eq!(js_math_max2(-2.0, 4.0), 4.0);
+
+        let pos_zero = js_math_max2(-0.0, 0.0);
+        assert_eq!(pos_zero, 0.0);
+        assert!(pos_zero.is_sign_positive());
+
+        let pos_zero_reversed = js_math_max2(0.0, -0.0);
+        assert_eq!(pos_zero_reversed, 0.0);
+        assert!(pos_zero_reversed.is_sign_positive());
+    }
+
+    #[test]
+    fn js_math_minmax2_nan() {
+        assert!(js_math_min2(f64::NAN, 1.0).is_nan());
+        assert!(js_math_min2(1.0, f64::NAN).is_nan());
+        assert!(js_math_max2(f64::NAN, 1.0).is_nan());
+        assert!(js_math_max2(1.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn js_math_sign_preserves_nan_and_signed_zero() {
+        assert_eq!(js_math_sign(7.0), 1.0);
+        assert_eq!(js_math_sign(-7.0), -1.0);
+        assert!(js_math_sign(f64::NAN).is_nan());
+        assert!(is_neg_zero(js_math_sign(-0.0)));
+        assert_eq!(js_math_sign(0.0).to_bits(), 0.0f64.to_bits());
+    }
+
+    #[test]
+    fn js_math_trunc_preserves_nan_infinity_and_signed_zero() {
+        assert_eq!(js_math_trunc(7.9), 7.0);
+        assert_eq!(js_math_trunc(-7.9), -7.0);
+        assert!(js_math_trunc(f64::NAN).is_nan());
+        assert_eq!(js_math_trunc(f64::INFINITY), f64::INFINITY);
+        assert_eq!(js_math_trunc(f64::NEG_INFINITY), f64::NEG_INFINITY);
+        assert!(is_neg_zero(js_math_trunc(-0.0)));
+    }
+
+    #[test]
+    fn js_math_imul_applies_to_int32_semantics() {
+        assert_eq!(js_math_imul(2.0, 4.0), 8.0);
+        assert_eq!(js_math_imul(f64::NAN, 5.0), 0.0);
+        assert_eq!(js_math_imul(f64::INFINITY, 5.0), 0.0);
+        assert_eq!(js_math_imul(4_294_967_295.0, 5.0), -5.0);
+        assert_eq!(js_math_imul(2_147_483_647.0, 2.0), -2.0);
+    }
 }

@@ -37,9 +37,41 @@ fn buffer_write_encoding_tag_or_throw(value: f64) -> i32 {
         throw_buffer_type_error_with_code("Invalid Buffer encoding", "ERR_INVALID_ARG_TYPE");
     }
     if crate::buffer::js_buffer_is_encoding(value) == 0 {
-        throw_buffer_type_error_with_code("Unknown encoding", "ERR_UNKNOWN_ENCODING");
+        throw_unknown_encoding(value);
     }
     crate::buffer::js_encoding_tag_from_value(value)
+}
+
+/// Throw `TypeError [ERR_UNKNOWN_ENCODING]: Unknown encoding: <name>` with
+/// the offending encoding name spelled out, matching node's message. `value`
+/// is the rejected encoding argument (a string).
+fn throw_unknown_encoding(value: f64) -> ! {
+    let name = crate::fs::validate::read_js_string_pub(value);
+    let message = format!("Unknown encoding: {name}");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_UNKNOWN_ENCODING");
+}
+
+/// True when `value` is a `Buffer` or `Uint8Array` (the acceptance set of
+/// node's `Buffer.prototype.copy/compare/equals` target argument).
+fn is_buffer_or_uint8array(value: f64) -> bool {
+    let bits = value.to_bits() as i64;
+    if crate::buffer::js_buffer_is_buffer(bits) == 1 {
+        return true;
+    }
+    let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+    raw >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw).is_some()
+}
+
+/// `Buffer.prototype.copy/compare/equals` reject a non-`Buffer`/`Uint8Array`
+/// target with `TypeError [ERR_INVALID_ARG_TYPE]` — and without this guard a
+/// number/boolean argument's bit pattern is masked into a bogus pointer and
+/// dereferenced (segfault). `name` is node's parameter name (`target` /
+/// `otherBuffer`).
+fn validate_buffer_target(value: f64, name: &str) {
+    if is_buffer_or_uint8array(value) {
+        return;
+    }
+    crate::validators::throw_invalid_arg_type(name, "an instance of Buffer or Uint8Array", value);
 }
 
 /// Dispatch a Buffer / Uint8Array instance method call. Receiver address
@@ -182,6 +214,13 @@ pub fn is_buffer_method_name(name: &str) -> bool {
             | "setUint32"
             | "setFloat32"
             | "setFloat64"
+            // #4365: DataView BigInt64/BigUint64 accessors (8-byte BigInt
+            // read/write). Route through `dispatch_buffer_method` like the
+            // other DataView numeric methods.
+            | "getBigInt64"
+            | "getBigUint64"
+            | "setBigInt64"
+            | "setBigUint64"
     )
 }
 
@@ -279,6 +318,10 @@ unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
         "AES-CTR" => 5,
         "HKDF" => 6,
         "PBKDF2" => 7,
+        "CHACHA20-POLY1305" => 15,
+        "KMAC128" => 23,
+        "KMAC256" => 24,
+        "AES-OCB" => 25,
         _ => return f64::from_bits(JSValue::undefined().bits()),
     };
     let hash_name = object_field_string_value(algorithm_bits, b"hash")
@@ -333,6 +376,24 @@ pub unsafe fn dispatch_buffer_method(
     };
     let i32_bool = |b: i32| f64::from_bits(JSValue::bool(b != 0).bits());
     let i32_num = |n: i32| n as f64;
+    // ToIntegerOrInfinity for an ArrayBuffer/SharedArrayBuffer slice index:
+    // full ToNumber (runs `valueOf`/`toString`, throws on a Symbol) then
+    // truncate toward zero, saturating into i32 so `js_buffer_slice` can apply
+    // the spec's relative-index clamp to [0, len].
+    let ab_slice_index = |v: f64| -> i32 {
+        let n = crate::builtins::js_number_coerce(v);
+        if n.is_nan() {
+            return 0;
+        }
+        let t = n.trunc();
+        if t >= i32::MAX as f64 {
+            i32::MAX
+        } else if t <= i32::MIN as f64 {
+            i32::MIN
+        } else {
+            t as i32
+        }
+    };
 
     // DataView numeric accessors (#2878): getInt8/getUint16/setFloat64/… The
     // receiver is a BufferHeader marked as a DataView. Endianness defaults to
@@ -407,8 +468,27 @@ pub unsafe fn dispatch_buffer_method(
         }
         "slice" | "subarray" => {
             let len = (*buf_ptr).length as i32;
-            let start = arg_i32(0);
-            let end = if args.len() >= 2 { arg_i32(1) } else { len };
+            let (start, end) = if crate::buffer::is_array_buffer(addr)
+                || crate::buffer::is_shared_array_buffer(addr)
+            {
+                // ArrayBuffer / SharedArrayBuffer.prototype.slice: ToIntegerOrInfinity
+                // on `start` (always) and `end` (defaults to len when undefined),
+                // running an object arg's `valueOf` in left-to-right order. Plain
+                // `arg_i32` would `as i32`-cast a boxed object to garbage and skip
+                // the coercion entirely (test262 slice/number-conversion,
+                // end-default-if-undefined). `js_buffer_slice` then clamps.
+                let s = ab_slice_index(arg_or_zero(0));
+                let e = if args.len() < 2 || JSValue::from_bits(args[1].to_bits()).is_undefined() {
+                    len
+                } else {
+                    ab_slice_index(args[1])
+                };
+                (s, e)
+            } else {
+                let s = arg_i32(0);
+                let e = if args.len() >= 2 { arg_i32(1) } else { len };
+                (s, e)
+            };
             let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
             // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
             // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
@@ -469,7 +549,11 @@ pub unsafe fn dispatch_buffer_method(
         "entries" => crate::buffer::js_buffer_entries(buf_f64),
         // `src.copy(dst, targetStart?, sourceStart?, sourceEnd?)` — mirrors
         // Node's Buffer.prototype.copy. Returns the number of bytes copied.
-        "copy" if !args.is_empty() => {
+        "copy" => {
+            if args.is_empty() {
+                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target");
+            }
+            validate_buffer_target(args[0], "target");
             let dst_bits = args[0].to_bits();
             let dst_addr = if (dst_bits >> 48) >= 0x7FF8 {
                 dst_bits & 0x0000_FFFF_FFFF_FFFF
@@ -491,7 +575,13 @@ pub unsafe fn dispatch_buffer_method(
         // `buf.write(string, offset?, length?, encoding?)` — writes the
         // utf8/hex/base64 encoding of `string` into `buf` at `offset`.
         // Returns the number of bytes written.
-        "write" if !args.is_empty() => {
+        "write" => {
+            if args.is_empty() || !is_buffer_dispatch_string(args[0]) {
+                throw_buffer_type_error_with_code(
+                    "argument must be a string",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            }
             let str_bits = args[0].to_bits();
             let str_addr = if (str_bits >> 48) >= 0x7FF8 {
                 str_bits & 0x0000_FFFF_FFFF_FFFF
@@ -584,9 +674,12 @@ pub unsafe fn dispatch_buffer_method(
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
         "equals" => {
-            if args.is_empty() {
-                return i32_bool(0);
-            }
+            validate_buffer_target(
+                args.first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+                "otherBuffer",
+            );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
                 other_bits & 0x0000_FFFF_FFFF_FFFF
@@ -597,9 +690,12 @@ pub unsafe fn dispatch_buffer_method(
             i32_bool(crate::buffer::js_buffer_equals(buf_ptr, other))
         }
         "compare" => {
-            if args.is_empty() {
-                return 0.0;
-            }
+            validate_buffer_target(
+                args.first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+                "target",
+            );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
                 other_bits & 0x0000_FFFF_FFFF_FFFF

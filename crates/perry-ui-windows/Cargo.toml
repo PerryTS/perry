@@ -28,13 +28,21 @@ qrcodegen = "1.8"
 # webview2-com 0.34.x is the last release that uses windows 0.58 (matches
 # the rest of perry-ui-windows). 0.35+ moved to windows 0.59+ which would
 # clash with our HWND/PCWSTR types.
-webview2-com = "=0.34"
+webview2-com = "=0.39"
 
 [features]
 geisterhand = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# The `#[implement]` macro from `windows` 0.58 expands to absolute
+# `::windows_core::` paths, so the consuming crate must depend on
+# `windows-core` directly or the COM authoring in drag_drop.rs fails to
+# resolve `windows_core` (E0433). Pinned to 0.58 to match `windows`.
+windows-core = "0.58"
 windows = { version = "0.58", features = [
+    # `#[implement]` — needed to author the IDropTarget / IDropSource /
+    # IDataObject COM objects for native drag-and-drop (#4773).
+    "implement",
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
@@ -44,6 +52,8 @@ windows = { version = "0.58", features = [
     "Win32_System_DataExchange",
     "Win32_System_Ole",
     "Win32_System_Com",
+    # STGMEDIUM / IDataObject marshalling for native drag-and-drop (#4773).
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_Memory",
     "Win32_System_SystemServices",
     "Win32_UI_HiDpi",

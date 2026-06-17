@@ -138,6 +138,10 @@ jobs:
   build:
     needs: await-tests
     strategy:
+      # Don't let one platform's build failure cancel the others (mirrors
+      # build-cross). A broken cross-host target should not strand the
+      # binaries that did build — partial publish beats no publish.
+      fail-fast: false
       matrix:
         include:
           - os: macos-14
@@ -186,6 +190,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "release-${{ matrix.target }}"
+
+      # #4856 — evict workspace-crate fingerprints from the restored cache.
+      # rust-cache's own workspace cleanup misses cross-target dirs, so a
+      # restored target/ can make cargo treat perry-runtime & co. as
+      # up-to-date and silently reuse a staticlib built from older sources
+      # (v0.5.1150 shipped Apple cross runtimes missing
+      # perry_macos_bundle_chdir that way). Deleting the .fingerprint
+      # entries forces every workspace crate to rebuild from the checkout
+      # while keeping the expensive external-dependency precompiles cached.
+      # Note `cargo clean -p` is NOT equivalent: it only covers the host
+      # layout, not target/<triple>/ dirs (verified on cargo 1.8x).
+      - name: Evict workspace crates from restored cache (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r pkg; do
+            rm -rf target/release/.fingerprint/"$pkg"-* \
+                   target/*/release/.fingerprint/"$pkg"-*
+          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
       # `perry compile foo.ts -o app --target ios[-simulator]` failed at link
@@ -247,6 +270,21 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p perry-runtime
           cargo build --release --target ${{ matrix.target }} -p perry-stdlib
 
+      - name: Build panic=abort runtime variant (Unix)
+        # Out-of-tree installs can't rebuild the runtime, so ship the
+        # panic=abort profile prebuilt: `perry compile` links it for
+        # runtime-only apps with no catch_unwind callers (games, CLIs),
+        # dropping unwind tables/landing pads (~12-18% of the binary).
+        # See optimized_libs.rs (find_runtime_abort_library selection).
+        # Separate CARGO_TARGET_DIR so the profile override doesn't
+        # invalidate the main build's incremental cache.
+        if: runner.os != 'Windows'
+        run: |
+          CARGO_TARGET_DIR=target-abort CARGO_PROFILE_RELEASE_PANIC=abort \
+            cargo build --release --target ${{ matrix.target }} -p perry-runtime
+          cp "target-abort/${{ matrix.target }}/release/libperry_runtime.a" \
+             "target/${{ matrix.target }}/release/libperry_runtime_abort.a"
+
       - name: Build native ext libraries (Unix)
         # #2532 — the perry-ext-* wrapper crates ship the host functions for
         # node:http (server), ws, net, zlib, fastify, the db drivers, etc.
@@ -280,7 +318,13 @@ jobs:
       # suffix so the bottle can ship both side-by-side. tvOS/visionOS/
       # watchOS are Tier-3 (need nightly + -Zbuild-std) and out of scope.
       - name: Build iOS cross-compile libraries (macOS)
-        if: runner.os == 'macOS'
+        # Only on the arm64 mac job. These iOS/Apple cross-libs are aarch64 and
+        # identical regardless of host, so building them on the x86_64 mac runner
+        # is redundant — and the macos-15 x86_64 runner fails `libsqlite3-sys`
+        # bindgen on the iOS target (libclang/SDK env). The macOS staging step
+        # copies these libs only `if [ -f ]`, so the x86_64 bottle degrades
+        # gracefully; the arm64 bottle + the build-cross tarballs still ship them.
+        if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
         run: |
           for triple in aarch64-apple-ios aarch64-apple-ios-sim; do
             cargo build --release --target "$triple" -p perry-runtime
@@ -299,7 +343,8 @@ jobs:
       # `apple_class_lib_name` already maps each `--target` to the correct
       # variant (covered by the `handles_other_class_suffixes` unit test).
       - name: Build tvOS/visionOS/watchOS cross-compile libraries (macOS)
-        if: runner.os == 'macOS'
+        # arm64 mac job only — same rationale as the iOS step above.
+        if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
         run: |
           set -e
           # Format: "<platform>:<device-triple>:<sim-triple>"
@@ -377,13 +422,30 @@ jobs:
           cargo build --release --target aarch64-linux-android -p perry-runtime
           cargo build --release --target aarch64-linux-android -p perry-stdlib
 
+      # #4856 — defense in depth behind the cache eviction above: assert
+      # every runtime archive this leg built (host triple + any Apple/
+      # Android cross triples) defines the sentinel #[no_mangle] symbols.
+      # A stale cached archive fails the release here instead of breaking
+      # consumer links with `undefined symbol: _perry_macos_bundle_chdir`.
+      - name: Verify runtime archives are fresh (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          libs=$(find target -path "*/release/libperry_runtime.a" -o -path "*/release/perry_runtime.lib")
+          if [ -z "$libs" ]; then
+            echo "::error::no built runtime archives found under target/ — nothing to verify"
+            exit 1
+          fi
+          # shellcheck disable=SC2086
+          ./scripts/check_runtime_symbols.sh $libs
+
       - name: Package release archive (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/release/perry staging/
           # Include static libraries for linking (runtime, stdlib, UI)
-          for lib in libperry_runtime.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
+          for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
             if [ -f "target/${{ matrix.target }}/release/$lib" ]; then
               cp "target/${{ matrix.target }}/release/$lib" staging/
             fi
@@ -714,6 +776,22 @@ jobs:
         with:
           shared-key: "release-cross-${{ matrix.target }}"
 
+      # #4856 — evict workspace-crate fingerprints from the restored cache
+      # so perry-runtime/stdlib/UI always rebuild from the checkout. The
+      # v0.5.1150 Apple cross bundles shipped a stale pre-#4833
+      # libperry_runtime.a (missing perry_macos_bundle_chdir) because the
+      # restored cache let cargo skip the rebuild. Mirrors the eviction
+      # step in `build:` — see the comment there for why `cargo clean -p`
+      # doesn't work (host layout only, misses target/<triple>/).
+      - name: Evict workspace crates from restored cache (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r pkg; do
+            rm -rf target/release/.fingerprint/"$pkg"-* \
+                   target/*/release/.fingerprint/"$pkg"-*
+          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+
       # --- Per-runner toolchain wiring --------------------------------------
       # Each of these blocks installs what the cross target needs that's NOT
       # already on the runner image. Apple runners get Xcode for free; Linux
@@ -791,6 +869,18 @@ jobs:
             -Z build-std=core,std,panic_abort \
             --target ${{ matrix.target }} \
             -p perry-runtime -p perry-stdlib -p ${{ matrix.ui_crate }}
+
+      # #4856 — defense in depth behind the cache eviction above: a stale
+      # cached runtime archive fails the release here instead of breaking
+      # every consumer executable link on the build workers.
+      - name: Verify runtime archive is fresh (#4856)
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="target/${{ matrix.target }}/release/libperry_runtime.a"
+          # Windows MSVC emits perry_runtime.lib (no `lib` prefix).
+          [ -f "$lib" ] || lib="target/${{ matrix.target }}/release/perry_runtime.lib"
+          ./scripts/check_runtime_symbols.sh "$lib"
 
       # --- Package + manifest ----------------------------------------------
       # Manifest schema (per issue #1083):
@@ -1125,75 +1215,174 @@ jobs:
           name: ${{ matrix.artifact }}
           path: staging/
 
-      - name: Build .deb package
+      - name: Build .deb packages
         run: |
           VERSION="${{ steps.release.outputs.version }}"
           ARCH="${{ matrix.arch }}"
-          PKG="perry_${VERSION}_${ARCH}"
+          umask 022
 
-          mkdir -p "${PKG}/DEBIAN"
-          mkdir -p "${PKG}/usr/bin"
-          mkdir -p "${PKG}/usr/lib/perry"
-
-          cat > "${PKG}/DEBIAN/control" << EOF
-          Package: perry
-          Version: ${VERSION}
-          Section: devel
-          Priority: optional
-          Architecture: ${ARCH}
-          Depends: gcc | clang
-          Maintainer: Perry Team <hello@perryts.com>
-          Homepage: https://github.com/PerryTS/perry
-          Description: Native TypeScript compiler
-           Perry compiles TypeScript source code directly to native
-           executables using Cranelift for code generation.
-          EOF
-          sed -i 's/^          //' "${PKG}/DEBIAN/control"
-
-          cp staging/perry "${PKG}/usr/bin/"
-          chmod 755 "${PKG}/usr/bin/perry"
-
-          for lib in libperry_runtime.a libperry_stdlib.a libperry_ui_gtk4.a; do
-            if [ -f "staging/$lib" ]; then
-              cp "staging/$lib" "${PKG}/usr/lib/perry/"
-              # Strip DWARF debug info but keep the symbol table.
-              # `strip = false` in [profile.release.package.perry-*]
-              # preserves the #[no_mangle] symbols perry-codegen needs
-              # at link time — but it also keeps multi-MB of DWARF that
-              # users don't need. `--strip-debug` removes the debug
-              # sections without touching .text / symbols.
-              #
-              # v0.5.891 fix: amd64 .deb crossed GitHub's 100 MB git
-              # push limit at v0.5.890. Strip drops ~30-50% off each
-              # .a, keeping the .deb under 100 MB so the apt-repo
-              # push doesn't reject.
-              strip --strip-debug "${PKG}/usr/lib/perry/$lib" || true
+          require_staging_file() {
+            local path="staging/$1"
+            if [ ! -f "$path" ]; then
+              echo "Missing required release artifact: $path" >&2
+              exit 1
             fi
-          done
+          }
 
-          # Add library path config so perry can find its libs
-          mkdir -p "${PKG}/etc/perry"
-          echo "/usr/lib/perry" > "${PKG}/etc/perry/lib-path"
+          write_control() {
+            local pkg_dir="$1"
+            local package="$2"
+            local depends="$3"
+            local description="$4"
+            local details="$5"
 
-          # `-Zxz -z9` overrides dpkg-deb's default (zstd on noble) with
-          # xz level 9. xz consistently 15-25% smaller than zstd on the
-          # libperry_*.a archive bodies. v0.5.921's arm64 .deb was
-          # 100.76 MB with zstd — under-100-MB push limit by 0.76 MB.
-          # xz pulls it well clear. Users decompress at install time; xz
-          # is supported by every dpkg version Perry's apt repo targets.
-          dpkg-deb --build -Zxz -z9 "${PKG}"
+            {
+              echo "Package: ${package}"
+              echo "Version: ${VERSION}"
+              echo "Section: devel"
+              echo "Priority: optional"
+              echo "Architecture: ${ARCH}"
+              if [ -n "$depends" ]; then
+                echo "Depends: ${depends}"
+              fi
+              echo "Maintainer: Perry Team <hello@perryts.com>"
+              echo "Homepage: https://github.com/PerryTS/perry"
+              echo "Description: ${description}"
+              echo " ${details}"
+            } > "${pkg_dir}/DEBIAN/control"
+          }
 
-      - name: Upload .deb as release asset
+          init_package() {
+            local pkg_dir="$1"
+            local package="$2"
+            local depends="$3"
+            local description="$4"
+            local details="$5"
+
+            rm -rf "$pkg_dir"
+            mkdir -p "${pkg_dir}/DEBIAN"
+            chmod 755 "$pkg_dir" "${pkg_dir}/DEBIAN"
+            write_control "$pkg_dir" "$package" "$depends" "$description" "$details"
+          }
+
+          copy_static_archive() {
+            local lib="$1"
+            local pkg_dir="$2"
+
+            require_staging_file "$lib"
+            mkdir -p "${pkg_dir}/usr/lib/perry"
+            cp "staging/$lib" "${pkg_dir}/usr/lib/perry/"
+
+            # Strip DWARF debug info but keep the symbol table. Perry's
+            # codegen linker still needs the #[no_mangle] symbols, while
+            # release users do not need archive debug sections.
+            strip --strip-debug "${pkg_dir}/usr/lib/perry/$lib" || true
+            chmod 644 "${pkg_dir}/usr/lib/perry/$lib"
+          }
+
+          build_deb() {
+            local pkg_dir="$1"
+
+            # `-Zxz -z9` overrides dpkg-deb's default (zstd on noble) with
+            # xz level 9. xz is consistently smaller on the libperry_*.a
+            # archive bodies, and every dpkg version Perry targets supports it.
+            dpkg-deb --build -Zxz -z9 "$pkg_dir"
+          }
+
+          check_deb_sizes() {
+            local max_git_blob_bytes=99000000
+            local failed=0
+
+            shopt -s nullglob
+            local debs=( *.deb )
+            if [ "${#debs[@]}" -eq 0 ]; then
+              echo "No .deb packages were produced" >&2
+              exit 1
+            fi
+
+            for deb in "${debs[@]}"; do
+              local size
+              size=$(stat -c %s "$deb")
+              if [ "$size" -gt "$max_git_blob_bytes" ]; then
+                echo "$deb is $size bytes; GitHub rejects git blobs near 100 MB" >&2
+                failed=1
+              fi
+            done
+
+            if [ "$failed" -ne 0 ]; then
+              exit 1
+            fi
+          }
+
+          require_staging_file perry
+          require_staging_file libperry_runtime.a
+          require_staging_file libperry_stdlib.a
+
+          MAIN_DEPENDS="gcc | clang, perry-runtime (= ${VERSION}), perry-stdlib (= ${VERSION})"
+          if [ -f staging/libperry_ui_gtk4.a ]; then
+            MAIN_DEPENDS="${MAIN_DEPENDS}, perry-ui-gtk4 (= ${VERSION})"
+          fi
+
+          MAIN_PKG="perry_${VERSION}_${ARCH}"
+          init_package "$MAIN_PKG" \
+            "perry" \
+            "$MAIN_DEPENDS" \
+            "Native TypeScript compiler" \
+            "Perry compiles TypeScript source code directly to native executables using Cranelift for code generation."
+          mkdir -p "${MAIN_PKG}/usr/bin" "${MAIN_PKG}/etc/perry"
+          install -m 755 staging/perry "${MAIN_PKG}/usr/bin/perry"
+          echo "/usr/lib/perry" > "${MAIN_PKG}/etc/perry/lib-path"
+          build_deb "$MAIN_PKG"
+
+          RUNTIME_PKG="perry-runtime_${VERSION}_${ARCH}"
+          init_package "$RUNTIME_PKG" \
+            "perry-runtime" \
+            "" \
+            "Perry runtime static library" \
+            "Static runtime archive required by the Perry compiler when linking generated executables."
+          copy_static_archive libperry_runtime.a "$RUNTIME_PKG"
+          build_deb "$RUNTIME_PKG"
+
+          STDLIB_PKG="perry-stdlib_${VERSION}_${ARCH}"
+          init_package "$STDLIB_PKG" \
+            "perry-stdlib" \
+            "" \
+            "Perry standard library static archive" \
+            "Static standard library archive required by the Perry compiler when linking generated executables."
+          copy_static_archive libperry_stdlib.a "$STDLIB_PKG"
+          build_deb "$STDLIB_PKG"
+
+          if [ -f staging/libperry_ui_gtk4.a ]; then
+            UI_PKG="perry-ui-gtk4_${VERSION}_${ARCH}"
+            init_package "$UI_PKG" \
+              "perry-ui-gtk4" \
+              "" \
+              "Perry GTK4 UI static archive" \
+              "Static GTK4 UI archive used by Perry programs that import the Linux UI backend."
+            copy_static_archive libperry_ui_gtk4.a "$UI_PKG"
+            build_deb "$UI_PKG"
+          fi
+
+          check_deb_sizes
+
+      - name: Upload .deb release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.release.outputs.version }}"
-          ARCH="${{ matrix.arch }}"
-          gh release upload "${{ github.event.release.tag_name }}" \
-            "perry_${VERSION}_${ARCH}.deb" \
-            --repo "${{ github.repository }}" --clobber
+          TAG="${{ steps.release.outputs.tag }}"
+          shopt -s nullglob
+          debs=( *.deb )
+          if [ "${#debs[@]}" -eq 0 ]; then
+            echo "No .deb packages were produced" >&2
+            exit 1
+          fi
 
-      - name: Upload .deb artifact (for apt-repo job)
+          for deb in "${debs[@]}"; do
+            gh release upload "$TAG" "$deb" \
+              --repo "${{ github.repository }}" --clobber
+          done
+
+      - name: Upload .deb artifacts (for apt-repo job)
         uses: actions/upload-artifact@v7
         with:
           name: deb-${{ matrix.arch }}
@@ -1243,6 +1432,19 @@ jobs:
           GPG_KEY_ID: ${{ secrets.APT_GPG_KEY_ID }}
         run: |
           cd apt-repo
+
+          max_git_blob_bytes=99000000
+          oversized=0
+          for deb in ../debs/*.deb; do
+            size=$(stat -c %s "$deb")
+            if [ "$size" -gt "$max_git_blob_bytes" ]; then
+              echo "$deb is $size bytes; GitHub rejects git blobs near 100 MB" >&2
+              oversized=1
+            fi
+          done
+          if [ "$oversized" -ne 0 ]; then
+            exit 1
+          fi
 
           # Copy new .deb files into pool
           mkdir -p pool/main/p/perry
@@ -1441,12 +1643,33 @@ jobs:
         # `./` prefix is required — `npm publish npm/foo` parses `npm/foo` as
         # a GitHub shorthand (user/repo) and tries ssh://git@github.com/npm/foo.git.
         # See run 24632227482 npm-publish job for the symptom.
+        #
+        # Skip versions already on the registry so the job is idempotent: at
+        # v0.5.1151 a transient artifact digest-mismatch killed the first run
+        # after the two darwin packages had published, and every re-run then
+        # died on the first package with "You cannot publish over the
+        # previously published versions" — the remaining six packages could
+        # never go out (run 27239815088).
         run: |
           set -e
           for pkg in ./npm/perry-*; do
+            name=$(node -p "require('$pkg/package.json').name")
+            ver=$(node -p "require('$pkg/package.json').version")
+            if npm view "$name@$ver" version >/dev/null 2>&1; then
+              echo "=== $name@$ver already published — skipping ==="
+              continue
+            fi
             echo "=== publishing $pkg ==="
             npm publish "$pkg" --access public --provenance
           done
 
       - name: Publish wrapper (@perryts/perry) last
-        run: npm publish ./npm/perry --access public --provenance
+        run: |
+          set -e
+          name=$(node -p "require('./npm/perry/package.json').name")
+          ver=$(node -p "require('./npm/perry/package.json').version")
+          if npm view "$name@$ver" version >/dev/null 2>&1; then
+            echo "$name@$ver already published — skipping"
+          else
+            npm publish ./npm/perry --access public --provenance
+          fi

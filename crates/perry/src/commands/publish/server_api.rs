@@ -82,6 +82,9 @@ pub(super) enum ServerMessage {
 #[derive(Debug, Serialize)]
 pub(super) struct BuildManifest {
     pub(super) app_name: String,
+    /// Home Screen display name (CFBundleDisplayName). `None` → the build
+    /// service omits the key and the icon label falls back to CFBundleName.
+    pub(super) display_name: Option<String>,
     pub(super) bundle_id: String,
     pub(super) version: String,
     pub(super) short_version: Option<String>,
@@ -125,6 +128,16 @@ pub(super) struct BuildManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tvos_info_plist: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tvos_distribute: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_deployment_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_encryption_exempt: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_info_plist: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) watchos_distribute: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) android_min_sdk: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) android_target_sdk: Option<String>,
@@ -133,11 +146,17 @@ pub(super) struct BuildManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) android_distribute: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) android_version_code: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) linux_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) linux_category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) linux_description: Option<String>,
+    /// `glibc` (default) or `musl` (fully static). Drives the worker's
+    /// `perry compile --target linux[-musl]` selection. #4826.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) linux_libc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) release_notes: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

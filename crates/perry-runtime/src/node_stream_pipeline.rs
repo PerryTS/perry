@@ -327,7 +327,13 @@ pub(super) fn settle_pipeline_value_with_origin(value: f64) -> Result<PipelineSe
                         fulfilled_promise: true,
                     })
                 }
-                crate::promise::PromiseState::Rejected => return Err((*promise).reason),
+                crate::promise::PromiseState::Rejected => {
+                    // Reason consumed by direct read (no reaction attached);
+                    // mark handled so it is not reported as an unhandled
+                    // rejection at program end (#1545).
+                    crate::promise::mark_rejection_handled(promise);
+                    return Err((*promise).reason);
+                }
                 crate::promise::PromiseState::Pending => {}
             }
         }
@@ -362,7 +368,10 @@ pub(super) fn settle_pipeline_value_with_origin(value: f64) -> Result<PipelineSe
                 value: (*promise).value,
                 fulfilled_promise: true,
             }),
-            crate::promise::PromiseState::Rejected => Err((*promise).reason),
+            crate::promise::PromiseState::Rejected => {
+                crate::promise::mark_rejection_handled(promise);
+                Err((*promise).reason)
+            }
             crate::promise::PromiseState::Pending => Ok(PipelineSettledValue {
                 value,
                 fulfilled_promise: false,
@@ -407,7 +416,8 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
         return Ok(chunks);
     }
     if object_ptr_from_value(value).is_some() {
-        let collected = crate::promise::js_array_from_async(value);
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let collected = crate::promise::js_array_from_async(value, undefined, undefined);
         let settled = settle_pipeline_value(collected)?;
         if is_array_like_value(settled) {
             return Ok(settled);

@@ -5,6 +5,25 @@
 
 use super::*;
 
+/// Box a `delete` operation's success bit into a JS boolean, throwing a
+/// `TypeError` in strict mode when the delete was refused (`deleted == 0`,
+/// i.e. the property exists and is non-configurable). Per spec, a strict-mode
+/// `delete` whose `[[Delete]]` returns `false` throws; sloppy mode yields
+/// `false`. `deleted != 0` always yields `true`.
+#[no_mangle]
+pub extern "C" fn js_delete_result(deleted: i32, strict: i32) -> f64 {
+    if deleted == 0 {
+        if strict != 0 {
+            let message = "Cannot delete property";
+            let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+            let err = crate::error::js_typeerror_new(msg);
+            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        }
+        return f64::from_bits(crate::value::TAG_FALSE);
+    }
+    f64::from_bits(crate::value::TAG_TRUE)
+}
+
 /// Delete a field from an object by its string key name
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
 #[no_mangle]
@@ -12,10 +31,73 @@ pub extern "C" fn js_object_delete_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
-    if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
+    if obj.is_null() || key.is_null() {
+        return 1;
+    }
+    // A Proxy is a small registered id in the proxy id band, not a heap
+    // ObjectHeader. Dereferencing it below (GC header / keys_array reads) would
+    // segfault. Route `delete proxy.k` / `delete proxy[k]` through the proxy
+    // `deleteProperty` trap. (#2846-family Proxy crash cluster.)
+    {
+        let addr = obj as u64;
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                let r = crate::proxy::js_proxy_delete(boxed, key_f64);
+                return if crate::value::js_is_truthy(r) != 0 {
+                    1
+                } else {
+                    0
+                };
+            }
+        }
+    }
+    if (obj as usize) < 0x10000 {
+        unsafe {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                let class_id = obj as usize as u32;
+                if super::class_registry::class_name_for_id(class_id).is_some() {
+                    super::class_registry::class_delete_own_dynamic_prop(class_id, name);
+                    super::class_registry::class_mark_key_deleted(class_id, name);
+                }
+            }
+        }
         return 1;
     }
     unsafe {
+        if let Some(addr) =
+            crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
+        {
+            return crate::typedarray_props::typed_array_delete_own_property(
+                addr as *mut crate::typedarray::TypedArrayHeader,
+                key,
+            );
+        }
+        if let Some(result) = super::arguments_object_before_delete(obj, key) {
+            return result;
+        }
+        // Date / RegExp / Error exotic instances: expando props live in side
+        // tables; the keys_array scan below would bit-cast the cell. Builtin
+        // own slots (`lastIndex`) are non-configurable → delete fails.
+        if let Some(kind) = super::exotic_expando::exotic_expando_kind(obj as usize) {
+            use super::exotic_expando::ExoticKind;
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                    if !attrs.configurable() {
+                        return 0;
+                    }
+                }
+                if kind == ExoticKind::RegExp && name == "lastIndex" {
+                    return 0;
+                }
+                super::exotic_expando::value_remove(kind, obj as usize, name);
+                super::clear_accessor_descriptor(obj as usize, name);
+                super::clear_property_attrs(obj as usize, name);
+            }
+            return 1;
+        }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -32,6 +114,20 @@ pub extern "C" fn js_object_delete_field(
                             index,
                         );
                     }
+                    // Named (non-index) property: drop the value-store entry AND
+                    // any accessor / attribute side-table state. A named
+                    // accessor (`Object.defineProperty(arr, "p", {get})`) lives
+                    // ONLY in the side tables, so without these clears the
+                    // delete was a no-op and `hasOwnProperty("p")` stayed true
+                    // (test262 verifyProperty's configurable check deletes then
+                    // asserts the key is gone).
+                    crate::array::array_named_property_delete(
+                        obj as *const crate::array::ArrayHeader,
+                        key,
+                    );
+                    super::clear_accessor_descriptor(obj as usize, name);
+                    super::clear_property_attrs(obj as usize, name);
+                    return 1;
                 }
                 crate::array::array_named_property_delete(
                     obj as *const crate::array::ArrayHeader,
@@ -61,6 +157,26 @@ pub extern "C" fn js_object_delete_field(
                 crate::closure::closure_mark_key_deleted(obj as usize, name);
             }
             return 1;
+        }
+        // An accessor-ONLY property (defineProperty get/set with no data
+        // slot) has no keys_array entry — the scan below would "succeed
+        // vacuously" while leaving the descriptor in the side table, so
+        // `delete obj[1]` left a ghost accessor behind (test262
+        // map/15.4.4.19-8-b-8: a getter deletes a sibling accessor
+        // mid-iteration and HasProperty must turn false).
+        if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+            if get_accessor_descriptor(obj as usize, name).is_some() {
+                if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                    if !attrs.configurable() {
+                        return 0;
+                    }
+                }
+                super::clear_accessor_descriptor(obj as usize, name);
+                super::clear_property_attrs(obj as usize, name);
+                // defineProperty may ALSO have planted a keys_array
+                // placeholder entry for the key — fall through to the scan
+                // below so hasOwnProperty / Object.keys stop seeing it.
+            }
         }
         let keys = (*obj).keys_array;
         if keys.is_null() {
@@ -186,10 +302,28 @@ pub extern "C" fn js_object_delete_field(
 }
 
 /// Delete a field from an object using a dynamic key (could be string or number index)
-/// For arrays, this sets the element to undefined
 /// Returns 1 if successful, 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
+    // Proxy receiver (small registered id) — route through the proxy
+    // `deleteProperty` trap before any key coercion that would deref the fake
+    // pointer. Handles symbol keys too (the string path also funnels into
+    // `js_object_delete_field`, which has its own guard).
+    {
+        let addr = obj as u64;
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let r = crate::proxy::js_proxy_delete(boxed, key);
+                return if crate::value::js_is_truthy(r) != 0 {
+                    1
+                } else {
+                    0
+                };
+            }
+        }
+    }
     let key_val = JSValue::from_bits(key.to_bits());
 
     // If the key is a string, use js_object_delete_field. #1781: accept
@@ -203,18 +337,21 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
         return js_object_delete_field(obj, key_str);
     }
 
-    // If the key is a number, treat as array index
-    if key_val.is_number() {
-        let index = key_val.as_number() as usize;
-        // Try to treat it as an array and set the element to undefined
-        // This is a simplified implementation - real JS delete on arrays
-        // creates a hole (sparse array), but we just set to undefined
-        let arr = obj as *mut crate::array::ArrayHeader;
-        let len = crate::array::js_array_length(arr) as usize;
-        if index < len {
-            crate::array::js_array_set(arr, index as u32, JSValue::undefined());
-            return 1;
-        }
+    let property_key = unsafe { js_to_property_key(key) };
+    if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
+        // Symbol-keyed delete (`delete obj[Symbol.iterator]`). Previously this
+        // fell through to the vacuous `return 1`, so the delete *reported*
+        // success while leaving the property in place — `verifyProperty`'s
+        // `isConfigurable` (delete-then-hasOwn) then saw the property survive
+        // and flagged a configurable symbol property as non-configurable
+        // (Test262 `Map.prototype/Symbol.iterator.js`). Route to the symbol
+        // property table delete, which honors the configurable attribute.
+        let obj_f64 = crate::value::js_nanbox_pointer(obj as i64);
+        return unsafe { crate::symbol::js_object_delete_symbol_property(obj_f64, property_key) };
+    }
+    let key_str = crate::value::js_jsvalue_to_string(property_key);
+    if !key_str.is_null() {
+        return js_object_delete_field(obj, key_str as *const crate::StringHeader);
     }
 
     // For other types, delete succeeds vacuously

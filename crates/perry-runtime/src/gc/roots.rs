@@ -130,7 +130,7 @@ pub(super) fn exit_gc_root_lock() {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ConservativeStackScanMode {
+pub(crate) enum ConservativeStackScanMode {
     Auto,
     Disabled,
     Full,
@@ -143,6 +143,7 @@ pub(super) enum ConservativeStackScanDecision {
 }
 
 impl ConservativeStackScanDecision {
+    #[cfg(feature = "diagnostics")]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -172,10 +173,82 @@ pub(super) fn conservative_stack_scan_mode_from_value(
     }
 }
 
+thread_local! {
+    /// Per-thread override for the conservative-scan mode, taking precedence over
+    /// the `#[cfg(test)]` default but not an explicit env var. The GC unit tests
+    /// set this to `Auto` (skip) inside their controlled-root scopes so a forced
+    /// collection still reclaims the objects they hold only as native-stack
+    /// locals; see `ScopedRootScannerRegistryGuard`.
+    pub(super) static CONSERVATIVE_STACK_SCAN_OVERRIDE: std::cell::Cell<Option<ConservativeStackScanMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Set (or clear) this thread's conservative-scan mode override, returning the
+/// previous value.
+pub(crate) fn set_conservative_stack_scan_override(
+    mode: Option<ConservativeStackScanMode>,
+) -> Option<ConservativeStackScanMode> {
+    CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.replace(mode))
+}
+
+/// Scoped guard forcing the conservative native-stack scan for an explicit
+/// `gc()` collection (#4977). In the default `Auto` mode a full collection
+/// skips the native scan, but at a `gc()` callsite live module-init/top-level
+/// locals may be held only on the native stack — neither the precise
+/// shadow-stack roots nor the module-var scanners cover them — so the
+/// collector reclaimed live object graphs and later field reads returned
+/// dangling-pointer garbage. An already-pinned per-thread override wins (the
+/// GC unit tests pin `Auto` so a forced collection still reclaims objects they
+/// hold only as native-stack locals), and an explicit
+/// `PERRY_CONSERVATIVE_STACK_SCAN` env value beats any override either way,
+/// so the bisection escape hatch keeps working.
+pub(super) struct ManualGcScanGuard {
+    engaged: bool,
+}
+
+impl ManualGcScanGuard {
+    pub(super) fn force_full_scan() -> Self {
+        let engaged = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| {
+            if c.get().is_some() {
+                return false;
+            }
+            c.set(Some(ConservativeStackScanMode::Full));
+            true
+        });
+        Self { engaged }
+    }
+}
+
+impl Drop for ManualGcScanGuard {
+    fn drop(&mut self) {
+        if self.engaged {
+            CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.set(None));
+        }
+    }
+}
+
 pub(super) fn conservative_stack_scan_mode() -> ConservativeStackScanMode {
-    match std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
-        Ok(value) => conservative_stack_scan_mode_from_value(Some(&value)),
-        Err(_) => ConservativeStackScanMode::Auto,
+    // Explicit env var wins (so the dedicated mode tests and ops bisection keep
+    // working), then a per-thread override, then the build-time default.
+    if let Ok(value) = std::env::var("PERRY_CONSERVATIVE_STACK_SCAN") {
+        return conservative_stack_scan_mode_from_value(Some(&value));
+    }
+    if let Some(mode) = CONSERVATIVE_STACK_SCAN_OVERRIDE.with(|c| c.get()) {
+        return mode;
+    }
+    // Unit tests root GC-managed pointers as raw locals on the *native* (Rust)
+    // stack, not the shadow stack, so without the conservative native scan any
+    // collection triggered mid-test (e.g. by an allocation in a helper) reclaims
+    // them and a later header deref faults. Default the test build to a full
+    // scan so those locals survive; production keeps live values on the shadow
+    // stack and skips the imprecise, costly native scan.
+    #[cfg(test)]
+    {
+        ConservativeStackScanMode::Full
+    }
+    #[cfg(not(test))]
+    {
+        ConservativeStackScanMode::Auto
     }
 }
 
@@ -362,9 +435,10 @@ pub extern "C" fn js_gc_register_global_root(ptr: i64) {
 pub(super) fn mark_stack_roots_for_decision(
     valid_ptrs: &ValidPointerSet,
     decision: ConservativeStackScanDecision,
+    pin_only_old: bool,
 ) -> ConservativeRootTraceStats {
     match decision {
-        ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs),
+        ConservativeStackScanDecision::Scan => mark_stack_roots_unchecked(valid_ptrs, pin_only_old),
         ConservativeStackScanDecision::SkipDisabled => ConservativeRootTraceStats::default(),
     }
 }
@@ -375,6 +449,7 @@ pub(super) fn mark_stack_roots_for_decision(
 /// variables — codegen stores these as raw I64 words (not NaN-boxed) in registers and on stack.
 pub(super) fn mark_stack_roots_unchecked(
     valid_ptrs: &ValidPointerSet,
+    pin_only_old: bool,
 ) -> ConservativeRootTraceStats {
     let mut stats = ConservativeRootTraceStats::default();
     // Capture callee-saved registers into a buffer via setjmp.
@@ -404,7 +479,7 @@ pub(super) fn mark_stack_roots_unchecked(
 
     // Scan the register buffer (covers callee-saved regs: x19-x28 on AArch64, rbx/rbp/r12-r15 on x86_64)
     for &word in &jmp_buf {
-        if try_mark_value_or_raw(word, valid_ptrs) {
+        if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
             stats.root_count += 1;
         }
     }
@@ -458,7 +533,7 @@ pub(super) fn mark_stack_roots_unchecked(
             options(nostack, preserves_flags),
         );
         for &word in &fp_regs {
-            if try_mark_value_or_raw(word, valid_ptrs) {
+            if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
                 stats.root_count += 1;
             }
         }
@@ -494,7 +569,7 @@ pub(super) fn mark_stack_roots_unchecked(
     let mut addr = stack_top;
     while addr < stack_bottom {
         let word = unsafe { *(addr as *const u64) };
-        if try_mark_value_or_raw(word, valid_ptrs) {
+        if try_mark_conservative_word(word, valid_ptrs, pin_only_old) {
             stats.root_count += 1;
         }
         addr += 8;
@@ -507,6 +582,88 @@ pub(super) fn mark_stack_roots_unchecked(
 /// This is used for conservative scanning where Perry stores raw I64 pointers (for is_string/
 /// is_array/is_pointer/is_closure vars) alongside NaN-boxed F64 values.
 #[inline]
+/// Conservative-scan variant of `try_mark_value_or_raw` (#5029).
+///
+/// In a MINOR cycle, a conservative stack discovery that lives in the OLD
+/// generation is retained WITHOUT tracing: minors never sweep the old
+/// generation, so the mark is not needed for survival, and `CONS_PINNED`
+/// already excludes the object from every evacuation candidate set. Tracing
+/// it is actively unsound: a stale stack word (a dead frame slot from an
+/// earlier loop iteration) can resurrect a DEAD old object whose slots still
+/// hold pointers into long-swept nursery memory. Once fresh nursery blocks
+/// are allocated over those freed ranges, the resurrected object's slots
+/// alias live young objects; tracing / force-evacuating / rewriting through
+/// them corrupts the heap, and the old-young-edge verifier reports the same
+/// aliases as phantom missing remembered-set edges (the
+/// gc_write_barrier_stress signature: missing_edges=7710 on a dead 256 KB
+/// array backing). A LIVE old object loses nothing here: its real old→young
+/// edges are dirty-page-covered by the write barriers, which is the only
+/// mechanism a minor uses to find them anyway, and precise roots (shadow
+/// stack, module vars, registered scanners) still mark and trace as before.
+///
+/// FULL collections (`pin_only_old == false`) keep the old behavior: the old
+/// sweep frees unmarked old objects, so a stack-only-referenced old object
+/// must be marked for retention there (#4977).
+pub(super) fn try_mark_conservative_word(
+    word: u64,
+    valid_ptrs: &ValidPointerSet,
+    pin_only_old: bool,
+) -> bool {
+    if !pin_only_old {
+        return try_mark_value_or_raw(word, valid_ptrs);
+    }
+
+    // Resolve the candidate exactly like `try_mark_value_or_raw` —
+    // NaN-boxed heap tags first, then the raw-I64 pointer fallback with the
+    // interior-pointer (`enclosing_object`) lookup.
+    let tag = word & TAG_MASK;
+    let target = if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+        let ptr_val = (word & POINTER_MASK) as usize;
+        if ptr_val == 0 || !valid_ptrs.maybe_contains(ptr_val) || !valid_ptrs.contains(&ptr_val) {
+            return false;
+        }
+        ptr_val
+    } else {
+        if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&word) {
+            return false;
+        }
+        let raw_ptr = word as usize;
+        if !valid_ptrs.maybe_contains(raw_ptr)
+            && raw_ptr.saturating_sub(0x10_0000) > valid_ptrs.range_max
+        {
+            return false;
+        }
+        if valid_ptrs.contains(&raw_ptr) {
+            raw_ptr
+        } else {
+            match valid_ptrs.enclosing_object(raw_ptr) {
+                Some(start) => start,
+                None => return false,
+            }
+        }
+    };
+
+    unsafe {
+        let header = header_from_user_ptr(target as *const u8);
+        if (*header).gc_flags & GC_FLAG_MARKED != 0 {
+            return false;
+        }
+        if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+            return false;
+        }
+        if matches!(
+            crate::arena::classify_heap_generation(target),
+            crate::arena::HeapGeneration::Old
+        ) {
+            // Pin-only retention: not moved, not traced, not marked.
+            return pin_conservative_root_header(header);
+        }
+        (*header).gc_flags |= GC_FLAG_MARKED;
+        push_mark_seed(header);
+    }
+    true
+}
+
 pub(super) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> bool {
     // First try NaN-boxed interpretation (POINTER_TAG / STRING_TAG / BIGINT_TAG)
     if try_mark_value(word, valid_ptrs) {

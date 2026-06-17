@@ -314,6 +314,26 @@ pub extern "C" fn perry_ui_calendar_get_selected_date(handle: i64) -> f64 {
     widgets::calendar::get_selected_date(handle)
 }
 
+// ---- DatePicker (issue #4772) ----
+
+/// Create an `NSDatePicker` in compact text-field-and-stepper mode.
+/// `year` and `month` are 1-based; pass <=0 / out-of-range to default
+/// to 2026-01. `on_change` fires with the selected date as `yyyy-MM-dd`.
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_create(year: i64, month: i64, on_change: f64) -> i64 {
+    widgets::date_picker::create(year, month, on_change)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_set_date(handle: i64, year: i64, month: i64, day: i64) {
+    widgets::date_picker::set_date(handle, year, month, day);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_date_picker_get_selected_date(handle: i64) -> f64 {
+    widgets::date_picker::get_selected_date(handle)
+}
+
 // ---- TreeView (issue #480) ----
 
 /// Register a tree node with `id` and `label`. Standalone — wire into

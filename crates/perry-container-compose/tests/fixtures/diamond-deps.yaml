@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  a:
+    image: alpine:3.19
+    depends_on:
+      - b
+      - c
+  b:
+    image: alpine:3.19
+    depends_on:
+      - d
+  c:
+    image: alpine:3.19
+    depends_on:
+      - d
+  d:
+    image: alpine:3.19

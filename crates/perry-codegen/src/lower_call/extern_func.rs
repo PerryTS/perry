@@ -407,6 +407,7 @@ fn build_pod_temp_from_object_value(
         let ptr = pod_field_ptr(ctx, &data_slot, field.offset);
         let llvm_ty = llvm_type_for_native_rep(&field.native_rep)
             .expect("manifest POD field reps have scalar LLVM types");
+        // GC_STORE_AUDIT(POINTER_FREE): POD record fields are native scalars, never heap edges.
         ctx.block()
             .store_aligned(llvm_ty, &lowered.value, &ptr, field.alignment);
     }

@@ -153,21 +153,28 @@ fn normalize_hostname_value(raw: &str) -> Option<String> {
     {
         return None;
     }
-    match idna::domain_to_ascii(raw) {
-        Ok(ascii) if !ascii.is_empty() => {
-            // #3056: apply the WHATWG numeric/IPv4-shorthand host parser as a
-            // post-step. `idna::domain_to_ascii` only runs IDNA, so a numeric
-            // host like `123` survives as `"123"` instead of canonicalizing to
-            // the IPv4 address `"0.0.0.123"`. The `url` crate's WHATWG host
-            // parser does this correctly; for ordinary hostnames it returns
-            // the same string (no change). When it rejects the host (e.g.
-            // out-of-range numeric `999999999999`) Node leaves the hostname
-            // unchanged — `None` propagates that, since `js_url_set_hostname`
-            // is a no-op on `None`.
-            super::whatwg_canonicalize_host(&ascii)
+    #[cfg(feature = "url-engine")]
+    {
+        match idna::domain_to_ascii(raw) {
+            Ok(ascii) if !ascii.is_empty() => {
+                // #3056: apply the WHATWG numeric/IPv4-shorthand host parser as a
+                // post-step. `idna::domain_to_ascii` only runs IDNA, so a numeric
+                // host like `123` survives as `"123"` instead of canonicalizing to
+                // the IPv4 address `"0.0.0.123"`. The `url` crate's WHATWG host
+                // parser does this correctly; for ordinary hostnames it returns
+                // the same string (no change). When it rejects the host (e.g.
+                // out-of-range numeric `999999999999`) Node leaves the hostname
+                // unchanged — `None` propagates that, since `js_url_set_hostname`
+                // is a no-op on `None`.
+                super::whatwg_canonicalize_host(&ascii)
+            }
+            _ => None,
         }
-        _ => None,
     }
+    // URL engine gated off: no IDNA. Fall back to the hand-rolled host
+    // canonicalizer (which, also gated off, passes the host through unchanged).
+    #[cfg(not(feature = "url-engine"))]
+    super::whatwg_canonicalize_host(raw)
 }
 
 fn percent_encode_path(raw: &str) -> String {

@@ -113,7 +113,7 @@ pub(super) fn normalize_sign_algorithm(algorithm: &[u8]) -> Option<RsaDigestKind
     }
 }
 
-pub(super) fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
+pub(crate) fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
     use rsa::pkcs1::DecodeRsaPrivateKey;
     use rsa::pkcs8::DecodePrivateKey;
 
@@ -122,7 +122,25 @@ pub(super) fn parse_rsa_private_key_pem(pem: &str) -> Option<RsaPrivateKey> {
         .ok()
 }
 
-pub(super) fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
+pub(super) fn parse_rsa_encrypted_private_key_pem(
+    pem: &str,
+    passphrase: &[u8],
+) -> Option<RsaPrivateKey> {
+    use rsa::pkcs8::DecodePrivateKey;
+
+    RsaPrivateKey::from_pkcs8_encrypted_pem(pem, passphrase).ok()
+}
+
+pub(super) fn rsa_private_key_to_pem(private_key: &RsaPrivateKey) -> Option<String> {
+    use rsa::pkcs8::EncodePrivateKey;
+
+    private_key
+        .to_pkcs8_pem(Default::default())
+        .ok()
+        .map(|pem| pem.to_string())
+}
+
+pub(crate) fn parse_rsa_public_key_pem(pem: &str) -> Option<RsaPublicKey> {
     use rsa::pkcs1::DecodeRsaPublicKey;
     use rsa::pkcs8::DecodePublicKey;
 
@@ -143,13 +161,13 @@ pub(super) fn rsa_public_key_to_pem(public_key: &RsaPublicKey) -> Option<String>
         .map(|pem| pem.to_string())
 }
 
-pub(super) fn parse_p256_signing_key_pem(pem: &str) -> Option<P256EcdsaSigningKey> {
+pub(crate) fn parse_p256_signing_key_pem(pem: &str) -> Option<P256EcdsaSigningKey> {
     use p256::pkcs8::DecodePrivateKey;
 
     P256EcdsaSigningKey::from_pkcs8_pem(pem).ok()
 }
 
-pub(super) fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::VerifyingKey> {
+pub(crate) fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::VerifyingKey> {
     use p256::pkcs8::{DecodePrivateKey, DecodePublicKey};
 
     p256::ecdsa::VerifyingKey::from_public_key_pem(pem)
@@ -178,7 +196,7 @@ pub(super) fn ed25519_public_surrogate(key: &ed25519_dalek::VerifyingKey) -> Str
     format!("{ED25519_PUBLIC_PREFIX}{public}")
 }
 
-pub(super) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::SigningKey> {
+pub(crate) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::SigningKey> {
     let rest = value.strip_prefix(ED25519_PRIVATE_PREFIX)?;
     let secret_b64 = rest.split('.').next()?;
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -188,7 +206,7 @@ pub(super) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dal
     Some(ed25519_dalek::SigningKey::from_bytes(&secret))
 }
 
-pub(super) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dalek::VerifyingKey> {
+pub(crate) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dalek::VerifyingKey> {
     if let Some(private) = parse_ed25519_private_surrogate(value) {
         return Some(private.verifying_key());
     }
@@ -210,7 +228,7 @@ pub(super) fn x25519_public_surrogate(public: &[u8; 32]) -> String {
     format!("{X25519_PUBLIC_PREFIX}{encoded}")
 }
 
-pub(super) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
+pub(crate) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
     let rest = value.strip_prefix(X25519_PRIVATE_PREFIX)?;
     let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(rest.as_bytes())
@@ -218,7 +236,7 @@ pub(super) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
     secret.as_slice().try_into().ok()
 }
 
-pub(super) fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
+pub(crate) fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
     if let Some(secret) = parse_x25519_private_surrogate(value) {
         let secret = x25519_dalek::StaticSecret::from(secret);
         let public = x25519_dalek::PublicKey::from(&secret);
@@ -438,6 +456,21 @@ pub(super) unsafe fn object_field_string(obj_bits: u64, name: &[u8]) -> Option<S
     string_from_jsvalue(object_field_bits(obj_bits, name)?)
 }
 
+pub(super) unsafe fn bytes_from_value_bits(bits: u64) -> Option<Vec<u8>> {
+    if let Some(s) = string_from_jsvalue(bits) {
+        return Some(s.into_bytes());
+    }
+    let ptr = bits & 0x0000_FFFF_FFFF_FFFF;
+    if ptr < 0x1000 {
+        return None;
+    }
+    Some(bytes_from_ptr(ptr as i64))
+}
+
+pub(super) unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Vec<u8>> {
+    bytes_from_value_bits(object_field_bits(obj_bits, name)?)
+}
+
 pub(super) fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s.as_bytes())
@@ -630,6 +663,19 @@ pub(super) unsafe fn crypto_key_input_to_private_pem(value_bits: u64) -> Option<
         if matches!(format.as_deref(), Some(f) if f.eq_ignore_ascii_case("jwk")) {
             return jwk_rsa_private_to_pem(key_bits).or_else(|| jwk_ec_private_to_pem(key_bits));
         }
+        let format_is_pem = format
+            .as_deref()
+            .map_or(true, |f| f.eq_ignore_ascii_case("pem"));
+        if format_is_pem {
+            if let Some(passphrase) = object_field_bytes(value_bits, b"passphrase") {
+                let key_bytes = bytes_from_value_bits(key_bits)?;
+                let pem = String::from_utf8(key_bytes).ok()?;
+                if pem.contains("ENCRYPTED PRIVATE KEY") {
+                    return parse_rsa_encrypted_private_key_pem(&pem, &passphrase)
+                        .and_then(|key| rsa_private_key_to_pem(&key));
+                }
+            }
+        }
         return crypto_key_input_to_private_pem(key_bits);
     }
     if matches!(format.as_deref(), Some(f) if f.eq_ignore_ascii_case("jwk")) {
@@ -719,6 +765,25 @@ pub(super) unsafe fn keygen_encoding_wants_jwk(options_bits: u64, field: &[u8]) 
         object_field_string(encoding_bits, b"format").as_deref(),
         Some(format) if format.eq_ignore_ascii_case("jwk")
     )
+}
+
+pub(super) unsafe fn keygen_rsa_private_encryption_passphrase(
+    options_bits: u64,
+) -> Option<Vec<u8>> {
+    let encoding_bits = object_field_bits(options_bits, b"privateKeyEncoding")?;
+    let format = object_field_string(encoding_bits, b"format")?;
+    if !format.eq_ignore_ascii_case("pem") {
+        return None;
+    }
+    let typ = object_field_string(encoding_bits, b"type")?;
+    if !typ.eq_ignore_ascii_case("pkcs8") {
+        return None;
+    }
+    let cipher = object_field_string(encoding_bits, b"cipher")?;
+    if !cipher.eq_ignore_ascii_case("aes-256-cbc") {
+        return None;
+    }
+    object_field_bytes(encoding_bits, b"passphrase")
 }
 
 pub(super) fn sign_rsa_data(

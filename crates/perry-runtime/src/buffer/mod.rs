@@ -30,6 +30,7 @@ mod view;
 pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
+pub(crate) use header::is_small_buf_slab_addr;
 pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
     buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
@@ -54,9 +55,11 @@ pub use from::{
 pub use query::{
     js_buffer_byte_length, js_buffer_byte_length_value, js_buffer_is_ascii, js_buffer_is_buffer,
     js_buffer_is_encoding, js_buffer_is_utf8, js_native_buffer_byte_len, js_native_buffer_data_ptr,
+    js_value_buffer_or_typedarray_data,
 };
 
 // ---- Re-exports: toString / print / length / to-array ----
+pub(crate) use encode::buf_bytes_to_utf8_string;
 pub use encode::{
     buffer_to_array, js_buffer_length, js_buffer_print, js_buffer_to_string,
     js_buffer_to_string_range, js_value_to_string_with_encoding,
@@ -164,6 +167,29 @@ mod tests {
                 cap,
                 "cap={cap}: wrong capacity stored in header"
             );
+        }
+    }
+
+    // #5226: every off-heap buffer (incl. `new Uint8Array(n)`, which lowers to
+    // a slab Buffer) must reserve a zeroed 8-byte sentinel before its pointer,
+    // so the runtime's many `*(ptr - GC_HEADER_SIZE)` type probes read a mapped
+    // `0` (matching no GC_TYPE) instead of crossing into the unmapped page
+    // before a freshly mapped slab/block and segfaulting. The sentinel must be
+    // `0`, never a real type tag.
+    #[test]
+    fn small_buffer_reserves_zeroed_header_sentinel() {
+        for cap in [0u32, 1, 3, 16, 255] {
+            let buf = buffer_alloc(cap);
+            assert!(is_registered_buffer(buf as usize), "cap={cap}");
+            unsafe {
+                let sentinel = *(buf as *const u8).sub(crate::gc::GC_HEADER_SIZE);
+                assert_eq!(sentinel, 0, "cap={cap}: header sentinel must be zero");
+            }
+            // The header-probing classifiers must read the sentinel and answer
+            // "not my type" without faulting.
+            let v = crate::value::js_nanbox_pointer(buf as i64);
+            assert_eq!(crate::promise::js_value_is_promise(v), 0, "cap={cap}");
+            assert!(!crate::date::is_date_cell_addr(buf as usize), "cap={cap}");
         }
     }
 

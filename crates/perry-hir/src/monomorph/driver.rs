@@ -217,6 +217,7 @@ fn collect_instantiations_in_expr(
             callee,
             args,
             type_args,
+            ..
         } => {
             // First collect in the callee and args
             collect_instantiations_in_expr(callee, ctx, module, idx);
@@ -251,6 +252,7 @@ fn collect_instantiations_in_expr(
             class_name,
             args,
             type_args,
+            ..
         } => {
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);
@@ -337,6 +339,7 @@ fn collect_instantiations_in_expr(
                     ArrayElement::Spread(expr) => {
                         collect_instantiations_in_expr(expr, ctx, module, idx)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -364,6 +367,43 @@ fn collect_instantiations_in_expr(
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for arg in args {
+                collect_instantiations_in_expr(arg, ctx, module, idx);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(value, ctx, module, idx);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(value, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            collect_instantiations_in_expr(home, ctx, module, idx);
+            collect_instantiations_in_expr(key, ctx, module, idx);
+            collect_instantiations_in_expr(receiver, ctx, module, idx);
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);
             }
@@ -477,7 +517,7 @@ fn collect_instantiations_in_expr(
             collect_instantiations_in_expr(string, ctx, module, idx);
             collect_instantiations_in_expr(delimiter, ctx, module, idx);
         }
-        Expr::StringFromCharCode(code) => {
+        Expr::StringFromCharCode(code) | Expr::StringFromCharCodeSpread(code) => {
             collect_instantiations_in_expr(code, ctx, module, idx);
         }
         Expr::MapNew => {}
@@ -525,6 +565,8 @@ fn collect_instantiations_in_expr(
         Expr::MathFloor(expr)
         | Expr::MathCeil(expr)
         | Expr::MathRound(expr)
+        | Expr::MathTrunc(expr)
+        | Expr::MathSign(expr)
         | Expr::MathAbs(expr)
         | Expr::MathSqrt(expr)
         | Expr::MathLog(expr)

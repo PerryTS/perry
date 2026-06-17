@@ -211,6 +211,7 @@ fn try_consumer_fuse_pattern(
                     callee,
                     args,
                     type_args,
+                    ..
                 }),
             ..
         } => match callee.as_ref() {
@@ -253,6 +254,8 @@ fn try_consumer_fuse_pattern(
         callee: Box::new(Expr::FuncRef(callee_id)),
         args: new_args,
         type_args,
+        // #5247: deforestation-fused call; no single source offset.
+        byte_offset: 0,
     };
     Some((2, vec![Stmt::Expr(new_call)]))
 }
@@ -387,6 +390,7 @@ fn try_rewrite_single_stmt(
                     callee,
                     args,
                     type_args,
+                    ..
                 }),
         } => match callee.as_ref() {
             Expr::FuncRef(fid) if producers.contains_key(fid) => {
@@ -397,6 +401,7 @@ fn try_rewrite_single_stmt(
                     callee: callee.clone(),
                     args: new_args,
                     type_args: type_args.clone(),
+                    byte_offset: 0,
                 });
                 let let_stmt = Stmt::Let {
                     id: *id,

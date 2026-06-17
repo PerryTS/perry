@@ -109,6 +109,18 @@ pub fn is_inlinable(func: &Function) -> bool {
         return false;
     }
 
+    // Don't inline functions that reference the dynamic `this` / `new.target`
+    // bindings. Those belong to the callee's own invocation, but the inliner
+    // substitutes the body into the CALLER's frame, where `this`/`new.target`
+    // resolve to the caller's binding. A strict callee called as `f()` has
+    // `this === undefined`; inlined into a sloppy caller it would instead read
+    // the caller's `this` (the global object), so `typeof this` flips from
+    // `"undefined"` to `"object"`. Refs test262 language/function-code
+    // `10.4.3-1-*`.
+    if body_references_dynamic_this(&func.body) {
+        return false;
+    }
+
     // Don't inline functions that call themselves. The single-Return-of-Call
     // pattern in `try_inline_simple_call` (and the multi-Let-then-Return
     // pattern) substitutes the body verbatim; when the body is
@@ -124,6 +136,47 @@ pub fn is_inlinable(func: &Function) -> bool {
         return false;
     }
 
+    true
+}
+
+/// Inlinability for a *method* invoked with a known (exact) receiver. Identical
+/// to [`is_inlinable`] except the dynamic-`this` rejection is relaxed: the
+/// method-inliner substitutes `this` for the concrete receiver
+/// (`substitute_this_in_stmts`), so an ordinary `this.field` accessor/mutator
+/// IS inlinable. `new.target` and nested closures remain rejected (see
+/// [`method_body_blocks_this_substitution`]). Without this, every method that
+/// touches `this` — i.e. essentially all of them — was excluded from inlining,
+/// so a hot `obj.method()` in a loop always paid full dispatch + a non-inlined
+/// call.
+pub fn is_inlinable_method(func: &Function) -> bool {
+    if func.is_async || func.is_generator {
+        return false;
+    }
+    if !func.captures.is_empty() {
+        return false;
+    }
+    if func.params.iter().any(|p| p.is_rest) {
+        return false;
+    }
+    if func.body.len() > MAX_INLINE_STMTS {
+        return false;
+    }
+    if !has_simple_control_flow(&func.body) {
+        return false;
+    }
+    let param_ids: std::collections::HashSet<LocalId> = func.params.iter().map(|p| p.id).collect();
+    if body_contains_closure_capturing(&func.body, &param_ids) {
+        return false;
+    }
+    if body_contains_super_call(&func.body) {
+        return false;
+    }
+    if method_body_blocks_this_substitution(&func.body) {
+        return false;
+    }
+    if body_calls_func(&func.body, func.id) {
+        return false;
+    }
     true
 }
 
@@ -235,10 +288,20 @@ pub fn method_lookup_is_unshadowed(classes: &[Class], class_name: &str, method_n
         return false;
     };
 
+    // Index classes by name for O(1) chain-walk lookups instead of an
+    // O(classes) linear scan per level. `entry().or_insert` keeps the FIRST
+    // class for a duplicate name, matching the prior `iter().find()` semantics
+    // (duplicate class names occur cross-module, e.g. Effect's same-named
+    // `Type` in SchemaAST and ParseResult).
+    let mut by_name: HashMap<&str, &Class> = HashMap::with_capacity(classes.len());
+    for c in classes {
+        by_name.entry(c.name.as_str()).or_insert(c);
+    }
+
     let mut cur = Some(class_name);
     let mut depth = 0usize;
     while let Some(name) = cur {
-        let Some(class) = classes.iter().find(|c| c.name == name) else {
+        let Some(class) = by_name.get(name).copied() else {
             return false;
         };
         if class.extends_expr.is_some() || class.native_extends.is_some() {
@@ -296,10 +359,16 @@ pub fn class_chain_property_sets(
     let mut fields = HashSet::new();
     let mut getters = HashSet::new();
     let mut setters = HashSet::new();
+    // Index by name for O(1) chain-walk lookups; `entry().or_insert` keeps the
+    // first class for a duplicate name, matching the prior `iter().find()`.
+    let mut by_name: HashMap<&str, &Class> = HashMap::with_capacity(classes.len());
+    for c in classes {
+        by_name.entry(c.name.as_str()).or_insert(c);
+    }
     let mut cur = Some(class_name);
     let mut depth = 0usize;
     while let Some(name) = cur {
-        let class = classes.iter().find(|c| c.name == name)?;
+        let class = by_name.get(name).copied()?;
         if class.extends_expr.is_some() || class.native_extends.is_some() {
             return None;
         }
@@ -441,6 +510,32 @@ pub fn construction_expr_can_affect_method_lookup(
                     getter_names,
                     setter_names,
                 )
+        }
+        // #4126 changed `this.field = x` ctor assignments to lower as
+        // `PutValueSet` (PutValue descriptor semantics) instead of
+        // `PropertySet`. Mirror the `PropertySet { object: This }` arm so a
+        // plain field store doesn't get treated as a method-lookup shadow —
+        // otherwise every class whose constructor assigns a field disables
+        // method inlining + scalar replacement (regressed #945).
+        Expr::PutValueSet {
+            target, key, value, ..
+        } if matches!(target.as_ref(), Expr::This) => {
+            match key.as_ref() {
+                Expr::String(k) => {
+                    k == method_name
+                        || setter_names.contains(k)
+                        || construction_expr_can_affect_method_lookup(
+                            value,
+                            method_name,
+                            data_fields,
+                            getter_names,
+                            setter_names,
+                        )
+                }
+                // Computed/dynamic key — can't prove which property is
+                // written, so conservatively treat it as lookup-affecting.
+                _ => true,
+            }
         }
         Expr::LocalSet(_, value) => construction_expr_can_affect_method_lookup(
             value,

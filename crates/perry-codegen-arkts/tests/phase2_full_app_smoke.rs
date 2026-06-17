@@ -53,6 +53,9 @@ fn empty_module() -> Module {
         init_kind: perry_hir::ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
 
@@ -75,7 +78,9 @@ fn closure(params: Vec<Param>, body: Vec<Stmt>) -> Expr {
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -90,6 +95,7 @@ fn param(id: LocalId, name: &str) -> Param {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     }
 }
 
@@ -143,6 +149,7 @@ fn full_phase2_app_emits_canonical_arkui() {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     // --- Phase 2 v6 + v5: Button with state.set + inline style ---
@@ -154,6 +161,7 @@ fn full_phase2_app_emits_canonical_arkui() {
         }),
         args: vec![Expr::Number(1.0)],
         type_args: vec![],
+        byte_offset: 0,
     })];
     let inc_button = nmc(
         "Button",
@@ -517,6 +525,7 @@ fn minimal_counter_app_emits_clean_page() {
                 }),
                 args: vec![],
                 type_args: vec![],
+                byte_offset: 0,
             },
             nmc(
                 "Button",

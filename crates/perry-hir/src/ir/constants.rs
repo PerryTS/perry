@@ -77,6 +77,70 @@ pub fn clear_compile_packages_override() {
     COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow_mut().clear());
 }
 
+/// Refs #5137: true when the user explicitly opted `pkg` into
+/// `perry.compilePackages` (the package's real npm source is being
+/// compiled). Native-instance registration and native-shim method
+/// lowering must back off for such packages even when a class name
+/// like `Command` / `Big` would otherwise hit a hardcoded
+/// library-name fallback — otherwise `new Command()` from commander's
+/// own source is still routed to the `js_commander_*` shim instead of
+/// the compiled-from-source class.
+pub fn is_compile_package_override(pkg: &str) -> bool {
+    COMPILE_PACKAGES_OVERRIDE.with(|cell| cell.borrow().contains(pkg))
+}
+
+// ---- #5009 build-time `process.env` define substitution ----
+
+/// #5009: a build-time `process.env.<NAME>` substitution value, esbuild
+/// `define`-style. Mirrors the perry-crate `DefineValue` but lives here so HIR
+/// lowering can fold a defined `process.env.X` read into a literal at the
+/// single point it would otherwise emit `Expr::EnvGet`.
+#[derive(Clone, Debug)]
+pub enum EnvDefine {
+    Str(String),
+    Bool(bool),
+    Num(f64),
+    Null,
+}
+
+thread_local! {
+    /// #5009: per-thread map of `process.env.<NAME>` build-time substitutions
+    /// (`perry.define`). Keyed by the bare env var NAME (e.g. `NODE_ENV`, not
+    /// the full `process.env.NODE_ENV`). When a static `process.env.<NAME>`
+    /// read is lowered and `NAME` is present here, lowering emits the defined
+    /// literal instead of `Expr::EnvGet` — so the define is honored in every
+    /// context (branch conditions, ternaries, closures) and regardless of
+    /// whether tree-shaking is enabled.
+    ///
+    /// Before #5009 the define was only consulted by the tree-shake-gated
+    /// `env_fold` branch pruner, so a `process.env.NODE_ENV` read produced a
+    /// live runtime env lookup (`undefined` when unset) in every default
+    /// build — React/Preact/etc. then selected their development builds.
+    /// Folding at the lowering source restores esbuild-style `define`
+    /// semantics: the define wins over the runtime environment.
+    ///
+    /// The driver installs this before each `lower_module_full` and clears it
+    /// after (rayon-safe — each worker thread has its own copy).
+    static ENV_DEFINES: std::cell::RefCell<std::collections::HashMap<String, EnvDefine>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// #5009: install the per-thread `process.env.<NAME>` define map. Keys are the
+/// bare env var names (the `process.env.` prefix already stripped).
+pub fn set_env_defines(map: std::collections::HashMap<String, EnvDefine>) {
+    ENV_DEFINES.with(|cell| *cell.borrow_mut() = map);
+}
+
+/// #5009: clear the per-thread define map (symmetry with the other resets).
+pub fn clear_env_defines() {
+    ENV_DEFINES.with(|cell| cell.borrow_mut().clear());
+}
+
+/// #5009: look up a build-time `process.env.<name>` substitution, if defined.
+pub fn env_define_lookup(name: &str) -> Option<EnvDefine> {
+    ENV_DEFINES.with(|cell| cell.borrow().get(name).cloned())
+}
+
 // ---- #503 dynamic-stdlib-dispatch refusal config ----
 
 thread_local! {
@@ -92,7 +156,12 @@ thread_local! {
     /// list lives in `lower/expr_member.rs::STDLIB_NAMESPACE_NAMES`. Set
     /// to false by `perry.allowDynamicStdlibDispatch: true` or
     /// `PERRY_ALLOW_DYNAMIC_STDLIB=1`.
-    static REFUSE_DYNAMIC_STDLIB_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    ///
+    /// #5263: default is now **false** (allow). Dynamic access over the linked
+    /// namespace can only select among already-linked members, so it is safe by
+    /// default; the compile driver re-arms it (`set_refuse_dynamic_stdlib_dispatch(true)`)
+    /// under `--lockdown` or an explicit opt-in.
+    static REFUSE_DYNAMIC_STDLIB_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 
     /// #503: per-thread set of npm package names that opted out of the
     /// dynamic-stdlib-dispatch refusal (`perry.allowDynamicStdlibDispatch:
@@ -214,6 +283,26 @@ pub fn current_module_line_at(byte_offset: u32) -> Option<usize> {
         }
         // Line number = 1 + count of newlines before the offset.
         Some(1 + src[..offset].bytes().filter(|&b| b == b'\n').count())
+    })
+}
+
+/// #4101: extract the source text spanning `[lo, hi)` (SWC `BytePos`, which
+/// is 1-based) from the currently-installed module source. Used at lowering
+/// to retain each function's original source for `Function.prototype.toString`.
+/// Returns `None` when no source is installed (unit tests / `check`) or the
+/// span is out of range, so callers fall back to a synthesized native form.
+pub fn current_module_source_slice(lo: u32, hi: u32) -> Option<String> {
+    CURRENT_MODULE_SOURCE.with(|cell| {
+        let borrowed = cell.borrow();
+        let src = borrowed.as_ref()?;
+        // SWC BytePos starts at 1, so subtract 1 for 0-indexed slicing.
+        let start = lo.saturating_sub(1) as usize;
+        let end = hi.saturating_sub(1) as usize;
+        if start <= end && end <= src.len() {
+            src.get(start..end).map(|s| s.to_string())
+        } else {
+            None
+        }
     })
 }
 
@@ -367,6 +456,7 @@ pub const NODE_BUILTIN_MODULES: &[&str] = &[
     "http2",
     "https",
     "inspector",
+    "inspector/promises",
     "module",
     "net",
     "os",

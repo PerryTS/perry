@@ -171,6 +171,33 @@ fn push_ws_event(ev: PendingWsEvent) {
     perry_runtime::event_pump::js_notify_main_thread();
 }
 
+#[cfg(not(target_os = "ios"))]
+fn mark_ws_connection_closed(ws_id: usize) -> bool {
+    WS_CONNECTIONS
+        .lock()
+        .unwrap()
+        .get_mut(&ws_id)
+        .map(|conn| {
+            let was_open = conn.is_open;
+            conn.is_open = false;
+            was_open
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "ios"))]
+fn cleanup_ws_client(ws_id: usize) {
+    WS_CONNECTIONS.lock().unwrap().remove(&ws_id);
+    WS_CLIENT_LISTENERS.lock().unwrap().remove(&ws_id);
+
+    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().remove(&ws_id);
+    if let Some(server_handle) = parent {
+        if let Some(server) = get_handle_mut::<WsServerHandle>(server_handle) {
+            server.client_ids.retain(|client_id| *client_id != ws_id);
+        }
+    }
+}
+
 /// Helper to extract string from StringHeader pointer
 unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
@@ -314,18 +341,14 @@ pub unsafe extern "C" fn js_ws_connect(
                                         let (code, reason) = frame
                                             .map(|f| (f.code.into(), f.reason.to_string()))
                                             .unwrap_or((1000u16, String::new()));
-                                        if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                            conn.is_open = false;
-                                        }
+                                        mark_ws_connection_closed(ws_id_io);
                                         push_ws_event(
                                             PendingWsEvent::Close(ws_id_io, code, reason)
                                         );
                                         break;
                                     }
                                     Some(Err(e)) => {
-                                        if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                            conn.is_open = false;
-                                        }
+                                        mark_ws_connection_closed(ws_id_io);
                                         push_ws_event(
                                             PendingWsEvent::Error(ws_id_io, format!("{}", e))
                                         );
@@ -337,8 +360,10 @@ pub unsafe extern "C" fn js_ws_connect(
                                     Some(Ok(_)) => {} // binary, ping, pong — ignore
                                     None => {
                                         // Stream ended
-                                        if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                            conn.is_open = false;
+                                        if mark_ws_connection_closed(ws_id_io) {
+                                            push_ws_event(
+                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                            );
                                         }
                                         break;
                                     }
@@ -350,23 +375,41 @@ pub unsafe extern "C" fn js_ws_connect(
                                         ws_file_log(&format!("[WS-io] sending len={}", msg.len()));
                                         if let Err(e) = write.send(Message::Text(msg.into())).await {
                                             ws_file_log(&format!("[WS-io] send ERR: {}", e));
+                                            if mark_ws_connection_closed(ws_id_io) {
+                                                push_ws_event(
+                                                    PendingWsEvent::Error(ws_id_io, format!("{}", e))
+                                                );
+                                                push_ws_event(
+                                                    PendingWsEvent::Close(ws_id_io, 1006, String::new())
+                                                );
+                                            }
                                             break;
                                         }
                                         ws_file_log("[WS-io] send OK");
                                     }
                                     Some(WsCommand::Close) => {
                                         let _ = write.send(Message::Close(None)).await;
+                                        if mark_ws_connection_closed(ws_id_io) {
+                                            push_ws_event(
+                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                            );
+                                        }
                                         break;
                                     }
-                                    None => break, // channel closed
+                                    None => {
+                                        if mark_ws_connection_closed(ws_id_io) {
+                                            push_ws_event(
+                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                            );
+                                        }
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
                     // Mark as closed
-                    if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                        conn.is_open = false;
-                    }
+                    mark_ws_connection_closed(ws_id_io);
                     ws_file_log(&format!("[WS-io] task ended for id={}", ws_id_io));
                 });
 
@@ -496,18 +539,14 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                                         let (code, reason) = frame
                                             .map(|f| (f.code.into(), f.reason.to_string()))
                                             .unwrap_or((1000u16, String::new()));
-                                        if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                            conn.is_open = false;
-                                        }
+                                        mark_ws_connection_closed(ws_id_io);
                                         push_ws_event(
                                             PendingWsEvent::Close(ws_id_io, code, reason)
                                         );
                                         break;
                                     }
                                     Some(Err(e)) => {
-                                        if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                            conn.is_open = false;
-                                        }
+                                        mark_ws_connection_closed(ws_id_io);
                                         push_ws_event(
                                             PendingWsEvent::Error(ws_id_io, format!("{}", e))
                                         );
@@ -518,8 +557,10 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                                     }
                                     Some(Ok(_)) => {}
                                     None => {
-                                        if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                            conn.is_open = false;
+                                        if mark_ws_connection_closed(ws_id_io) {
+                                            push_ws_event(
+                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                            );
                                         }
                                         break;
                                     }
@@ -528,22 +569,40 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                             cmd = rx.recv() => {
                                 match cmd {
                                     Some(WsCommand::Send(msg)) => {
-                                        if write.send(Message::Text(msg.into())).await.is_err() {
+                                        if let Err(e) = write.send(Message::Text(msg.into())).await {
+                                            if mark_ws_connection_closed(ws_id_io) {
+                                                push_ws_event(
+                                                    PendingWsEvent::Error(ws_id_io, format!("{}", e))
+                                                );
+                                                push_ws_event(
+                                                    PendingWsEvent::Close(ws_id_io, 1006, String::new())
+                                                );
+                                            }
                                             break;
                                         }
                                     }
                                     Some(WsCommand::Close) => {
                                         let _ = write.send(Message::Close(None)).await;
+                                        if mark_ws_connection_closed(ws_id_io) {
+                                            push_ws_event(
+                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                            );
+                                        }
                                         break;
                                     }
-                                    None => break,
+                                    None => {
+                                        if mark_ws_connection_closed(ws_id_io) {
+                                            push_ws_event(
+                                                PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                            );
+                                        }
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
-                    if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                        conn.is_open = false;
-                    }
+                    mark_ws_connection_closed(ws_id_io);
                 });
             }
             Err(e) => {
@@ -551,6 +610,7 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
                     ws_id,
                     format!("WebSocket connection error: {}", e),
                 ));
+                push_ws_event(PendingWsEvent::Close(ws_id, 1006, String::new()));
             }
         }
     });
@@ -1003,18 +1063,14 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                             let (code, reason) = frame
                                                                 .map(|f| (f.code.into(), f.reason.to_string()))
                                                                 .unwrap_or((1000u16, String::new()));
-                                                            if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                                                conn.is_open = false;
-                                                            }
+                                                            mark_ws_connection_closed(ws_id_io);
                                                             push_ws_event(
                                                                 PendingWsEvent::Close(ws_id_io, code, reason)
                                                             );
                                                             break;
                                                         }
                                                         Some(Err(e)) => {
-                                                            if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                                                conn.is_open = false;
-                                                            }
+                                                            mark_ws_connection_closed(ws_id_io);
                                                             push_ws_event(
                                                                 PendingWsEvent::Error(ws_id_io, format!("{}", e))
                                                             );
@@ -1025,8 +1081,10 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                         }
                                                         Some(Ok(_)) => {}
                                                         None => {
-                                                            if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                                                conn.is_open = false;
+                                                            if mark_ws_connection_closed(ws_id_io) {
+                                                                push_ws_event(
+                                                                    PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                                                );
                                                             }
                                                             break;
                                                         }
@@ -1042,6 +1100,14 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                                 }
                                                                 Err(e) => {
                                                                     ws_file_log(&format!("[WS-srv-io] id={} send ERR: {}", ws_id_io, e));
+                                                                    if mark_ws_connection_closed(ws_id_io) {
+                                                                        push_ws_event(
+                                                                            PendingWsEvent::Error(ws_id_io, format!("{}", e))
+                                                                        );
+                                                                        push_ws_event(
+                                                                            PendingWsEvent::Close(ws_id_io, 1006, String::new())
+                                                                        );
+                                                                    }
                                                                     break;
                                                                 }
                                                             }
@@ -1049,16 +1115,26 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
                                                         Some(WsCommand::Close) => {
                                                             ws_file_log(&format!("[WS-srv-io] id={} closing", ws_id_io));
                                                             let _ = write.send(Message::Close(None)).await;
+                                                            if mark_ws_connection_closed(ws_id_io) {
+                                                                push_ws_event(
+                                                                    PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                                                );
+                                                            }
                                                             break;
                                                         }
-                                                        None => break,
+                                                        None => {
+                                                            if mark_ws_connection_closed(ws_id_io) {
+                                                                push_ws_event(
+                                                                    PendingWsEvent::Close(ws_id_io, 1000, String::new())
+                                                                );
+                                                            }
+                                                            break;
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
-                                        if let Some(conn) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id_io) {
-                                            conn.is_open = false;
-                                        }
+                                        mark_ws_connection_closed(ws_id_io);
                                     });
                                 }
                                 Err(e) => {
@@ -1259,8 +1335,7 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
                     }
                 }
 
-                // Clean up parent mapping
-                WS_CLIENT_PARENT_SERVER.lock().unwrap().remove(&ws_id);
+                cleanup_ws_client(ws_id);
             }
             PendingWsEvent::Error(ws_id, error_msg) => {
                 let listeners: Vec<i64> = {
@@ -1357,11 +1432,25 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
 mod tests {
     use super::*;
 
+    lazy_static::lazy_static! {
+        static ref TEST_LOCK: Mutex<()> = Mutex::new(());
+    }
+
+    fn clear_test_state() {
+        WS_CONNECTIONS.lock().unwrap().clear();
+        WS_CLIENT_LISTENERS.lock().unwrap().clear();
+        WS_CLIENT_PARENT_SERVER.lock().unwrap().clear();
+        WS_PENDING_EVENTS.lock().unwrap().clear();
+        WS_ACTIVE_SERVERS.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
     #[test]
     fn root_scanner_emits_client_and_server_listeners() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_test_state();
+
         {
             let mut clients = WS_CLIENT_LISTENERS.lock().unwrap();
-            clients.clear();
             clients.insert(
                 42,
                 WsClientListeners {
@@ -1383,6 +1472,64 @@ mod tests {
         assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x1234_5678)));
         assert!(emitted.contains(&(0x7FFD_0000_0000_0000 | 0x2345_6780)));
         crate::common::drop_handle(server_handle);
-        WS_CLIENT_LISTENERS.lock().unwrap().clear();
+        clear_test_state();
+    }
+
+    #[test]
+    fn close_event_releases_server_client_bookkeeping() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        clear_test_state();
+
+        let client_id = 77usize;
+        let (tx, _rx) = mpsc::unbounded_channel::<WsCommand>();
+        let server_handle = register_handle(WsServerHandle {
+            listeners: HashMap::new(),
+            port: 0,
+            is_listening: false,
+            client_ids: vec![client_id],
+            shutdown_tx: None,
+        });
+
+        WS_CONNECTIONS.lock().unwrap().insert(
+            client_id,
+            WsConnection {
+                sender: tx,
+                messages: Vec::new(),
+                is_open: false,
+            },
+        );
+        WS_CLIENT_LISTENERS.lock().unwrap().insert(
+            client_id,
+            WsClientListeners {
+                listeners: HashMap::new(),
+            },
+        );
+        WS_CLIENT_PARENT_SERVER
+            .lock()
+            .unwrap()
+            .insert(client_id, server_handle);
+        WS_PENDING_EVENTS
+            .lock()
+            .unwrap()
+            .push(PendingWsEvent::Close(client_id, 1000, String::new()));
+
+        assert_eq!(js_ws_has_active_handles(), 1);
+        let processed = unsafe { js_ws_process_pending() };
+        assert_eq!(processed, 1);
+
+        assert!(!WS_CONNECTIONS.lock().unwrap().contains_key(&client_id));
+        assert!(!WS_CLIENT_LISTENERS.lock().unwrap().contains_key(&client_id));
+        assert!(!WS_CLIENT_PARENT_SERVER
+            .lock()
+            .unwrap()
+            .contains_key(&client_id));
+        assert!(get_handle_mut::<WsServerHandle>(server_handle)
+            .unwrap()
+            .client_ids
+            .is_empty());
+        assert_eq!(js_ws_has_active_handles(), 0);
+
+        crate::common::drop_handle(server_handle);
+        clear_test_state();
     }
 }

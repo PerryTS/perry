@@ -116,6 +116,31 @@ pub fn fix_break_continue_sentinels_in_stmts(
     }
 }
 
+/// Fix BREAK/CONTINUE sentinels inside the bodies of `CatchRoute`s captured
+/// while linearizing a loop body. The async-generator `.throw()` closure
+/// inlines `route.body` verbatim (no dispatch loop), so a user `continue`/
+/// `break` inside such a catch was rewritten to
+/// `[LocalSet(state, SENTINEL), Stmt::Continue]` but its sentinel never got
+/// fixed (`fix_break_continue_sentinels` only walks the linearized `states`,
+/// not the extracted catch routes). Apply the same loop targets to those
+/// catch-route bodies so the resume state is correct (the dangling dispatch
+/// `Stmt::Continue` is then neutralized by the async catch-route inliner).
+pub fn fix_break_continue_sentinels_in_catches(
+    catches: &mut [CatchRoute],
+    state_id: LocalId,
+    break_target: u32,
+    continue_target: u32,
+) {
+    for route in catches.iter_mut() {
+        fix_break_continue_sentinels_in_stmts(
+            &mut route.body,
+            state_id,
+            break_target,
+            continue_target,
+        );
+    }
+}
+
 pub fn fix_break_continue_sentinels_in_stmt(
     stmt: &mut Stmt,
     state_id: LocalId,
@@ -350,10 +375,10 @@ pub fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, T
             } => {
                 collect_vars_recursive(body, vars);
                 if let Some(c) = catch {
-                    // Hoist the catch parameter so the .throw() closure can assign to it.
-                    if let Some((pid, pname)) = &c.param {
-                        vars.push((*pid, pname.clone(), Type::Any));
-                    }
+                    // Catch params are hoisted only for catch routes that
+                    // linearize_body lifts into the async throw path. Ordinary
+                    // post-await Stmt::Try bodies must keep codegen's direct
+                    // catch binding slot.
                     collect_vars_recursive(&c.body, vars);
                 }
                 if let Some(f) = finally {

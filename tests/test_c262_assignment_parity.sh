@@ -1,0 +1,305 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PERRY="${PERRY_BIN:-$SCRIPT_DIR/../target/release/perry}"
+[ ! -f "$PERRY" ] && PERRY="$SCRIPT_DIR/../target/debug/perry"
+if [ ! -f "$PERRY" ]; then
+  echo "SKIP: perry binary not found (build with cargo build --release)"
+  exit 0
+fi
+
+TMPDIR=$(mktemp -d)
+trap "rm -rf $TMPDIR" EXIT
+
+cat > "$TMPDIR/main.js" << 'EOF'
+var failures = "";
+
+function check(condition, label) {
+  if (!condition) {
+    failures += label + "\n";
+  }
+}
+
+x = 1;
+check(x === 1, "sloppy simple assignment creates backing storage");
+
+var y = { bre\u0061k: x } = { break: 42 };
+check(x === 42 && y.break === 42, "escaped reserved destructuring name");
+
+var count = 0;
+var caught = false;
+try {
+  (null).prop = count += 1;
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && count === 1, "null property assignment evaluates rhs then throws");
+
+count = 0;
+caught = false;
+try {
+  (undefined)["prop"] = count += 1;
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && count === 1, "undefined computed assignment evaluates rhs then throws");
+
+function computedKey() {
+  count += 10;
+  return "prop";
+}
+
+function computedThrow() {
+  count += 10;
+  throw new Error("key");
+}
+
+class Base {}
+class Derived extends Base {
+  static setSuperIdentifier() {
+    super.prop = count += 1;
+  }
+
+  static setSuperComputed() {
+    super[computedKey()] = count += 1;
+  }
+
+  static setSuperComputedThrows() {
+    super[computedThrow()] = count += 1;
+  }
+}
+
+count = 0;
+caught = false;
+try {
+  Derived.setSuperIdentifier();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && count === 1, "super identifier assignment evaluates rhs then throws");
+
+count = 0;
+caught = false;
+try {
+  Derived.setSuperComputed();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && count === 11, "super computed assignment evaluates key then rhs");
+
+count = 0;
+caught = false;
+try {
+  Derived.setSuperComputedThrows();
+} catch (e) {
+  caught = e instanceof Error && !(e instanceof TypeError);
+}
+check(caught && count === 10, "super computed assignment stops when key throws");
+
+class InstanceBase {
+  set prop(v) {
+    this.seen = v;
+  }
+}
+class InstanceDerived extends InstanceBase {
+  setSuperIdentifier() {
+    return super.prop = count += 1;
+  }
+
+  setSuperComputed() {
+    return super[computedKey()] = count += 1;
+  }
+}
+
+var instance = new InstanceDerived();
+count = 0;
+var superSetResult = instance.setSuperIdentifier();
+check(superSetResult === 1 && instance.seen === 1, "instance super assignment calls inherited setter with receiver");
+
+instance = new InstanceDerived();
+count = 0;
+superSetResult = instance.setSuperComputed();
+check(superSetResult === 11 && instance.seen === 11 && count === 11, "instance super computed assignment evaluates key then rhs and uses receiver");
+
+class GetterOnlyBase {
+  get locked() {
+    return "base";
+  }
+}
+class GetterOnlyDerived extends GetterOnlyBase {
+  writeLocked() {
+    super.locked = "override";
+  }
+}
+var getterOnly = new GetterOnlyDerived();
+caught = false;
+try {
+  getterOnly.writeLocked();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && !Object.prototype.hasOwnProperty.call(getterOnly, "locked"), "super assignment to inherited getter-only accessor throws");
+
+var objectSuperHit = "";
+var objectSuperBase = {};
+Object.defineProperty(objectSuperBase, "prop", {
+  set: function(v) {
+    this.objectSeen = v;
+    objectSuperHit = this === objectSuperDerived ? "receiver" : "base";
+  }
+});
+var objectSuperDerived = {
+  write() {
+    return super.prop = count += 1;
+  }
+};
+Object.setPrototypeOf(objectSuperDerived, objectSuperBase);
+count = 0;
+superSetResult = objectSuperDerived.write();
+check(superSetResult === 1 && objectSuperDerived.objectSeen === 1 && objectSuperHit === "receiver", "object-literal super assignment calls inherited setter with receiver");
+
+caught = false;
+try {
+  (function() {
+    "use strict";
+    Number.MAX_VALUE = 42;
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught, "strict assignment to Number.MAX_VALUE throws TypeError");
+
+caught = false;
+try {
+  (function() {
+    "use strict";
+    Math.PI = 20;
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught, "strict assignment to Math.PI throws TypeError");
+
+caught = false;
+try {
+  (function() {
+    "use strict";
+    Function.length = 42;
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught, "strict assignment to Function.length throws TypeError");
+
+var fooPrototype = {};
+Object.defineProperty(fooPrototype, "bar", { value: "unwritable" });
+var foo = Object.create(fooPrototype);
+foo.bar = "overridden";
+check(!foo.hasOwnProperty("bar") && foo.bar === "unwritable", "sloppy inherited non-writable assignment is ignored");
+
+caught = false;
+try {
+  (function() {
+    "use strict";
+    foo.bar = "overridden";
+  })();
+} catch (e) {
+  caught = e instanceof TypeError;
+}
+check(caught && foo.bar === "unwritable", "strict inherited non-writable assignment throws");
+
+var receiverHit = "";
+var receiverBase = {};
+Object.defineProperty(receiverBase, "seen", {
+  set: function(v) {
+    this.recorded = v;
+    receiverHit = this === receiverObj ? "receiver" : "base";
+  }
+});
+var receiverObj = Object.create(receiverBase);
+var assignedResult = receiverObj.seen = "ok";
+check(receiverObj.recorded === "ok" && receiverHit === "receiver" && assignedResult === "ok", "inherited setter uses receiver and assignment returns rhs");
+
+caught = false;
+try {
+  missingPutValueName = missingPutValueName;
+} catch (e) {
+  caught = e instanceof ReferenceError;
+}
+check(caught, "unresolved assignment evaluates RHS reference before PutValue");
+
+count = 0;
+caught = false;
+var scope = { withPutValueBinding: 1 };
+with (scope) {
+  (function() {
+    "use strict";
+    try {
+      count++;
+      withPutValueBinding = (delete scope.withPutValueBinding, 2);
+      count++;
+    } catch (e) {
+      caught = e instanceof ReferenceError;
+    }
+    count++;
+  })();
+}
+check(caught && count === 2 && !("withPutValueBinding" in scope), "with PutValue rechecks deleted binding in strict mode");
+
+var arrowName;
+var fnName;
+var coverName;
+var memberName;
+var className;
+var o = {};
+arrowName = () => {};
+fnName = function() {};
+coverName = (function() {});
+o.method = function() {};
+className = class {};
+check(arrowName.name === "arrowName", "assignment names anonymous arrow functions");
+check(fnName.name === "fnName", "assignment names anonymous functions");
+check(coverName.name === "coverName", "assignment names parenthesized anonymous functions");
+check(o.method.name === "", "assignment does not name member-target functions");
+check(className.name === "className", "assignment names anonymous classes");
+var classNameDesc = Object.getOwnPropertyDescriptor(className, "name");
+check(classNameDesc.value === "className", "class name descriptor value");
+check(classNameDesc.writable === false, "class name descriptor writable");
+check(classNameDesc.enumerable === false, "class name descriptor enumerable");
+check(classNameDesc.configurable === true, "class name descriptor configurable");
+
+var __isArray = Array.isArray;
+check(__isArray([]) === true && __isArray({}) === false, "captured Array.isArray remains callable");
+
+function deleteByName(obj, name) {
+  return delete obj[name];
+}
+
+check(deleteByName(arrowName, "name") === true, "computed delete through parameter succeeds");
+check(!Object.prototype.hasOwnProperty.call(arrowName, "name"), "computed delete removes configurable function name");
+
+if (failures.length !== 0) {
+  throw new Error(failures);
+}
+
+console.log("PASS c262 assignment parity");
+EOF
+
+cd "$TMPDIR"
+PERRY_NO_AUTO_OPTIMIZE=1 "$PERRY" compile main.js --output test_bin --no-cache >/dev/null 2>&1
+RUN_OUTPUT=$(./test_bin 2>&1)
+
+EXPECTED="PASS c262 assignment parity"
+if [ "$RUN_OUTPUT" = "$EXPECTED" ]; then
+  echo "PASS"
+  exit 0
+fi
+
+echo "FAIL: c262 assignment parity fixture output mismatch"
+echo "Expected:"
+echo "$EXPECTED"
+echo ""
+echo "Got:"
+echo "$RUN_OUTPUT"
+exit 1

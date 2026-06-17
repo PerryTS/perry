@@ -1,6 +1,4 @@
-//! node:stream — readable/writable state machine (flow control, pipes, read/write/transform impl) (split out of node_stream.rs for the 2000-line
-//! file-size gate, #1987). Shares the parent module's constants, hidden-key
-//! accessors and state primitives via `use super::*`.
+//! node:stream readable/writable state, split from node_stream.rs for #1987.
 #![allow(unused_imports)]
 use super::*;
 use crate::closure::{
@@ -78,7 +76,12 @@ pub(super) fn string_value_eq(value: f64, expected: &[u8]) -> bool {
 
 pub(super) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     let raw = raw_ptr_from_value(value);
-    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+    // The handle band (EventEmitter ids sit at 0x38000..0x40000,
+    // widget/stream handles lower) is never a heap object. The old 0x10000
+    // floor let an EventEmitter handle through to the GcHeader probe at
+    // raw-8, which is unmapped memory (#4633 SIGSEGV in
+    // events.on(emitter, name, { signal }) target validation).
+    if crate::value::addr_class::is_handle_band(raw) || crate::buffer::is_registered_buffer(raw) {
         return None;
     }
     unsafe {
@@ -175,6 +178,30 @@ pub(super) fn stream_auto_destroy_enabled(stream: f64) -> bool {
         .unwrap_or(true)
 }
 
+pub(super) fn set_stream_emit_close(stream: f64, opts: f64) {
+    let enabled = get_hidden_value(opts, hidden_key(b"emitClose"))
+        .map(|v| v.to_bits() != TAG_FALSE)
+        .unwrap_or(true);
+    set_hidden_value(
+        stream,
+        hidden_stream_emit_close_key(),
+        f64::from_bits(if enabled { TAG_TRUE } else { TAG_FALSE }),
+    );
+}
+
+pub(super) fn stream_emit_close_enabled(stream: f64) -> bool {
+    get_hidden_value(stream, hidden_stream_emit_close_key())
+        .map(|v| v.to_bits() != TAG_FALSE)
+        .unwrap_or(true)
+}
+
+pub(super) fn mark_stream_closed_and_emit_close(stream: f64) {
+    mark_stream_closed(stream);
+    if stream_emit_close_enabled(stream) {
+        let _ = emit_stream_event(stream, string_value(b"close"), &[]);
+    }
+}
+
 pub(super) fn mark_stream_destroyed(stream: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_TRUE));
     refresh_readable_aborted_flag(stream);
@@ -240,6 +267,9 @@ pub(super) fn emit_readable_data(stream: f64, chunk: f64) {
 }
 
 pub(super) fn emit_readable_data_unchecked(stream: f64, chunk: f64) {
+    let Some(chunk) = super::decode_readable_chunk_for_encoding(stream, chunk) else {
+        return;
+    };
     let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
     write_chunk_to_pipe_destinations(stream, chunk);
 }
@@ -431,6 +461,13 @@ pub(super) fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool)
     if !end_dest {
         add_pipe_no_end_destination(stream, dest);
     }
+    // A flowing destination (e.g. a piped-into PassThrough/Duplex) must consume
+    // each chunk from its own readable buffer when it emits 'data' live —
+    // otherwise the chunk lingers in the buffer and the destination's drain
+    // microtask re-emits it, duplicating every piped chunk. `pipeline()` already
+    // marks both ends; `pipe()` needs the same on the destination. (matches
+    // mark_live_pipe_consume_on_emit usage in node_stream_pipeline.rs)
+    mark_live_pipe_consume_on_emit(dest);
     install_pipe_destination_listeners(stream, dest);
     let _ = emit_stream_event(dest, string_value(b"pipe"), &[stream]);
     set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
@@ -438,6 +475,27 @@ pub(super) fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool)
     flush_pending_readable_chunks(stream);
     schedule_readable_from_drain(stream);
     dest
+}
+
+fn is_small_native_handle_destination(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits >> 48) as u16 != 0x7FFD {
+        return false;
+    }
+    let raw = bits & 0x0000_FFFF_FFFF_FFFF;
+    raw > 0 && raw < 0x0010_0000
+}
+
+fn call_small_native_pipe_method(dest: f64, method: &'static [u8], args: &[f64]) -> f64 {
+    unsafe {
+        crate::object::js_native_call_method(
+            dest,
+            method.as_ptr() as *const i8,
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+        )
+    }
 }
 
 pub(super) fn remove_pipe_no_end_destination_once(stream: f64, dest: f64) -> bool {
@@ -526,6 +584,13 @@ pub(super) fn write_chunk_to_pipe_destinations(stream: f64, chunk: f64) {
         dests.push(crate::array::js_array_get_f64(arr, i));
     }
     for dest in dests {
+        if is_small_native_handle_destination(dest) {
+            let ret = call_small_native_pipe_method(dest, b"write", &[chunk]);
+            if ret.to_bits() == TAG_FALSE {
+                let _ = pause_readable_stream(stream);
+            }
+            continue;
+        }
         let ret = write_writable_chunk(
             dest,
             chunk,
@@ -552,6 +617,10 @@ pub(super) fn end_pipe_destinations(stream: f64) {
         dests.push(crate::array::js_array_get_f64(arr, i));
     }
     for dest in dests {
+        if is_small_native_handle_destination(dest) {
+            let _ = call_small_native_pipe_method(dest, b"end", &[]);
+            continue;
+        }
         if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_finish_emitted_key()) {
             continue;
         }
@@ -746,9 +815,6 @@ pub(super) fn emit_readable_end_once(stream: f64) {
             if !writable_pending {
                 destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
             }
-        } else if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
-            mark_stream_closed(stream);
-            let _ = emit_stream_event(stream, string_value(b"close"), &[]);
         }
     }
 }
@@ -806,173 +872,6 @@ pub(super) fn clear_pending_readable_chunks(stream: f64) {
         hidden_readable_pending_key(),
         box_pointer(crate::array::js_array_alloc(0) as *const u8),
     );
-}
-
-pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
-    let size_value = JSValue::from_bits(size.to_bits());
-    if size_value.is_undefined() || !size_value.is_number() {
-        return read_stream_default_size(stream);
-    }
-    let size = size_value.as_number();
-    if size.is_nan() {
-        return read_stream_default_size(stream);
-    }
-    read_stream_exact_size(stream, size.trunc())
-}
-
-pub(super) fn read_stream_default_size(stream: f64) -> f64 {
-    invoke_read_once(stream);
-    read_stream_available_default(stream)
-}
-
-pub(super) fn read_stream_available_default(stream: f64) -> f64 {
-    if get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0) <= 0.0 {
-        if stream_hidden_ended(stream) {
-            cancel_readable_event(stream);
-            refresh_readable_aborted_flag(stream);
-        }
-        return f64::from_bits(TAG_NULL);
-    }
-    if readable_object_mode(stream) {
-        return read_stream_object_mode_chunk(stream);
-    }
-    let mut values = Vec::new();
-    if let Some(chunks) = readable_hidden_chunks(stream) {
-        push_chunk_values(chunks, &mut values, 0);
-    }
-    if values.is_empty() {
-        if stream_hidden_ended(stream) {
-            cancel_readable_event(stream);
-            refresh_readable_aborted_flag(stream);
-        }
-        return f64::from_bits(TAG_NULL);
-    }
-    clear_readable_buffer(stream);
-    mark_disturbed(stream);
-    clear_pending_readable_chunks(stream);
-    if stream_hidden_ended(stream) {
-        queue_readable_event(stream);
-        schedule_readable_end(stream);
-    }
-    let encoded = readable_encoding_tag(stream).is_some();
-    if values.len() == 1 {
-        if encoded {
-            return values[0];
-        }
-        return string_chunk_to_buffer(values[0]).unwrap_or(values[0]);
-    }
-    let result = crate::string::js_string_concat_chain(values.as_ptr(), values.len() as i32);
-    if encoded {
-        return f64::from_bits(JSValue::string_ptr(result).bits());
-    }
-    box_pointer(crate::buffer::js_buffer_from_string(result, 0) as *const u8)
-}
-
-pub(super) fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
-    invoke_read_once(stream);
-    if size <= 0.0 {
-        return f64::from_bits(TAG_NULL);
-    }
-    let requested = size as usize;
-    let available = get_hidden_value(stream, hidden_buffered_key())
-        .unwrap_or(0.0)
-        .max(0.0) as usize;
-    if available == 0 {
-        if stream_hidden_ended(stream) {
-            cancel_readable_event(stream);
-            refresh_readable_aborted_flag(stream);
-        }
-        return f64::from_bits(TAG_NULL);
-    }
-    if readable_encoding_tag(stream).is_some() {
-        return read_stream_available_default(stream);
-    }
-    if requested > available && !stream_hidden_ended(stream) {
-        return f64::from_bits(TAG_NULL);
-    }
-    if requested >= available {
-        return read_stream_available_default(stream);
-    }
-
-    let mut bytes = Vec::new();
-    if let Some(chunks) = readable_hidden_chunks(stream) {
-        append_chunk_bytes(chunks, &mut bytes, 0);
-    }
-    if bytes.len() <= requested {
-        return read_stream_available_default(stream);
-    }
-    let result = buffer_value_from_bytes(&bytes[..requested]);
-    set_readable_buffer_bytes(stream, &bytes[requested..]);
-    mark_disturbed(stream);
-    result
-}
-
-pub(super) fn set_readable_buffer_bytes(stream: f64, bytes: &[u8]) {
-    if bytes.is_empty() {
-        clear_readable_buffer(stream);
-        return;
-    }
-    let chunk = buffer_value_from_bytes(bytes);
-    let mut arr = crate::array::js_array_alloc(0);
-    arr = crate::array::js_array_push_f64(arr, chunk);
-    set_hidden_value(stream, hidden_chunks_key(), box_pointer(arr as *const u8));
-    let remaining = bytes.len() as f64;
-    set_hidden_value(stream, hidden_buffered_key(), remaining);
-    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
-}
-
-pub(super) fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
-    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-    if !bytes.is_empty() {
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    box_pointer(buf as *const u8)
-}
-
-pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
-    let Some(chunks) = readable_hidden_chunks(stream) else {
-        return f64::from_bits(TAG_NULL);
-    };
-    if !is_array_like_value(chunks) {
-        clear_readable_buffer(stream);
-        return chunks;
-    }
-    let arr = raw_ptr_from_value(chunks) as *mut crate::array::ArrayHeader;
-    if crate::array::js_array_length(arr) == 0 {
-        clear_readable_buffer(stream);
-        return f64::from_bits(TAG_NULL);
-    }
-    let chunk = crate::array::js_array_shift_f64(arr);
-    let remaining = crate::array::js_array_length(arr) as f64;
-    set_hidden_value(stream, hidden_buffered_key(), remaining);
-    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
-    mark_disturbed(stream);
-    if stream_hidden_ended(stream) && remaining == 0.0 {
-        clear_pending_readable_chunks(stream);
-        queue_readable_event(stream);
-        schedule_readable_end(stream);
-    }
-    chunk
-}
-
-pub(super) fn string_chunk_to_buffer(value: f64) -> Option<f64> {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_any_string() {
-        return None;
-    }
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
-        return None;
-    }
-    Some(box_pointer(
-        crate::buffer::js_buffer_from_string(ptr, 0) as *const u8
-    ))
 }
 
 pub(super) fn drain_readable_from_events(stream: f64) {
@@ -1572,6 +1471,13 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
     if let Some(chunks) = collection_iterable_chunks(raw) {
         return normalized_readable_chunks(chunks);
     }
+    if raw >= 0x10000 {
+        if let Some(chunks) = unsafe {
+            crate::object::arguments_object_to_array(raw as *const crate::object::ObjectHeader)
+        } {
+            return normalized_readable_chunks(box_pointer(chunks as *const u8));
+        }
+    }
     if is_array_like_value(iterable) {
         return normalized_readable_chunks(iterable);
     }
@@ -1759,11 +1665,6 @@ pub(super) fn push_chunk_values(value: f64, out: &mut Vec<f64>, depth: u8) {
 }
 
 /// Drain the chunk storage Perry attaches in `Readable.from(iterable)`.
-///
-/// This intentionally handles only the current stream stub's concrete shapes:
-/// arrays of strings/Buffers/Uint8Arrays/ArrayBuffers plus direct single
-/// string/binary chunks. It gives `node:stream/consumers` useful data without
-/// pretending Perry has a full Node stream pump yet.
 pub fn js_node_stream_collect_bytes(stream: f64) -> Vec<u8> {
     js_node_stream_collect_bytes_result(stream).unwrap_or_default()
 }
@@ -1868,12 +1769,7 @@ pub(crate) fn js_node_stream_readable_chunks_result(stream: f64) -> Result<Optio
     Ok(Some(out))
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Method tables. Order is locked in — it determines the shape's
-// packed-keys order. Each method set's length is a unique
-// shape-cache key when added to its base shape id, so the Readable,
-// Writable, and Duplex method tables stay in distinct shape bands.
-// ─────────────────────────────────────────────────────────────────
+// Method table order determines packed-key order and shape-cache identity.
 
 pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
     [
@@ -1901,11 +1797,7 @@ pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
         ("destroy", cast1(ns_destroy1)),
         ("setEncoding", cast1(ns_set_encoding1)),
         ("isPaused", cast0(ns_is_paused0)),
-        // #1558 — async iterator helpers. The consuming helpers accept a
-        // trailing `{ signal }` options arg; the lazy transforms accept one
-        // too (Node's signature). Arities are registered in
-        // `register_iter_helper_arities` so under-supplied calls pad the
-        // missing trailing args with `undefined`.
+        // #1558: async iterator helpers; arities pad missing options args.
         ("toArray", cast1(ns_iter_to_array)),
         ("map", cast2(ns_iter_map)),
         ("filter", cast2(ns_iter_filter)),
@@ -1922,6 +1814,36 @@ pub(super) fn readable_methods() -> [(&'static str, StubFn); 39] {
         ("push", cast1(ns_push1)),
         ("unshift", cast1(ns_unshift1)),
         ("compose", cast1(ns_compose1)),
+    ]
+}
+
+/// #5137: the bare `EventEmitter` surface — the same 15 listener/emit
+/// methods that `readable_methods`/`writable_methods` share, minus all the
+/// stream-specific entries. Installed onto `this` by
+/// `js_event_emitter_subclass_init` so a source-compiled `class X extends
+/// EventEmitter` (e.g. commander's `Command`) gets working
+/// `.on`/`.emit`/`.once`/… without routing through the handle-based
+/// `js_event_emitter_*` shim. The closures are the generic
+/// `ns_*` emitter helpers, which key all state off the receiver object, so
+/// they work unchanged on a plain object that never went through a stream
+/// constructor.
+pub(super) fn emitter_methods() -> [(&'static str, StubFn); 15] {
+    [
+        ("on", cast2(ns_on2)),
+        ("once", cast2(ns_once2)),
+        ("prependListener", cast2(ns_prepend_listener2)),
+        ("prependOnceListener", cast2(ns_prepend_once_listener2)),
+        ("off", cast2(ns_off2)),
+        ("addListener", cast2(ns_on2)),
+        ("removeListener", cast2(ns_remove_listener2)),
+        ("removeAllListeners", cast1(ns_remove_all_listeners1)),
+        ("emit", cast2(ns_emit_rest)),
+        ("setMaxListeners", cast1(ns_set_max_listeners)),
+        ("getMaxListeners", cast0(ns_get_max_listeners)),
+        ("eventNames", cast0(ns_event_names)),
+        ("listenerCount", cast1(ns_listener_count)),
+        ("listeners", cast1(ns_listeners)),
+        ("rawListeners", cast1(ns_raw_listeners)),
     ]
 }
 

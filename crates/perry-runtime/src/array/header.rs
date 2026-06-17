@@ -16,6 +16,11 @@ thread_local! {
     static TEMPLATE_RAW_MAP: RefCell<HashMap<usize, *mut ArrayHeader>> =
         RefCell::new(HashMap::new());
 
+    /// Tagged-template template-object cache — maps a stable compile-time
+    /// call-site id to the frozen cooked/raw array pair for that site.
+    static TEMPLATE_OBJECT_CACHE: RefCell<HashMap<u64, (*mut ArrayHeader, *mut ArrayHeader)>> =
+        RefCell::new(HashMap::new());
+
     /// Own non-index properties for Array exotic objects.
     ///
     /// Perry's `ArrayHeader` intentionally stays compact: `length`,
@@ -40,6 +45,72 @@ pub enum NumericArrayLayout {
     RawF64 = 1,
 }
 
+#[inline]
+pub(crate) fn array_object_flags(arr: *const ArrayHeader) -> u16 {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return 0;
+    }
+    unsafe {
+        let gc_header =
+            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            (*gc_header)._reserved
+        } else {
+            0
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn array_is_frozen(arr: *const ArrayHeader) -> bool {
+    array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0
+}
+
+#[inline]
+pub(crate) fn array_is_sealed_or_no_extend(arr: *const ArrayHeader) -> bool {
+    array_object_flags(arr) & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
+}
+
+unsafe fn mark_template_array_frozen(arr: *mut ArrayHeader) {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() || (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return;
+    }
+    let gc_header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+        (*gc_header)._reserved |=
+            crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+    }
+}
+
+unsafe fn register_template_raw_pair(cooked: *mut ArrayHeader, raw: *mut ArrayHeader) {
+    if cooked.is_null() || raw.is_null() {
+        return;
+    }
+    TEMPLATE_RAW_MAP.with(|m| {
+        m.borrow_mut().insert(cooked as usize, raw);
+    });
+}
+
+unsafe fn install_template_raw_property(
+    cooked_handle: &crate::gc::RuntimeHandle<'_>,
+    raw_handle: &crate::gc::RuntimeHandle<'_>,
+) {
+    let raw_key = crate::string::js_string_from_bytes(b"raw".as_ptr(), 3);
+    let cooked = cooked_handle.get_raw_mut_ptr::<ArrayHeader>();
+    let raw = raw_handle.get_raw_mut_ptr::<ArrayHeader>();
+    if cooked.is_null() || raw.is_null() {
+        return;
+    }
+    array_named_property_set(cooked, raw_key, crate::value::js_nanbox_pointer(raw as i64));
+    crate::object::set_property_attrs(
+        cooked as usize,
+        "raw".to_string(),
+        crate::object::PropertyAttrs::new(false, false, false),
+    );
+}
+
 /// Register the (cooked, raw) pair for a tagged-template call. Returns
 /// `cooked` (so the codegen can chain it inline into the call args).
 #[no_mangle]
@@ -47,13 +118,59 @@ pub extern "C" fn js_tagged_template_register_raw(
     cooked: *mut ArrayHeader,
     raw: *mut ArrayHeader,
 ) -> *mut ArrayHeader {
-    if !cooked.is_null() && !raw.is_null() {
-        TEMPLATE_RAW_MAP.with(|m| {
-            m.borrow_mut().insert(cooked as usize, raw);
-        });
+    let cooked = clean_arr_ptr_mut(cooked);
+    let raw = clean_arr_ptr_mut(raw);
+    unsafe {
+        register_template_raw_pair(cooked, raw);
     }
     cooked
 }
+
+/// Return the frozen template-strings object for a tagged-template call site,
+/// initializing the per-site cooked/raw pair on first evaluation.
+#[no_mangle]
+pub extern "C" fn js_tagged_template_get_or_init(
+    site_id: u64,
+    cooked: *mut ArrayHeader,
+    raw: *mut ArrayHeader,
+) -> *mut ArrayHeader {
+    if let Some(cached) = TEMPLATE_OBJECT_CACHE.with(|m| {
+        m.borrow()
+            .get(&site_id)
+            .map(|&(cached_cooked, _)| cached_cooked)
+    }) {
+        return cached;
+    }
+
+    let cooked = clean_arr_ptr_mut(cooked);
+    let raw = clean_arr_ptr_mut(raw);
+    if cooked.is_null() || raw.is_null() {
+        return cooked;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cooked_handle = scope.root_raw_mut_ptr(cooked);
+    let raw_handle = scope.root_raw_mut_ptr(raw);
+    unsafe {
+        install_template_raw_property(&cooked_handle, &raw_handle);
+        let cooked = cooked_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let raw = raw_handle.get_raw_mut_ptr::<ArrayHeader>();
+        mark_template_array_frozen(raw);
+        mark_template_array_frozen(cooked);
+        register_template_raw_pair(cooked, raw);
+        TEMPLATE_OBJECT_CACHE.with(|m| {
+            m.borrow_mut().insert(site_id, (cooked, raw));
+        });
+    }
+    cooked_handle.get_raw_mut_ptr::<ArrayHeader>()
+}
+
+#[used]
+static KEEP_TAGGED_TEMPLATE_GET_OR_INIT: extern "C" fn(
+    u64,
+    *mut ArrayHeader,
+    *mut ArrayHeader,
+) -> *mut ArrayHeader = js_tagged_template_get_or_init;
 
 /// Read the raw-strings array for a cooked array, or 0 if not a
 /// tagged-template strings array.
@@ -81,6 +198,13 @@ pub fn scan_template_raw_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    TEMPLATE_OBJECT_CACHE.with(|m| {
+        let mut map = m.borrow_mut();
+        for (_, (cooked_ptr, raw_ptr)) in map.iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(cooked_ptr);
+            visitor.visit_raw_mut_ptr_slot(raw_ptr);
+        }
+    });
     TEMPLATE_RAW_MAP.with(|m| {
         let mut map = m.borrow_mut();
         let mut moved = Vec::new();
@@ -432,14 +556,13 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             }
         }
     }
-    // Length/capacity sanity: a real ArrayHeader has length <= capacity,
-    // and length below 100M (800 MB of element payload — well above
-    // legitimate large result sets, far below the 775M / 926M patterns
-    // we observed when a reused arena slot landed ASCII text at offsets
-    // 0/4). Buffers can be much larger than arrays, so only gate the
-    // polymorphic entry on the tighter array-sized bound and let
-    // buffer-specific runtime paths dispatch themselves when they
-    // recognize a registered buffer pointer.
+    // Length/capacity sanity: dense arrays have length <= capacity and
+    // length below 100M (800 MB of element payload — well above legitimate
+    // large result sets, far below the 775M / 926M patterns we observed
+    // when a reused arena slot landed ASCII text at offsets 0/4). Sparse
+    // arrays created by far-index writes are the one legal exception:
+    // logical length can be huge while dense capacity stays small and the
+    // far slots live in ARRAY_NAMED_PROPS.
     unsafe {
         let hdr = &*cleaned;
         if hdr.length > hdr.capacity || hdr.length > 100_000_000 {
@@ -449,11 +572,24 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             // wave them through; everything else at this size is
             // almost certainly corrupted.
             let addr = cleaned as usize;
-            if !crate::buffer::is_registered_buffer(addr)
-                && crate::typedarray::lookup_typed_array_kind(addr).is_none()
-            {
-                return std::ptr::null();
+            let sparse_array_shape = if addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+                let gc_header = (cleaned as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                    as *const crate::gc::GcHeader;
+                (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+                    && hdr.length > hdr.capacity
+                    && hdr.capacity <= 1_000_000
+            } else {
+                false
+            };
+            if sparse_array_shape {
+                return cleaned;
             }
+            if crate::buffer::is_registered_buffer(addr)
+                || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+            {
+                return cleaned;
+            }
+            return std::ptr::null();
         }
     }
     cleaned
@@ -462,6 +598,99 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
 #[inline(always)]
 pub(crate) fn clean_arr_ptr_mut(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader
+}
+
+/// #5135: detect a Proxy id arriving where an `ArrayHeader` pointer is
+/// expected. immer's array drafts are Proxies typed (statically) as plain
+/// arrays, so `draft.push(x)` / `draft.length` reach the native array helpers
+/// with the masked proxy id instead of a real heap pointer. Deref-ing one as an
+/// `ArrayHeader` reads unmapped memory and SIGSEGVs. Callers use this to detect
+/// the case and route the operation through the proxy's traps. Returns the
+/// re-boxed (`POINTER_TAG`) proxy value when `arr` is a *registered* proxy.
+#[inline]
+pub(crate) fn array_ptr_as_proxy(arr: *const ArrayHeader) -> Option<f64> {
+    let bits = arr as u64;
+    let raw = if (bits >> 48) >= 0x7FF8 {
+        bits & 0x0000_FFFF_FFFF_FFFF
+    } else {
+        bits
+    };
+    if crate::value::addr_class::is_proxy_id_band(raw as usize) {
+        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+        let boxed = f64::from_bits(POINTER_TAG | raw);
+        if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+            return Some(boxed);
+        }
+    }
+    None
+}
+
+/// Normalize an Array.prototype method receiver into a real ArrayHeader.
+///
+/// `Array.prototype.<method>.call(arrayLike, ...)` lets a *generic array-like
+/// object* — a plain object with a `length` property and indexed keys, e.g.
+/// `{length: 3, 0: "a", 1: "b", 2: "c"}` — stand in for a real Array
+/// (ECMA-262 §23.1.3, every method's ToObject(this)/LengthOfArrayLike steps).
+///
+/// The read-only Array methods (`map`/`filter`/`reduce`/`slice`/`indexOf`/…)
+/// all start with `clean_arr_ptr(arr)` and then dereference the result as if it
+/// were a real ArrayHeader (reading `(*arr).length` + the inline element
+/// buffer). When the receiver is a plain object, `clean_arr_ptr` either nulls
+/// it (TypeError downstream) or — if the object's first u32s happen to pass the
+/// length<=capacity sanity bound — reads the `ObjectHeader` field_count / inline
+/// f64 slots as garbage elements (e.g. `8.48e-314`).
+///
+/// This helper detects the array-like case via the GC header `obj_type`
+/// (`GC_TYPE_OBJECT` == plain object) and materializes it into a real array via
+/// `js_array_from_arraylike` (which ToLength-coerces `length` and reads indexed
+/// keys `"0".."len-1"`). For genuine arrays (`GC_TYPE_ARRAY`), lazy arrays,
+/// typed arrays, buffers, and null/garbage it delegates straight to
+/// `clean_arr_ptr` — so the real-array hot path pays nothing beyond one
+/// already-warm GC-header byte read and a single integer compare.
+///
+/// Returns a pointer that is safe to dereference as an `ArrayHeader`, or null
+/// (preserving the existing empty-result / TypeError-at-call-site behavior).
+#[inline(always)]
+pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayHeader {
+    // Strip a NaN-box tag (if present) to recover the raw heap address so we
+    // can probe the GC header. Mirrors the tag-strip in clean_arr_ptr /
+    // flat_clone's array-like detection.
+    let bits = arr as u64;
+    let raw_addr = if (bits >> 48) >= 0x7FF8 {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else {
+        bits as usize
+    };
+    if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        // Hot path first: read the GC-header obj_type byte. A genuine Array is
+        // GC_TYPE_ARRAY and falls straight through to `clean_arr_ptr` — the
+        // only added cost for `[1,2,3].map(...)` etc. is this one byte read and
+        // an integer compare (the registry lookups below are reached ONLY for a
+        // plain-object receiver, never for real arrays).
+        let obj_type = unsafe {
+            let hdr = (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader;
+            (*hdr).obj_type
+        };
+        if obj_type == crate::gc::GC_TYPE_OBJECT
+            // Guard out registered typed arrays / buffers that (theoretically)
+            // carry a plain-object GC tag — those have their own delegation arms
+            // in the callers and must not be materialized as array-likes.
+            && crate::typedarray::lookup_typed_array_kind(raw_addr).is_none()
+            && !crate::buffer::is_registered_buffer(raw_addr)
+        {
+            // Generic array-like object receiver
+            // (`Array.prototype.<m>.call({length, 0:…}, …)`): materialize
+            // `length` + indexed keys into a real array and operate on that.
+            return unsafe {
+                crate::array::js_array_from_arraylike(
+                    raw_addr as *const crate::object::ObjectHeader,
+                )
+            } as *const ArrayHeader;
+        }
+    }
+    // Real array / lazy array / typed array / null / garbage: existing path.
+    clean_arr_ptr(arr)
 }
 
 /// Array header - precedes the elements in memory
@@ -748,6 +977,11 @@ pub(crate) unsafe fn array_numeric_raw_f64_get(arr: *mut ArrayHeader, index: u32
     if arr.is_null() {
         return None;
     }
+    // An index converted to an accessor (or given custom attrs) via
+    // `Object.defineProperty` must dispatch through the slow path.
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+        return None;
+    }
     if index >= (*arr).length {
         return None;
     }
@@ -766,6 +1000,10 @@ pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
 ) -> bool {
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() || index >= (*arr).length {
+        return false;
+    }
+    // Accessor setters / non-writable attrs on indices need the slow path.
+    if array_object_flags(arr) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         return false;
     }
     let original_bits = value.to_bits();

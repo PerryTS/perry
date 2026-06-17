@@ -32,6 +32,8 @@ pub fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("tvos-simulator") => Some("aarch64-apple-tvos-sim"),
         Some("tvos") => Some("aarch64-apple-tvos"),
         Some("android") => Some("aarch64-linux-android"),
+        // Wear OS is Android-on-a-watch: same arm64 Android toolchain/.so.
+        Some("wearos") => Some("aarch64-linux-android"),
         _ => None,
     }
 }
@@ -102,6 +104,31 @@ pub fn resolve_target(
                 pick_device(&devices, "Android device")?
             };
             Ok((Some("android".to_string()), Some(serial)))
+        }
+        Some(Platform::Wearos) => {
+            // Wear OS runs over adb just like a phone — the connected device is
+            // a watch or a Wear emulator. Same detection, but filter to actual
+            // watches (`ro.build.characteristics` contains `watch`) so a paired
+            // phone on the same adb isn't selected. The `wearos` target string
+            // routes packaging to the Wear Gradle template at launch.
+            let devices: Vec<DeviceInfo> = detect_android_devices()?
+                .into_iter()
+                .filter(|d| is_wear_os_device(&d.udid))
+                .collect();
+            if devices.is_empty() {
+                return Err(anyhow!(
+                    "No Wear OS devices found. Pair a watch over adb or start a Wear OS emulator, then try again.\n\
+                     Create one:  avdmanager create avd -n perry_wear \\\n               \
+                     -k \"system-images;android-34;android-wear;arm64-v8a\" -d wearos_large_round\n\
+                     Boot it:     emulator -avd perry_wear"
+                ));
+            }
+            let serial = if devices.len() == 1 {
+                devices[0].udid.clone()
+            } else {
+                pick_device(&devices, "Wear OS device")?
+            };
+            Ok((Some("wearos".to_string()), Some(serial)))
         }
         Some(Platform::Ios) => {
             if let Some(ref udid) = args.simulator {

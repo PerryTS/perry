@@ -1,8 +1,7 @@
-//! Minimal `node:wasi` surface for constructor/import-object parity.
+//! Minimal `node:wasi` surface for constructor/import-object and lifecycle parity.
 //!
-//! This intentionally stops at option validation plus preview1/unstable import
-//! object shape. Running WASI modules and full syscall fidelity are separate
-//! lifecycle work.
+//! This intentionally validates lifecycle state and WASI instance export shape
+//! without attempting full WASI syscall fidelity.
 
 use crate::closure::ClosureHeader;
 use crate::object::ObjectHeader;
@@ -14,6 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub const CLASS_ID_WASI: u32 = 0xFFFF_00B2;
 const CLASS_ID_WASI_IMPORT_PREVIEW1: u32 = 0xFFFF_00B3;
 const CLASS_ID_WASI_IMPORT_UNSTABLE: u32 = 0xFFFF_00B4;
+const FIELD_WASI_IMPORT: &str = "wasiImport";
+const FIELD_WASI_STARTED: &str = "__wasiStarted";
 
 static WASI_PROTOTYPE_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -74,6 +75,14 @@ fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+fn bool_value(value: bool) -> f64 {
+    f64::from_bits(JSValue::bool(value).bits())
+}
+
+fn is_undefined(value: f64) -> bool {
+    JSValue::from_bits(value.to_bits()).is_undefined()
+}
+
 fn named_key(name: &[u8]) -> *mut StringHeader {
     crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
 }
@@ -129,12 +138,28 @@ fn type_error_with_code(message: &str, code: &'static str) -> ! {
     crate::fs::validate::throw_type_error_with_code(message, code)
 }
 
+fn invalid_arg_type(message: &str) -> ! {
+    type_error_with_code(message, "ERR_INVALID_ARG_TYPE")
+}
+
 fn invalid_type(property: &str, expected: &str, value: f64) -> ! {
     let message = format!(
         "The \"{property}\" property must be of type {expected}. Received {}",
         crate::fs::validate::describe_received(value)
     );
-    type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+    invalid_arg_type(&message)
+}
+
+fn invalid_undefined_property(property: &str, value: f64) -> ! {
+    let message = format!(
+        "The \"{property}\" property must be undefined. Received {}",
+        crate::fs::validate::describe_received(value)
+    );
+    invalid_arg_type(&message)
+}
+
+fn invalid_wasm_memory() -> ! {
+    invalid_arg_type("\"instance.exports.memory\" property must be a WebAssembly.Memory object")
 }
 
 fn invalid_options(value: f64) -> ! {
@@ -337,15 +362,21 @@ pub extern "C" fn js_wasi_new(options: f64) -> f64 {
     let (_, import_class_id) = validate_options(options);
     ensure_wasi_prototype();
     let import_obj = create_import_object(import_class_id);
-    let keys = b"wasiImport\0";
+    let keys = b"wasiImport\0__wasiStarted\0";
     let obj = crate::object::js_object_alloc_class_with_keys(
         CLASS_ID_WASI,
         0,
-        1,
+        2,
         keys.as_ptr(),
         keys.len() as u32,
     );
     crate::object::js_object_set_field(obj, 0, JSValue::from_bits(ptr_value(import_obj).to_bits()));
+    crate::object::js_object_set_field(obj, 1, JSValue::from_bits(bool_value(false).to_bits()));
+    crate::object::set_builtin_property_attrs(
+        obj as usize,
+        FIELD_WASI_STARTED.to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
     ptr_value(obj)
 }
 
@@ -355,8 +386,10 @@ pub extern "C" fn js_wasi_get_import_object(_closure: *const ClosureHeader) -> f
     let Some(obj) = heap_object_ptr(this) else {
         invalid_options(this);
     };
-    let import_value =
-        crate::object::js_object_get_field_by_name_f64(obj, named_key(b"wasiImport"));
+    let import_value = crate::object::js_object_get_field_by_name_f64(
+        obj,
+        named_key(FIELD_WASI_IMPORT.as_bytes()),
+    );
     let Some(import_obj) = heap_object_ptr(import_value) else {
         return undefined();
     };
@@ -372,38 +405,141 @@ pub extern "C" fn js_wasi_get_import_object(_closure: *const ClosureHeader) -> f
 
 #[no_mangle]
 pub extern "C" fn js_wasi_start(_closure: *const ClosureHeader, instance: f64) -> f64 {
-    validate_instance_arg(instance);
-    throw_wasi_lifecycle_unimplemented()
+    let wasi = wasi_receiver_or_throw();
+    ensure_wasi_not_started(wasi);
+    let exports = validate_instance_exports(instance);
+    validate_start_exports(exports);
+    mark_wasi_started(wasi);
+    0.0
 }
 
 #[no_mangle]
 pub extern "C" fn js_wasi_initialize(_closure: *const ClosureHeader, instance: f64) -> f64 {
-    validate_instance_arg(instance);
-    throw_wasi_lifecycle_unimplemented()
+    let wasi = wasi_receiver_or_throw();
+    ensure_wasi_not_started(wasi);
+    let exports = validate_instance_exports(instance);
+    validate_initialize_exports(exports);
+    mark_wasi_started(wasi);
+    undefined()
 }
 
 #[no_mangle]
 pub extern "C" fn js_wasi_finalize_bindings(_closure: *const ClosureHeader, instance: f64) -> f64 {
-    validate_instance_arg(instance);
-    throw_wasi_lifecycle_unimplemented()
+    let wasi = wasi_receiver_or_throw();
+    ensure_wasi_not_started(wasi);
+    let exports = validate_instance_exports(instance);
+    validate_memory_export(exports);
+    mark_wasi_started(wasi);
+    undefined()
 }
 
-fn validate_instance_arg(instance: f64) {
-    if !is_object_value(instance) {
+fn wasi_receiver_or_throw() -> *mut ObjectHeader {
+    let this = crate::object::js_implicit_this_get();
+    let Some(obj) = heap_object_ptr(this) else {
+        type_error_with_code("Value of \"this\" must be of type WASI", "ERR_INVALID_THIS");
+    };
+    unsafe {
+        if (*obj).class_id != CLASS_ID_WASI {
+            type_error_with_code("Value of \"this\" must be of type WASI", "ERR_INVALID_THIS");
+        }
+    }
+    obj
+}
+
+fn wasi_started(obj: *mut ObjectHeader) -> bool {
+    let value = crate::object::js_object_get_field_by_name_f64(
+        obj,
+        named_key(FIELD_WASI_STARTED.as_bytes()),
+    );
+    let jsval = JSValue::from_bits(value.to_bits());
+    jsval.is_bool() && jsval.as_bool()
+}
+
+fn ensure_wasi_not_started(obj: *mut ObjectHeader) {
+    if wasi_started(obj) {
+        crate::fs::validate::throw_error_with_code(
+            "WASI instance has already started",
+            "ERR_WASI_ALREADY_STARTED",
+        );
+    }
+}
+
+fn mark_wasi_started(obj: *mut ObjectHeader) {
+    crate::object::js_object_set_field_by_name(
+        obj,
+        named_key(FIELD_WASI_STARTED.as_bytes()),
+        bool_value(true),
+    );
+    crate::object::set_builtin_property_attrs(
+        obj as usize,
+        FIELD_WASI_STARTED.to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+fn validate_instance_arg(instance: f64) -> *mut ObjectHeader {
+    let Some(obj) = heap_object_ptr(instance) else {
         let message = format!(
             "The \"instance\" argument must be of type object. Received {}",
             crate::fs::validate::describe_received(instance)
         );
-        type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+        invalid_arg_type(&message);
+    };
+    obj
+}
+
+fn validate_instance_exports(instance: f64) -> *mut ObjectHeader {
+    let instance_obj = validate_instance_arg(instance);
+    let exports =
+        crate::object::js_object_get_field_by_name_f64(instance_obj, named_key(b"exports"));
+    let Some(exports_obj) = heap_object_ptr(exports) else {
+        let message = format!(
+            "The \"instance.exports\" property must be of type object. Received {}",
+            crate::fs::validate::describe_received(exports)
+        );
+        invalid_arg_type(&message);
+    };
+    exports_obj
+}
+
+fn export_value(exports: *mut ObjectHeader, name: &[u8]) -> f64 {
+    crate::object::js_object_get_field_by_name_f64(exports, named_key(name))
+}
+
+fn is_callable_value(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let ptr = jsval.as_pointer::<u8>() as usize;
+    crate::closure::is_closure_ptr(ptr)
+}
+
+fn validate_memory_export(exports: *mut ObjectHeader) {
+    let memory = export_value(exports, b"memory");
+    if !is_object_value(memory) {
+        invalid_wasm_memory();
     }
 }
 
-fn throw_wasi_lifecycle_unimplemented() -> f64 {
-    let message = "WASI lifecycle execution is not implemented in Perry";
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg, "ERR_WASI_NOT_STARTED");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+fn validate_start_exports(exports: *mut ObjectHeader) {
+    validate_memory_export(exports);
+    let start = export_value(exports, b"_start");
+    if !is_callable_value(start) {
+        invalid_type("instance.exports._start", "function", start);
+    }
+    let initialize = export_value(exports, b"_initialize");
+    if !is_undefined(initialize) {
+        invalid_undefined_property("instance.exports._initialize", initialize);
+    }
+}
+
+fn validate_initialize_exports(exports: *mut ObjectHeader) {
+    validate_memory_export(exports);
+    let start = export_value(exports, b"_start");
+    if !is_undefined(start) {
+        invalid_undefined_property("instance.exports._start", start);
+    }
 }
 
 #[no_mangle]

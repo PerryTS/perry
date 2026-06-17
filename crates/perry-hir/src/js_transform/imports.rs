@@ -706,7 +706,7 @@ pub fn transform_expr(
         }
 
         // Dynamic new expressions - may be for JS classes (e.g., new ObjectId(str))
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             // Transform the callee first
             transform_expr(callee, js_imports, extern_func_to_js, local_name_to_js, tracker);
 
@@ -814,6 +814,7 @@ pub fn transform_expr(
                 match elem {
                     crate::ir::ArrayElement::Expr(e) => transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker),
                     crate::ir::ArrayElement::Spread(e) => transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker),
+                    crate::ir::ArrayElement::Hole => {}
                 }
             }
         }
@@ -961,6 +962,43 @@ pub fn transform_expr(
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            for arg in args {
+                transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            }
+        }
         // Dynamic environment variable access
         Expr::EnvGetDynamic(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
@@ -979,7 +1017,7 @@ pub fn transform_expr(
         Expr::JsonParse(e) | Expr::JsonStringify(e) | Expr::JsonRawJson(e) | Expr::JsonIsRawJson(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::MathFloor(e) | Expr::MathCeil(e) | Expr::MathRound(e) | Expr::MathAbs(e) | Expr::MathSqrt(e) => {
+        Expr::MathFloor(e) | Expr::MathCeil(e) | Expr::MathRound(e) | Expr::MathTrunc(e) | Expr::MathSign(e) | Expr::MathAbs(e) | Expr::MathSqrt(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::MathMin(args) | Expr::MathMax(args) => {
@@ -1051,7 +1089,9 @@ pub fn transform_expr(
                 transform_expr(sep, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
-        Expr::ArrayFlat { array } | Expr::ArrayToReversed { array } => {
+        Expr::ArrayFlat { array }
+        | Expr::ArrayToReversed { array }
+        | Expr::ArrayReverseValue { receiver: array } => {
             transform_expr(array, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::ArrayEntries(array) | Expr::ArrayKeys(array) | Expr::ArrayValues(array) => {
@@ -1077,11 +1117,17 @@ pub fn transform_expr(
             transform_expr(start, js_imports, extern_func_to_js, local_name_to_js, tracker);
             if let Some(e) = end { transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker); }
         }
+        Expr::ArrayCopyWithinValue { receiver, target, start, end } => {
+            transform_expr(receiver, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(target, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            transform_expr(start, js_imports, extern_func_to_js, local_name_to_js, tracker);
+            if let Some(e) = end { transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker); }
+        }
         Expr::StringSplit(a, b) => {
             transform_expr(a, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(b, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::StringFromCharCode(code) => {
+        Expr::StringFromCharCode(code) | Expr::StringFromCharCodeSpread(code) => {
             transform_expr(code, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // Map/Set methods
@@ -1133,7 +1179,7 @@ pub fn transform_expr(
             transform_expr(replacement, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // Object operations
-        Expr::ObjectKeys(e) => {
+        Expr::ObjectKeys(e) | Expr::ForInKeys(e) => {
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // Parse/coerce functions

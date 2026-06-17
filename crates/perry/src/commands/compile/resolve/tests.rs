@@ -1327,6 +1327,61 @@ mod manifest_parse_tests {
         assert!(msg.contains("backends.vulkan.available"), "got: {msg}");
         assert!(msg.contains("expected boolean"), "got: {msg}");
     }
+
+    #[test]
+    fn dotted_specifier_appends_not_replaces_extension() {
+        // Next.js app-render dir: `stream-ops.js` and `stream-ops.web.js`
+        // coexist, and `stream-ops.js` does `require("./stream-ops.web")`.
+        // `Path::with_extension("js")` REPLACES `.web` → `stream-ops.js` (the
+        // requiring file itself); resolving to it makes the module self-require
+        // and its re-export getters recurse forever. The resolver must APPEND:
+        // `./stream-ops.web` → `./stream-ops.web.js`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("stream-ops.js"), "// requiring module\n").expect("write");
+        std::fs::write(root.join("stream-ops.web.js"), "// the real target\n").expect("write");
+
+        let resolved = resolve_with_extensions(&root.join("stream-ops.web")).expect("must resolve");
+        assert_eq!(
+            resolved,
+            root.join("stream-ops.web.js"),
+            "must append `.js` to the full specifier, not strip `.web`"
+        );
+    }
+
+    #[test]
+    fn pruned_js_specifier_still_falls_back_to_ts_via_replace() {
+        // The REPLACE path is retained for Perry's TS-over-JS preference: a
+        // `require("./foo.js")` whose `.js` was pruned but whose `./foo.ts`
+        // source is present must still resolve to the TS file.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("foo.ts"), "export const x = 1;\n").expect("write");
+
+        let resolved = resolve_with_extensions(&root.join("foo.js")).expect("must resolve");
+        assert_eq!(resolved, root.join("foo.ts"));
+    }
+}
+
+#[cfg(test)]
+mod lexical_path_tests {
+    use super::*;
+
+    #[test]
+    fn lexical_normalization_preserves_leading_parent_segments() {
+        assert_eq!(
+            normalize_path_lexically(std::path::Path::new("../../dep")),
+            std::path::PathBuf::from("../../dep")
+        );
+    }
+
+    #[test]
+    fn lexical_normalization_pops_only_normal_segments() {
+        assert_eq!(
+            normalize_path_lexically(std::path::Path::new("app/../../dep")),
+            std::path::PathBuf::from("../dep")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1474,6 +1529,56 @@ mod declaration_sidecar_tests {
     }
 
     #[test]
+    fn extract_compile_package_dir_uses_path_components() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root
+            .join("node_modules")
+            .join("@noble")
+            .join("curves")
+            .join("node_modules")
+            .join("@noble")
+            .join("hashes")
+            .join("src")
+            .join("sha256.ts");
+
+        assert_eq!(
+            extract_compile_package_dir(&path, "@noble/hashes").expect("package dir"),
+            root.join("node_modules")
+                .join("@noble")
+                .join("curves")
+                .join("node_modules")
+                .join("@noble")
+                .join("hashes")
+        );
+        assert_eq!(
+            extract_compile_package_dir(&path, "@noble/curves").expect("outer package dir"),
+            root.join("node_modules").join("@noble").join("curves")
+        );
+    }
+
+    #[test]
+    fn compile_package_membership_uses_path_components() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = root
+            .join("node_modules")
+            .join("left-pad")
+            .join("lib")
+            .join("index.js");
+        let compile_packages = HashSet::from(["left-pad".to_string()]);
+
+        assert!(is_in_compile_package(&path, &compile_packages));
+        assert!(!is_in_compile_package(
+            &root
+                .join("not_node_modules")
+                .join("left-pad")
+                .join("index.js"),
+            &compile_packages
+        ));
+    }
+
+    #[test]
     fn declaration_file_detection_includes_mts_and_cts_sidecars() {
         assert!(is_declaration_file(Path::new("index.d.ts")));
         assert!(is_declaration_file(Path::new("index.d.mts")));
@@ -1524,5 +1629,280 @@ mod declaration_sidecar_tests {
             "lockfile (a file, not a dir) skipped"
         );
         assert_eq!(found.len(), 5, "exactly the five real packages");
+    }
+}
+
+/// Issue #5039 — Node subpath imports (`#…` specifiers resolved through the
+/// importing package's own `package.json` `"imports"` map). chalk 5 loads
+/// its vendored deps this way (`import ansiStyles from '#ansi-styles'`);
+/// before the fix the specifier fell through bare-package resolution, the
+/// import silently came up empty, and every chalk style table was blank
+/// (ink's `<Text dimColor>` rendered `[object Object]`).
+mod subpath_imports_tests {
+    use super::super::{resolve_import, ModuleKind};
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
+
+    fn write_chalk_like_package(root: &std::path::Path) -> PathBuf {
+        let pkg = root.join("node_modules/chalky");
+        std::fs::create_dir_all(pkg.join("source/vendor/ansi-styles")).unwrap();
+        std::fs::create_dir_all(pkg.join("source/vendor/supports-color")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r##"{
+                "name": "chalky",
+                "type": "module",
+                "exports": "./source/index.js",
+                "imports": {
+                    "#ansi-styles": "./source/vendor/ansi-styles/index.js",
+                    "#supports-color": {
+                        "node": "./source/vendor/supports-color/index.js",
+                        "default": "./source/vendor/supports-color/browser.js"
+                    }
+                }
+            }"##,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("source/index.js"), "export default 1;\n").unwrap();
+        std::fs::write(
+            pkg.join("source/vendor/ansi-styles/index.js"),
+            "export default {};\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("source/vendor/supports-color/index.js"),
+            "export default { stdout: false };\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("source/vendor/supports-color/browser.js"),
+            "export default { stdout: false };\n",
+        )
+        .unwrap();
+        pkg
+    }
+
+    #[test]
+    fn hash_specifier_resolves_through_imports_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pkg = write_chalk_like_package(root);
+        let importer = pkg.join("source/index.js");
+
+        let compile_packages: HashSet<String> = ["chalky".to_string()].into_iter().collect();
+        let compile_package_dirs: HashMap<String, PathBuf> = HashMap::new();
+
+        let (resolved, kind) = resolve_import(
+            "#ansi-styles",
+            &importer,
+            root,
+            &compile_packages,
+            &compile_package_dirs,
+        )
+        .expect("#ansi-styles must resolve via the imports map");
+        assert_eq!(
+            resolved,
+            pkg.join("source/vendor/ansi-styles/index.js")
+                .canonicalize()
+                .unwrap()
+        );
+        // The mapped file is inside a compile package → compiled natively.
+        assert_eq!(kind, ModuleKind::NativeCompiled);
+    }
+
+    #[test]
+    fn conditional_imports_target_prefers_node_over_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pkg = write_chalk_like_package(root);
+        let importer = pkg.join("source/index.js");
+
+        let compile_packages: HashSet<String> = ["chalky".to_string()].into_iter().collect();
+        let compile_package_dirs: HashMap<String, PathBuf> = HashMap::new();
+
+        let (resolved, _) = resolve_import(
+            "#supports-color",
+            &importer,
+            root,
+            &compile_packages,
+            &compile_package_dirs,
+        )
+        .expect("#supports-color must resolve via the imports map");
+        assert_eq!(
+            resolved,
+            pkg.join("source/vendor/supports-color/index.js")
+                .canonicalize()
+                .unwrap(),
+            "conditional imports entry must pick `node`, not the browser `default`"
+        );
+    }
+
+    #[test]
+    fn unmapped_hash_specifier_stays_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pkg = write_chalk_like_package(root);
+        let importer = pkg.join("source/index.js");
+
+        assert!(
+            resolve_import("#nope", &importer, root, &HashSet::new(), &HashMap::new(),).is_none(),
+            "a `#` specifier missing from the imports map must not resolve"
+        );
+    }
+}
+
+#[cfg(test)]
+mod exports_candidates_tests {
+    use crate::commands::compile::resolve::resolve_exports_candidates;
+
+    #[test]
+    fn pruned_import_target_falls_back_to_default() {
+        // @swc/helpers shape under Next.js standalone output: file tracing
+        // prunes esm/, so the `import` condition target is absent on disk and
+        // the resolver must surface `default` (cjs) as a later candidate.
+        let exports: serde_json::Value = serde_json::json!({
+            ".": { "import": "./esm/index.js", "default": "./cjs/index.cjs" },
+            "./_/_interop_require_default": {
+                "import": "./esm/_interop_require_default.js",
+                "default": "./cjs/_interop_require_default.cjs"
+            }
+        });
+        let candidates = resolve_exports_candidates(&exports, "./_/_interop_require_default");
+        assert_eq!(
+            candidates,
+            vec![
+                "./esm/_interop_require_default.js".to_string(),
+                "./cjs/_interop_require_default.cjs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wildcard_candidates_expand_star() {
+        let exports: serde_json::Value = serde_json::json!({
+            "./cjs/*": { "import": "./esm/*.js", "default": "./cjs/*.cjs" }
+        });
+        let candidates = resolve_exports_candidates(&exports, "./cjs/foo");
+        assert_eq!(
+            candidates,
+            vec!["./esm/foo.js".to_string(), "./cjs/foo.cjs".to_string()]
+        );
+    }
+
+    /// #5237 — a Node "exports" *fallback array* (an ordered list of targets,
+    /// here a conditions-object followed by a plain string) must expand to its
+    /// inner targets. Before the fix the array form produced no candidates at
+    /// all, so the resolver fell through to the legacy `"module"` field.
+    #[test]
+    fn array_form_candidates_expand() {
+        let exports: serde_json::Value = serde_json::json!({
+            ".": [
+                { "import": "./index.mjs", "require": "./build/index.cjs" },
+                "./build/index.cjs"
+            ]
+        });
+        let candidates = resolve_exports_candidates(&exports, ".");
+        assert_eq!(
+            candidates,
+            vec!["./index.mjs".to_string(), "./build/index.cjs".to_string()]
+        );
+    }
+}
+
+/// #5237 — `"exports"`, when it covers the requested specifier, takes
+/// precedence over the legacy `"module"`/`"main"` fields (matching Node's
+/// resolution algorithm). The live regression was `y18n` (a `yargs` dep):
+/// perry picked its `"module": "./build/lib/index.js"` (a named-export-only
+/// file with no `default`) instead of the `exports.import` target
+/// `./index.mjs`, breaking `import y18n from "y18n"`.
+mod exports_over_module_precedence_tests {
+    use super::super::resolve_package_entry;
+
+    /// Lay out a package mirroring the #5237 minimal repro: `module` points at
+    /// a built `build/lib/index.js`, but an array-form `exports` points its
+    /// `import` condition at `./index.mjs`.
+    fn write_y18n_like_package(root: &std::path::Path) -> std::path::PathBuf {
+        let pkg = root.join("node_modules/y18n-like");
+        std::fs::create_dir_all(pkg.join("build/lib")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{
+                "name": "y18n-like",
+                "version": "1.0.0",
+                "type": "module",
+                "main": "./build/index.cjs",
+                "module": "./build/lib/index.js",
+                "exports": {
+                    ".": [
+                        { "import": "./index.mjs", "require": "./build/index.cjs" },
+                        "./build/index.cjs"
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("index.mjs"), "export default 1;\n").unwrap();
+        std::fs::write(pkg.join("build/lib/index.js"), "export function x(){}\n").unwrap();
+        std::fs::write(pkg.join("build/index.cjs"), "module.exports = 1;\n").unwrap();
+        pkg
+    }
+
+    #[test]
+    fn exports_import_wins_over_module_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = write_y18n_like_package(dir.path());
+
+        let resolved = resolve_package_entry(&pkg, None).expect("resolve entry");
+        assert_eq!(
+            resolved,
+            pkg.join("index.mjs"),
+            "exports.import (./index.mjs) must win over module (./build/lib/index.js)"
+        );
+    }
+
+    /// Regression: a package with `module` but NO `exports` still resolves via
+    /// the `module` field (and `main`), exactly as before.
+    #[test]
+    fn module_field_still_resolves_without_exports() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = dir.path().join("node_modules/legacy-mod");
+        std::fs::create_dir_all(pkg.join("dist")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{
+                "name": "legacy-mod",
+                "type": "module",
+                "main": "./dist/index.cjs",
+                "module": "./dist/index.mjs"
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("dist/index.mjs"), "export default 1;\n").unwrap();
+        std::fs::write(pkg.join("dist/index.cjs"), "module.exports = 1;\n").unwrap();
+
+        let resolved = resolve_package_entry(&pkg, None).expect("resolve entry");
+        assert_eq!(resolved, pkg.join("dist/index.mjs"));
+    }
+
+    /// Regression: a normal object-form `exports`-only package (no `module`)
+    /// resolves through `exports` unchanged.
+    #[test]
+    fn plain_object_exports_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = dir.path().join("node_modules/modern-pkg");
+        std::fs::create_dir_all(pkg.join("dist")).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{
+                "name": "modern-pkg",
+                "type": "module",
+                "exports": { ".": { "import": "./dist/index.js" } }
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(pkg.join("dist/index.js"), "export default 1;\n").unwrap();
+
+        let resolved = resolve_package_entry(&pkg, None).expect("resolve entry");
+        assert_eq!(resolved, pkg.join("dist/index.js"));
     }
 }

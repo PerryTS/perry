@@ -281,6 +281,91 @@ fn class_field_get_contract(
     }
 }
 
+fn class_field_fast_contract(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    expected_field_index: u32,
+    require_raw_f64: bool,
+) -> bool {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+        return false;
+    }
+    let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+        return false;
+    };
+    unsafe {
+        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+            || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return false;
+        }
+        let obj = object_addr as *const ObjectHeader;
+        let shape_ok = (*obj).object_type == crate::error::OBJECT_TYPE_REGULAR
+            && (*obj).class_id == expected_class_id
+            && std::ptr::eq((*obj).keys_array as *const ArrayHeader, expected_keys)
+            && expected_field_index < (*obj).field_count;
+        // #5093 self-check: the codegen-inlined fast path concludes "slot K is
+        // raw-f64" purely from the per-object intact bit (plus a class_id/keys
+        // match). Under PERRY_VERIFY_TYPED_INTACT=1, assert that whenever this
+        // contract sees a shape match for a raw-f64 candidate field with the
+        // intact bit set, the side table actually agrees the slot is raw-f64 —
+        // i.e. the inline path could never read a NaN-boxed value as a raw
+        // double. Any drift aborts loudly during the test sweep.
+        if require_raw_f64 && shape_ok && verify_typed_intact_enabled() {
+            let intact = crate::gc::layout_typed_intact_for_user(object_addr);
+            let raw = crate::gc::layout_typed_raw_f64_slot_for_user(
+                object_addr,
+                expected_field_index as usize,
+            );
+            if intact && !raw {
+                eprintln!(
+                    "PERRY_VERIFY_TYPED_INTACT: intact bit set on class {} but slot {} is not raw-f64 in the side table (inline fast path would corrupt)",
+                    expected_class_id, expected_field_index
+                );
+                std::process::abort();
+            }
+        }
+        shape_ok
+            && (!require_raw_f64
+                || crate::gc::layout_typed_raw_f64_slot_for_user(
+                    object_addr,
+                    expected_field_index as usize,
+                ))
+    }
+}
+
+#[cfg(not(test))]
+fn verify_typed_intact_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    match STATE.load(Ordering::Relaxed) {
+        0 => {
+            // Parse by value so `=0`/`=false`/`=off` don't enable the verifier,
+            // matching `env_flag_enabled` in `gc/mod.rs` (which also disables the
+            // inline fast path when this is on, so the verifier sees every access).
+            let on = std::env::var("PERRY_VERIFY_TYPED_INTACT")
+                .map(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "on" | "yes"
+                    )
+                })
+                .unwrap_or(false);
+            STATE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+            on
+        }
+        2 => true,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+fn verify_typed_intact_enabled() -> bool {
+    false
+}
+
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_class_field_get_guard(
     site_id: u64,
@@ -291,6 +376,15 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     expected_field_index: u32,
     require_raw_f64: i32,
 ) -> i32 {
+    if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
+        return class_field_fast_contract(
+            receiver,
+            expected_class_id,
+            expected_keys,
+            expected_field_index,
+            require_raw_f64 != 0,
+        ) as i32;
+    }
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_get_contract(
         receiver,
         expected_class_id,
@@ -320,6 +414,35 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     } else {
         0
     }
+}
+
+fn class_field_set_fast_contract(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    expected_field_index: u32,
+    require_raw_f64: bool,
+    value_bits: u64,
+) -> bool {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !class_field_fast_contract(
+        receiver,
+        expected_class_id,
+        expected_keys,
+        expected_field_index,
+        require_raw_f64,
+    ) {
+        return false;
+    }
+    unsafe {
+        let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+            return false;
+        };
+        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            return false;
+        }
+    }
+    !require_raw_f64 || is_plain_number_bits(value_bits)
 }
 
 fn descriptor_blocks_class_field_set(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
@@ -425,6 +548,16 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     require_raw_f64: i32,
 ) -> i32 {
     let value_bits = value.to_bits();
+    if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
+        return class_field_set_fast_contract(
+            receiver,
+            expected_class_id,
+            expected_keys,
+            expected_field_index,
+            require_raw_f64 != 0,
+            value_bits,
+        ) as i32;
+    }
     let (shape_addr, class_id, gc_type, contract_valid) = class_field_set_contract(
         receiver,
         expected_class_id,
@@ -599,6 +732,34 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
     } else {
         0
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_method_direct_shape_guard(
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+) -> i32 {
+    let object_addr = normalize_raw_object_addr(receiver.to_bits());
+    if object_addr == 0 || expected_class_id == 0 || expected_keys.is_null() {
+        return 0;
+    }
+    let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
+        return 0;
+    };
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
+        || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || crate::object::descriptors_in_use()
+        || crate::object::class_prototype_fast_guards_invalidated()
+    {
+        return 0;
+    }
+    let obj = object_addr as *const ObjectHeader;
+    if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
+        return 0;
+    }
+    ((*obj).class_id == expected_class_id && (*obj).keys_array as usize == expected_keys as usize)
+        as i32
 }
 
 #[no_mangle]

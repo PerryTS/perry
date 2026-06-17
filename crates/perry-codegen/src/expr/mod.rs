@@ -54,6 +54,7 @@ mod native_record;
 mod object_literal;
 mod pod_layout_constants;
 mod pod_record;
+mod property_get_names;
 mod range_facts;
 mod strings;
 mod typed_feedback;
@@ -119,10 +120,28 @@ pub(crate) use v8_interop::{
 };
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_layout_note_slot_on_block, emit_root_heap_word_store_on_block,
-    emit_root_nanbox_store_on_block, emit_write_barrier, emit_write_barrier_slot_on_block,
+    emit_jsvalue_slot_store_scalar_aware_on_block, emit_layout_note_slot_on_block,
+    emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,
+    emit_write_barrier_slot_on_block, lower_event_emitter_subclass_init,
     lower_node_stream_super_init, lower_stream_super_init,
 };
+
+/// One in-flight inline-constructor return target. See
+/// `FnCtx::inline_ctor_return`.
+#[derive(Clone)]
+pub(crate) struct InlineCtorReturn {
+    /// `alloca` (as `%name`) holding the constructed instance, overwritten by
+    /// an explicit `return <object>` (spec return-override). Loaded as the
+    /// `new`-expression's value after the body's `after_label` block.
+    pub result_slot: String,
+    /// Label of the block that follows the inlined constructor body. Every
+    /// `return` inside the body branches here instead of emitting `ret`.
+    pub after_label: String,
+    /// True for a derived class (`class X extends Y`). A derived ctor that
+    /// `return`s a non-object, non-undefined value throws a TypeError; a base
+    /// ctor silently ignores it and keeps `this`.
+    pub is_derived: bool,
+}
 
 /// Per-function codegen context. Held briefly during lowering, never stored.
 pub(crate) struct FnCtx<'a> {
@@ -157,18 +176,22 @@ pub(crate) struct FnCtx<'a> {
     /// LlModule that `func` was derived from. See `crate::strings` for the
     /// design rationale.
     pub strings: &'a mut StringPool,
-    /// Stack of loop targets for `break` / `continue` lowering. Each entry
-    /// is `(continue_label, break_label)`. Pushed when entering a loop,
-    /// popped on exit. The innermost loop is at the top of the stack.
+    /// Stack of loop targets for `break` / `continue` lowering. Each entry is
+    /// `(continue_label, break_label, try_depth_at_entry)`, pushed on loop
+    /// entry, popped on exit; innermost loop on top. `for`: continue → update
+    /// block, break → exit; `while`/`do-while`: continue → cond, break → exit.
     ///
-    /// For `for`-loops: continue → update block (so the update runs before
-    /// the next iteration); break → exit block.
-    /// For `while`/`do-while`: continue → cond block; break → exit block.
-    pub loop_targets: Vec<(String, String)>,
-    /// Map from label name → (continue_label, break_label). Populated by
-    /// `Stmt::Labeled { label, body }` when the body is a loop. Looked up
-    /// by `Stmt::LabeledBreak(label)` / `Stmt::LabeledContinue(label)`.
-    pub label_targets: std::collections::HashMap<String, (String, String)>,
+    /// The third field is `ctx.try_depth` at loop entry, so a `break`/`continue`
+    /// out of open `try` frames emits a matching `js_try_end` per exited frame
+    /// (like `Stmt::Return`), keeping the runtime TRY_DEPTH balanced. Without
+    /// it, a state-machine suspend (lowered to a `break` out of the dispatch
+    /// loop's real `try`) leaked a slot per awaited try/catch (panic at 128).
+    pub loop_targets: Vec<(String, String, usize)>,
+    /// Map from label name → (continue_label, break_label, try_depth_at_entry).
+    /// Populated by `Stmt::Labeled` when the body is a loop; read by
+    /// `Stmt::LabeledBreak`/`LabeledContinue`. Third field balances try frames
+    /// as in `loop_targets`.
+    pub label_targets: std::collections::HashMap<String, (String, String, usize)>,
     /// Pending label set by `Stmt::Labeled` just before lowering the body.
     /// The next loop that runs (`for`/`while`/`do-while`) consumes it and
     /// registers itself in `label_targets` so `break label;` /
@@ -191,6 +214,9 @@ pub(crate) struct FnCtx<'a> {
     /// Stack of `this` slot pointers — set when lowering inside a class
     /// constructor body. `Expr::This` loads from the top entry.
     pub this_stack: Vec<String>,
+    /// Stack of lexical `new.target` slot pointers. Arrow closures that
+    /// reference `new.target` capture the enclosing value here.
+    pub new_target_stack: Vec<String>,
     /// Stack of class names currently being lowered. Pushed when entering
     /// a constructor body. `Expr::SuperCall` looks at the top entry to
     /// find the parent class's constructor to inline. Same depth as
@@ -309,12 +335,12 @@ pub(crate) struct FnCtx<'a> {
     /// `ctx.classes` chain (which mis-picks same-named cross-module parents).
     pub class_init_chains:
         &'a std::collections::HashMap<String, Vec<(String, Vec<perry_hir::ClassField>)>>,
-    /// Imported class constructor names: class_name → (ctor_fn_name, param_count).
-    pub imported_class_ctors: &'a std::collections::HashMap<String, (String, usize)>,
+    /// Imported class constructor metadata, keyed by effective imported class name.
+    pub imported_class_ctors: &'a std::collections::HashMap<String, crate::codegen::ImportedCtor>,
     /// Per-function param signature: `(declared_param_count,
     /// has_rest_param)`. Used by FuncRef call sites to know whether
     /// to bundle trailing arguments into a rest array.
-    pub func_signatures: &'a std::collections::HashMap<u32, (usize, bool, bool)>,
+    pub func_signatures: &'a std::collections::HashMap<u32, (usize, bool, bool, bool)>,
     /// Function declarations where Perry appended a synthetic trailing
     /// `arguments` binding. Unlike a real rest parameter, it must receive
     /// every actual argument while fixed parameters still receive their
@@ -373,6 +399,14 @@ pub(crate) struct FnCtx<'a> {
     /// native constructor lowering read `const init = {...}; new Request(url,
     /// init)` with the same field extractor used for inline object literals.
     pub option_object_locals: std::collections::HashMap<u32, Vec<(String, Expr)>>,
+    /// LocalIds of immutable locals provably initialized from an object
+    /// literal (`const o = { … }`, including method-bearing literals that
+    /// lower to an object-building IIFE). #5271: a builtin-named method on
+    /// such a receiver (`o.trim()`, joi's `internals.trim(v, s)`) is the
+    /// object's OWN method, never `String.prototype.<m>` — so the static
+    /// String-method fast path must NOT claim it even when the call's arity
+    /// happens to match the String builtin.
+    pub object_literal_locals: std::collections::HashSet<u32>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
     /// Locals that are namespace imports (`import * as X from "./mod"`).
@@ -403,6 +437,13 @@ pub(crate) struct FnCtx<'a> {
     /// produces a Promise so subsequent `p.then(cb)` chains route
     /// through `js_promise_then` instead of `js_native_call_method`.
     pub local_async_funcs: &'a std::collections::HashSet<u32>,
+    /// Locally-defined generator wrapper FuncIds after generator lowering.
+    /// Used by direct `FuncRef` calls to re-link returned iterator objects to
+    /// the same closure-cached prototype that `g.prototype` reads expose.
+    pub local_generator_funcs: &'a std::collections::HashSet<u32>,
+    /// FuncIds whose body reads dynamic `this` — see
+    /// `CrossModuleCtx::funcs_reading_dynamic_this` (#3576).
+    pub funcs_reading_dynamic_this: &'a std::collections::HashSet<u32>,
     /// Type alias map (name → Type) aggregated from all modules. Used
     /// to resolve `Named` types in function signatures and dispatch.
     pub type_aliases: &'a std::collections::HashMap<String, perry_types::Type>,
@@ -462,6 +503,16 @@ pub(crate) struct FnCtx<'a> {
     /// per call. Once 128 leaks accumulate the runtime panics with
     /// "Try block nesting too deep".
     pub try_depth: usize,
+
+    /// Stack of in-flight inline-constructor return targets. When a class
+    /// constructor body is inlined at a `new C(...)` site (see
+    /// `lower_call/new.rs`), an explicit `return` inside that body must NOT
+    /// emit a function-level `ret` (that would terminate the *enclosing*
+    /// function). Instead `Stmt::Return` stores the spec return-override
+    /// result into `result_slot` and branches to `after_label`; the
+    /// new-expression then loads `result_slot` as its value. One entry per
+    /// nested inline ctor; the innermost (`last()`) governs a `return`.
+    pub inline_ctor_return: Vec<InlineCtorReturn>,
 
     /// Cross-module function declarations to add to `LlModule` after
     /// lowering finishes. Each entry is `(llvm_name, return_type, param_types)`.
@@ -1359,7 +1410,7 @@ mod arrays_finds;
 mod bigint_set;
 mod binary;
 mod call_spread;
-mod calls;
+pub(crate) mod calls;
 mod child_proc;
 mod closure;
 mod compare;
@@ -1370,6 +1421,8 @@ mod fs_await;
 mod index_get;
 mod index_set;
 mod instance_misc1;
+pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
+mod class_field_inline_guard;
 mod js_runtime;
 mod literals_vars;
 mod logical_collections;
@@ -1423,8 +1476,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Conditional { .. } => conditional::lower(ctx, expr),
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => array_push::lower(ctx, expr),
         Expr::Closure { .. } => closure::lower(ctx, expr),
-        Expr::New { .. } | Expr::NewDynamic { .. } => new_dynamic::lower(ctx, expr),
-        Expr::This | Expr::SuperCall(..) => this_super_call::lower(ctx, expr),
+        Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => {
+            new_dynamic::lower(ctx, expr)
+        }
+        Expr::This | Expr::NewTarget | Expr::SuperCall(..) | Expr::SuperCallSpread(..) => {
+            this_super_call::lower(ctx, expr)
+        }
         Expr::IsNaN(..)
         | Expr::MathPow(..)
         | Expr::MathImul(..)
@@ -1438,6 +1495,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathFloor(..)
         | Expr::MathCeil(..)
         | Expr::MathRound(..)
+        | Expr::MathTrunc(..)
+        | Expr::MathSign(..)
         | Expr::MathAbs(..)
         | Expr::MathLog(..)
         | Expr::MathLog2(..)
@@ -1462,6 +1521,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ArrayJoin { .. }
         | Expr::MapDelete { .. }
         | Expr::ObjectKeys(..)
+        | Expr::ForInKeys(..)
         | Expr::IsFinite(..)
         | Expr::NumberIsFinite(..)
         | Expr::IsUndefinedOrBareNan(..)
@@ -1474,8 +1534,11 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::BooleanCoerce(..)
         | Expr::ArraySlice { .. }
         | Expr::ArrayShift(..)
+        | Expr::ArrayLikeMethod { .. }
         | Expr::SetNew
         | Expr::In { .. }
+        | Expr::PrivateBrandCheck { .. }
+        | Expr::PrivateGuard { .. }
         | Expr::ParseInt { .. }
         | Expr::ParseFloat(..)
         | Expr::RegExp { .. }
@@ -1486,11 +1549,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StaticMethodCall { .. } => static_method::lower(ctx, expr),
         Expr::SuperMethodCall { .. }
         | Expr::SuperPropertyGet { .. }
+        | Expr::SuperPropertySet { .. }
+        | Expr::ObjectSuperPropertyGet { .. }
+        | Expr::ObjectSuperPropertySet { .. }
+        | Expr::ObjectSuperMethodCall { .. }
         | Expr::FsReadFileBinary(..) => super_method::lower(ctx, expr),
-        Expr::InstanceOf { .. }
+        Expr::WithGet { .. }
+        | Expr::WithSet { .. }
+        | Expr::InstanceOf { .. }
         | Expr::Delete(..)
         | Expr::Sequence(..)
         | Expr::ArrayFrom(..)
+        | Expr::ArrayFromArrayLikeHoley(..)
         | Expr::IteratorFrom(..)
         | Expr::TaggedTemplateStrings { .. }
         | Expr::TemplateRaw(..)
@@ -1559,7 +1629,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::FsMkdirSync(..)
         | Expr::IteratorToArray(..)
         | Expr::GetIterator(..)
+        | Expr::GetAsyncIterator(..)
         | Expr::ForOfToArray(..)
+        | Expr::ForAwaitToArray(..)
         | Expr::WeakRefDeref(..)
         | Expr::Uint8ArrayNew(..)
         | Expr::Uint8ArrayLength(..)
@@ -1648,6 +1720,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::RegExpExecGroups => misc_methods::lower(ctx, expr),
         Expr::SetClear(..)
         | Expr::StringFromCodePoint(..)
+        | Expr::StringFromCharCodeSpread(..)
         | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::StringCodePointAt { .. }
@@ -1752,11 +1825,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DateToString(..)
         | Expr::DateToDateString(..)
         | Expr::DateToTimeString(..)
+        | Expr::DateToUTCString(..)
         | Expr::DateToLocaleDateString(..)
         | Expr::DateToLocaleTimeString(..)
         | Expr::DateToJSON(..)
+        | Expr::ArrayReverseValue { .. }
         | Expr::ArrayWith { .. }
         | Expr::ArrayCopyWithin { .. }
+        | Expr::ArrayCopyWithinValue { .. }
         | Expr::ArrayToReversed { .. }
         | Expr::ArrayToSorted { .. }
         | Expr::ArrayToSpliced { .. }
@@ -1805,6 +1881,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::EnvGetDynamic(..)
         | Expr::ProcessEnv => array_methods::lower(ctx, expr),
         Expr::GlobalThisExpr
+        | Expr::ModuleTopThis
         | Expr::DateToISOString(..)
         | Expr::DateToLocaleString(..)
         | Expr::FetchGetWithAuth { .. }
@@ -1829,13 +1906,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StaticFieldGet { .. }
         | Expr::StaticFieldSet { .. }
         | Expr::RegisterClassParentDynamic { .. }
+        | Expr::RegisterClassCaptures { .. }
+        | Expr::ClassCaptureValue { .. }
         | Expr::RegisterClassStaticSymbol { .. }
+        | Expr::RegisterClassComputedMethod { .. }
+        | Expr::RegisterClassComputedAccessor { .. }
         | Expr::ClassExprFresh { .. }
         | Expr::SetFunctionPrototype { .. }
         | Expr::RegisterPrototypeMethod { .. }
         | Expr::RegisterFunctionPrototypeMethod { .. }
         | Expr::GetFunctionPrototypeMethod { .. }
         | Expr::ClassStaticSymbolSet { .. }
+        | Expr::LinkGeneratorPrototype { .. }
         | Expr::NativeModuleRef(..) => static_field_meta::lower(ctx, expr),
         Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
@@ -1867,12 +1949,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProxyRevoke(..)
         | Expr::ReflectGet { .. }
         | Expr::ReflectSet { .. }
+        | Expr::PutValueSet { .. }
         | Expr::ReflectHas { .. }
         | Expr::ReflectDelete { .. }
         | Expr::ReflectOwnKeys(..)
         | Expr::ReflectApply { .. }
         | Expr::ReflectConstruct { .. }
         | Expr::ReflectDefineProperty { .. }
+        | Expr::ReflectGetOwnPropertyDescriptor { .. }
         | Expr::ReflectGetPrototypeOf(..)
         | Expr::ReflectSetPrototypeOf { .. }
         | Expr::ReflectIsExtensible(..)
@@ -1901,6 +1985,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ChildProcessKillProcess(..) => child_proc::lower(ctx, expr),
         Expr::FileURLToPath(..)
         | Expr::UrlNew { .. }
+        | Expr::UrlPatternNew { .. }
         | Expr::UrlGetHref(..)
         | Expr::UrlGetPathname(..)
         | Expr::UrlGetProtocol(..)
@@ -1956,5 +2041,16 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             "perry-codegen Phase 2: expression {} not yet supported",
             variant_name(other)
         ),
+    }
+}
+
+pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    let raw = lower_expr(ctx, expr)?;
+    if is_numeric_expr(ctx, expr) {
+        Ok(raw)
+    } else {
+        Ok(ctx
+            .block()
+            .call(DOUBLE, "js_math_to_number", &[(DOUBLE, &raw)]))
     }
 }

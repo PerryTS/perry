@@ -36,91 +36,94 @@ pub(crate) fn lower_switch(
     let exit_idx = ctx.new_block("switch.exit");
     let exit_label = ctx.block_label(exit_idx);
 
-    // Branch from the discriminant block into the first test (or
-    // straight into the body if there are zero cases — degenerate but
-    // legal).
-    if let Some(&first_test) = test_blocks.first() {
-        let first_test_label = ctx.block_label(first_test);
-        ctx.block().br(&first_test_label);
-    } else {
+    if cases.is_empty() {
         ctx.block().br(&exit_label);
         ctx.current_block = exit_idx;
         return Ok(());
     }
 
-    // Find the default case index, if any. The "fall-through to default
-    // when nothing matches" target is the default's body block; if
-    // there's no default, we fall through to exit.
+    // Find the default case index, if any. The "no case matched" target
+    // is the default's body block; if there's no default, it is exit.
     let default_idx = cases.iter().position(|c| c.test.is_none());
     let no_match_target_label = match default_idx {
         Some(i) => ctx.block_label(body_blocks[i]),
         None => exit_label.clone(),
     };
 
+    // Branch from the discriminant block into the first *case* test.
+    // A leading `default:` is skipped — its body only runs when no case
+    // test anywhere in the block matches.
+    let first_case_test = cases.iter().position(|c| c.test.is_some());
+    match first_case_test {
+        Some(i) => {
+            let first_test_label = ctx.block_label(test_blocks[i]);
+            ctx.block().br(&first_test_label);
+        }
+        None => {
+            // Only a default clause: run it unconditionally.
+            ctx.block().br(&no_match_target_label);
+        }
+    }
+
     // Push break target. Switch has no continue, so we use exit for both.
     ctx.loop_targets
-        .push((exit_label.clone(), exit_label.clone()));
+        .push((exit_label.clone(), exit_label.clone(), ctx.try_depth));
+
+    // If this switch carries a pending label (from an enclosing
+    // `a: switch (...)`), register it so `break a;` resolves to THIS
+    // switch's exit even when the break sits inside a *nested* switch.
+    // Without this, `LabeledBreak` falls back to the innermost
+    // `loop_targets` entry — the nested switch's own exit — so the break
+    // escapes only the inner switch and execution falls through into the
+    // outer switch's remaining code (e.g. react-reconciler's
+    // `switch (type.$$typeof) { case CTX: t = 10; break a; }`, where the
+    // case body's `break a` was landing in the invalid-element tail and
+    // every Context.Provider became fiber tag 29 → children dropped).
+    let consumed_label = ctx.pending_label.take();
+    if let Some(ref lbl) = consumed_label {
+        ctx.label_targets.insert(
+            lbl.clone(),
+            (exit_label.clone(), exit_label.clone(), ctx.try_depth),
+        );
+    }
 
     // Compile each test block. Each test compares dv against the case
     // expression with fcmp oeq, jumps to the body on match, otherwise
-    // jumps to the next test (or to no_match_target if this is the last).
+    // jumps to the next *case* test (or to no_match_target if this is the
+    // last). The default clause is NOT part of the test chain: per spec
+    // CaseBlockEvaluation, every case test — including ones written
+    // *after* `default:` — is tried first, and the default body only
+    // runs when no case matched. A non-match at the default's source
+    // position must therefore skip over it to the next case test.
     for (i, case) in cases.iter().enumerate() {
         ctx.current_block = test_blocks[i];
         let body_label = ctx.block_label(body_blocks[i]);
-        let next_label = if i + 1 < test_blocks.len() {
-            ctx.block_label(test_blocks[i + 1])
-        } else {
-            no_match_target_label.clone()
+        let next_case_test = ((i + 1)..cases.len()).find(|&j| cases[j].test.is_some());
+        let next_label = match next_case_test {
+            Some(j) => ctx.block_label(test_blocks[j]),
+            None => no_match_target_label.clone(),
         };
 
         if let Some(test_expr) = case.test.as_ref() {
             let cv = lower_expr(ctx, test_expr)?;
-            // If either the discriminant or the case value is a static
-            // string expression (e.g. `switch (typeof x) { case "foo": }`),
-            // compare by string content via js_string_equals. Two allocations
-            // of the same text have different pointers, so icmp on bits
-            // would report them unequal. Dispatch through the unified
-            // string-pointer getter which returns null for non-strings —
-            // js_string_equals treats null as "not equal", matching the
-            // expected fall-through behavior.
-            let either_string = crate::type_analysis::is_string_expr(ctx, discriminant)
-                || crate::type_analysis::is_string_expr(ctx, test_expr);
-            if either_string {
-                let blk = ctx.block();
-                let l_handle = blk.call(
-                    crate::types::I64,
-                    "js_get_string_pointer_unified",
-                    &[(crate::types::DOUBLE, &dv)],
-                );
-                let r_handle = blk.call(
-                    crate::types::I64,
-                    "js_get_string_pointer_unified",
-                    &[(crate::types::DOUBLE, &cv)],
-                );
-                let i32_eq = blk.call(
-                    crate::types::I32,
-                    "js_string_equals",
-                    &[
-                        (crate::types::I64, &l_handle),
-                        (crate::types::I64, &r_handle),
-                    ],
-                );
-                let cmp = blk.icmp_ne(crate::types::I32, &i32_eq, "0");
-                blk.cond_br(&cmp, &body_label, &next_label);
-            } else {
-                // fcmp on NaN-tagged string/pointer values is always
-                // false (NaN comparisons are unordered). For switch on
-                // strings or any value that might be NaN-tagged, compare
-                // the i64 bit patterns instead. This works for numbers
-                // too — equal doubles have equal bits except for ±0
-                // which the JS spec treats as equal anyway and Number(0)
-                // === Number(-0) is true.
-                let blk = ctx.block();
-                let dv_bits = blk.bitcast_double_to_i64(&dv);
-                let cv_bits = blk.bitcast_double_to_i64(&cv);
-                let cmp = blk.icmp_eq(crate::types::I64, &dv_bits, &cv_bits);
-                blk.cond_br(&cmp, &body_label, &next_label);
-            }
+            // CaseClauseIsSelected is strict equality (`===`). One runtime
+            // helper covers every value-kind correctly: string content
+            // compare (heap + SSO), IEEE numeric compare (NaN never
+            // matches, -0 == +0, int32-boxed == raw double), and bit
+            // identity for objects/null/undefined/booleans. The previous
+            // two-path lowering (js_get_string_pointer_unified +
+            // js_string_equals, raw bit compare otherwise) made
+            // `switch (1)` match `case '1'` through the unified getter's
+            // number→string property-key coercion (S12.11_A1_T2) and
+            // `switch (NaN)` match `case NaN` through bit equality.
+            let blk = ctx.block();
+            let i32_eq = blk.call(
+                crate::types::I32,
+                "js_switch_strict_equals",
+                &[(crate::types::DOUBLE, &dv), (crate::types::DOUBLE, &cv)],
+            );
+            let cmp = blk.icmp_ne(crate::types::I32, &i32_eq, "0");
+            blk.cond_br(&cmp, &body_label, &next_label);
         } else {
             // Default case test block: unconditional jump to its body.
             ctx.block().br(&body_label);

@@ -46,11 +46,88 @@ use super::{
     I18nLowerCtx,
 };
 
+/// A `new` callee that is a primitive literal — never a constructor, so
+/// `new <it>(…)` is a `TypeError`. Covers number / bool / null / undefined /
+/// string / bigint literals (the cases the runtime construct path can't always
+/// tag-reject, notably `f64` numbers).
+fn new_callee_is_primitive_literal(callee: &Expr) -> bool {
+    matches!(
+        callee,
+        Expr::Integer(_)
+            | Expr::Number(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Undefined
+            | Expr::String(_)
+            | Expr::WtfString(_)
+            | Expr::BigInt(_)
+    )
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::New {
-            class_name, args, ..
-        } => lower_new(ctx, class_name, args),
+            class_name,
+            args,
+            byte_offset,
+            ..
+        } => {
+            // #5253: under `--debug-symbols`, attach this `new`'s source
+            // `file:line` so a "X is not a constructor" throw from `lower_new`'s
+            // runtime-construct fallback (or a built-in non-constructor) renders
+            // a location. No-op for resolved user classes (no throw fires).
+            crate::expr::calls::emit_call_location_at(ctx, *byte_offset);
+            lower_new(ctx, class_name, args)
+        }
+
+        // `new <callee>(...spread)` — spread-bearing construction. Fold every
+        // argument (regular pushed, spread sources expanded via
+        // `js_array_like_to_array` + concat) into a single JS array in
+        // evaluation order, then dispatch through `js_new_function_construct_apply`
+        // which materialises a flat buffer and reuses the full callee-shape
+        // dispatch of the non-spread `js_new_function_construct`.
+        Expr::NewDynamicSpread {
+            callee,
+            args,
+            byte_offset,
+        } => {
+            use perry_hir::CallArg;
+            let new_byte_offset = *byte_offset;
+            let func_double = lower_expr(ctx, callee)?;
+            let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+            for a in args {
+                match a {
+                    CallArg::Expr(e) => {
+                        let v = lower_expr(ctx, e)?;
+                        acc_handle = ctx.block().call(
+                            I64,
+                            "js_array_push_f64",
+                            &[(I64, &acc_handle), (DOUBLE, &v)],
+                        );
+                    }
+                    CallArg::Spread(e) => {
+                        let part_box = lower_expr(ctx, e)?;
+                        let part_handle =
+                            ctx.block()
+                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
+                        acc_handle = ctx.block().call(
+                            I64,
+                            "js_array_concat",
+                            &[(I64, &acc_handle), (I64, &part_handle)],
+                        );
+                    }
+                }
+            }
+            let args_box = nanbox_pointer_inline(ctx.block(), &acc_handle);
+            // #5253: locate the not-a-constructor throw the apply path can raise.
+            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_new_function_construct_apply",
+                &[(DOUBLE, &func_double), (DOUBLE, &args_box)],
+            );
+            Ok(result)
+        }
 
         // `new <expr>(args…)` where the callee isn't a bare identifier.
         // Several shapes get static rerouting; the rest fall back to a
@@ -95,7 +172,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //      inspects the callee's NaN tag and dispatches to the right
         //      class constructor. That's a separate followup tracked in
         //      the v0.5.8 changelog.
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic {
+            callee,
+            args,
+            byte_offset,
+        } => {
+            // #5253: source location of this `new` for the not-a-constructor
+            // throws below. `const X: any = undefined; new X()` lowers here
+            // (callee `LocalGet`), so this is what localizes ajv's
+            // `undefined is not a constructor`.
+            let new_byte_offset = *byte_offset;
+            // `new <primitive-literal>(…)` is always a `TypeError` — a primitive
+            // is never a constructor (`new 1`, `new 1.5`, `new true`, `new null`,
+            // `new undefined`, `new "s"`). Number literals lower to a plain `f64`
+            // whose bit pattern overlaps the raw-pointer encoding, so the runtime
+            // construct path can't tag-distinguish them; handle every primitive
+            // literal here for a uniform, deterministic throw. Args are lowered
+            // first for their side effects (spec evaluation order).
+            if new_callee_is_primitive_literal(callee.as_ref()) {
+                let _ = lower_expr(ctx, callee)?;
+                for a in args {
+                    let _ = lower_expr(ctx, a)?;
+                }
+                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+                return Ok(ctx.block().call(DOUBLE, "js_throw_not_a_constructor", &[]));
+            }
+
             // Case 1 + 2: callee is statically a class.
             if let Some(name) = try_static_class_name(callee.as_ref(), ctx) {
                 return lower_new(ctx, name, args);
@@ -142,7 +244,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                         if mod_name == "assert" || mod_name == "assert/strict" {
                             let opts = if args.is_empty() {
-                                "double 0x7FFC000000000001".to_string()
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                             } else {
                                 lower_expr(ctx, &args[0])?
                             };
@@ -151,6 +253,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 "js_assert_assertion_error_ctor",
                                 &[(DOUBLE, &opts)],
                             ));
+                        }
+                    }
+                }
+                if property == "Assert" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "assert" || mod_name == "assert/strict" {
+                            let opts = if args.is_empty() {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            } else {
+                                lower_expr(ctx, &args[0])?
+                            };
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_assert_assert_ctor",
+                                &[(DOUBLE, &opts)],
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // `new net.BlockList()` / `new net.SocketAddress(options)` are
+            // native-module constructor exports, so their callee arrives as
+            // `PropertyGet { NativeModuleRef("net"), ... }` rather than a bare
+            // built-in class name. Route them through `lower_new` so the
+            // handle-producing constructor arms allocate registered net handles.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(property.as_str(), "BlockList" | "SocketAddress") {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "net" || mod_name == "node:net" {
+                            return lower_new(ctx, property, args);
+                        }
+                    }
+                }
+            }
+
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if property == "WebSocket" {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "http" || mod_name == "node:http" {
+                            return lower_new(ctx, property, args);
                         }
                     }
                 }
@@ -170,7 +313,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let mod_bytes_global =
                                 format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
                             let mod_len_str = module_name.len().to_string();
-                            return Ok(ctx.block().call(
+                            let install_sym = crate::nm_install::nm_install_symbol(module_name);
+                            let blk = ctx.block();
+                            if let Some(s) = install_sym {
+                                blk.call_void(s, &[]);
+                            }
+                            return Ok(blk.call(
                                 DOUBLE,
                                 "js_create_native_module_namespace",
                                 &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
@@ -180,10 +328,54 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
-            // `new v8.GCProfiler()` (#3142) — represent the profiler instance
-            // as the `"v8.GCProfiler"` native-module namespace so its
-            // `start()` / `stop()` methods dispatch through the runtime
-            // native-module method table (same shape as `new crypto.Certificate`).
+            // `new crypto.DiffieHellman(...)` /
+            // `new crypto.DiffieHellmanGroup(name)` are legacy constructor
+            // aliases for the existing classic-DH factory helpers.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if matches!(property.as_str(), "DiffieHellman" | "DiffieHellmanGroup") {
+                    if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                        if mod_name == "crypto" {
+                            if property == "DiffieHellmanGroup" {
+                                let group = if let Some(arg) = args.first() {
+                                    lower_expr(ctx, arg)?
+                                } else {
+                                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                                };
+                                return Ok(ctx.block().call(
+                                    DOUBLE,
+                                    "js_crypto_get_diffie_hellman",
+                                    &[(DOUBLE, &group)],
+                                ));
+                            }
+
+                            let first = if let Some(arg) = args.first() {
+                                lower_expr(ctx, arg)?
+                            } else {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            };
+                            let second = if let Some(arg) = args.get(1) {
+                                lower_expr(ctx, arg)?
+                            } else {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            };
+                            let third = if let Some(arg) = args.get(2) {
+                                lower_expr(ctx, arg)?
+                            } else {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            };
+                            return Ok(ctx.block().call(
+                                DOUBLE,
+                                "js_crypto_create_diffie_hellman",
+                                &[(DOUBLE, &first), (DOUBLE, &second), (DOUBLE, &third)],
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // `new v8.GCProfiler()` (#3142) — allocate a fresh native-module
+            // instance whose `start()` / `stop()` methods dispatch through the
+            // runtime native-module method table.
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
                 if property == "GCProfiler" {
                     if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
@@ -191,17 +383,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             for a in args {
                                 let _ = lower_expr(ctx, a)?;
                             }
-                            let module_name = "v8.GCProfiler";
-                            let mod_idx = ctx.strings.intern(module_name);
-                            let mod_bytes_global =
-                                format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
-                            let mod_len_str = module_name.len().to_string();
-                            return Ok(ctx.block().call(
-                                DOUBLE,
-                                "js_create_native_module_namespace",
-                                &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
-                            ));
+                            return Ok(ctx.block().call(DOUBLE, "js_v8_gc_profiler_new", &[]));
                         }
+                    }
+                }
+            }
+
+            // `new stream.Readable(opts)` / `new stream.Writable(opts)` /
+            // `new stream.Duplex(...)` / `.Transform` / `.PassThrough` (#3663).
+            // The namespace-member form (`import * as stream` /
+            // `const stream = require('stream')`) arrives here as
+            // `NewDynamic { callee: PropertyGet { NativeModuleRef("stream"),
+            // "Readable" } }` instead of the bare-identifier `Expr::New`
+            // produced by a named ESM import. Without this arm it would fall
+            // through to the empty-object placeholder below, so the resulting
+            // object carries no EventEmitter/Writable methods and
+            // `.on()`/`.write()`/`.pipe()` throw "is not a function". Route to
+            // the same `lower_builtin_new` stream handler the named-import path
+            // uses so the runtime allocates the fully-methoded stream object.
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
+                    if mod_name == "stream"
+                        && matches!(
+                            property.as_str(),
+                            "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+                        )
+                    {
+                        return lower_new(ctx, property, args);
                     }
                 }
             }
@@ -318,10 +526,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let then_synth = Expr::NewDynamic {
                     callee: then_expr.clone(),
                     args: args.clone(),
+                    byte_offset: new_byte_offset,
                 };
                 let else_synth = Expr::NewDynamic {
                     callee: else_expr.clone(),
                     args: args.clone(),
+                    byte_offset: new_byte_offset,
                 };
                 return lower_conditional(ctx, condition, &then_synth, &else_synth);
             }
@@ -354,17 +564,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // also supported because the helper falls back to a
             // class_id=0 empty-object allocation when no synthetic id
             // exists (preserves the pre-fix baseline).
-            // Also route PropertyGet callees through `js_new_function_construct`:
+            // Also route PropertyGet / IndexGet callees through `js_new_function_construct`:
             // covers `new date.constructor(value)` (date-fns
             // `constructFrom`) and generic `new obj.factory(...)` shapes
-            // where `obj.factory` resolves to a closure pointer at
+            // where `obj.factory` or `ctors[i]` resolves to a closure pointer at
             // runtime. The runtime helper detects the global Date /
             // Array / Object thunks and dispatches into the matching
             // real factory; non-matching closures still get the
             // class_id=0 empty-object baseline.
+            // `Expr::Logical` covers `new (A ?? B)()` / `new (A || B)()` /
+            // `new (A && B)()` — picking a constructor with a short-circuit
+            // operator. zod v4's `safeParse` builds its error via
+            // `new (_Err ?? errors.$ZodError)(issues)` (#4699): without this
+            // the callee fell through to the Case-4 empty-object placeholder,
+            // so the `ZodError` constructor never ran and `r.error.issues`
+            // was `undefined`. The whole logical expression lowers to a single
+            // closure value, which `js_new_function_construct` handles exactly
+            // like a `LocalGet` callee (and still falls back to the class_id=0
+            // empty object if the value turns out non-callable).
             let routes_through_function_construct = matches!(
                 callee.as_ref(),
-                Expr::FuncRef(_) | Expr::LocalGet(_) | Expr::PropertyGet { .. }
+                Expr::FuncRef(_)
+                    | Expr::ExternFuncRef { .. }
+                    | Expr::LocalGet(_)
+                    | Expr::PropertyGet { .. }
+                    | Expr::IndexGet { .. }
+                    | Expr::Closure { .. }
+                    | Expr::Logical { .. }
             );
             if routes_through_function_construct {
                 let func_double = lower_expr(ctx, callee)?;
@@ -373,6 +599,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .map(|a| lower_expr(ctx, a))
                     .collect::<Result<Vec<_>>>()?;
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                // #5253: locate a not-a-constructor throw from the runtime
+                // construct path (a `LocalGet` callee holding `undefined`, a
+                // non-callable value, etc.).
+                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
                 let result = ctx.block().call(
                     DOUBLE,
                     "js_new_function_construct",
@@ -381,18 +611,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(result);
             }
 
-            // Case 4: best-effort fallback. Lower the callee + args for
-            // side effects, then return an empty object as the result.
-            let _ = lower_expr(ctx, callee)?;
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
-            let class_id = "0".to_string();
-            let count = "0".to_string();
-            let handle =
-                ctx.block()
-                    .call(I64, "js_object_alloc", &[(I32, &class_id), (I32, &count)]);
-            Ok(nanbox_pointer_inline(ctx.block(), &handle))
+            // Case 4: generic fallback — route any remaining callee shape
+            // through `js_new_function_construct`. This is what makes
+            // `new <primitive>` (`new 1`, `new true`, `new null`) and
+            // `new <boxed-wrapper>` (`new new Boolean(true)`) throw the spec
+            // `TypeError`: the runtime inspects the NaN-box tag / boxed payload
+            // and rejects non-constructors. Unknown closure values still fall
+            // back to the class_id=0 empty-object baseline inside the helper,
+            // preserving the previous best-effort behavior for shapes the
+            // compiler can't resolve statically.
+            let func_double = lower_expr(ctx, callee)?;
+            let lowered_args: Vec<String> = args
+                .iter()
+                .map(|a| lower_expr(ctx, a))
+                .collect::<Result<Vec<_>>>()?;
+            let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+            // #5253: locate the not-a-constructor throw for `new <primitive>` /
+            // `new <non-constructor-value>` rejected inside the runtime helper.
+            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_new_function_construct",
+                &[(DOUBLE, &func_double), (PTR, &args_ptr), (I64, &args_len)],
+            );
+            Ok(result)
         }
 
         // `this` — load from the topmost `this` slot in the constructor

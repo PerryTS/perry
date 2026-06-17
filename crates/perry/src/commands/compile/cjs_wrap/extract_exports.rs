@@ -10,7 +10,14 @@ use super::*;
 /// literal, call, member expression, etc.) — those cases need the IIFE's
 /// `module.exports` machinery to resolve correctly.
 pub fn extract_single_module_exports_assignment(source: &str) -> Option<String> {
-    let re = regex::Regex::new(r#"(?m)^\s*module\.exports\s*=\s*([^;\n]+?)\s*;?\s*$"#).ok()?;
+    // Issue #5275: also accept the bracket/computed-string-literal form
+    // `module['exports'] = X` / `module["exports"] = X`, equivalent to the
+    // dot form. A genuinely dynamic `module[k] = X` (non-string-literal key)
+    // is NOT matched and stays on the runtime `_cjs` path.
+    let re = regex::Regex::new(
+        r#"(?m)^\s*module(?:\.exports|\[\s*'exports'\s*\]|\[\s*"exports"\s*\])\s*=\s*([^;\n]+?)\s*;?\s*$"#,
+    )
+    .ok()?;
     let ident_re = regex::Regex::new(r#"^[A-Za-z_$][A-Za-z0-9_$]*$"#).ok()?;
     let mut found: Option<String> = None;
     for cap in re.captures_iter(source) {
@@ -355,11 +362,36 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     };
 
     // Shape 1: `exports.X = ...` / `module.exports.X = ...`
+    // The boundary class excludes `.` so `e.exports.X = …` (a property write on
+    // some OTHER object — e.g. a webpack/ncc inner module's own exports param,
+    // as in next/dist/compiled/p-queue's `e.exports.TimeoutError = TimeoutError`)
+    // is NOT mistaken for a named export of the outer bundle. A false positive
+    // here makes the wrap emit `export const X = _cjs.X;` at module scope,
+    // which shadows the inner binding of the same name during lowering and
+    // turns every inner reference to it into `undefined`.
     let dot_re = regex::Regex::new(
-        r"(?:^|[^A-Za-z0-9_$])(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
+        r"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
     )
     .unwrap();
     for cap in dot_re.captures_iter(source) {
+        if let Some(m) = cap.get(1) {
+            push_unique(&mut names, m.as_str());
+        }
+    }
+
+    // Issue #5275: bracket / computed-string-literal named exports —
+    // `exports['name'] = …` / `exports["name"] = …` (and the
+    // `module.exports['name'] = …` variant). Equivalent to the dot form.
+    // The leading boundary class excludes `.` so `e.exports['X'] = …` (an
+    // inner webpack/ncc module's own exports param) is not mistaken for a
+    // named export of the outer bundle — mirroring the dot matcher above. A
+    // genuinely dynamic `exports[k] = …` (non-string-literal key) does not
+    // match and stays on the `_cjs` runtime path.
+    let bracket_re = regex::Regex::new(
+        r#"(?:^|[^A-Za-z0-9_$.])(?:module\.)?exports\[\s*['"]([A-Za-z_$][A-Za-z0-9_$]*)['"]\s*\]\s*="#,
+    )
+    .unwrap();
+    for cap in bracket_re.captures_iter(source) {
         if let Some(m) = cap.get(1) {
             push_unique(&mut names, m.as_str());
         }
@@ -378,6 +410,46 @@ pub fn extract_exports_from_source(source: &str) -> Vec<String> {
     let mut search_from = 0usize;
     while let Some(idx) = source[search_from..].find("module.exports") {
         let abs = search_from + idx;
+        // Skip a `module.exports = { … }` that is in EXPRESSION position rather
+        // than at a statement boundary. The dominant case is the
+        // `0 && (module.exports = { X: null, Y: null })` idiom that Babel /
+        // TypeScript emit as a DEAD type-only export hint (the values are `null`
+        // placeholders; the real exports are installed separately, e.g. via
+        // `_export(exports, { X: () => X })` getters). Treating the
+        // placeholder's keys as named exports overrode the real getter exports
+        // with `undefined` (Next.js `built/pages` → `PagesNormalizers`
+        // undefined → "undefined is not a constructor").
+        //
+        // A real top-level assignment is fine even when it's not at column 0
+        // (`exports.a = 1; module.exports = { b, c }`) — accept it at a true
+        // statement boundary. The dead `0 && (module.exports = …)` hint (and
+        // its newline-split form `0 && (\n  module.exports = …\n)`) sits in
+        // EXPRESSION position, so the nearest preceding non-whitespace token —
+        // searched ACROSS newlines, not just the current line — is `(` (or an
+        // operator), never a statement terminator.
+        let prefix = &source[..abs];
+        let prev_token = prefix.bytes().rev().find(|b| !b.is_ascii_whitespace());
+        // Statement terminator / block brace / start-of-file → real statement.
+        let stmt_boundary = matches!(prev_token, None | Some(b';') | Some(b'}') | Some(b'{'));
+        // Operator / open-bracket / comma → the assignment continues an
+        // expression (`0 && (…`, `x =`, `a,`), so it is NOT a real export.
+        let expr_continuation = matches!(
+            prev_token,
+            Some(b'(' | b'&' | b'|' | b',' | b'=' | b'?' | b':' | b'+' | b'-' | b'*' | b'<' | b'>')
+        );
+        // A clean column-0 / ASI line start is also acceptable (e.g. after a
+        // block comment) — but only when the previous token isn't a dangling
+        // expression continuation.
+        let line_start_ok = prefix
+            .bytes()
+            .rev()
+            .take_while(|&b| b != b'\n')
+            .all(|b| b == b' ' || b == b'\t');
+        let accept = stmt_boundary || (line_start_ok && !expr_continuation);
+        if !accept {
+            search_from = abs + 1;
+            continue;
+        }
         // Skip past `module.exports`
         let mut p = abs + "module.exports".len();
         // Skip whitespace

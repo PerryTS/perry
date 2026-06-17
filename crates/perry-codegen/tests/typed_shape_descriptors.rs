@@ -1,7 +1,7 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{
-    BinaryOp, CompareOp, Expr, Function, Interface, InterfaceProperty, Module, ModuleInitKind,
-    Stmt, UpdateOp,
+    ArrayElement, BinaryOp, CompareOp, Expr, Function, Interface, InterfaceProperty, Module,
+    ModuleInitKind, Stmt, UpdateOp,
 };
 use perry_types::{ObjectType, PropertyInfo, Type};
 
@@ -77,6 +77,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -143,6 +145,9 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
 
@@ -284,9 +289,190 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
 }
 
 #[test]
+fn c262_array_spread_uses_strict_iterator_append_and_preserves_holes() {
+    let module = base_module(
+        "c262_array_spread.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "iter".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(vec![Expr::Number(2.0)])),
+            },
+            Stmt::Return(Some(Expr::ArraySpread(vec![
+                ArrayElement::Expr(Expr::Number(1.0)),
+                ArrayElement::Hole,
+                ArrayElement::Spread(Expr::LocalGet(1)),
+            ]))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call i64 @js_array_push_hole"),
+        "elisions should append a hole sentinel, not undefined"
+    );
+    assert!(
+        ir.contains("call i64 @js_array_spread_append"),
+        "spread operands should go through strict iterator materialization"
+    );
+}
+
+#[test]
+fn c262_array_has_own_property_uses_object_prototype_dispatch() {
+    let module = base_module(
+        "c262_array_has_own_property.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::Array(vec![Expr::Bool(true)])),
+            },
+            Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "hasOwnProperty".to_string(),
+                }),
+                args: vec![Expr::String("0".to_string())],
+                type_args: vec![],
+                byte_offset: 0,
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call double @js_typed_feedback_native_call_method"),
+        "array hasOwnProperty should dispatch through Object.prototype semantics"
+    );
+}
+
+#[test]
+fn c262_addition_assignment_operands_use_dynamic_add_helper() {
+    let module = base_module(
+        "c262_addition_order.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "y".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalSet(1, Box::new(Expr::Number(1.0)))),
+                right: Box::new(Expr::LocalGet(1)),
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call double @js_dynamic_string_or_number_add"),
+        "addition with assignment/GetValue operands should preserve ToPrimitive ordering"
+    );
+}
+
+#[test]
 fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     let module = base_module(
         "bounded_integer_array_store.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::Array(vec![
+                    Expr::Number(0.0),
+                    Expr::Number(0.0),
+                    Expr::Number(0.0),
+                ])),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "length".to_string(),
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                // `arr[i] = i + 1`: integer-classified but neither iota nor
+                // constant, so the #4957 bulk-fill matcher
+                // (`match_numeric_bulk_fill_loop`) does NOT fire and the loop
+                // keeps exercising the per-element guarded store path this
+                // test is about. The plain `arr[i] = i` shape now lowers to
+                // `js_array_fill_f64_iota_len_extend` — covered by
+                // `numeric_iota_fill_loop_uses_bulk_helper_without_barrier`
+                // below.
+                body: vec![Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(2)),
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+
+    assert!(
+        ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
+        "bounded numeric array store should route through the raw-f64 payload helper"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "bounded numeric array stores must guard that the runtime layout is still raw-f64"
+    );
+    assert!(
+        ir.contains("call double @js_typed_feedback_array_index_set_fallback_boxed"),
+        "guarded bounded stores need a boxed fallback when the array downgraded"
+    );
+    assert!(
+        !ir.contains("call void @js_gc_note_slot_layout"),
+        "integer store into a numeric array should not update slot layout"
+    );
+    assert!(
+        !ir.contains("call void @js_write_barrier_slot"),
+        "integer store into a numeric array should not emit a slot barrier"
+    );
+}
+
+#[test]
+fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
+    // #4957 lowers `for (let i = 0; i < arr.length; i++) arr[i] = i` over a
+    // numeric array to a bulk iota fill instead of per-element guarded
+    // stores. Pin that lowering — and that the bulk path, like the
+    // per-element one, emits no layout note and no slot barrier for raw-f64
+    // payloads.
+    let module = base_module(
+        "numeric_iota_fill_loop.ts",
         vec![
             Stmt::Let {
                 id: 1,
@@ -334,24 +520,20 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     let ir = ir_for(module);
 
     assert!(
-        ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
-        "bounded numeric array store should route through the raw-f64 payload helper"
+        ir.contains("call i64 @js_array_fill_f64_iota_len_extend"),
+        "iota fill over `arr.length` should lower to the bulk iota helper"
     );
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
-        "bounded numeric array stores must guard that the runtime layout is still raw-f64"
-    );
-    assert!(
-        ir.contains("call double @js_typed_feedback_array_index_set_fallback_boxed"),
-        "guarded bounded stores need a boxed fallback when the array downgraded"
+        !ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
+        "bulk-fill loop should not also emit per-element raw-f64 stores"
     );
     assert!(
         !ir.contains("call void @js_gc_note_slot_layout"),
-        "integer LocalGet store into a numeric array should not update slot layout"
+        "bulk iota fill of a numeric array should not update slot layout"
     );
     assert!(
         !ir.contains("call void @js_write_barrier_slot"),
-        "integer LocalGet store into a numeric array should not emit a slot barrier"
+        "bulk iota fill of a numeric array should not emit a slot barrier"
     );
 }
 

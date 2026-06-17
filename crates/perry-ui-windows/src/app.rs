@@ -227,6 +227,11 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             // Attach any pending menu bar now that the window exists
             crate::menu::attach_pending_menubar(hwnd);
 
+            // Apply modern Win11 chrome by default (rounded corners +
+            // theme-aware title bar) before the window is shown — issue #4681.
+            // No-op / ignored on Windows 10 and earlier.
+            crate::dwm::apply_default_window_chrome(hwnd);
+
             APPS.with(|apps| {
                 let mut apps = apps.borrow_mut();
                 apps.push(AppEntry {
@@ -718,23 +723,8 @@ pub fn app_set_frameless(app_handle: i64, value: f64) {
                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
                     );
 
-                    // Request rounded corners on Windows 11+ via DWM
-                    // DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
-                    extern "system" {
-                        fn DwmSetWindowAttribute(
-                            hwnd: isize,
-                            attr: u32,
-                            value: *const i32,
-                            size: u32,
-                        ) -> i32;
-                    }
-                    let corner_pref: i32 = 2; // DWMWCP_ROUND
-                    let _ = DwmSetWindowAttribute(
-                        hwnd.0 as isize,
-                        33, // DWMWA_WINDOW_CORNER_PREFERENCE
-                        &corner_pref,
-                        std::mem::size_of::<i32>() as u32,
-                    );
+                    // Request rounded corners on Windows 11+ via DWM.
+                    crate::dwm::apply_rounded_corners(hwnd);
                 }
             }
         });
@@ -830,30 +820,10 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
                         _ => 3, // Acrylic default
                     };
 
-                    // DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof)
-                    extern "system" {
-                        fn DwmSetWindowAttribute(
-                            hwnd: isize,
-                            attr: u32,
-                            value: *const i32,
-                            size: u32,
-                        ) -> i32;
-                    }
-                    let _ = DwmSetWindowAttribute(
-                        hwnd.0 as isize,
-                        38, // DWMWA_SYSTEMBACKDROP_TYPE
-                        &backdrop_type,
-                        std::mem::size_of::<i32>() as u32,
-                    );
+                    crate::dwm::set_backdrop(hwnd, backdrop_type);
 
                     // Also enable dark mode title bar for better blending
-                    let use_dark: i32 = 1;
-                    let _ = DwmSetWindowAttribute(
-                        hwnd.0 as isize,
-                        20, // DWMWA_USE_IMMERSIVE_DARK_MODE
-                        &use_dark,
-                        std::mem::size_of::<i32>() as u32,
-                    );
+                    crate::dwm::set_attr_i32(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, 1);
 
                     // Extend client area into frame for borderless mica/acrylic
                     extern "system" {
@@ -1112,6 +1082,37 @@ unsafe extern "system" fn wnd_proc(
                     crate::layout::layout_widget(root, width, height);
                     // Set a one-shot timer to force repaint
                     let _ = SetTimer(hwnd, 9999, 500, None);
+                }
+            }
+            LRESULT(0)
+        }
+        // WM_DPICHANGED (0x02E0) — fired when the window moves to a monitor with
+        // a different DPI (per-monitor-v2; #4681 DPI task). lparam is a
+        // `*const RECT` with the suggested new window position+size Windows has
+        // already scaled for the target monitor. Honoring it (instead of
+        // letting DefWindowProc bitmap-stretch) keeps text and controls crisp
+        // when the window is dragged across monitors with mixed scaling.
+        x if x == 0x02E0 => {
+            if lparam.0 != 0 {
+                let suggested = &*(lparam.0 as *const RECT);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    suggested.left,
+                    suggested.top,
+                    suggested.right - suggested.left,
+                    suggested.bottom - suggested.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            // Relayout the root to the new client size (mirrors WM_SIZE) so
+            // child widgets pick up the new DPI-scaled metrics.
+            let mut client = RECT::default();
+            let _ = GetClientRect(hwnd, &mut client);
+            if let Some(root) = get_root_widget(1) {
+                if let Some(child_hwnd) = crate::widgets::get_hwnd(root) {
+                    let _ = MoveWindow(child_hwnd, 0, 0, client.right, client.bottom, true);
+                    crate::layout::layout_widget(root, client.right, client.bottom);
                 }
             }
             LRESULT(0)

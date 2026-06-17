@@ -32,6 +32,7 @@ use crate::OutputFormat;
 use super::audit_manifest::write_audit_manifest_logging_failures;
 use super::collect_modules::collect_modules;
 use super::resolve::discover_extension_entries;
+use super::resources::find_project_root_for_resources;
 use crate::commands::progress::VerboseProgress;
 
 use super::{CompilationContext, CompileArgs, ParseCache};
@@ -163,6 +164,8 @@ pub(super) fn rerun_collect_with_class_field_types(
         return Ok(());
     }
     let mut field_map: HashMap<String, Vec<(String, perry_types::Type)>> = HashMap::new();
+    let mut accessor_map: HashMap<String, perry_hir::ClassAccessorNames> = HashMap::new();
+    let mut parent_map: HashMap<String, String> = HashMap::new();
     for hir_module in ctx.native_modules.values() {
         for class in &hir_module.classes {
             let fields: Vec<(String, perry_types::Type)> = class
@@ -171,12 +174,38 @@ pub(super) fn rerun_collect_with_class_field_types(
                 .map(|f| (f.name.clone(), f.ty.clone()))
                 .collect();
             field_map.entry(class.name.clone()).or_insert(fields);
+            let mut accessors = perry_hir::ClassAccessorNames::default();
+            for (name, _) in &class.getters {
+                accessors.insert_getter(name.clone());
+            }
+            for (name, _) in &class.setters {
+                accessors.insert_setter(name.clone());
+            }
+            accessor_map.entry(class.name.clone()).or_insert(accessors);
+            if let Some(parent_name) = &class.extends_name {
+                parent_map
+                    .entry(class.name.clone())
+                    .or_insert_with(|| parent_name.clone());
+            }
         }
     }
-    if field_map.is_empty() {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (class_name, parent_name) in parent_map.clone() {
+            let parent_accessors = accessor_map.get(&parent_name).cloned().unwrap_or_default();
+            if parent_accessors.is_empty() {
+                continue;
+            }
+            let entry = accessor_map.entry(class_name).or_default();
+            changed |= entry.extend_from(&parent_accessors);
+        }
+    }
+    if field_map.is_empty() && accessor_map.is_empty() {
         return Ok(());
     }
     ctx.cross_module_class_field_types = field_map;
+    ctx.cross_module_class_accessors = accessor_map;
     ctx.native_modules.clear();
     visited.clear();
     *next_class_id = 1;
@@ -309,11 +338,138 @@ pub(super) fn enforce_js_runtime_gate(ctx: &CompilationContext) -> Result<()> {
     );
 }
 
+fn is_bare_package_specifier(source: &str) -> bool {
+    !source.starts_with('.') && !source.starts_with('/')
+}
+
+fn module_provides_export(
+    ctx: &mut CompilationContext,
+    module_path: &Path,
+    export_name: &str,
+    seen: &mut HashSet<(PathBuf, String)>,
+) -> bool {
+    let key = (module_path.to_path_buf(), export_name.to_string());
+    if !seen.insert(key) {
+        return false;
+    }
+
+    let Some(module) = ctx.native_modules.get(module_path) else {
+        return false;
+    };
+    let exports = module.exports.clone();
+
+    for export in exports {
+        match export {
+            perry_hir::Export::Named { exported, .. } if exported == export_name => {
+                return true;
+            }
+            perry_hir::Export::NamespaceReExport { name, .. } if name == export_name => {
+                return true;
+            }
+            perry_hir::Export::ReExport {
+                source,
+                imported,
+                exported,
+            } if exported == export_name => {
+                if let Some((resolved, perry_hir::ModuleKind::NativeCompiled)) =
+                    super::cached_resolve_import(&source, module_path, ctx)
+                {
+                    if module_provides_export(ctx, &resolved, &imported, seen) {
+                        return true;
+                    }
+                }
+            }
+            perry_hir::Export::ExportAll { source } if export_name != "default" => {
+                if let Some((resolved, perry_hir::ModuleKind::NativeCompiled)) =
+                    super::cached_resolve_import(&source, module_path, ctx)
+                {
+                    if module_provides_export(ctx, &resolved, export_name, seen) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+/// Validate default imports from package entries that Perry compiles natively.
+///
+/// Perry lowers JS-module default imports to a `__default` wrapper symbol. If a
+/// package entry is ESM-shaped and exposes only named exports, that wrapper has
+/// no producer and the user sees a native linker error. Match Node's static ESM
+/// behavior for the package-import case by rejecting the import while the module
+/// graph still has source/package context.
+pub(super) fn enforce_package_default_exports(ctx: &mut CompilationContext) -> Result<()> {
+    let import_edges: Vec<(PathBuf, String, String, String)> = ctx
+        .native_modules
+        .iter()
+        .flat_map(|(importer_path, module)| {
+            module.imports.iter().filter_map(|import| {
+                if import.type_only
+                    || import.is_dynamic
+                    || import.is_native
+                    // Issue #5257: an adopted `require('S')` (CJS wrap synthesized
+                    // `import _req_N from 'S'`) is NOT a static-ESM default import —
+                    // `require()` hands back the exports object, so a named-only / CJS
+                    // target is valid and must route through the namespace machinery
+                    // instead of failing Node's "no default export" rule.
+                    || import.is_adopted_require
+                    || import.module_kind != perry_hir::ModuleKind::NativeCompiled
+                    || !is_bare_package_specifier(&import.source)
+                {
+                    return None;
+                }
+                let resolved_path = import.resolved_path.as_ref()?;
+                let default_local =
+                    import
+                        .specifiers
+                        .iter()
+                        .find_map(|specifier| match specifier {
+                            perry_hir::ImportSpecifier::Default { local } => Some(local.clone()),
+                            _ => None,
+                        })?;
+                Some((
+                    importer_path.clone(),
+                    import.source.clone(),
+                    resolved_path.clone(),
+                    default_local,
+                ))
+            })
+        })
+        .collect();
+
+    for (importer_path, source, resolved_path, local) in import_edges {
+        let target_path = PathBuf::from(&resolved_path);
+        if !ctx.native_modules.contains_key(&target_path) {
+            continue;
+        }
+        if !module_provides_export(ctx, &target_path, "default", &mut HashSet::new()) {
+            anyhow::bail!(
+                "The requested package '{}' does not provide an export named 'default' \
+                 (imported as '{}' in {}). Resolved package entry: {}",
+                source,
+                local,
+                importer_path.display(),
+                target_path.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod js_runtime_gate_tests {
     use std::path::PathBuf;
 
-    use super::{enforce_js_runtime_gate, CompilationContext};
+    use super::{enforce_js_runtime_gate, enforce_package_default_exports, CompilationContext};
+
+    fn empty_module(name: &str) -> perry_hir::Module {
+        perry_hir::Module::new(name)
+    }
 
     #[test]
     fn diagnostic_suggests_missing_compile_package_on_windows_paths() {
@@ -363,6 +519,46 @@ mod js_runtime_gate_tests {
         assert!(message.contains(&format!("declarations: {}", declaration.display())));
         assert!(message.contains("Declaration hint:"));
         assert!(message.contains("typed-js"));
+    }
+
+    #[test]
+    fn package_default_import_without_default_export_fails_preflight() {
+        let mut ctx = CompilationContext::new(PathBuf::from("/repo"));
+        let importer_path = PathBuf::from("/repo/main.ts");
+        let package_path = PathBuf::from("/repo/node_modules/pkg/index.ts");
+
+        let mut importer = empty_module("main");
+        importer.imports.push(perry_hir::Import {
+            source: "pkg".to_string(),
+            specifiers: vec![perry_hir::ImportSpecifier::Default {
+                local: "Pkg".to_string(),
+            }],
+            is_native: false,
+            module_kind: perry_hir::ModuleKind::NativeCompiled,
+            resolved_path: Some(package_path.to_string_lossy().to_string()),
+            type_only: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+
+        let mut package = empty_module("pkg");
+        package.exports.push(perry_hir::Export::Named {
+            local: "named".to_string(),
+            exported: "named".to_string(),
+        });
+
+        ctx.native_modules.insert(importer_path, importer);
+        ctx.native_modules.insert(package_path, package);
+
+        let message = enforce_package_default_exports(&mut ctx)
+            .expect_err("missing package default export must fail before codegen")
+            .to_string();
+
+        assert!(message.contains("pkg"));
+        assert!(message.contains("default"));
+        assert!(message.contains("Resolved package entry"));
     }
 }
 
@@ -656,6 +852,56 @@ pub(super) fn validate_min_windows_version(
     Ok(())
 }
 
+/// Resolve the Windows PE subsystem override into `ctx.windows_subsystem`.
+///
+/// Precedence:
+///   1. `--windows-subsystem` when set to `console`/`windows` (explicit
+///      CLI intent wins).
+///   2. `perry.toml [windows] subsystem` — the source that survives the
+///      `perry publish` worker round-trip, since the dev shell's flags don't
+///      transfer but perry.toml is uploaded with `--project` (mirrors
+///      `resolve_optional_framework_dir`'s env→toml fallback).
+///   3. `auto` — defer to the `needs_ui` import heuristic at link time.
+///
+/// Unknown values from either source are a hard error so typos fail loudly
+/// instead of silently linking a console window onto a GUI game.
+pub(super) fn validate_windows_subsystem(
+    args: &CompileArgs,
+    ctx: &mut CompilationContext,
+) -> Result<()> {
+    fn check(value: &str, source: &str) -> Result<()> {
+        match value {
+            "auto" | "console" | "windows" => Ok(()),
+            other => {
+                anyhow::bail!("{source}: expected 'auto', 'console', or 'windows', got '{other}'.")
+            }
+        }
+    }
+
+    check(&args.windows_subsystem, "--windows-subsystem")?;
+
+    // 1. Explicit CLI override wins.
+    if args.windows_subsystem != "auto" {
+        ctx.windows_subsystem = args.windows_subsystem.clone();
+        return Ok(());
+    }
+
+    // 2. CLI left at default — consult perry.toml [windows] subsystem.
+    let project_root = find_project_root_for_resources(&args.input, true);
+    if let Ok(content) = std::fs::read_to_string(project_root.join("perry.toml")) {
+        if let Ok(doc) = content.parse::<toml::Table>() {
+            if let Some(sub) = super::app_metadata::toml_string(&doc, "windows", "subsystem") {
+                check(&sub, "perry.toml [windows] subsystem")?;
+                ctx.windows_subsystem = sub;
+                return Ok(());
+            }
+        }
+    }
+
+    // 3. Stays "auto" (ctx default) — import heuristic decides.
+    Ok(())
+}
+
 /// Run the full post-collect preflight chain (capability / egress /
 /// lockdown / SBOM / geisterhand / windows-version / project_root
 /// recompute / module-count print). All gates collected here so the
@@ -666,6 +912,7 @@ pub(super) fn run_post_collect_preflight(
     format: OutputFormat,
 ) -> Result<()> {
     enforce_js_runtime_gate(ctx)?;
+    enforce_package_default_exports(ctx)?;
     recompute_common_project_root(ctx);
 
     let total_modules = ctx.native_modules.len() + ctx.js_modules.len();
@@ -697,6 +944,7 @@ pub(super) fn run_post_collect_preflight(
 
     apply_geisterhand_args(args, ctx);
     validate_min_windows_version(args, ctx)?;
+    validate_windows_subsystem(args, ctx)?;
     Ok(())
 }
 

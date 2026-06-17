@@ -19,7 +19,19 @@
 //! when the *owner* object itself is evacuated.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+/// Set when `Object.setPrototypeOf` has retargeted a REAL ARRAY's
+/// [[Prototype]] anywhere in the program. The typed-feedback array guards
+/// consult it (one relaxed load) so the inline raw-slot fast path stands
+/// down: holes/OOB reads must then walk the custom chain (test262
+/// copyWithin/coerced-values-start-change-*).
+static ARRAY_TARGET_PROTO_RECORDED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn array_static_proto_recorded() -> bool {
+    ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
+}
 
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
@@ -35,6 +47,20 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
     if obj_ptr == 0 {
         return;
+    }
+    if !ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
+        && obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
+        && crate::value::addr_class::is_above_handle_band(obj_ptr)
+        && crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
+    {
+        let obj_type = unsafe {
+            let hdr =
+                (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            (*hdr).obj_type
+        };
+        if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            ARRAY_TARGET_PROTO_RECORDED.store(true, Ordering::Relaxed);
+        }
     }
     let mut slot_addr = 0usize;
     if let Ok(mut map) = get_object_prototypes().lock() {
@@ -55,6 +81,50 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
         .lock()
         .ok()
         .and_then(|map| map.get(&obj_ptr).copied())
+}
+
+pub(crate) fn default_object_prototype_bits() -> Option<u64> {
+    let object_ctor = super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let ctor_bits = object_ctor.to_bits();
+    if (ctor_bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let ctor_ptr = (ctor_bits & crate::value::POINTER_MASK) as usize;
+    if ctor_ptr == 0 {
+        return None;
+    }
+    let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+    let proto_bits = proto.to_bits();
+    if (proto_bits >> 48) == 0x7FFD {
+        Some(proto_bits)
+    } else {
+        None
+    }
+}
+
+pub(crate) unsafe fn default_object_prototype_for_owner(obj_ptr: usize) -> Option<u64> {
+    if obj_ptr == 0 {
+        return None;
+    }
+    let obj = obj_ptr as *const crate::ObjectHeader;
+    if !super::is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    let gc = super::gc_header_for(obj);
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        return None;
+    }
+    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT
+        || ((*obj).class_id != 0 && !super::is_anon_shape_class_id((*obj).class_id))
+    {
+        return None;
+    }
+    let proto_bits = default_object_prototype_bits()?;
+    let proto_ptr = (proto_bits & crate::value::POINTER_MASK) as usize;
+    if proto_ptr == 0 || proto_ptr == obj_ptr {
+        return None;
+    }
+    Some(proto_bits)
 }
 
 /// Migrate the side-table entry when the owner object is evacuated by a moving
@@ -101,9 +171,7 @@ pub(crate) fn resolve_inherited_field(
     obj_ptr: usize,
     key: *const crate::StringHeader,
 ) -> Option<crate::value::JSValue> {
-    let Some(proto_bits) = object_static_prototype(obj_ptr) else {
-        return None;
-    };
+    let proto_bits = object_static_prototype(obj_ptr)?;
     if proto_bits == TAG_NULL {
         return None;
     }
@@ -129,7 +197,12 @@ pub(crate) fn resolve_inherited_field(
     // object instead of the instance.
     let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
     let previous_this = super::js_implicit_this_set(receiver);
+    // The recursive `get_field(proto, key)` re-derives the accessor receiver
+    // from `proto`; stash the real instance so an inherited getter binds `this`
+    // to it, not to the prototype.
+    let prev_override = super::field_get_set::accessor_receiver_override_begin(receiver);
     let v = super::js_object_get_field_by_name(proto, key);
+    super::field_get_set::accessor_receiver_override_end(prev_override);
     super::js_implicit_this_set(previous_this);
     if v.bits() == 0x7FFC_0000_0000_0001 {
         // undefined — treat as "not present" so callers fall back cleanly.

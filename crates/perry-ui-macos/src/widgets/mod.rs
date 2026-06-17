@@ -7,6 +7,7 @@ pub mod canvas;
 pub mod chart;
 pub mod combobox;
 pub mod command_palette;
+pub mod date_picker;
 pub mod divider;
 pub mod foreach_registry;
 pub mod form;

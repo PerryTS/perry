@@ -10,6 +10,13 @@ use super::*;
 #[no_mangle]
 pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     let bits = value.to_bits();
+    // RequireObjectCoercible(base): `null[i]` / `undefined[i]` throw a
+    // TypeError rather than returning undefined (test262
+    // compound-assignment / prefix-increment null-base cases). Mirrors the
+    // codegen-side guard on the by-name fallback in index_get.rs.
+    if bits == TAG_UNDEFINED || bits == TAG_NULL {
+        crate::object::has_own_helpers::throw_to_object_nullish_type_error();
+    }
     let jsval = JSValue::from_bits(bits);
     if jsval.is_string() || jsval.is_short_string() {
         let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
@@ -27,6 +34,30 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         }
         return f64::from_bits(JSValue::string_ptr(result).bits());
     }
+    // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key]` where `C` is a
+    // runtime class-ref value (e.g. a function parameter). Member-expression
+    // access (`C.key`) already routes through `js_object_get_field_by_name_f64`,
+    // which detects the class-ref tag and consults the static method / field /
+    // CLASS_DYNAMIC_PROPS tables; the computed form must do the same instead of
+    // falling through to the not-a-pointer `undefined` path below. (test262
+    // class/elements propertyHelper `isWritable(C, "m")` does `C[name] = v`.)
+    if (bits >> 48) == 0x7FFE {
+        let idx_top16 = index.to_bits() >> 48;
+        let key_ptr = if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+            js_get_string_pointer_unified(index) as *const crate::StringHeader
+        } else {
+            // Numeric / other index → ToString for the class-ref lookup.
+            let s = crate::builtins::js_string_coerce(index);
+            s as *const crate::StringHeader
+        };
+        if key_ptr.is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return crate::object::js_object_get_field_by_name_f64(
+            bits as *const crate::object::ObjectHeader,
+            key_ptr,
+        );
+    }
     let raw_ptr = if jsval.is_pointer() {
         (bits & POINTER_MASK) as usize
     } else if !value.is_nan()
@@ -41,6 +72,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     };
     if raw_ptr < 0x10000 {
         return f64::from_bits(TAG_UNDEFINED);
+    }
+    // TypedArrays carry element-typed storage, not boxed ArrayHeader slots.
+    // Probe the registry before any GC-header or raw ArrayHeader fallback so
+    // values whose static type was erased by callback methods still read via
+    // the per-kind accessor (`Uint16Array#map(...)[0]`, `(ta as any)[0]`).
+    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+        return crate::typedarray::js_typed_array_index_get_dynamic(
+            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+            index,
+        );
     }
     // Issue #63 / #321 (Effect.runSync→fork SIGBUS): the raw-I64 fallback
     // above accepts arbitrary in-range bits — including denormal f64
@@ -81,6 +122,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     } else {
         index as i32
     };
+    if idx_i32 >= 0 {
+        if let Some(value) = unsafe {
+            crate::object::arguments_object_get_index(
+                raw_ptr as *const crate::object::ObjectHeader,
+                idx_i32 as u32,
+            )
+        } {
+            return value;
+        }
+    }
     // Registry-backed Buffer (`Buffer.from(...)`, `js_buffer_alloc`, the
     // `'data'`-event chunk an http/net listener receives). These carry NO
     // GcHeader (see `crates/perry-runtime/src/buffer.rs` — "Buffers carry
@@ -149,10 +200,23 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
                 format!("{}", index)
             };
             let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            return crate::object::js_object_get_field_by_name_f64(
+            let v = crate::object::js_object_get_field_by_name_f64(
                 raw_ptr as *const crate::object::ObjectHeader,
                 key,
             );
+            // An indexed property inherited from the canonical
+            // `Object.prototype` (incl. a defineProperty accessor) shows
+            // through any object/function receiver — e.g. `Array[1]` after
+            // `Object.defineProperty(Object.prototype, "1", { get })`
+            // (test262 filter/15.4.4.20-9-b-6).
+            if v.to_bits() == crate::value::TAG_UNDEFINED
+                && idx_i32 >= 0
+                && index == (idx_i32 as f64)
+                && crate::array::object_prototype_has_index_prop(idx_i32 as u32)
+            {
+                return crate::array::sort_object_prototype_index_get(idx_i32 as u32);
+            }
+            return v;
         }
     }
     if idx_i32 < 0 {
@@ -180,7 +244,41 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
+    // `Object.prototype[i] = v` (computed write) makes the index visible
+    // through every array's hole/OOB reads — flip the global flag.
+    if jsval.is_pointer() {
+        crate::array::note_object_prototype_index_write((bits & POINTER_MASK) as usize);
+    }
     if jsval.is_string() || jsval.is_short_string() {
+        return value;
+    }
+    // A `Temporal.*` value is an opaque immutable cell — a dynamic property
+    // write (`temporalValue[key] = v`) is a no-op, never an ObjectHeader write.
+    #[cfg(feature = "temporal")]
+    if crate::temporal::is_temporal_value(obj) {
+        return value;
+    }
+    // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key] = v` where `C` is
+    // a runtime class-ref value (e.g. a function parameter). Route to the
+    // by-name setter, which detects the class-ref tag and stores into the
+    // static-field / CLASS_DYNAMIC_PROPS side table — matching the member-write
+    // form (`C.key = v`). Without this the write was silently dropped, so
+    // propertyHelper's `isWritable(C, name)` (`C[name] = v`) reported a static
+    // method as non-writable. (Mirrors the get arm above.)
+    if (bits >> 48) == 0x7FFE {
+        let idx_top16 = index.to_bits() >> 48;
+        let key_ptr = if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+            js_get_string_pointer_unified(index) as *const crate::StringHeader
+        } else {
+            crate::builtins::js_string_coerce(index) as *const crate::StringHeader
+        };
+        if !key_ptr.is_null() {
+            crate::object::js_object_set_field_by_name(
+                bits as *mut crate::object::ObjectHeader,
+                key_ptr,
+                value,
+            );
+        }
         return value;
     }
     let raw_ptr = if jsval.is_pointer() {
@@ -198,9 +296,38 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return value;
     }
+    if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
+        if index.is_finite() {
+            let idx_i32 = index as i32;
+            if idx_i32 >= 0 && index == idx_i32 as f64 {
+                crate::typedarray::js_typed_array_set(
+                    raw_ptr as *mut crate::typedarray::TypedArrayHeader,
+                    idx_i32,
+                    value,
+                );
+            }
+        }
+        return value;
+    }
     // Mirror the #63/#321 guard on the get side: heuristic-derived
     // pseudo-pointers from non-pointer dataflow must not be dereferenced.
     if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
+        return value;
+    }
+    let idx_i32 = if index.is_nan() || index.is_infinite() {
+        0
+    } else {
+        index as i32
+    };
+    if idx_i32 >= 0
+        && unsafe {
+            crate::object::arguments_object_set_index(
+                raw_ptr as *mut crate::object::ObjectHeader,
+                idx_i32 as u32,
+                value,
+            )
+        }
+    {
         return value;
     }
     let is_array = unsafe {
@@ -225,11 +352,6 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         crate::value::js_get_string_pointer_unified(index) as *const crate::StringHeader
     } else {
         // Numeric (or other) index — stringify and intern as a UTF-8 key.
-        let idx_i32 = if index.is_nan() || index.is_infinite() {
-            0
-        } else {
-            index as i32
-        };
         let s = idx_i32.to_string();
         crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     };

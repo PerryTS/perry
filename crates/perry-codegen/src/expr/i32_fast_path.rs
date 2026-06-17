@@ -93,6 +93,21 @@ pub(crate) fn try_lower_flat_const_index_get(
         _ => return Ok(None),
     };
 
+    // A string-keyed access (`m["1"]["0"]`) must NOT take the integer flat
+    // path: `fptosi` on a NaN-boxed string collapses to index 0, so every
+    // string-keyed read returned the matrix's element 0. Bail to the caller's
+    // tag-aware dispatch, which resolves a canonical numeric-string index to
+    // the real element (`m` itself materializes as a heap array; only the
+    // separately-tracked `const row = m[i]` alias does not). Proven-numeric /
+    // loop-counter indices keep the flat path.
+    let row_is_string = matches!(row_expr.as_ref(), Expr::String(_))
+        || crate::type_analysis::is_string_expr(ctx, &row_expr);
+    let col_is_string = matches!(col_expr.as_ref(), Expr::String(_))
+        || crate::type_analysis::is_string_expr(ctx, &col_expr);
+    if row_is_string || col_is_string {
+        return Ok(None);
+    }
+
     // Compute `row_i32` and `col_i32` as i32 SSA values. Use the existing
     // integer lowering when possible (both operands are likely small
     // loop-derived values); otherwise fall back to the double path and

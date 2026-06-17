@@ -61,7 +61,8 @@ use intrinsics::{
     try_embed_wasm, try_function_return_this, try_iife_call_rewrite, try_iterator_from,
     try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
-    try_pod_layout_constants, try_precompile, try_require_literal_bail,
+    try_pod_layout_constants, try_precompile, try_require_literal,
+    try_strict_eval_arguments_assignment,
 };
 use local_array_methods::try_local_array_methods;
 use module_class_static::try_module_class_static;
@@ -73,8 +74,8 @@ use nested_namespace::{
     try_web_crypto_subtle,
 };
 use post_args_dispatch::{
-    try_object_has_own_call, try_object_prototype_call, try_object_static_alias_call,
-    try_proxy_call,
+    try_array_static_alias_call, try_direct_has_own_call, try_object_has_own_call,
+    try_object_prototype_call, try_object_static_alias_call, try_proxy_call,
 };
 use prescans::run_call_prescans;
 use regex_string::try_regex_string_methods;
@@ -142,12 +143,21 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     // are likewise out of scope once we unwind past their owning
     // call). `truncate` is a no-op when nothing was added.
     if ctx.native_instances.len() > ni_mark {
-        ctx.native_instances.truncate(ni_mark);
+        ctx.truncate_native_instances(ni_mark);
     }
     result
 }
 
 fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
+    // Safety net for the receiver-lowering memo (see
+    // `LoweringContext::prelowered_member_receiver`): the memo is set by
+    // `try_static_method_and_instance` only to be consumed by the immediately
+    // following fall-through tail's `lower_member_inner`. It is single-shot and
+    // span-keyed, but in case a code path sets it without the tail consuming it,
+    // drop any stale entry here so it can never leak across calls. This runs
+    // before the callee tail (which lowers a Member, not a Call), so it never
+    // clobbers an in-flight memo for the call currently being lowered.
+    ctx.prelowered_member_receiver = None;
     // Check if any argument has spread
     let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
 
@@ -161,7 +171,9 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
     // Compile-time intrinsics + legacy CJS/UMD bare-callee shapes
     // (require/embedWasm/IIFE.call/Function('return this')/RegExp).
-    try_require_literal_bail(ctx, call)?;
+    if let Some(expr) = try_require_literal(ctx, call)? {
+        return Ok(expr);
+    }
     if let Some(expr) = try_embed_wasm(ctx, call)? {
         return Ok(expr);
     }
@@ -209,16 +221,29 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     if let Some(expr) = try_function_return_this(ctx, call, has_spread) {
         return Ok(expr);
     }
+    // Strict-mode early errors in a literal eval body must throw the
+    // SyntaxError at the eval() call — checked BEFORE the const-fold so a
+    // foldable body carrying a violation doesn't compile through.
+    if let Some(expr) = try_strict_eval_arguments_assignment(ctx, call) {
+        return Ok(expr);
+    }
     // #1679 (Phase 1): const-fold a literal `Function(...)` body into a
     // native function, and fold the `(0, eval)('this')` globalThis idiom.
     // Runs after the `Function('return this')()` fold; before the Phase 0
     // refusal so const-foldable sites compile instead of being classified.
+    if let Some(expr) = super::const_fold_fn::try_eval_function_member_call_fold(ctx, call)? {
+        return Ok(expr);
+    }
     if let Some(expr) = super::const_fold_fn::try_eval_function_call_fold(ctx, call)? {
         return Ok(expr);
     }
-    // #1678: classify `Function(...)` / `eval(...)`. Bails on the
-    // runtime-unknown bucket; otherwise logs + falls through.
-    check_eval_function_call(ctx, call)?;
+    // #1678/#5206: classify `Function(...)` / `eval(...)`. In strict-eval
+    // mode bails on the runtime-unknown bucket; by default compiles that
+    // bucket to a throw-on-reach value (returned here); otherwise falls
+    // through.
+    if let Some(expr) = check_eval_function_call(ctx, call)? {
+        return Ok(expr);
+    }
     if let Some(expr) = try_bare_regexp_call(ctx, call, has_spread)? {
         return Ok(expr);
     }
@@ -288,7 +313,15 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         Ok(expr) => return Ok(expr),
         Err(args) => args,
     };
+    args = match try_array_static_alias_call(ctx, call, args, has_spread) {
+        Ok(expr) => return Ok(expr),
+        Err(args) => args,
+    };
     args = match try_object_has_own_call(call, args, has_spread) {
+        Ok(expr) => return Ok(expr),
+        Err(args) => args,
+    };
+    args = match try_direct_has_own_call(ctx, call, args, has_spread) {
         Ok(expr) => return Ok(expr),
         Err(args) => args,
     };
@@ -318,17 +351,60 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
     match &call.callee {
         ast::Callee::Super(_) => {
-            // super() call in constructor
+            // super() call in constructor. With spread args
+            // (`super(...arguments)` — tsc's pass-through-ctor emit) the
+            // parent ctor is invoked at runtime via the
+            // CLASS_CONSTRUCTORS registry with the materialized args
+            // array; the flat lowering would pass the spread operand as
+            // ONE positional arg (zod's ZodNumber stored the whole
+            // `arguments` object into `this._def`).
+            if let Some(spread_args) = spread_args {
+                return Ok(Expr::SuperCallSpread(spread_args));
+            }
             Ok(Expr::SuperCall(args))
         }
         ast::Callee::Expr(expr) => {
             // Check for super.method() call
             if let ast::Expr::SuperProp(super_prop) = expr.as_ref() {
-                if let ast::SuperProp::Ident(ident) = &super_prop.prop {
-                    return Ok(Expr::SuperMethodCall {
-                        method: ident.sym.to_string(),
-                        args,
-                    });
+                match &super_prop.prop {
+                    ast::SuperProp::Ident(ident) => {
+                        if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                            return Ok(Expr::ObjectSuperMethodCall {
+                                home: Box::new(Expr::LocalGet(home_id)),
+                                key: Box::new(Expr::String(ident.sym.to_string())),
+                                receiver: Box::new(Expr::This),
+                                args,
+                            });
+                        }
+                        return Ok(Expr::SuperMethodCall {
+                            method: ident.sym.to_string(),
+                            args,
+                        });
+                    }
+                    ast::SuperProp::Computed(computed) => {
+                        if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
+                            return Ok(Expr::ObjectSuperMethodCall {
+                                home: Box::new(Expr::LocalGet(home_id)),
+                                key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
+                                receiver: Box::new(Expr::This),
+                                args,
+                            });
+                        }
+                        // `super['getThis']()` in a CLASS method with a string-
+                        // literal key is a super METHOD CALL — route it through
+                        // SuperMethodCall (the ident-form path) so it binds the
+                        // current `this` as receiver. Without this it fell through
+                        // to a generic property-get-then-call that lost the
+                        // receiver binding (test262 super/prop-expr-cls-ref-this).
+                        if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
+                            if let Some(method) = s.value.as_str() {
+                                return Ok(Expr::SuperMethodCall {
+                                    method: method.to_string(),
+                                    args,
+                                });
+                            }
+                        }
+                    }
                 }
             }
 
@@ -566,6 +642,10 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                     callee,
                     args,
                     type_args,
+                    // #5247: capture the call's source byte offset (same source as
+                    // DynamicImport's `byte_offset` below). Codegen resolves it to a
+                    // `file:line` for the runtime "X is not a function" TypeError.
+                    byte_offset: call.span.lo.0,
                 })
             }
         }
@@ -582,6 +662,8 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             Ok(Expr::DynamicImport {
                 paths: Vec::new(),
                 arg: Box::new(arg),
+                byte_offset: call.span.lo.0,
+                deferred_error: None,
             })
         }
     }

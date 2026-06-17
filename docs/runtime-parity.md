@@ -336,8 +336,8 @@ Bun column reflects [bun.sh/docs/runtime/nodejs-apis](https://bun.sh/docs/runtim
 | `filehandle.createReadStream([options])` | ✓ | ✓ |  |
 | `filehandle.createWriteStream([options])` | ✓ | ✓ |  |
 | `filehandle.datasync()` | ✓ | ✓ |  |
-| `filehandle.pull([...transforms][, options])` | ✓ | ⚠ | Experimental in Node |
-| `filehandle.pullSync([...transforms][, options])` | ✓ | ⚠ | Experimental in Node |
+| `filehandle.pull([...transforms][, options])` | ✓ | ⚠ | Experimental in Node; Perry supports no-transform source iteration |
+| `filehandle.pullSync([...transforms][, options])` | ✓ | ⚠ | Experimental in Node; Perry supports no-transform source iteration |
 | `filehandle.read(buffer, offset, length, position)` | ✓ | ✓ |  |
 | `filehandle.read([options])` | ✓ | ✓ |  |
 | `filehandle.read(buffer[, options])` | ✓ | ✓ |  |
@@ -354,7 +354,7 @@ Bun column reflects [bun.sh/docs/runtime/nodejs-apis](https://bun.sh/docs/runtim
 | `filehandle.write(string[, position[, encoding]])` | ✓ | ✓ |  |
 | `filehandle.writeFile(data, options)` | ✓ | ✓ |  |
 | `filehandle.writev(buffers[, position])` | ✓ | ✓ |  |
-| `filehandle.writer([options])` | ✓ | ⚠ | Newer API |
+| `filehandle.writer([options])` | ✓ | ⚠ | Newer API; Perry supports direct FileHandle writes |
 | `filehandle[Symbol.asyncDispose]()` | ✓ | ✓ |  |
 
 #### Events
@@ -477,7 +477,7 @@ Available via `require('node:path/win32')` or `path.win32`. Exposes the same sur
 | `server[Symbol.asyncDispose]()` | ✓ | ✓ |  |
 | `server.headersTimeout` | ✓ | ✓ |  |
 | `server.keepAliveTimeout` | ✓ | ✓ |  |
-| `server.keepAliveTimeoutBuffer` | ✓ | ⚠ | Newer Node addition |
+| `server.keepAliveTimeoutBuffer` | ✓ | ✓ |  |
 | `server.listening` | ✓ | ✓ |  |
 | `server.maxHeadersCount` | ✓ | ✓ |  |
 | `server.maxRequestsPerSocket` | ✓ | ✓ |  |
@@ -629,6 +629,7 @@ Available via `require('node:path/win32')` or `path.win32`. Exposes the same sur
 | `server.requestTimeout` | ✓ | ✓ |  |
 | `server.timeout` | ✓ | ✓ |  |
 | `server.keepAliveTimeout` | ✓ | ✓ |  |
+| `server.keepAliveTimeoutBuffer` | ✓ | ✓ |  |
 | `server[Symbol.asyncDispose]()` | ✓ | ✓ |  |
 
 #### Events
@@ -1173,8 +1174,8 @@ Available via `require('node:dns/promises')` or `dns.promises`.
 #### Functions
 | API | Node.js | Bun | Notes |
 |-----|---------|-----|-------|
-| `crypto.checkPrime(candidate[, options], callback)` | ✓ | ✓ |  |
-| `crypto.checkPrimeSync(candidate[, options])` | ✓ | ✓ |  |
+| `crypto.checkPrime(candidate[, options], callback)` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
+| `crypto.checkPrimeSync(candidate[, options])` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
 | `crypto.createCipheriv(algorithm, key, iv[, options])` | ✓ | ✓ |  |
 | `crypto.createDecipheriv(algorithm, key, iv[, options])` | ✓ | ✓ |  |
 | `crypto.createDiffieHellman(prime[, primeEncoding][, generator][, generatorEncoding])` | ✓ | ✓ |  |
@@ -1193,8 +1194,8 @@ Available via `require('node:dns/promises')` or `dns.promises`.
 | `crypto.generateKeySync(type, options)` | ✓ | ✓ |  |
 | `crypto.generateKeyPair(type, options, callback)` | ✓ | ✓ |  |
 | `crypto.generateKeyPairSync(type, options)` | ✓ | ✓ |  |
-| `crypto.generatePrime(size[, options], callback)` | ✓ | ✓ |  |
-| `crypto.generatePrimeSync(size[, options])` | ✓ | ✓ |  |
+| `crypto.generatePrime(size[, options], callback)` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
+| `crypto.generatePrimeSync(size[, options])` | ✓ | ✓ | Buffer/ArrayBuffer-compatible and BigInt prime parity fixture |
 | `crypto.getCipherInfo(nameOrNid[, options])` | ✓ | ✓ |  |
 | `crypto.getCiphers()` | ✓ | ✓ |  |
 | `crypto.getCurves()` | ✓ | ✓ |  |
@@ -1225,10 +1226,10 @@ Available via `require('node:dns/promises')` or `dns.promises`.
 | `crypto.sign(algorithm, data, key[, callback])` | ✓ | ✓ |  |
 | `crypto.timingSafeEqual(a, b)` | ✓ | ✓ |  |
 | `crypto.verify(algorithm, data, key, signature[, callback])` | ✓ | ✓ |  |
-| `crypto.argon2(algorithm, parameters, callback)` | ✓ | ⚠ | New v22+ |
-| `crypto.argon2Sync(algorithm, parameters)` | ✓ | ⚠ | New v22+ |
-| `crypto.encapsulate(key[, callback])` | ✓ | ⚠ | New PQC API |
-| `crypto.decapsulate(key, ciphertext[, callback])` | ✓ | ⚠ | New PQC API |
+| `crypto.argon2(algorithm, parameters, callback)` | ✓ | ⚠ | Argon2 KDF parity fixture |
+| `crypto.argon2Sync(algorithm, parameters)` | ✓ | ⚠ | Argon2 KDF parity fixture |
+| `crypto.encapsulate(key[, callback])` | ✓ | ⚠ | X25519 KeyObject-surrogate KEM parity fixture |
+| `crypto.decapsulate(key, ciphertext[, callback])` | ✓ | ⚠ | X25519 KeyObject-surrogate KEM parity fixture |
 
 #### Module Properties
 | Property | Node.js | Bun | Notes |
@@ -2297,9 +2298,9 @@ Bun status: 🟡 Mostly implemented. `process.binding` partial. `process.title` 
 | `process.permission.has(scope[, reference])` | ✓ | ⚠ |  |
 | `process.umask()` | ✓ | ✓ |  |
 | `process.umask(mask)` | ✓ | ✓ |  |
-| `process.finalization.register(ref, callback)` | ✓ | ⚠ |  |
-| `process.finalization.registerBeforeExit(ref, callback)` | ✓ | ⚠ |  |
-| `process.finalization.unregister(ref)` | ✓ | ⚠ |  |
+| `process.finalization.register(ref, callback)` | ✓ | ✓ |  |
+| `process.finalization.registerBeforeExit(ref, callback)` | ✓ | ✓ |  |
+| `process.finalization.unregister(ref)` | ✓ | ✓ |  |
 | `process.nextTick(callback[, ...args])` | ✓ | ✓ |  |
 | `process.ref(maybeRefable)` | ✓ | ⚠ |  |
 | `process.unref(maybeRefable)` | ✓ | ⚠ |  |
@@ -2659,8 +2660,8 @@ Bun status: 🟢 Fully implemented. 98% of Node.js's test suite passes.
 | `zlib.Unzip` | ✓ | ✓ |  |
 | `zlib.BrotliCompress` | ✓ | ✓ |  |
 | `zlib.BrotliDecompress` | ✓ | ✓ |  |
-| `zlib.ZstdCompress` | ✓ | ⚠ | experimental |
-| `zlib.ZstdDecompress` | ✓ | ⚠ | experimental |
+| `zlib.ZstdCompress` | ✓ | ✓ | experimental |
+| `zlib.ZstdDecompress` | ✓ | ✓ | experimental |
 | `zlib.ZlibBase` (base class) | ✓ | ✓ |  |
 
 #### Factory Functions
@@ -2676,8 +2677,8 @@ Bun status: 🟢 Fully implemented. 98% of Node.js's test suite passes.
 | `zlib.createUnzip([options])` | ✓ | ✓ |  |
 | `zlib.createBrotliCompress([options])` | ✓ | ✓ |  |
 | `zlib.createBrotliDecompress([options])` | ✓ | ✓ |  |
-| `zlib.createZstdCompress([options])` | ✓ | ⚠ |  |
-| `zlib.createZstdDecompress([options])` | ✓ | ⚠ |  |
+| `zlib.createZstdCompress([options])` | ✓ | ✓ |  |
+| `zlib.createZstdDecompress([options])` | ✓ | ✓ |  |
 
 #### Convenience Functions (callback + sync)
 
@@ -2701,10 +2702,10 @@ Bun status: 🟢 Fully implemented. 98% of Node.js's test suite passes.
 | `zlib.brotliCompressSync(buffer[, options])` | ✓ | ✓ |  |
 | `zlib.brotliDecompress(buffer[, options], callback)` | ✓ | ✓ |  |
 | `zlib.brotliDecompressSync(buffer[, options])` | ✓ | ✓ |  |
-| `zlib.zstdCompress(buffer[, options], callback)` | ✓ | ⚠ |  |
-| `zlib.zstdCompressSync(buffer[, options])` | ✓ | ⚠ |  |
-| `zlib.zstdDecompress(buffer[, options], callback)` | ✓ | ⚠ |  |
-| `zlib.zstdDecompressSync(buffer[, options])` | ✓ | ⚠ |  |
+| `zlib.zstdCompress(buffer[, options], callback)` | ✓ | ✓ |  |
+| `zlib.zstdCompressSync(buffer[, options])` | ✓ | ✓ |  |
+| `zlib.zstdDecompress(buffer[, options], callback)` | ✓ | ✓ |  |
+| `zlib.zstdDecompressSync(buffer[, options])` | ✓ | ✓ |  |
 
 #### ZlibBase Methods / Properties
 
@@ -3482,14 +3483,26 @@ Bun status: 🟡 Missing `syncBuiltinESMExports`, `Module#load()`. `module._exte
 
 | API | Node.js | Bun | Notes |
 |-----|---------|-----|-------|
+| `Module` / `new Module(id)` | ✓ | ⚠ | CommonJS constructor internals |
 | `Module.builtinModules` | ✓ | ✓ |  |
 | `Module.createRequire(filename)` | ✓ | ✓ |  |
 | `Module.findPackageJSON(specifier[, base])` | ✓ | ⚠ |  |
 | `Module.findSourceMap(path)` | ✓ | ⚠ |  |
 | `Module.flushCompileCache()` | ✓ | ⚠ |  |
+| `Module.globalPaths` | ✓ | ⚠ | CommonJS global lookup paths |
 | `Module.getCompileCacheDir()` | ✓ | ⚠ |  |
 | `Module.getSourceMapsSupport()` | ✓ | ⚠ |  |
 | `Module.isBuiltin(moduleName)` | ✓ | ✓ |  |
+| `Module._cache` | ✓ | ⚠ | CommonJS module cache |
+| `Module._extensions` | ✓ | ⚠ | extension loader table |
+| `Module._pathCache` | ✓ | ⚠ | CommonJS path cache |
+| `Module._findPath(request, paths)` | ✓ | ⚠ | internal resolver |
+| `Module._initPaths()` | ✓ | ⚠ | initializes global paths |
+| `Module._load(request, parent, isMain)` | ✓ | ⚠ | CommonJS loader entry |
+| `Module._nodeModulePaths(from)` | ✓ | ⚠ | node_modules ancestry |
+| `Module._preloadModules(requests)` | ✓ | ⚠ | preload entry |
+| `Module._resolveFilename(request, parent)` | ✓ | ⚠ | internal resolver |
+| `Module._resolveLookupPaths(request, parent)` | ✓ | ⚠ | internal resolver |
 | `Module.register(specifier[, parentURL][, options])` | ✓ | ✗ | use Bun.plugin instead |
 | `Module.registerHooks(options)` | ✓ | ⚠ |  |
 | `Module.runMain()` | ✓ | ✓ |  |

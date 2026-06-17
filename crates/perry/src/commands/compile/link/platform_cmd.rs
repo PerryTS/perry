@@ -53,10 +53,20 @@ pub fn select_linker_command(
         )?
         .trim()
         .to_string();
+        // arm64_32 watchOS (Series 4-8 / SE): opt-in via PERRY_WATCHOS_ARM64_32.
+        // Lets the device target reach pre-S9 watches; deployment min defaults
+        // low (these watches run watchOS 9-11) but is overridable.
+        let arm64_32 = target == Some("watchos") && std::env::var("PERRY_WATCHOS_ARM64_32").is_ok();
+        let watchos_min = std::env::var("PERRY_WATCHOS_MIN").unwrap_or_else(|_| "11.0".to_string());
+        let triple_owned;
         let triple = if target == Some("watchos-simulator") {
             "arm64-apple-watchos10.0-simulator"
+        } else if arm64_32 {
+            triple_owned = format!("arm64_32-apple-watchos{}", watchos_min);
+            triple_owned.as_str()
         } else {
-            "arm64_32-apple-watchos10.0"
+            // Device builds default to arm64-only (S9+ / watchOS 26).
+            "arm64-apple-watchos26.0"
         };
 
         // Find the entry object whose stem matches the user's input file stem
@@ -75,12 +85,41 @@ pub fn select_linker_command(
             .and_then(|s| s.to_str())
             .map(|s| format!("{}_ts", s))
             .unwrap_or_else(|| "main_ts".to_string());
-        if let Some(entry_obj) = obj_paths.iter().find(|f| {
-            f.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem)))
+        // The entry object is the one that defines the `_main` text symbol.
+        // Object files are content-hash-named in the per-module cache
+        // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
+        // silently missed them — the objcopy rename then no-op'd and the link
+        // failed with undefined `__perry_user_main`. Query each object's symbol
+        // table instead; fall back to the stem match only if `nm` is unavailable.
+        let defines_main = |obj: &std::path::Path| -> bool {
+            Command::new("nm")
+                .arg(obj)
+                .output()
+                .ok()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|l| l.ends_with(" T _main") || l.ends_with(" t _main"))
+                })
                 .unwrap_or(false)
-        }) {
+        };
+        let entry_obj = obj_paths
+            .iter()
+            .find(|f| defines_main(f.as_ref()))
+            .or_else(|| {
+                obj_paths.iter().find(|f| {
+                    f.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| {
+                            s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem))
+                        })
+                        .unwrap_or(false)
+                })
+            });
+        // arm64_32: rust-objcopy crashes on these Mach-O objects, so the entry
+        // symbol was emitted directly by codegen (PERRY_ENTRY_SYMBOL) instead of
+        // renamed here. Skip the objcopy pass entirely.
+        if let Some(entry_obj) = entry_obj.filter(|_| !arm64_32) {
             let objcopy = std::env::var("HOME").ok()
                 .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
                 .filter(|p| p.exists())
@@ -167,19 +206,21 @@ pub fn select_linker_command(
             "Local visionOS compilation requires Xcode on macOS. Use a macOS host or Perry Hub remote build."
         ));
     } else if is_visionos {
+        // visionOS has two app models, mirroring watchOS:
+        //   - `--features ios-game-loop`: a UIKit + CAMetalLayer game-loop app.
+        //     perry-runtime's ios_game_loop `main()` owns the process and calls
+        //     UIApplicationMain; the native lib builds the Metal view / wgpu
+        //     surface on scene-connect. Linked with clang — no SwiftUI shell and
+        //     no PerryVisionApp.swift. The `_main → __perry_user_main` rename is
+        //     applied by the orchestrator in link/mod.rs (shared with iOS/tvOS).
+        //   - default: a SwiftUI app shell (PerryVisionApp.swift) linked with
+        //     swiftc; `_main → _perry_main_init` so the Swift `@main` entry wins.
+        let is_visionos_game_loop = compiled_features.iter().any(|f| f == "ios-game-loop");
         let sdk = if target == Some("visionos-simulator") {
             "xrsimulator"
         } else {
             "xros"
         };
-        let swiftc = String::from_utf8(
-            Command::new("xcrun")
-                .args(["--sdk", sdk, "--find", "swiftc"])
-                .output()?
-                .stdout,
-        )?
-        .trim()
-        .to_string();
         let sysroot = String::from_utf8(
             Command::new("xcrun")
                 .args(["--sdk", sdk, "--show-sdk-path"])
@@ -194,44 +235,112 @@ pub fn select_linker_command(
         } else {
             format!("arm64-apple-xros{}", sdk_version)
         };
-        let swift_runtime = find_visionos_swift_runtime().ok_or_else(|| {
-            anyhow!(
-                "PerryVisionApp.swift not found. Expected next to perry binary or in source tree."
-            )
-        })?;
 
-        let input_stem = args_input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| format!("{}_ts", s))
-            .unwrap_or_else(|| "main_ts".to_string());
-        if let Some(entry_obj) = obj_paths.iter().find(|f| {
-            f.file_stem()
+        if is_visionos_game_loop {
+            // UIKit/Metal game-loop app — link with clang, mirroring the iOS
+            // native branch (Swift-stdlib search paths + libc++ for the engine's
+            // C++ deps). perry-runtime supplies `main()`; no Swift app shell.
+            let clang = String::from_utf8(
+                Command::new("xcrun")
+                    .args(["--sdk", sdk, "--find", "clang"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim()
+            .to_string();
+            let developer_dir =
+                String::from_utf8(Command::new("xcode-select").arg("-p").output()?.stdout)?
+                    .trim()
+                    .to_string();
+            let mut c = Command::new(clang);
+            c.arg("-target")
+                .arg(&triple)
+                .arg("-isysroot")
+                .arg(&sysroot)
+                .arg("-L")
+                .arg(format!("{}/usr/lib/swift", sysroot))
+                .arg("-L")
+                .arg(format!(
+                    "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}",
+                    developer_dir, sdk
+                ))
+                .arg("-lc++")
+                .arg("-lc++abi");
+            c
+        } else {
+            let swiftc = String::from_utf8(
+                Command::new("xcrun")
+                    .args(["--sdk", sdk, "--find", "swiftc"])
+                    .output()?
+                    .stdout,
+            )?
+            .trim()
+            .to_string();
+            let swift_runtime = find_visionos_swift_runtime().ok_or_else(|| {
+                anyhow!(
+                    "PerryVisionApp.swift not found. Expected next to perry binary or in source tree."
+                )
+            })?;
+
+            let input_stem = args_input
+                .file_stem()
                 .and_then(|s| s.to_str())
-                .map(|s| s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem)))
-                .unwrap_or(false)
-        }) {
-            let objcopy = std::env::var("HOME").ok()
-                .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
-                .filter(|p| p.exists())
-                .or_else(|| std::env::var("HOME").ok()
-                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
-                    .filter(|p| p.exists()))
-                .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
-            let _ = Command::new(&objcopy)
-                .args(["--redefine-sym", "_main=_perry_main_init"])
-                .arg(entry_obj)
-                .status();
-        }
+                .map(|s| format!("{}_ts", s))
+                .unwrap_or_else(|| "main_ts".to_string());
+            // The entry object is the one that defines the `_main` text symbol.
+            // Object files are content-hash-named in the per-module cache
+            // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
+            // silently missed them — the objcopy rename then no-op'd and the link
+            // failed with undefined `__perry_user_main`. Query each object's symbol
+            // table instead; fall back to the stem match only if `nm` is unavailable.
+            let defines_main = |obj: &std::path::Path| -> bool {
+                Command::new("nm")
+                    .arg(obj)
+                    .output()
+                    .ok()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .lines()
+                            .any(|l| l.ends_with(" T _main") || l.ends_with(" t _main"))
+                    })
+                    .unwrap_or(false)
+            };
+            let entry_obj = obj_paths
+                .iter()
+                .find(|f| defines_main(f.as_ref()))
+                .or_else(|| {
+                    obj_paths.iter().find(|f| {
+                        f.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| {
+                                s == input_stem.as_str() || s.ends_with(&format!("_{}", input_stem))
+                            })
+                            .unwrap_or(false)
+                    })
+                });
+            if let Some(entry_obj) = entry_obj {
+                let objcopy = std::env::var("HOME").ok()
+                    .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/rust-objcopy"))
+                    .filter(|p| p.exists())
+                    .or_else(|| std::env::var("HOME").ok()
+                        .map(|h| PathBuf::from(h).join(".rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy"))
+                        .filter(|p| p.exists()))
+                    .unwrap_or_else(|| PathBuf::from("rust-objcopy"));
+                let _ = Command::new(&objcopy)
+                    .args(["--redefine-sym", "_main=_perry_main_init"])
+                    .arg(entry_obj)
+                    .status();
+            }
 
-        let mut c = Command::new(swiftc);
-        c.arg("-target")
-            .arg(&triple)
-            .arg("-sdk")
-            .arg(&sysroot)
-            .arg("-parse-as-library")
-            .arg(&swift_runtime);
-        c
+            let mut c = Command::new(swiftc);
+            c.arg("-target")
+                .arg(&triple)
+                .arg("-sdk")
+                .arg(&sysroot)
+                .arg("-parse-as-library")
+                .arg(&swift_runtime);
+            c
+        }
     } else if is_ios && is_cross_ios {
         // Cross-compile iOS from Linux using ld64.lld + Apple SDK sysroot
         let ld64 = find_llvm_tool("ld64.lld")
@@ -273,6 +382,13 @@ pub fn select_linker_command(
             .arg("-F")
             .arg(format!("{}/System/Library/Frameworks", sysroot))
             .arg("-lSystem")
+            // Native C++ deps (bloom engine, Jolt physics, …) reference libc++ /
+            // libc++abi symbols (exceptions, RTTI, operator new/delete, vtables).
+            // ld64 only auto-links those from C++ *inputs*; we hand it .o/.a, so
+            // request them explicitly — mirrors the native (on-Mac) iOS branch.
+            // The .tbd stubs live in the sysroot usr/lib already on the -L path.
+            .arg("-lc++")
+            .arg("-lc++abi")
             .arg("-dead_strip");
         c
     } else if is_ios {
@@ -324,7 +440,13 @@ pub fn select_linker_command(
             .arg(format!(
                 "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/{}",
                 developer_dir, sdk
-            ));
+            ))
+            // Native C++ deps (e.g. Jolt physics) pull in libc++ / libc++abi
+            // symbols; clang links these only when it sees C++ inputs, which it
+            // doesn't here (we hand it objects + .a archives), so request them
+            // explicitly. Mirrors the cross-iOS branch.
+            .arg("-lc++")
+            .arg("-lc++abi");
         c
     } else if is_tvos && is_cross_tvos {
         // Cross-compile tvOS from Linux using ld64.lld + Apple SDK sysroot.
@@ -374,6 +496,13 @@ pub fn select_linker_command(
             .arg("-F")
             .arg(format!("{}/System/Library/Frameworks", sysroot))
             .arg("-lSystem")
+            // Native C++ deps (bloom engine, Jolt physics, …) reference libc++ /
+            // libc++abi symbols (exceptions, RTTI, operator new/delete, vtables).
+            // ld64 only auto-links those from C++ *inputs*; we hand it .o/.a, so
+            // request them explicitly — mirrors the native (on-Mac) iOS branch.
+            // The .tbd stubs live in the sysroot usr/lib already on the -L path.
+            .arg("-lc++")
+            .arg("-lc++abi")
             .arg("-dead_strip");
         c
     } else if is_tvos {
@@ -444,8 +573,14 @@ pub fn select_linker_command(
             "linux-x86_64"
         };
         let clang = format!(
-            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang",
-            ndk_home, host_tag
+            "{}/toolchains/llvm/prebuilt/{}/bin/aarch64-linux-android24-clang{}",
+            ndk_home,
+            host_tag,
+            if cfg!(target_os = "windows") {
+                ".cmd"
+            } else {
+                ""
+            }
         );
         if !PathBuf::from(&clang).exists() {
             return Err(anyhow!("Android NDK clang not found at: {}", clang));
@@ -500,6 +635,81 @@ pub fn select_linker_command(
             // the .so into a host process that may expose its own `main`/malloc.
             .arg("-Wl,-Bsymbolic")
             .arg("-Wl,--warn-unresolved-symbols");
+        c
+    } else if matches!(target, Some("linux-arm64") | Some("linux-aarch64")) {
+        // aarch64 Linux is a cross-compile (the builder host is x86_64), so the
+        // plain host `cc` won't do. Prefer the `aarch64-linux-gnu-gcc` cross
+        // toolchain (ships its own sysroot + linker); fall back to clang/cc with
+        // an explicit target triple + an optional sysroot from
+        // PERRY_LINUX_ARM64_SYSROOT. Mirrors the iOS/Windows cross pattern.
+        let cross_gcc = std::env::var("PERRY_LINUX_ARM64_CC")
+            .unwrap_or_else(|_| "aarch64-linux-gnu-gcc".to_string());
+        let cross_on_path = std::env::var_os("PATH")
+            .map(|paths| std::env::split_paths(&paths).any(|d| d.join(&cross_gcc).is_file()))
+            .unwrap_or(false);
+        if cross_on_path {
+            Command::new(cross_gcc)
+        } else {
+            let mut c = Command::new("cc");
+            c.arg("-target").arg("aarch64-unknown-linux-gnu");
+            c.arg("-fuse-ld=lld");
+            if let Ok(sysroot) = std::env::var("PERRY_LINUX_ARM64_SYSROOT") {
+                c.arg(format!("--sysroot={}", sysroot));
+                c.arg("-Wl,-dynamic-linker=/lib/ld-linux-aarch64.so.1");
+            }
+            c
+        }
+    } else if matches!(
+        target,
+        Some("linux-musl") | Some("linux-x86_64-musl") | Some("linux-aarch64-musl")
+    ) {
+        // Fully-static musl Linux target (#4826). Produces a binary with no
+        // dynamic-loader / glibc dependency, so it runs unchanged on AWS
+        // Lambda `provided.al2023` (glibc 2.34), scratch/distroless
+        // containers, Cloud Run, etc. — the GLIBC_2.39-not-found failures
+        // happen in the *loader*, before Perry's tiny-init ever runs, so a
+        // static binary sidesteps them entirely.
+        //
+        // Driver: prefer the musl gcc wrapper (`musl-gcc` for x86_64, from
+        // the `musl-tools` package) which carries musl's specs + sysroot +
+        // crt objects. Fall back to clang/cc with an explicit musl triple +
+        // a sysroot from PERRY_LINUX_MUSL_SYSROOT (mirrors the glibc-cross
+        // fallback below). The perry-runtime / perry-stdlib `.a` files for
+        // the musl triple are built by release-packages.yml and resolved by
+        // library_search.rs via rust_target_triple().
+        let is_musl_aarch64 = target == Some("linux-aarch64-musl");
+        let (cc_env, default_musl_gcc, clang_triple) = if is_musl_aarch64 {
+            (
+                "PERRY_LINUX_MUSL_AARCH64_CC",
+                "aarch64-linux-musl-gcc",
+                "aarch64-unknown-linux-musl",
+            )
+        } else {
+            (
+                "PERRY_LINUX_MUSL_CC",
+                "musl-gcc",
+                "x86_64-unknown-linux-musl",
+            )
+        };
+        let musl_gcc = std::env::var(cc_env).unwrap_or_else(|_| default_musl_gcc.to_string());
+        let musl_gcc_on_path = std::env::var_os("PATH")
+            .map(|paths| std::env::split_paths(&paths).any(|d| d.join(&musl_gcc).is_file()))
+            .unwrap_or(false);
+        let mut c = if musl_gcc_on_path {
+            Command::new(musl_gcc)
+        } else {
+            let mut c = Command::new("cc");
+            c.arg("-target").arg(clang_triple);
+            c.arg("-fuse-ld=lld");
+            if let Ok(sysroot) = std::env::var("PERRY_LINUX_MUSL_SYSROOT") {
+                c.arg(format!("--sysroot={}", sysroot));
+            }
+            c
+        };
+        // Fully static link: no interpreter, libc/libm/libpthread/libdl all
+        // folded into the executable. musl's libc.a is self-contained, so
+        // this is the supported/portable mode (unlike a fully-static glibc).
+        c.arg("-static");
         c
     } else if is_linux {
         // Linux target: when running on Linux natively, just use "cc".
@@ -596,8 +806,10 @@ pub fn select_linker_command(
         // /ENTRY:mainCRTStartup works for both subsystems: Perry emits
         // `int main()` and the MSVC CRT invokes it regardless of subsystem.
         // See windows_pe_subsystem_flag() for subsystem selection rationale.
+        // The `--windows-subsystem` / `[windows] subsystem` override (resolved
+        // into ctx.windows_subsystem) can force GUI/console past the heuristic.
         c.arg(windows_pe_subsystem_flag(
-            ctx.needs_ui,
+            windows_subsystem_needs_ui(&ctx.windows_subsystem, ctx.needs_ui),
             &ctx.min_windows_version,
         ))
         .arg("/ENTRY:mainCRTStartup")
@@ -658,6 +870,13 @@ pub fn select_linker_command(
             .arg("-F")
             .arg(format!("{}/System/Library/Frameworks", sysroot))
             .arg("-lSystem")
+            // Native C++ deps (bloom engine, Jolt physics, …) reference libc++ /
+            // libc++abi symbols (exceptions, RTTI, operator new/delete, vtables).
+            // ld64 only auto-links those from C++ *inputs*; we hand it .o/.a, so
+            // request them explicitly — mirrors the native (on-Mac) iOS branch.
+            // The .tbd stubs live in the sysroot usr/lib already on the -L path.
+            .arg("-lc++")
+            .arg("-lc++abi")
             .arg("-dead_strip");
         c
     } else {

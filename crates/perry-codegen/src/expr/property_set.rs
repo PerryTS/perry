@@ -50,6 +50,72 @@ use super::{
     TypedFeedbackKind,
 };
 
+fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    ctx.classes
+        .get(class_name)
+        .is_some_and(|class| !class.computed_members.is_empty())
+}
+
+fn lower_runtime_property_set_by_name(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+) -> Result<String> {
+    let recv_box = lower_expr(ctx, object)?;
+    let val_double = lower_expr(ctx, value)?;
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    blk.call_void(
+        "js_object_set_field_by_name",
+        &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+    );
+    Ok(val_double)
+}
+
+pub(crate) fn emit_nullish_write_guard(
+    ctx: &mut FnCtx<'_>,
+    obj_bits: &str,
+    property: &str,
+    label_prefix: &str,
+) {
+    let is_undef = ctx
+        .block()
+        .icmp_eq(I64, obj_bits, crate::nanbox::TAG_UNDEFINED_I64);
+    let is_null = ctx
+        .block()
+        .icmp_eq(I64, obj_bits, crate::nanbox::TAG_NULL_I64);
+    let is_nullish = ctx.block().or(I1, &is_undef, &is_null);
+    let throw_idx = ctx.new_block(&format!("{}.throw_nullish", label_prefix));
+    let ok_idx = ctx.new_block(&format!("{}.recv_ok", label_prefix));
+    let throw_label = ctx.block_label(throw_idx);
+    let ok_label = ctx.block_label(ok_idx);
+    ctx.block().cond_br(&is_nullish, &throw_label, &ok_label);
+
+    ctx.current_block = throw_idx;
+    let key_idx = ctx.strings.intern(property);
+    let prop_entry = ctx.strings.entry(key_idx);
+    let prop_bytes_global = format!("@{}", prop_entry.bytes_global);
+    let prop_len_str = prop_entry.byte_len.to_string();
+    let is_null_i32 = ctx.block().zext(I1, &is_null, I32);
+    ctx.block().call_void(
+        "js_throw_type_error_property_access",
+        &[
+            (I32, &is_null_i32),
+            (PTR, &prop_bytes_global),
+            (I64, &prop_len_str),
+        ],
+    );
+    ctx.block().unreachable();
+
+    ctx.current_block = ok_idx;
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::PropertySet {
@@ -190,16 +256,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // store. The setter takes (this, value) and returns
             // undefined; we forward `value` as the expression result.
             if let Some(class_name) = receiver_class_name(ctx, object) {
+                if class_has_computed_runtime_members(ctx, &class_name) {
+                    return lower_runtime_property_set_by_name(ctx, object, property, value);
+                }
                 let setter_key = (class_name.clone(), format!("__set_{}", property));
-                if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let val_double = lower_expr(ctx, value)?;
-                    let _ = ctx.block().call(
-                        DOUBLE,
-                        &fn_name,
-                        &[(DOUBLE, &recv_box), (DOUBLE, &val_double)],
-                    );
-                    return Ok(val_double);
+                // STATIC accessors compile under the static (no-`this`)
+                // convention — see the matching gate in property_get.rs.
+                let is_static_accessor = ctx
+                    .classes
+                    .get(&class_name)
+                    .map(|c| c.static_accessor_names.iter().any(|n| n == property))
+                    .unwrap_or(false);
+                if !is_static_accessor {
+                    if let Some(fn_name) = ctx.methods.get(&setter_key).cloned() {
+                        let recv_box = lower_expr(ctx, object)?;
+                        let val_double = lower_expr(ctx, value)?;
+                        let _ = ctx.block().call(
+                            DOUBLE,
+                            &fn_name,
+                            &[(DOUBLE, &recv_box), (DOUBLE, &val_double)],
+                        );
+                        return Ok(val_double);
+                    }
                 }
                 // Fast path: known class instance + plain instance field.
                 // The runtime guard checks the receiver's class/shape and
@@ -232,42 +310,67 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
-                        let (key_raw, guard_ok) = {
+                        // #5093: build the guard operands once, up front, so both
+                        // the inline shape pre-check and the guard-call fallback
+                        // can reference them.
+                        let (obj_bits, obj_handle, key_raw, expected_keys, val_bits) = {
                             let blk = ctx.block();
+                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+                            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                             let key_box = blk.load(DOUBLE, &key_handle_global);
                             let key_bits = blk.bitcast_double_to_i64(&key_box);
                             let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
                             let expected_keys = blk.load(I64, &format!("@{}", keys_global_name));
-                            let guard_ok = blk.call(
-                                I32,
-                                "js_typed_feedback_class_field_set_guard",
-                                &[
-                                    (I64, &site_id),
-                                    (DOUBLE, &recv_box),
-                                    (I32, &expected_class_id_str),
-                                    (I64, &expected_keys),
-                                    (I64, &key_raw),
-                                    (I32, &field_idx_str),
-                                    (DOUBLE, &val_double),
-                                    (I32, requires_raw_f64_str),
-                                ],
-                            );
-                            (key_raw, guard_ok)
+                            let val_bits = blk.bitcast_double_to_i64(&val_double);
+                            (obj_bits, obj_handle, key_raw, expected_keys, val_bits)
                         };
-                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
                         let fast_idx = ctx.new_block("class_field_set.fast");
                         let fallback_idx = ctx.new_block("class_field_set.fallback");
                         let merge_idx = ctx.new_block("class_field_set.merge");
                         let fast_label = ctx.block_label(fast_idx);
                         let fallback_label = ctx.block_label(fallback_idx);
                         let merge_label = ctx.block_label(merge_idx);
+
+                        // #5093: inline shape pre-check, raw-f64 fields only. The
+                        // boxed-store path keeps the guard call (its setter-in-
+                        // chain handling and write barrier aren't reproduced
+                        // inline). On a hit this branches straight to the raw
+                        // store, skipping the call; on a miss the guard-call path
+                        // below runs unchanged.
+                        if requires_raw_f64 {
+                            let _guardcall_label =
+                                crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
+                                    ctx,
+                                    &obj_bits,
+                                    &obj_handle,
+                                    &expected_class_id_str,
+                                    &expected_keys,
+                                    field_index,
+                                    true,
+                                    Some(&val_bits),
+                                    &fast_label,
+                                );
+                        }
+                        let guard_ok = ctx.block().call(
+                            I32,
+                            "js_typed_feedback_class_field_set_guard",
+                            &[
+                                (I64, &site_id),
+                                (DOUBLE, &recv_box),
+                                (I32, &expected_class_id_str),
+                                (I64, &expected_keys),
+                                (I64, &key_raw),
+                                (I32, &field_idx_str),
+                                (DOUBLE, &val_double),
+                                (I32, requires_raw_f64_str),
+                            ],
+                        );
+                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
                         ctx.block()
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 
                         ctx.current_block = fast_idx;
                         let blk = ctx.block();
-                        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-                        let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
                         let obj_ptr = blk.inttoptr(I64, &obj_handle);
                         let header_skip = "24".to_string();
                         let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
@@ -333,7 +436,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
                         ctx.current_block = fallback_idx;
                         let blk = ctx.block();
-                        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
                         blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
                         blk.call_void(
                             "js_object_set_field_by_name",
@@ -395,6 +497,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
             // Issue #618-followup: pass the FULL bits (including NaN-box
             // tag) so the runtime can detect INT32-tagged class refs
             // (`SQL.Aliased = Aliased` IIFE-static-property pattern from
@@ -406,6 +509,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let key_box = ctx.block().load(DOUBLE, &key_handle_global);
             let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
             let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+            if matches!(property.as_str(), "caller" | "arguments") {
+                ctx.block().call_void(
+                    "js_object_set_field_by_name",
+                    &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+                );
+                return Ok(val_double);
+            }
             let site_id = emit_typed_feedback_register_site(
                 ctx,
                 TypedFeedbackKind::PropertySet,

@@ -25,8 +25,10 @@ where
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. }
+        | Expr::NewTarget
         | Expr::ClassRef(_)
         | Expr::This
+        | Expr::NewTarget
         | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }
@@ -34,6 +36,7 @@ where
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
         | Expr::GlobalThisExpr
+        | Expr::ModuleTopThis
         | Expr::ProcessUptime
         | Expr::ProcessCwd
         | Expr::ProcessArgv
@@ -144,6 +147,7 @@ where
         | Expr::ObjectGetPrototypeOf(v)
         | Expr::ObjectGetOwnPropertySymbols(v)
         | Expr::ObjectKeys(v)
+        | Expr::ForInKeys(v)
         | Expr::ObjectValues(v)
         | Expr::ObjectEntries(v)
         | Expr::ObjectFromEntries(v)
@@ -163,6 +167,8 @@ where
         | Expr::MathFloor(v)
         | Expr::MathCeil(v)
         | Expr::MathRound(v)
+        | Expr::MathTrunc(v)
+        | Expr::MathSign(v)
         | Expr::MathAbs(v)
         | Expr::MathSqrt(v)
         | Expr::MathLog(v)
@@ -237,10 +243,13 @@ where
         | Expr::StaticPluginResolve(v)
         | Expr::ArrayIsArray(v)
         | Expr::ArrayFrom(v)
+        | Expr::ArrayFromArrayLikeHoley(v)
         | Expr::IteratorFrom(v)
         | Expr::IteratorToArray(v)
         | Expr::GetIterator(v)
+        | Expr::GetAsyncIterator(v)
         | Expr::ForOfToArray(v)
+        | Expr::ForAwaitToArray(v)
         | Expr::ObjectRest { object: v, .. }
         | Expr::ProxyRevoke(v)
         | Expr::ReflectOwnKeys(v)
@@ -270,6 +279,7 @@ where
         | Expr::DateToString(v)
         | Expr::DateToDateString(v)
         | Expr::DateToTimeString(v)
+        | Expr::DateToUTCString(v)
         | Expr::DateToLocaleDateString(v)
         | Expr::DateToLocaleTimeString(v)
         | Expr::DateToLocaleString(v)
@@ -571,6 +581,12 @@ where
         Expr::RegisterClassParentDynamic { parent_expr, .. } => {
             f(parent_expr);
         }
+        Expr::RegisterClassCaptures { captures, .. } => {
+            for c in captures {
+                f(c);
+            }
+        }
+        Expr::ClassCaptureValue { .. } => {}
         Expr::RegisterClassStaticSymbol {
             key_expr,
             value_expr,
@@ -578,6 +594,10 @@ where
         } => {
             f(key_expr);
             f(value_expr);
+        }
+        Expr::RegisterClassComputedMethod { key_expr, .. }
+        | Expr::RegisterClassComputedAccessor { key_expr, .. } => {
+            f(key_expr);
         }
         Expr::ClassExprFresh {
             named_statics,
@@ -630,6 +650,12 @@ where
             f(property);
             f(object);
         }
+        Expr::PrivateBrandCheck { object, .. } => {
+            f(object);
+        }
+        Expr::PrivateGuard { object, .. } => {
+            f(object);
+        }
         Expr::FsWriteFileSync(a, b)
         | Expr::FsAppendFileSync(a, b)
         | Expr::PathJoin(a, b)
@@ -656,7 +682,9 @@ where
                 f(v);
             }
         }
-        Expr::StringFromCharCode(v) | Expr::StringFromCodePoint(v) => {
+        Expr::StringFromCharCode(v)
+        | Expr::StringFromCharCodeSpread(v)
+        | Expr::StringFromCodePoint(v) => {
             f(v);
         }
         Expr::StringRaw {
@@ -775,6 +803,43 @@ where
                 f(e);
             }
         }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            f(home);
+            f(key);
+            f(receiver);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            f(key);
+            f(value);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            f(home);
+            f(key);
+            f(value);
+            f(receiver);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            f(home);
+            f(key);
+            f(receiver);
+            for a in args {
+                f(a);
+            }
+        }
         Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. }
         | Expr::New { args, .. } => {
@@ -796,10 +861,18 @@ where
                 }
             }
         }
+        Expr::SuperCallSpread(args) => {
+            for a in args {
+                match a {
+                    CallArg::Expr(e) | CallArg::Spread(e) => f(e),
+                }
+            }
+        }
         Expr::ArraySpread(elements) => {
             for el in elements {
                 match el {
                     ArrayElement::Expr(e) | ArrayElement::Spread(e) => f(e),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -824,10 +897,18 @@ where
                 f(v);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             f(callee);
             for a in args {
                 f(a);
+            }
+        }
+        Expr::NewDynamicSpread { callee, args, .. } => {
+            f(callee);
+            for a in args {
+                match a {
+                    CallArg::Expr(e) | CallArg::Spread(e) => f(e),
+                }
             }
         }
         Expr::JsNew {
@@ -951,6 +1032,12 @@ where
                 f(b);
             }
         }
+        Expr::UrlPatternNew { input, base } => {
+            f(input);
+            if let Some(b) = base {
+                f(b);
+            }
+        }
         Expr::UrlSearchParamsNew(opt) => {
             if let Some(v) = opt {
                 f(v);
@@ -1069,6 +1156,9 @@ where
         Expr::StructuredClone { value, options } => {
             f(value);
             f(options);
+        }
+        Expr::LinkGeneratorPrototype { obj, .. } => {
+            f(obj);
         }
         Expr::BufferFromArrayBuffer {
             data,
@@ -1365,12 +1455,16 @@ where
             method,
             body,
             headers,
+            headers_dynamic,
         } => {
             f(url);
             f(method);
             f(body);
             for (_, v) in headers {
                 f(v);
+            }
+            if let Some(hd) = headers_dynamic {
+                f(hd);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {
@@ -1508,6 +1602,16 @@ where
                 f(s);
             }
         }
+        Expr::ArrayLikeMethod {
+            method: _,
+            receiver,
+            args,
+        } => {
+            f(receiver);
+            for a in args {
+                f(a);
+            }
+        }
         Expr::ArrayToSorted { array, comparator } => {
             f(array);
             if let Some(c) = comparator {
@@ -1536,12 +1640,28 @@ where
             f(index);
             f(value);
         }
+        Expr::ArrayReverseValue { receiver } => {
+            f(receiver);
+        }
         Expr::ArrayCopyWithin {
             array_id: _,
             target,
             start,
             end,
         } => {
+            f(target);
+            f(start);
+            if let Some(e) = end {
+                f(e);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            f(receiver);
             f(target);
             f(start);
             if let Some(e) = end {
@@ -1599,9 +1719,41 @@ where
             f(target);
             f(key);
         }
-        Expr::ReflectSet { target, key, value } => {
+        Expr::ReflectGetOwnPropertyDescriptor { target, key } => {
             f(target);
             f(key);
+        }
+        Expr::ReflectSet {
+            target,
+            key,
+            value,
+            receiver,
+        } => {
+            f(target);
+            f(key);
+            f(value);
+            f(receiver);
+        }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            f(target);
+            f(key);
+            f(value);
+            f(receiver);
+        }
+        Expr::WithGet {
+            object, fallback, ..
+        } => {
+            f(object);
+            f(fallback);
+        }
+        Expr::WithSet { object, value, .. } => {
+            f(object);
             f(value);
         }
         Expr::ReflectSetPrototypeOf { target, proto } => {

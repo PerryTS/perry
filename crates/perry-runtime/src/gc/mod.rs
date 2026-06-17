@@ -58,6 +58,10 @@ mod cycle;
 use cycle::*;
 mod verify;
 pub use verify::*;
+#[cfg(feature = "diagnostics")]
+mod heap_snapshot;
+#[cfg(feature = "diagnostics")]
+pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 
 pub fn gc_collect_minor() -> u64 {
     if defer_gc_request(DeferredGcRequest::DirectMinor) {
@@ -243,7 +247,53 @@ pub(super) fn test_gc_collect_emergency_full_trace_json() -> serde_json::Value {
         .into_json(GcStepSnapshot::current())
 }
 
+thread_local! {
+    /// Whether `gc_init` has registered this thread's root scanners yet. The
+    /// scanner list (`MUTABLE_ROOT_SCANNERS`) is thread-local, so soundness
+    /// requires every thread that can trigger a collection to register
+    /// independently — not just the main thread that runs `js_gc_init()`.
+    static GC_INIT_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// When set, `ensure_gc_initialized` is a no-op. The GC unit tests take
+    /// manual control of the thread's scanner registry (see
+    /// `ScopedRootScannerRegistryGuard`) and must collect with exactly the
+    /// roots they install — lazy auto-init would pollute that controlled set.
+    static AUTO_GC_INIT_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Suppress (or re-enable) lazy `ensure_gc_initialized` on this thread, returning
+/// the previous value. Used by the GC tests' `ScopedRootScannerRegistryGuard` to
+/// run collections against a hand-controlled root set.
+pub(crate) fn set_auto_gc_init_suppressed(suppressed: bool) -> bool {
+    AUTO_GC_INIT_SUPPRESSED.with(|c| c.replace(suppressed))
+}
+
+/// Register the runtime root scanners on the current thread if they haven't been
+/// registered yet. Idempotent per thread; a no-op while auto-init is suppressed.
+///
+/// `js_gc_init()` runs this at the production entrypoint, but spawned worker
+/// threads and the unit-test harness never call it — so without this a collection
+/// on those threads runs with an empty scanner set and reclaims live objects
+/// reachable only through a registered root (most importantly the realm global at
+/// `GLOBAL_THIS_PTR` and the `Array`/`Object` intrinsics it holds). Called from
+/// `js_get_global_this` before the global is created, so the global is born under
+/// a registered scanner and survives later collections on this thread.
+pub(crate) fn ensure_gc_initialized() {
+    if AUTO_GC_INIT_SUPPRESSED.with(|c| c.get()) {
+        return;
+    }
+    if !GC_INIT_DONE.with(|c| c.get()) {
+        gc_init();
+    }
+}
+
 pub fn gc_init() {
+    // Idempotent per thread: production calls this at startup, and
+    // `ensure_gc_initialized` calls it lazily on threads that don't. Latch the
+    // flag before any registration so a re-entrant call can't double-register
+    // the thread-local scanner list.
+    if GC_INIT_DONE.with(|c| c.replace(true)) {
+        return;
+    }
     crate::perf_hooks::init_time_origin();
     gc_register_budgeted_mutable_root_scanner_with_source(
         scan_runtime_handle_roots_mut,
@@ -269,11 +319,15 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(async_hooks_mutable_root_scanner);
     gc_register_mutable_root_scanner(shape_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_exotic_expando_roots_mut);
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
     gc_register_mutable_root_scanner(crate::perf_hooks::scan_perf_entries_roots_mut);
+    gc_register_mutable_root_scanner(crate::v8::scan_v8_promise_hook_roots_mut);
     gc_register_mutable_root_scanner(crate::typed_feedback::scan_typed_feedback_roots_mut);
+    gc_register_mutable_root_scanner(crate::typedarray_props::scan_typed_array_own_props_roots_mut);
     gc_register_mutable_root_scanner(transition_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);
     gc_register_budgeted_mutable_root_scanner_with_source(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,
@@ -305,11 +359,17 @@ pub fn gc_init() {
     // fire-and-forget spawn). Scan + rewrite them so a GC between ticks doesn't
     // reclaim the object whose `data`/`exit` handlers are still pending.
     gc_register_mutable_root_scanner(crate::child_process::reactor::cp_reactor_scan_roots_mut);
+    // #4911: a bound node:dgram socket is reachable only from the dgram
+    // reactor's registry while its recv thread runs; scan + rewrite it so a GC
+    // between ticks doesn't reclaim the object whose `message` handlers fire.
+    #[cfg(feature = "mod-dgram")]
+    gc_register_mutable_root_scanner(crate::dgram_reactor::scan_roots_mut);
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     gc_register_mutable_root_scanner(intern_table_mutable_root_scanner);
     gc_register_mutable_root_scanner(small_int_cache_mutable_root_scanner);
     gc_register_mutable_root_scanner(crate::builtins::scan_console_log_singleton_roots_mut);
     gc_register_mutable_root_scanner(crate::builtins::scan_boxed_primitive_payload_roots_mut);
+    gc_register_mutable_root_scanner(crate::weakref::scan_pending_finalization_jobs_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle
@@ -338,9 +398,14 @@ pub fn gc_init() {
     // singletons store heap pointers in TLS caches; keep them live and rewrite
     // them if a copying collection moves their backing allocations.
     gc_register_mutable_root_scanner(crate::object::scan_native_callable_export_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_class_capture_value_roots_mut);
+    gc_register_mutable_root_scanner(crate::node_vm::scan_vm_roots_mut);
     gc_register_mutable_root_scanner(crate::tls::scan_tls_roots_mut);
+    gc_register_mutable_root_scanner(crate::process::scan_process_finalization_roots_mut);
+    gc_register_mutable_root_scanner(crate::process::scan_process_module_loader_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_event_listener_roots_mut);
     gc_register_mutable_root_scanner(crate::os::scan_process_stream_singleton_roots_mut);
+    gc_register_mutable_root_scanner(crate::fs::scan_fs_handle_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_stream_roots_mut);
     gc_register_mutable_root_scanner(crate::fs::scan_fs_watcher_roots_mut);
     #[cfg(feature = "full")]
@@ -374,7 +439,35 @@ pub fn gc_init() {
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
     crate::node_submodules::diagnostics_channel_init_main_thread();
+    // #5093: force every class-field access back through the full guard call —
+    // i.e. disable the codegen-inlined fast path — when:
+    //   - typed-feedback tracing is on (the guard observes every access), or
+    //   - the intact-bit verifier is on (`PERRY_VERIFY_TYPED_INTACT`): the
+    //     verifier lives in the guard's fast contract, so inline hits would skip
+    //     it; disabling the inline path routes every access through it, or
+    //   - the explicit escape hatch `PERRY_DISABLE_CLASS_FIELD_INLINE` is set to
+    //     a truthy value (perf bisection / A-B measurement). `=0`/`=false`/`=off`
+    //     leave the fast path enabled.
+    if crate::typed_feedback::typed_feedback_active()
+        || env_flag_enabled("PERRY_VERIFY_TYPED_INTACT")
+        || env_flag_enabled("PERRY_DISABLE_CLASS_FIELD_INLINE")
+    {
+        crate::object::disable_class_field_inline_guard();
+    }
     gc_init();
+}
+
+/// #5093: parse a boolean-ish env var by value (not mere presence): true for
+/// `1`/`true`/`on`/`yes` (case-insensitive), false for unset / `0`/`false`/`off`
+/// / `no` / empty / anything else.
+fn env_flag_enabled(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        ),
+        Err(_) => false,
+    }
 }
 
 /// FFI: get GC stats

@@ -135,6 +135,7 @@ fn update_call_sites_in_expr(
             callee,
             args,
             type_args,
+            ..
         } => {
             // First update the callee and args recursively
             update_call_sites_in_expr(callee, ctx, lookup);
@@ -175,6 +176,7 @@ fn update_call_sites_in_expr(
             class_name,
             args,
             type_args,
+            ..
         } => {
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);
@@ -261,6 +263,7 @@ fn update_call_sites_in_expr(
                 match e {
                     ArrayElement::Expr(expr) => update_call_sites_in_expr(expr, ctx, lookup),
                     ArrayElement::Spread(expr) => update_call_sites_in_expr(expr, ctx, lookup),
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -288,6 +291,43 @@ fn update_call_sites_in_expr(
             }
         }
         Expr::SuperMethodCall { args, .. } => {
+            for arg in args.iter_mut() {
+                update_call_sites_in_expr(arg, ctx, lookup);
+            }
+        }
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
+        }
+        Expr::SuperPropertySet { key, value, .. } => {
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(value, ctx, lookup);
+        }
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(value, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
+        }
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            update_call_sites_in_expr(home, ctx, lookup);
+            update_call_sites_in_expr(key, ctx, lookup);
+            update_call_sites_in_expr(receiver, ctx, lookup);
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);
             }
@@ -409,7 +449,7 @@ fn update_call_sites_in_expr(
             update_call_sites_in_expr(string, ctx, lookup);
             update_call_sites_in_expr(delimiter, ctx, lookup);
         }
-        Expr::StringFromCharCode(code) => {
+        Expr::StringFromCharCode(code) | Expr::StringFromCharCodeSpread(code) => {
             update_call_sites_in_expr(code, ctx, lookup);
         }
         Expr::MapNew => {}
@@ -457,6 +497,8 @@ fn update_call_sites_in_expr(
         Expr::MathFloor(expr)
         | Expr::MathCeil(expr)
         | Expr::MathRound(expr)
+        | Expr::MathTrunc(expr)
+        | Expr::MathSign(expr)
         | Expr::MathAbs(expr)
         | Expr::MathSqrt(expr)
         | Expr::MathLog(expr)
@@ -676,7 +718,7 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
 
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
 
-        Expr::Binary { op, .. } => match op {
+        Expr::Binary { op, left, right } => match op {
             BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul
@@ -687,8 +729,16 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => Some(Type::Number),
+            | BinaryOp::Shr => {
+                let left_ty = infer_expr_type_from_lookup(left, lookup);
+                let right_ty = infer_expr_type_from_lookup(right, lookup);
+                if matches!(left_ty, Some(Type::BigInt)) || matches!(right_ty, Some(Type::BigInt)) {
+                    Some(Type::BigInt)
+                } else {
+                    Some(Type::Number)
+                }
+            }
+            BinaryOp::UShr => Some(Type::Number),
         },
 
         Expr::Compare { .. } => Some(Type::Boolean),
@@ -696,8 +746,18 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
         Expr::Logical { left, right, .. } => infer_expr_type_from_lookup(left, lookup)
             .or_else(|| infer_expr_type_from_lookup(right, lookup)),
 
-        Expr::Unary { op, .. } => match op {
-            UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot => Some(Type::Number),
+        Expr::Unary { op, operand } => match op {
+            UnaryOp::Neg | UnaryOp::BitNot => {
+                if matches!(
+                    infer_expr_type_from_lookup(operand, lookup),
+                    Some(Type::BigInt)
+                ) {
+                    Some(Type::BigInt)
+                } else {
+                    Some(Type::Number)
+                }
+            }
+            UnaryOp::Pos => Some(Type::Number),
             UnaryOp::Not => Some(Type::Boolean),
         },
 

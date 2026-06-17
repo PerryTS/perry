@@ -300,6 +300,60 @@ pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
     0
 }
 
+/// Strict equality (`===`) for `switch` case dispatch. The previous codegen
+/// compared via `js_get_string_pointer_unified`, whose number→string property
+/// -key coercion made `switch (1)` match `case '1'` (test262 S12.11_A1_T2).
+///
+/// - string vs string → content compare (heap + SSO)
+/// - string vs non-string → false
+/// - number vs number → IEEE `==` after int32 unboxing (NaN ≠ NaN, -0 == +0,
+///   int32-boxed 1 == raw 1.0)
+/// - everything else (undefined/null/bool/pointers) → bit identity
+#[no_mangle]
+pub extern "C" fn js_switch_strict_equals(a: f64, b: f64) -> i32 {
+    // Raw module-slot object pointers (top16 == 0) must compare identical to
+    // their POINTER_TAG'd form — see normalize_raw_object_bits.
+    let a = f64::from_bits(crate::value::equality::normalize_raw_object_bits(
+        a.to_bits(),
+    ));
+    let b = f64::from_bits(crate::value::equality::normalize_raw_object_bits(
+        b.to_bits(),
+    ));
+    let av = JSValue::from_bits(a.to_bits());
+    let bv = JSValue::from_bits(b.to_bits());
+    let a_str = av.is_any_string();
+    let b_str = bv.is_any_string();
+    if a_str != b_str {
+        return 0;
+    }
+    if a_str {
+        let pa = js_get_string_pointer_unified(a) as *const crate::string::StringHeader;
+        let pb = js_get_string_pointer_unified(b) as *const crate::string::StringHeader;
+        return crate::string::js_string_equals(pa, pb);
+    }
+    let a_numeric = av.is_number() || av.is_int32();
+    let b_numeric = bv.is_number() || bv.is_int32();
+    if a_numeric && b_numeric {
+        let an = if av.is_int32() {
+            av.as_int32() as f64
+        } else {
+            f64::from_bits(av.bits())
+        };
+        let bn = if bv.is_int32() {
+            bv.as_int32() as f64
+        } else {
+            f64::from_bits(bv.bits())
+        };
+        return (an == bn) as i32;
+    }
+    (a.to_bits() == b.to_bits()) as i32
+}
+
+// #1561-style force-keep: only generated IR calls this — see
+// value/dyn_index.rs for the rationale.
+#[used]
+static KEEP_JS_SWITCH_STRICT_EQUALS: extern "C" fn(f64, f64) -> i32 = js_switch_strict_equals;
+
 /// Check if a NaN-boxed f64 value represents a string.
 #[no_mangle]
 pub extern "C" fn js_nanbox_is_string(value: f64) -> i32 {

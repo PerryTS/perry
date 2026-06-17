@@ -59,6 +59,19 @@ struct ReadlineInterfaceState {
     cursor_cols: i32,
     cursor_rows: i32,
     uses_custom_stream: bool,
+    /// Async-iteration state (`for await (const line of rl)`). Activated when
+    /// `js_readline_iterator` builds the iterator object. While active, incoming
+    /// lines feed the iterator instead of the `'line'` event callback.
+    async_iter_active: bool,
+    /// The input stream has ended (`'end'`/`'close'` fired): future `next()`
+    /// calls resolve to `{ done: true }`.
+    ended: bool,
+    /// Lines that arrived before the consumer requested them via `next()`.
+    buffered_lines: std::collections::VecDeque<String>,
+    /// Raw `*mut Promise` for an outstanding `next()` awaiting a line, or 0.
+    /// `for await` awaits each `next()` before issuing the next, so at most one
+    /// is pending at a time.
+    pending_next: usize,
 }
 
 impl ReadlineInterfaceState {
@@ -83,6 +96,10 @@ impl ReadlineInterfaceState {
             cursor_cols: 0,
             cursor_rows: 0,
             uses_custom_stream,
+            async_iter_active: false,
+            ended: false,
+            buffered_lines: std::collections::VecDeque::new(),
+            pending_next: 0,
         }
     }
 }
@@ -115,6 +132,13 @@ static STDIN_PAUSED: AtomicBool = AtomicBool::new(false);
 static STDIN_REFED: AtomicBool = AtomicBool::new(true);
 /// Destroyed stdin clears listeners/queues and no longer keeps the loop alive.
 static STDIN_DESTROYED: AtomicBool = AtomicBool::new(false);
+/// Set once a `process.stdin.on('data', …)` listener is registered. The
+/// reader thread is on a different OS thread and can't read the main-thread
+/// `DATA_CALLBACKS` cell, so this atomic mirror tells it to deliver cooked
+/// (non-raw) input as 'data' chunks instead of routing it to the readline
+/// 'line' queue. Without it a 'data' listener attached in cooked mode never
+/// fires (#5227): bytes accumulate into `PENDING_LINES` that nothing drains.
+static STDIN_DATA_FLOWING: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Main-thread-only state — callbacks are dispatched from the main thread
@@ -251,6 +275,18 @@ fn stream_is_writable(value: f64) -> bool {
     ))
 }
 
+/// A `child_process` stdio pipe (e.g. `child.stdout`) is a synthetic
+/// EventEmitter marked with `__cpHandle`, not a `node:stream` instance, so
+/// `js_node_stream_is_readable` returns null for it. Recognise it here so
+/// `readline.createInterface({ input: child.stdout })` drives a per-interface
+/// custom stream instead of silently falling back to the stdin singleton.
+/// Gating on the `__cpHandle` marker keeps `process.stdin` (which also exposes
+/// a callable `.on`) on its dedicated Phase 1/2 path.
+fn is_event_emitter_input(value: f64) -> bool {
+    object_field(value, b"__cpHandle").is_some()
+        && object_field(value, b"on").is_some_and(is_callable)
+}
+
 fn call_write_value(output: f64, text: &str) {
     let chunk = boxed_str(text.as_bytes());
     if stream_is_writable(output) {
@@ -338,6 +374,22 @@ fn fire_line_or_question(state: &mut ReadlineInterfaceState, line: String) {
 }
 
 fn close_custom_interface(handle: i64) {
+    // Resolve any outstanding async-iteration `next()` with `{ done: true }`
+    // and mark the stream ended, before delivering the `'close'` event.
+    let pending = with_interface_mut(handle, |state| {
+        if state.async_iter_active {
+            state.ended = true;
+            let p = state.pending_next;
+            state.pending_next = 0;
+            p
+        } else {
+            0
+        }
+    })
+    .unwrap_or(0);
+    if pending != 0 {
+        resolve_pending_next(pending, undefined(), true);
+    }
     let cb = with_interface_mut(handle, |state| {
         if state.closed {
             None
@@ -354,7 +406,11 @@ fn close_custom_interface(handle: i64) {
 
 fn append_custom_input(handle: i64, chunk: f64) {
     let text = value_to_string(chunk);
-    with_interface_mut(handle, |state| {
+    // Collect complete lines first, then dispatch outside the state borrow so
+    // line delivery (which may resolve a Promise and run JS) doesn't re-enter a
+    // held `with_interface_mut` borrow.
+    let mut lines: Vec<String> = Vec::new();
+    let async_iter = with_interface_mut(handle, |state| {
         state.pending.push_str(&text);
         while let Some(pos) = state.pending.find('\n') {
             let mut line: String = state.pending.drain(..=pos).collect();
@@ -364,9 +420,173 @@ fn append_custom_input(handle: i64, chunk: f64) {
             if line.ends_with('\r') {
                 line.pop();
             }
-            fire_line_or_question(state, line);
+            lines.push(line);
         }
+        state.async_iter_active
+    })
+    .unwrap_or(false);
+    if async_iter {
+        for line in lines {
+            deliver_async_iter_line(handle, line);
+        }
+    } else {
+        with_interface_mut(handle, |state| {
+            for line in lines {
+                fire_line_or_question(state, line);
+            }
+        });
+    }
+}
+
+/// Feed a line to the async iterator: resolve a waiting `next()` Promise if one
+/// is outstanding, otherwise buffer it for the next `next()` call.
+fn deliver_async_iter_line(handle: i64, line: String) {
+    let pending = with_interface_mut(handle, |state| {
+        let p = state.pending_next;
+        if p != 0 {
+            state.pending_next = 0;
+            Some((p, line))
+        } else {
+            state.buffered_lines.push_back(line);
+            None
+        }
+    })
+    .flatten();
+    if let Some((promise, line)) = pending {
+        resolve_pending_next(promise, boxed_str(line.as_bytes()), false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Async iteration: `for await (const line of rl)`
+// ---------------------------------------------------------------------------
+
+const READLINE_ITER_SHAPE_ID: u32 = 0x7FFF_FF4B;
+
+/// Build a `{ value, done }` iterator-result object.
+fn iter_result(value: f64, done: bool) -> f64 {
+    let packed = b"value\0done\0";
+    let obj = js_object_alloc_with_shape(
+        READLINE_ITER_SHAPE_ID,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    js_object_set_field(obj, 0, JSValue::from_bits(value.to_bits()));
+    js_object_set_field(obj, 1, JSValue::bool(done));
+    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+}
+
+/// A Promise already resolved with `{ value, done }`.
+fn resolved_iter_promise(value: f64, done: bool) -> f64 {
+    let p = perry_runtime::promise::js_promise_resolved(iter_result(value, done));
+    f64::from_bits(JSValue::pointer(p as *const u8).bits())
+}
+
+/// Resolve an outstanding `next()` Promise (raw pointer) with `{ value, done }`.
+fn resolve_pending_next(promise: usize, value: f64, done: bool) {
+    let p = promise as *mut perry_runtime::Promise;
+    if !p.is_null() {
+        perry_runtime::js_promise_resolve(p, iter_result(value, done));
+    }
+}
+
+fn register_aiter_arities() {
+    perry_runtime::closure::js_register_closure_arity(readline_aiter_next as *const u8, 0);
+    perry_runtime::closure::js_register_closure_arity(readline_aiter_return as *const u8, 0);
+    perry_runtime::closure::js_register_closure_arity(readline_aiter_self as *const u8, 0);
+}
+
+enum NextAction {
+    Line(String),
+    Done,
+    Pending,
+}
+
+extern "C" fn readline_aiter_next(closure: *const ClosureHeader) -> f64 {
+    let handle = js_closure_get_capture_f64(closure, 0) as i64;
+    // Decide the outcome without holding the interface borrow across the Promise
+    // allocation below (GC must be free to scan READLINE_INTERFACES).
+    let action = with_interface_mut(handle, |state| {
+        if let Some(line) = state.buffered_lines.pop_front() {
+            NextAction::Line(line)
+        } else if state.ended {
+            NextAction::Done
+        } else {
+            NextAction::Pending
+        }
+    })
+    .unwrap_or(NextAction::Done);
+    match action {
+        NextAction::Line(line) => resolved_iter_promise(boxed_str(line.as_bytes()), false),
+        NextAction::Done => resolved_iter_promise(undefined(), true),
+        NextAction::Pending => {
+            let p = perry_runtime::js_promise_new();
+            with_interface_mut(handle, |state| {
+                state.pending_next = p as usize;
+            });
+            f64::from_bits(JSValue::pointer(p as *const u8).bits())
+        }
+    }
+}
+
+extern "C" fn readline_aiter_return(closure: *const ClosureHeader) -> f64 {
+    let handle = js_closure_get_capture_f64(closure, 0) as i64;
+    let pending = with_interface_mut(handle, |state| {
+        state.ended = true;
+        state.buffered_lines.clear();
+        let p = state.pending_next;
+        state.pending_next = 0;
+        p
+    })
+    .unwrap_or(0);
+    if pending != 0 {
+        resolve_pending_next(pending, undefined(), true);
+    }
+    resolved_iter_promise(undefined(), true)
+}
+
+extern "C" fn readline_aiter_self(closure: *const ClosureHeader) -> f64 {
+    js_closure_get_capture_f64(closure, 0)
+}
+
+/// `rl.iterator()` / `rl[Symbol.asyncIterator]()` — build the async iterator
+/// object backing `for await (const line of rl)`. Lines from the interface's
+/// input stream feed this iterator (see `deliver_async_iter_line`).
+#[no_mangle]
+pub extern "C" fn js_readline_iterator(handle: i64) -> i64 {
+    register_aiter_arities();
+    with_interface_mut(handle, |state| {
+        state.async_iter_active = true;
     });
+    // Drain anything already pending in the line buffer is handled lazily by
+    // `next()`. Build the iterator object: `{ next, return }` + asyncIterator.
+    let packed = b"next\0return\0";
+    let obj = js_object_alloc_with_shape(
+        READLINE_ITER_SHAPE_ID + 1,
+        2,
+        packed.as_ptr(),
+        packed.len() as u32,
+    );
+    let next_cl = js_closure_alloc(readline_aiter_next as *const u8, 1);
+    js_closure_set_capture_f64(next_cl, 0, handle as f64);
+    js_object_set_field(obj, 0, JSValue::pointer(next_cl as *const u8));
+    let ret_cl = js_closure_alloc(readline_aiter_return as *const u8, 1);
+    js_closure_set_capture_f64(ret_cl, 0, handle as f64);
+    js_object_set_field(obj, 1, JSValue::pointer(ret_cl as *const u8));
+
+    let iter_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    let sym = perry_runtime::symbol::well_known_symbol("asyncIterator");
+    if !sym.is_null() {
+        let self_cl = js_closure_alloc(readline_aiter_self as *const u8, 1);
+        js_closure_set_capture_f64(self_cl, 0, iter_val);
+        let self_val = f64::from_bits(JSValue::pointer(self_cl as *const u8).bits());
+        let sym_val = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
+        unsafe {
+            perry_runtime::symbol::js_object_set_symbol_property(iter_val, sym_val, self_val);
+        }
+    }
+    obj as i64
 }
 
 extern "C" fn custom_input_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
@@ -394,6 +614,25 @@ fn attach_custom_input(handle: i64, input: f64) {
     let data_event = boxed_str(b"data");
     let end_event = boxed_str(b"end");
     let close_event = boxed_str(b"close");
+    // A `child_process` stdio pipe is not a `node:stream` instance, so the
+    // node_stream `on` helper can't be used. Register through the object's own
+    // bound `.on` method (its closure already carries `this`), which routes the
+    // listener into the child_process reactor's event delivery.
+    if !stream_is_readable(input) {
+        if let Some(on) = object_field(input, b"on").filter(|v| is_callable(*v)) {
+            for (event, cb) in [
+                (data_event, data_value),
+                (end_event, close_value),
+                (close_event, close_value),
+            ] {
+                let args = [event, cb];
+                unsafe {
+                    let _ = js_native_call_value(on, args.as_ptr(), args.len());
+                }
+            }
+        }
+        return;
+    }
     let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, data_event, data_value);
     let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, end_event, close_value);
     let _ = perry_runtime::node_stream::js_node_stream_method_on(raw, close_event, close_value);
@@ -430,7 +669,7 @@ fn create_interface_from_options(opts: f64) -> i64 {
     let output = object_field(opts, b"output").unwrap_or_else(undefined);
     let prompt = prompt_from_options(opts);
     let terminal = terminal_from_options(opts);
-    let uses_custom_stream = stream_is_readable(input);
+    let uses_custom_stream = stream_is_readable(input) || is_event_emitter_input(input);
     let handle = allocate_interface(ReadlineInterfaceState::new(
         input,
         output,
@@ -477,6 +716,20 @@ fn ensure_reader_started() {
                         if let Ok(mut q) = PENDING_DATA.lock() {
                             q.push(vec![byte[0]]);
                         }
+                    } else if STDIN_DATA_FLOWING.load(Ordering::Acquire) {
+                        // Cooked flowing mode (#5227): a `process.stdin.on('data')`
+                        // listener is attached but raw mode is off. Deliver input
+                        // as 'data' chunks (newline INCLUDED, matching Node's
+                        // line-buffered cooked tty / piped-stream chunks) rather
+                        // than routing it to the readline 'line' queue.
+                        line_buf.push(byte[0]);
+                        if byte[0] == b'\n' {
+                            let chunk = std::mem::take(&mut line_buf);
+                            if let Ok(mut q) = PENDING_DATA.lock() {
+                                q.push(chunk);
+                            }
+                            line_buf = Vec::with_capacity(256);
+                        }
                     } else if byte[0] == b'\n' {
                         // Strip trailing CR for Windows CRLF input.
                         if line_buf.last() == Some(&b'\r') {
@@ -492,6 +745,24 @@ fn ensure_reader_started() {
                     }
                 }
                 Err(_) => break,
+            }
+        }
+        // Flush any trailing bytes not terminated by a newline. In cooked
+        // flowing mode this is the last 'data' chunk for input like
+        // `printf "abc"` (no final newline); otherwise it's a final 'line'.
+        if !line_buf.is_empty() && !STDIN_DESTROYED.load(Ordering::Acquire) {
+            if STDIN_DATA_FLOWING.load(Ordering::Acquire) && !RAW_MODE.load(Ordering::Acquire) {
+                if let Ok(mut q) = PENDING_DATA.lock() {
+                    q.push(std::mem::take(&mut line_buf));
+                }
+            } else if !RAW_MODE.load(Ordering::Acquire) {
+                if line_buf.last() == Some(&b'\r') {
+                    line_buf.pop();
+                }
+                let line = String::from_utf8_lossy(&line_buf).into_owned();
+                if let Ok(mut q) = PENDING_LINES.lock() {
+                    q.push(line);
+                }
             }
         }
         EOF_REACHED.store(true, Ordering::Release);
@@ -908,6 +1179,10 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
     match event.as_str() {
         "data" => {
             DATA_CALLBACKS.with(|cb| cb.borrow_mut().push(callback));
+            // A 'data' listener switches stdin into flowing mode (Node
+            // auto-resumes on the first data listener). Tell the reader to
+            // deliver cooked input as 'data' chunks even without raw mode.
+            STDIN_DATA_FLOWING.store(true, Ordering::Release);
             try_register_pump();
             ensure_reader_started();
         }
@@ -937,9 +1212,11 @@ pub extern "C" fn js_readline_stdin_remove_listener(
     let event = string_header_to_string(event_ptr);
     match event.as_str() {
         "data" => DATA_CALLBACKS.with(|callbacks| {
-            callbacks
-                .borrow_mut()
-                .retain(|registered| *registered != callback);
+            let mut callbacks = callbacks.borrow_mut();
+            callbacks.retain(|registered| *registered != callback);
+            if callbacks.is_empty() {
+                STDIN_DATA_FLOWING.store(false, Ordering::Release);
+            }
         }),
         "keypress" => KEYPRESS_CALLBACKS.with(|callbacks| {
             callbacks
@@ -993,6 +1270,7 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
     STDIN_REFED.store(false, Ordering::Release);
     STDIN_PAUSED.store(true, Ordering::Release);
     RAW_MODE.store(false, Ordering::Release);
+    STDIN_DATA_FLOWING.store(false, Ordering::Release);
     EOF_REACHED.store(true, Ordering::Release);
     let _ = termios_impl::disable();
     if let Ok(mut q) = PENDING_DATA.lock() {
@@ -1223,7 +1501,8 @@ pub extern "C" fn js_readline_has_active() -> i32 {
         && !destroyed
         && refed
         && !paused
-        && ((RAW_MODE.load(Ordering::Acquire) && has_stdin_callbacks)
+        && (((RAW_MODE.load(Ordering::Acquire) || STDIN_DATA_FLOWING.load(Ordering::Acquire))
+            && has_stdin_callbacks)
             || has_line_callbacks
             || has_close_cb);
     if !destroyed
@@ -1303,6 +1582,7 @@ mod tests {
         STDIN_DESTROYED.store(false, Ordering::Release);
         CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
         RAW_MODE.store(false, Ordering::Release);
+        STDIN_DATA_FLOWING.store(false, Ordering::Release);
         READLINE_INTERFACES.with(|interfaces| interfaces.borrow_mut().clear());
         NEXT_READLINE_HANDLE.with(|next| *next.borrow_mut() = 2);
         // READER_STARTED stays sticky once set in a test process.
@@ -1378,6 +1658,37 @@ mod tests {
         assert_eq!(js_readline_process_pending(), 1);
         assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
         DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    }
+
+    #[test]
+    fn stdin_data_listener_flows_without_raw_mode() {
+        // #5227: a 'data' listener attached in cooked (non-raw) mode must
+        // switch stdin into flowing mode and keep the loop alive so the
+        // reader can deliver chunks — previously only raw mode did.
+        let _g = reset();
+        READER_STARTED.store(true, Ordering::Release);
+        assert!(!RAW_MODE.load(Ordering::Acquire));
+        assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
+
+        let cb = data_counter_callback();
+        let event = event_name("data");
+        let _ = js_readline_stdin_on(event, cb);
+        assert!(STDIN_DATA_FLOWING.load(Ordering::Acquire));
+        // Cooked-mode data listener keeps the event loop alive. (Clear EOF
+        // first: a real reader thread spawned by an earlier `resume()` test
+        // may have flipped this shared static on the runner's empty stdin.)
+        EOF_REACHED.store(false, Ordering::Release);
+        assert_eq!(js_readline_has_active(), 1);
+
+        // Cooked-mode chunks (delivered by the reader with the newline
+        // included) drain to the 'data' callback.
+        test_inject_chunk(b"hello world\n");
+        assert_eq!(js_readline_process_pending(), 1);
+        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+
+        // Removing the last data listener clears flowing mode.
+        let _ = js_readline_stdin_remove_listener(event, cb);
+        assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
     }
 
     #[test]

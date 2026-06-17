@@ -18,7 +18,7 @@
 //! on its registration, the Promise resolves correctly through
 //! the microtask queue.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use perry_ffi::{
     alloc_buffer, alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
@@ -74,6 +74,24 @@ pub struct IncomingMessage {
     /// Trailers placeholder — Node populates after `'end'`. We hand
     /// back an empty object until trailing-headers support lands.
     pub trailers: HashMap<String, String>,
+    /// Lazily-created AbortController/AbortSignal pair backing
+    /// `req.signal`.
+    pub signal_controller: f64,
+    pub signal: f64,
+    /// True once `'close'` has fired.
+    pub close_emitted: bool,
+    /// #4904: true for `new http.IncomingMessage(socket)` instances —
+    /// standalone messages not attached to any live connection.
+    pub standalone: bool,
+    /// #4904: the socket value Node mirrors through `req.socket` /
+    /// `req.connection`. For standalone instances this holds the
+    /// constructor argument verbatim; assigning either alias
+    /// (`req.connection = v`) overwrites it (Node's `connection`
+    /// accessor writes `this.socket`).
+    pub socket_value: f64,
+    /// #4904: true once `socket`/`connection` has been assigned, so
+    /// server-attached requests also honor the override on reads.
+    pub socket_overridden: bool,
 }
 
 impl IncomingMessage {
@@ -104,6 +122,56 @@ impl IncomingMessage {
             paused: false,
             encoding: None,
             trailers: HashMap::new(),
+            signal_controller: f64::from_bits(crate::types::TAG_UNDEFINED),
+            signal: f64::from_bits(crate::types::TAG_UNDEFINED),
+            close_emitted: false,
+            standalone: false,
+            socket_value: f64::from_bits(crate::types::TAG_UNDEFINED),
+            socket_overridden: false,
+        }
+    }
+}
+
+extern "C" {
+    fn js_abort_controller_new() -> *mut perry_ffi::ObjectHeader;
+    fn js_abort_controller_signal(
+        controller: *mut perry_ffi::ObjectHeader,
+    ) -> *mut perry_ffi::ObjectHeader;
+    fn js_abort_controller_abort(controller: *mut perry_ffi::ObjectHeader);
+}
+
+fn is_undefined(value: f64) -> bool {
+    JsValue::from_bits(value.to_bits()).is_undefined()
+}
+
+fn object_value<T>(ptr: *mut T) -> f64 {
+    if ptr.is_null() {
+        f64::from_bits(crate::types::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(JsValue::from_object_ptr(ptr).bits())
+    }
+}
+
+fn ensure_signal(im: &mut IncomingMessage) -> f64 {
+    if !is_undefined(im.signal) {
+        return im.signal;
+    }
+
+    unsafe {
+        let controller = js_abort_controller_new();
+        let signal = js_abort_controller_signal(controller);
+        im.signal_controller = object_value(controller);
+        im.signal = object_value(signal);
+    }
+    im.signal
+}
+
+fn abort_signal(im: &mut IncomingMessage) {
+    let controller =
+        JsValue::from_bits(im.signal_controller.to_bits()).as_pointer::<perry_ffi::ObjectHeader>();
+    if !controller.is_null() {
+        unsafe {
+            js_abort_controller_abort(controller);
         }
     }
 }
@@ -139,6 +207,40 @@ pub extern "C" fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader
     alloc_string(&s).as_raw()
 }
 
+/// `req.httpVersionMajor` — numeric major half of `httpVersion`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_http_version_major(handle: i64) -> f64 {
+    incoming_http_version_part(handle, false)
+}
+
+/// `req.httpVersionMinor` — numeric minor half of `httpVersion`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_http_version_minor(handle: i64) -> f64 {
+    incoming_http_version_part(handle, true)
+}
+
+/// `req.httpVersionMajor` / `req.httpVersionMinor` — numeric halves of
+/// `httpVersion` ("1.0" → 1 / 0).
+pub(crate) fn incoming_http_version_part(handle: i64, minor: bool) -> f64 {
+    let version = get_handle::<IncomingMessage>(handle)
+        .map(|im| im.http_version.clone())
+        .unwrap_or_else(|| "1.1".to_string());
+    let mut parts = version.split('.');
+    let major = parts
+        .next()
+        .and_then(|p| p.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    let minor_v = parts
+        .next()
+        .and_then(|p| p.parse::<f64>().ok())
+        .unwrap_or(1.0);
+    if minor {
+        minor_v
+    } else {
+        major
+    }
+}
+
 /// `req.headers` — JSON-stringify the lowercase-keyed header map.
 /// Returned as a NaN-boxed STRING — TS-side parses with `JSON.parse`
 /// at the binding wrapper. (Returning a runtime ObjectHeader directly
@@ -147,9 +249,77 @@ pub extern "C" fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader
 #[no_mangle]
 pub extern "C" fn js_node_http_im_headers_json(handle: i64) -> *mut StringHeader {
     let s = get_handle::<IncomingMessage>(handle)
-        .map(|im| serde_json::to_string(&im.headers).unwrap_or_else(|_| "{}".to_string()))
+        .map(|im| combined_headers_json(&im.raw_headers))
         .unwrap_or_else(|| "{}".to_string());
     alloc_string(&s).as_raw()
+}
+
+/// Single-value request headers: per Node's `_http_incoming.js`
+/// `matchKnownFields`, duplicates of these are discarded (first wins)
+/// rather than joined with `, `. `set-cookie` is excluded — it always
+/// accumulates into an array.
+fn is_single_value_header(name: &str) -> bool {
+    matches!(
+        name,
+        "age"
+            | "authorization"
+            | "content-length"
+            | "content-type"
+            | "etag"
+            | "expires"
+            | "from"
+            | "host"
+            | "if-modified-since"
+            | "if-unmodified-since"
+            | "last-modified"
+            | "location"
+            | "max-forwards"
+            | "proxy-authorization"
+            | "referer"
+            | "retry-after"
+            | "server"
+            | "user-agent"
+    )
+}
+
+/// Build the combined `req.headers` JSON object from the raw
+/// `(name, value)` pairs, applying Node's `matchKnownFields` rules
+/// (#5079): `set-cookie` → string array (even for one cookie),
+/// single-value fields keep-first, everything else joined with `, `.
+/// Keys are lower-cased to match Node's `headers` view.
+fn combined_headers_json(raw: &[(String, String)]) -> String {
+    use serde_json::Value;
+    // Key order in the serialized object is not significant here (the
+    // previous `HashMap` serialization was already unordered); what
+    // matters is that `set-cookie` surfaces as an array and other
+    // duplicates combine per Node's rules.
+    let mut map = serde_json::Map::new();
+    for (name, value) in raw {
+        let key = name.to_ascii_lowercase();
+        if key == "set-cookie" {
+            match map.get_mut(&key) {
+                Some(Value::Array(arr)) => arr.push(Value::String(value.clone())),
+                _ => {
+                    map.insert(key, Value::Array(vec![Value::String(value.clone())]));
+                }
+            }
+            continue;
+        }
+        match map.get_mut(&key) {
+            Some(Value::String(existing)) => {
+                if !is_single_value_header(&key) {
+                    // Node's `matchKnownFields`: duplicate `cookie` headers are
+                    // joined with "; ", everything else with ", ".
+                    existing.push_str(if key == "cookie" { "; " } else { ", " });
+                    existing.push_str(value);
+                }
+            }
+            _ => {
+                map.insert(key, Value::String(value.clone()));
+            }
+        }
+    }
+    serde_json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// `req.rawHeaders` — JSON-stringify the original-case `[name, value, ...]`
@@ -166,6 +336,62 @@ pub extern "C" fn js_node_http_im_raw_headers_json(handle: i64) -> *mut StringHe
             serde_json::to_string(&flat).unwrap_or_else(|_| "[]".to_string())
         })
         .unwrap_or_else(|| "[]".to_string());
+    alloc_string(&s).as_raw()
+}
+
+/// `req.headersDistinct` — lowercase keys mapped to arrays of values,
+/// preserving duplicates from `rawHeaders`.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_headers_distinct_json(handle: i64) -> *mut StringHeader {
+    let s = get_handle::<IncomingMessage>(handle)
+        .map(|im| {
+            let mut distinct: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (name, value) in &im.raw_headers {
+                distinct
+                    .entry(name.to_lowercase())
+                    .or_default()
+                    .push(value.clone());
+            }
+            serde_json::to_string(&distinct).unwrap_or_else(|_| "{}".to_string())
+        })
+        .unwrap_or_else(|| "{}".to_string());
+    alloc_string(&s).as_raw()
+}
+
+/// `req.trailers` — JSON-stringify the lowercase-keyed trailer map.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_trailers_json(handle: i64) -> *mut StringHeader {
+    let s = get_handle::<IncomingMessage>(handle)
+        .map(|im| {
+            let trailers: BTreeMap<&String, &String> = im.trailers.iter().collect();
+            serde_json::to_string(&trailers).unwrap_or_else(|_| "{}".to_string())
+        })
+        .unwrap_or_else(|| "{}".to_string());
+    alloc_string(&s).as_raw()
+}
+
+/// `req.rawTrailers` — flat original-case trailer list. Trailers are not
+/// collected yet, so this is currently the Node-compatible empty array.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_raw_trailers_json(_handle: i64) -> *mut StringHeader {
+    alloc_string("[]").as_raw()
+}
+
+/// `req.trailersDistinct` — lowercase trailer keys mapped to arrays.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_trailers_distinct_json(handle: i64) -> *mut StringHeader {
+    let s = get_handle::<IncomingMessage>(handle)
+        .map(|im| {
+            let mut distinct: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (name, value) in &im.trailers {
+                distinct
+                    .entry(name.to_lowercase())
+                    .or_default()
+                    .push(value.clone());
+            }
+            serde_json::to_string(&distinct).unwrap_or_else(|_| "{}".to_string())
+        })
+        .unwrap_or_else(|| "{}".to_string());
     alloc_string(&s).as_raw()
 }
 
@@ -192,6 +418,39 @@ pub extern "C" fn js_node_http_im_destroyed(handle: i64) -> i32 {
     get_handle::<IncomingMessage>(handle)
         .map(|im| if im.destroyed { 1 } else { 0 })
         .unwrap_or(0)
+}
+
+/// `req.rawBody` — the fully-collected request body as a `Buffer`.
+///
+/// Perry's HTTP server buffers the entire request body before invoking the
+/// handler (`req.collect().await`), so the bytes are available synchronously
+/// here. `@hono/node-server` checks `"rawBody" in incoming && incoming.rawBody
+/// instanceof Buffer` and, when present, builds the `Request` body from it via a
+/// synchronous single-chunk `ReadableStream` — avoiding the data-less
+/// `Readable.toWeb(incoming)` stub path (the #1540 Node↔WHATWG stream gap).
+/// Exposing it makes `await c.req.text()` / `.json()` / `.formData()` on a POST
+/// resolve to the real body instead of an empty/garbage value. Returns an empty
+/// Buffer when there is no body (harmless: node-server only consults it for
+/// non-GET/HEAD methods).
+#[no_mangle]
+pub extern "C" fn js_node_http_im_raw_body(handle: i64) -> f64 {
+    let bytes = get_handle::<IncomingMessage>(handle)
+        .map(|im| im.body_bytes.clone())
+        .unwrap_or_default();
+    let buf = alloc_buffer(&bytes);
+    if buf.is_null() {
+        f64::from_bits(crate::types::TAG_UNDEFINED)
+    } else {
+        f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+    }
+}
+
+/// `req.signal` — lazily-created AbortSignal for the request lifetime.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_signal(handle: i64) -> f64 {
+    get_handle_mut::<IncomingMessage>(handle)
+        .map(ensure_signal)
+        .unwrap_or_else(|| f64::from_bits(crate::types::TAG_UNDEFINED))
 }
 
 /// `req.socket.remoteAddress` — peer IP as a dotted string.
@@ -221,6 +480,16 @@ pub extern "C" fn js_node_http_im_pause(handle: i64) {
     }
 }
 
+/// Chainable `req.pause()` — Node's `Readable.pause()` returns `this`, so
+/// `res.pause().on(...)` keeps flowing. Returns the receiver handle (boxed
+/// as a pointer via the `NR_PTR` row) instead of `undefined`/a raw number.
+/// Mirrors `js_node_http_res_set_header_self` (#5011/#2129 self-return).
+#[no_mangle]
+pub extern "C" fn js_node_http_im_pause_self(handle: i64) -> i64 {
+    js_node_http_im_pause(handle);
+    handle
+}
+
 /// `req.resume()` — clear the paused flag. If a `'data'` listener was
 /// registered while paused and we still have body bytes to emit,
 /// the event-loop iterator will pick the request up on its next pass.
@@ -234,20 +503,22 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     let encoding;
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.paused = false;
-        if !im.data_emitted && !im.body_bytes.is_empty() {
-            should_emit_data = true;
-        }
-        if !im.end_emitted {
-            should_emit_end = true;
-        }
         body_bytes = im.body_bytes.clone();
         data_listeners = im.listeners.get("data").cloned().unwrap_or_default();
         end_listeners = im.listeners.get("end").cloned().unwrap_or_default();
         encoding = im.encoding.clone();
-        if should_emit_data {
+        // #4909 — only consume the one-shot emit flags when a listener is
+        // actually present. `req.resume(); req.on('end', cb)` (the canonical
+        // body-drain pattern) registers the listener one statement AFTER
+        // resume; marking `end_emitted` here meant `im_on`'s sync-emit arm
+        // saw the event as already delivered and the server hung without
+        // ever responding.
+        if !im.data_emitted && !im.body_bytes.is_empty() && !data_listeners.is_empty() {
+            should_emit_data = true;
             im.data_emitted = true;
         }
-        if should_emit_end {
+        if !im.end_emitted && !end_listeners.is_empty() {
+            should_emit_end = true;
             im.end_emitted = true;
             im.complete = true;
         }
@@ -262,17 +533,26 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     }
 }
 
+/// Chainable `req.resume()` — Node's `Readable.resume()` returns `this`, so
+/// the canonical `res.resume().on('end', …)` body-drain chain keeps flowing.
+/// Returns the receiver handle (boxed as a pointer via the `NR_PTR` row)
+/// instead of `undefined`/a raw number. Mirrors
+/// `js_node_http_res_set_header_self` (#5011/#2129 self-return).
+#[no_mangle]
+pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
+    js_node_http_im_resume(handle);
+    handle
+}
+
 /// `req.destroy()` — mark destroyed and fire `'close'`.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroy(handle: i64) {
-    let close_listeners;
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         im.destroyed = true;
-        close_listeners = im.listeners.get("close").cloned().unwrap_or_default();
     } else {
         return;
     }
-    emit_no_arg_to_listeners(&close_listeners);
+    close_incoming_message(handle);
 }
 
 /// `req.on(event, cb)` — register a listener. For `'data'` and `'end'`
@@ -378,6 +658,13 @@ pub unsafe extern "C" fn js_node_http_im_set_encoding(
     handle
 }
 
+/// `req.setTimeout(msecs[, callback])` — timeout scheduling is transport-owned
+/// for now; expose Node's chainable shape.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_set_timeout(handle: i64, _msecs: f64, _callback: i64) -> i64 {
+    handle
+}
+
 /// `req.read()` — return a buffered chunk as a string, or null if
 /// nothing left. Phase 1 returns the full body on first call, then
 /// `null` thereafter.
@@ -459,6 +746,25 @@ pub(crate) fn emit_no_arg_to_listeners(listeners: &[i64]) {
     }
 }
 
+/// Mark the request as closed, abort `req.signal`, and fire `'close'` once.
+pub(crate) fn close_incoming_message(handle: i64) {
+    let close_listeners;
+    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+        if im.close_emitted {
+            return;
+        }
+        im.close_emitted = true;
+        close_listeners = im.listeners.get("close").cloned().unwrap_or_default();
+        if !close_listeners.is_empty() {
+            ensure_signal(im);
+        }
+        abort_signal(im);
+    } else {
+        return;
+    }
+    emit_no_arg_to_listeners(&close_listeners);
+}
+
 // ============================================================================
 // Allocation helper used by server.rs
 // ============================================================================
@@ -495,6 +801,203 @@ pub(crate) fn with_implicit_this<R>(this_val: f64, f: impl FnOnce() -> R) -> R {
     r
 }
 
+// ============================================================================
+// #4904: standalone `new http.IncomingMessage(socket)` support
+// ============================================================================
+
+/// `new http.IncomingMessage(socket)` — construct a standalone message not
+/// attached to any live connection. Node keeps the constructor argument
+/// verbatim on `req.socket` / `req.connection` and leaves the parse-state
+/// fields empty.
+#[no_mangle]
+pub extern "C" fn js_node_http_incoming_message_standalone_new(socket: f64) -> i64 {
+    crate::ensure_gc_scanner_registered();
+    let mut im = IncomingMessage::new(
+        String::new(),
+        String::new(),
+        HashMap::new(),
+        Vec::new(),
+        Vec::new(),
+        String::new(),
+        0,
+    );
+    im.standalone = true;
+    im.socket_value = socket;
+    register_handle(im)
+}
+
+/// `req.socket` / `req.connection` read override. `None` means the request
+/// is server-attached and untouched — dispatch falls back to the legacy
+/// self-pointer placeholder.
+pub(crate) fn incoming_socket_override(handle: i64) -> Option<f64> {
+    get_handle::<IncomingMessage>(handle).and_then(|im| {
+        if im.standalone || im.socket_overridden {
+            Some(im.socket_value)
+        } else {
+            None
+        }
+    })
+}
+
+/// `req.socket = v` / `req.connection = v`. Node's `connection` accessor
+/// writes `this.socket`, so both aliases land on the same slot.
+pub(crate) fn incoming_socket_assign(handle: i64, value: f64) -> bool {
+    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+        im.socket_value = value;
+        im.socket_overridden = true;
+        true
+    } else {
+        false
+    }
+}
+
+/// Header-field classification mirroring Node's `matchKnownFields`
+/// (lib/_http_incoming.js): the flag drives `_addHeaderLine` dedupe/merge.
+enum HeaderFieldKind {
+    /// Known single-value field — duplicate lines are dropped (first wins).
+    Single,
+    /// `', '`-joined list (known list fields and every unknown field).
+    List,
+    /// `Cookie` — joined with `'; '`.
+    Cookie,
+    /// `Set-Cookie` — accumulates an array.
+    SetCookie,
+}
+
+fn match_known_fields(field: &str) -> (HeaderFieldKind, String) {
+    // Node first tries an exact match against the canonical and all-lowercase
+    // spellings, then retries fully lowercased — observably identical to
+    // lowercasing up front and matching the lowercase table.
+    let lower = field.to_lowercase();
+    let kind = match lower.as_str() {
+        "age"
+        | "host"
+        | "from"
+        | "etag"
+        | "server"
+        | "referer"
+        | "expires"
+        | "location"
+        | "user-agent"
+        | "retry-after"
+        | "content-type"
+        | "max-forwards"
+        | "authorization"
+        | "last-modified"
+        | "content-length"
+        | "if-modified-since"
+        | "proxy-authorization"
+        | "if-unmodified-since" => HeaderFieldKind::Single,
+        "set-cookie" => HeaderFieldKind::SetCookie,
+        "cookie" => HeaderFieldKind::Cookie,
+        // Known list fields ("date", "vary", "origin", "expect", "accept",
+        // "upgrade", "if-match", "connection", "cache-control",
+        // "if-none-match", "accept-encoding", "accept-language",
+        // "x-forwarded-for", "content-encoding", "x-forwarded-host",
+        // "transfer-encoding", "x-forwarded-proto") and every unknown field
+        // share the same ', '-join behavior.
+        _ => HeaderFieldKind::List,
+    };
+    (kind, lower)
+}
+
+/// Stringify a JS value the way `'' + value` would inside Node's
+/// `dest[field] += ', ' + value` merge.
+fn header_value_to_string(value: f64) -> String {
+    let v = JsValue::from_bits(value.to_bits());
+    if v.is_undefined() {
+        return "undefined".to_string();
+    }
+    if v.is_null() {
+        return "null".to_string();
+    }
+    jsvalue_to_owned_string(value).unwrap_or_default()
+}
+
+/// Node's `IncomingMessage.prototype._addHeaderLine(field, value, dest)` —
+/// internal-by-convention API exercised directly by Node's own tests and by
+/// userland HTTP shims (#4904). Mutates `dest` in place per the
+/// `matchKnownFields` flag.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_im_add_header_line(
+    _handle: i64,
+    field: f64,
+    value: f64,
+    dest: f64,
+) {
+    extern "C" {
+        fn js_object_get_field_by_name(
+            obj: *const perry_ffi::ObjectHeader,
+            key: *const StringHeader,
+        ) -> JsValue;
+        fn js_object_set_field_by_name(
+            obj: *mut perry_ffi::ObjectHeader,
+            key: *const StringHeader,
+            value: f64,
+        );
+    }
+    if !JsValue::from_bits(dest.to_bits()).is_pointer() {
+        return;
+    }
+    let dest_ptr = (dest.to_bits() & PTR_MASK) as *mut perry_ffi::ObjectHeader;
+    let field_name = jsvalue_to_owned_string(field).unwrap_or_default();
+    let (kind, name) = match_known_fields(&field_name);
+    let key = alloc_string(&name);
+    let existing = js_object_get_field_by_name(dest_ptr as *const _, key.as_raw());
+    let existing_f64 = f64::from_bits(existing.bits());
+    match kind {
+        HeaderFieldKind::List | HeaderFieldKind::Cookie => {
+            if JsValue::from_bits(existing.bits()).is_string() {
+                let sep = if matches!(kind, HeaderFieldKind::Cookie) {
+                    "; "
+                } else {
+                    ", "
+                };
+                let merged = format!(
+                    "{}{}{}",
+                    jsvalue_to_owned_string(existing_f64).unwrap_or_default(),
+                    sep,
+                    header_value_to_string(value),
+                );
+                let merged_str = alloc_string(&merged);
+                js_object_set_field_by_name(
+                    dest_ptr,
+                    key.as_raw(),
+                    f64::from_bits(STRING_TAG | (merged_str.as_raw() as u64 & PTR_MASK)),
+                );
+            } else {
+                js_object_set_field_by_name(dest_ptr, key.as_raw(), value);
+            }
+        }
+        HeaderFieldKind::SetCookie => {
+            if JsValue::from_bits(existing.bits()).is_undefined() {
+                let mut arr = perry_ffi::js_array_alloc(1);
+                arr = perry_ffi::js_array_push(arr, JsValue::from_bits(value.to_bits()));
+                js_object_set_field_by_name(
+                    dest_ptr,
+                    key.as_raw(),
+                    f64::from_bits(JsValue::from_object_ptr(arr as *mut _).bits()),
+                );
+            } else if JsValue::from_bits(existing.bits()).is_pointer() {
+                let arr = (existing.bits() & PTR_MASK) as *mut perry_ffi::ArrayHeader;
+                let new_arr = perry_ffi::js_array_push(arr, JsValue::from_bits(value.to_bits()));
+                if new_arr != arr {
+                    js_object_set_field_by_name(
+                        dest_ptr,
+                        key.as_raw(),
+                        f64::from_bits(JsValue::from_object_ptr(new_arr as *mut _).bits()),
+                    );
+                }
+            }
+        }
+        HeaderFieldKind::Single => {
+            if JsValue::from_bits(existing.bits()).is_undefined() {
+                js_object_set_field_by_name(dest_ptr, key.as_raw(), value);
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn _force_jsvalue_link(v: f64) -> Option<String> {
     jsvalue_to_owned_string(v)
@@ -503,4 +1006,88 @@ pub(crate) fn _force_jsvalue_link(v: f64) -> Option<String> {
 #[allow(dead_code)]
 pub(crate) fn _force_jsvalue_extract(v: f64) -> bool {
     JsValue::from_bits(v.to_bits()).is_pointer()
+}
+
+#[cfg(test)]
+mod add_header_line_tests {
+    use super::*;
+
+    fn kind(field: &str) -> (u8, String) {
+        let (k, name) = match_known_fields(field);
+        let tag = match k {
+            HeaderFieldKind::Single => 0,
+            HeaderFieldKind::List => 1,
+            HeaderFieldKind::Cookie => 2,
+            HeaderFieldKind::SetCookie => 3,
+        };
+        (tag, name)
+    }
+
+    #[test]
+    fn known_single_value_fields_classify_and_lowercase() {
+        // First-wins fields from Node's matchKnownFields — including the
+        // odd-cased spellings the lowercase retry handles ('Etag' is neither
+        // the canonical 'ETag' nor all-lowercase).
+        for f in [
+            "Content-Type",
+            "content-type",
+            "Etag",
+            "User-Agent",
+            "If-Modified-Since",
+            "Proxy-Authorization",
+            "Max-Forwards",
+            "Retry-After",
+            "Last-Modified",
+            "Host",
+            "Age",
+            "Expires",
+            "Server",
+            "Location",
+            "Referer",
+            "Authorization",
+            "If-Unmodified-Since",
+        ] {
+            let (tag, name) = kind(f);
+            assert_eq!(tag, 0, "{f} should be single-valued");
+            assert_eq!(name, f.to_lowercase());
+        }
+    }
+
+    #[test]
+    fn list_fields_and_unknown_fields_join() {
+        for f in [
+            "Date",
+            "Connection",
+            "Transfer-Encoding",
+            "Cache-Control",
+            "Form",
+            "X-Totally-Custom",
+            "",
+        ] {
+            let (tag, name) = kind(f);
+            assert_eq!(tag, 1, "{f} should be ', '-joined");
+            assert_eq!(name, f.to_lowercase());
+        }
+    }
+
+    #[test]
+    fn cookie_kinds() {
+        assert_eq!(kind("Cookie"), (2, "cookie".to_string()));
+        assert_eq!(kind("Set-Cookie"), (3, "set-cookie".to_string()));
+        assert_eq!(kind("set-cookie"), (3, "set-cookie".to_string()));
+    }
+
+    #[test]
+    fn standalone_socket_assignment_aliases() {
+        // `new http.IncomingMessage()` then `req.connection = v` must read
+        // back through both `socket` and `connection` (#4904).
+        let handle = js_node_http_incoming_message_standalone_new(f64::from_bits(
+            crate::types::TAG_UNDEFINED,
+        ));
+        assert!(incoming_socket_override(handle).is_some());
+        let marker = 1234.5_f64;
+        assert!(incoming_socket_assign(handle, marker));
+        assert_eq!(incoming_socket_override(handle), Some(marker));
+        perry_ffi::drop_handle(handle);
+    }
 }

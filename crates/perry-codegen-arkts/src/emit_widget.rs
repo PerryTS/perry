@@ -154,6 +154,10 @@ pub(crate) fn emit_widget(
                 // picker variant is simpler than the full Calendar
                 // (which would need a builder for cell rendering).
                 "Calendar" => emit_calendar(args, callbacks),
+                // Issue #4772 — DatePicker(year, month, onChange) maps to
+                // ArkUI's native DatePicker (compact field complement to
+                // Calendar's CalendarPicker grid).
+                "DatePicker" => emit_date_picker(args, callbacks),
                 "ProgressView" => emit_progressview(args),
                 "Section" => emit_section(
                     args,

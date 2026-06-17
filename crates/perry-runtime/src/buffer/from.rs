@@ -461,10 +461,44 @@ pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut 
     buf
 }
 
+/// Validate a `new Uint8Array(length)` argument with `ToIndex` semantics and
+/// throw the spec `RangeError: Invalid typed array length: <n>` on a negative
+/// or out-of-range length, matching Node (#3662). `Uint8Array` is backed by a
+/// `BufferHeader` in Perry, so this lives here rather than in `typedarray.rs`.
+#[inline]
+fn uint8array_length_or_throw(val: f64) -> u32 {
+    let integer = if val.is_nan() { 0.0 } else { val.trunc() };
+    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+        // Node reports the ORIGINAL argument, not the truncated integer
+        // (`new Uint8Array(-1.5)` → "Invalid typed array length: -1.5"), with
+        // integral values shown without a decimal point (#3146).
+        let shown = if val.is_infinite() {
+            if val > 0.0 { "Infinity" } else { "-Infinity" }.to_string()
+        } else if val.fract() == 0.0 && val.abs() < (i64::MAX as f64) {
+            format!("{}", val as i64)
+        } else {
+            format!("{val}")
+        };
+        let msg = format!("Invalid typed array length: {shown}");
+        let m = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_rangeerror_new(m);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    }
+    // #5067 — a `Uint8Array` is backed by an `i32`-capacity `BufferHeader`, so
+    // a length above `i32::MAX` (~2 GiB) cannot be allocated. Node passes the
+    // `<= 2**53-1` length check for these and then fails the real allocation,
+    // so match its `RangeError: Array buffer allocation failed` rather than
+    // silently capping the length (which produced a wrong-size buffer).
+    if integer > i32::MAX as f64 {
+        crate::error::throw_allocation_failed();
+    }
+    integer as u32
+}
+
 /// `new Uint8Array(length)` — zero-filled buffer marked as Uint8Array.
 #[no_mangle]
 pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
-    let length = length.max(0) as u32;
+    let length = uint8array_length_or_throw(length as f64);
     let buf = buffer_alloc(length);
     unsafe {
         (*buf).length = length;
@@ -520,17 +554,35 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                 return dst;
             }
         }
+        if let Some(src_kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+            if crate::typedarray::bigint::is_bigint_kind(src_kind) {
+                crate::typedarray::bigint::throw_bigint_number_mix();
+            }
+            let src = raw as *const crate::typedarray::TypedArrayHeader;
+            unsafe {
+                let len = crate::typedarray::js_typed_array_length(src).max(0) as u32;
+                let dst = buffer_alloc(len);
+                (*dst).length = len;
+                let dst_data = buffer_data_mut(dst);
+                for i in 0..len as usize {
+                    let value = crate::typedarray::js_typed_array_get(src, i as i32);
+                    *dst_data.add(i) = buffer_byte_from_js_value(value);
+                }
+                mark_as_uint8array(dst as usize);
+                return dst;
+            }
+        }
         // Otherwise treat as a numeric source array.
         return js_uint8array_from_array(raw as *const ArrayHeader);
     }
     // Plain IEEE double (upper16 < 0x7FFC or > 0x7FFF) — numeric length.
+    // Node applies ToIndex (NaN → 0, truncate toward zero) and throws a
+    // RangeError on a negative / out-of-range length (#3662).
     if !(0x7FFC..=0x7FFF).contains(&top16) {
-        let len = if val.is_finite() && val >= 0.0 {
-            val as i32
-        } else {
-            0
-        };
-        return js_uint8array_alloc(len);
+        // `uint8array_length_or_throw` already throws for lengths above
+        // `i32::MAX` (#5067), so the cast is in range here.
+        let len = uint8array_length_or_throw(val);
+        return js_uint8array_alloc(len as i32);
     }
     // Any other tag (undefined/null/bool/string/bigint) → empty buffer,
     // matching the JS semantics of `new Uint8Array(undefined)` et al.
@@ -557,6 +609,19 @@ pub extern "C" fn js_uint8array_view(
     let src = raw as *const BufferHeader;
     unsafe {
         let total_len = (*src).length as i32;
+        // #4103: spec `RangeError` for an out-of-range view. `BYTES_PER_ELEMENT`
+        // is 1 for `Uint8Array`, so there is no alignment constraint — only the
+        // offset and (offset + length) bounds against the backing buffer.
+        if byte_offset < 0 || byte_offset > total_len {
+            crate::fs::validate::throw_range_error_with_code(&format!(
+                "Start offset {byte_offset} is outside the bounds of the buffer"
+            ));
+        }
+        if requested_length >= 0 && byte_offset.saturating_add(requested_length) > total_len {
+            crate::fs::validate::throw_range_error_with_code(&format!(
+                "Invalid typed array length: {requested_length}"
+            ));
+        }
         let start = byte_offset.clamp(0, total_len);
         let len = if requested_length < 0 {
             total_len.saturating_sub(start)
@@ -597,14 +662,24 @@ fn array_buffer_to_index(value: f64) -> i32 {
     if jv.is_undefined() {
         return 0;
     }
-    let n = jv.to_number();
-    if n.is_nan() {
-        return 0;
+    // ToIndex(length) → ToNumber: a BigInt throws TypeError; `js_number_coerce`
+    // is the full ToNumber — it runs an object's `valueOf`/`toString` (so a
+    // throwing one propagates) and throws TypeError on a Symbol. The bare
+    // `JSValue::to_number()` previously produced NaN→0 for objects/symbols, so
+    // `new ArrayBuffer({valueOf(){return 42}})` silently became length 0.
+    if jv.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
     }
-    if n < 0.0 || n > i32::MAX as f64 {
+    let n = crate::builtins::js_number_coerce(value);
+    // ToIndex truncates toward zero (ToIntegerOrInfinity) BEFORE the range
+    // check, so a fractional value in (-1, 0] like `-0.1` or `-0.99999` maps to
+    // +0 rather than tripping the negativity guard (test262
+    // SharedArrayBuffer/toindex-length). NaN → 0.
+    let integer = if n.is_nan() { 0.0 } else { n.trunc() };
+    if integer < 0.0 || integer > i32::MAX as f64 {
         throw_array_buffer_range_error();
     }
-    n.trunc() as i32
+    integer as i32
 }
 
 /// `new ArrayBuffer(size)` — allocate a zero-filled buffer of `size` bytes.
@@ -628,12 +703,24 @@ pub extern "C" fn js_array_buffer_new_value(size_value: f64) -> *mut BufferHeade
     js_array_buffer_new(array_buffer_to_index(size_value))
 }
 
-/// `new SharedArrayBuffer(size)` — same BufferHeader backing store as
-/// ArrayBuffer, tracked in a distinct side registry for util.types predicates.
+/// `new SharedArrayBuffer(size)` — same `BufferHeader` shape as ArrayBuffer,
+/// tracked in a distinct side registry for util.types predicates.
+///
+/// Unlike a plain ArrayBuffer, the backing store is allocated process-globally
+/// (never freed, stable address valid from every thread — see
+/// `crate::shared_sab`) instead of from the thread-local slab. That is what
+/// lets the same SAB alias the same physical bytes across `perry/thread`
+/// agents, so cross-agent `Atomics.wait`/`notify` actually coordinate (#4913).
 #[no_mangle]
 pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
-    let buf = zeroed_array_buffer_storage(size);
-    mark_as_shared_array_buffer(buf as usize);
+    let size = size.max(0) as u32;
+    let buf = crate::shared_sab::alloc_shared_sab(size);
+    let addr = buf as usize;
+    // Register in the creating thread's tables too so local predicates
+    // (`is_registered_buffer`, `is_shared_array_buffer`, views) work without a
+    // round-trip through the process-global registry.
+    register_buffer(buf);
+    mark_as_shared_array_buffer(addr);
     buf
 }
 
@@ -669,19 +756,31 @@ fn dataview_to_index(value: f64, what: &str) -> i64 {
     if jv.is_undefined() {
         return 0;
     }
-    let n = jv.to_number();
+    // ToIndex → ToNumber: a BigInt throws a TypeError (ToNumber rejects it), and
+    // `js_number_coerce` is the full ToNumber — it throws a TypeError on a Symbol
+    // and runs an object's `valueOf`/`toString`. The bare `JSValue::to_number()`
+    // previously produced `NaN`→0 for those, so `new DataView(buf, Symbol())`
+    // didn't throw and a `valueOf` never ran.
+    if jv.is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    let n = crate::builtins::js_number_coerce(value);
     if n.is_nan() {
         // ToIntegerOrInfinity(NaN) = 0.
         return 0;
     }
-    if n < 0.0 {
+    // ToIndex truncates toward zero (ToIntegerOrInfinity) *before* the sign and
+    // range checks, so e.g. `-0.1`/`-0.99999` become `-0` (== 0), not a
+    // RangeError (test262 toindex-byteoffset/-bytelength).
+    let int = n.trunc();
+    if int < 0.0 {
         throw_dataview_range_error(&format!("Invalid DataView {what}"));
     }
     // ToIndex rejects values above 2^53-1 (and thus +Infinity).
-    if n > 9_007_199_254_740_991.0 {
+    if int > 9_007_199_254_740_991.0 {
         throw_dataview_range_error(&format!("Invalid DataView {what}"));
     }
-    n.trunc() as i64
+    int as i64
 }
 
 /// `new DataView(buffer, byteOffset?, byteLength?)` — Perry models a DataView

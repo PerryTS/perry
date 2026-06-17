@@ -60,6 +60,70 @@ pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
     }
 }
 
+/// Issue #5111: serialize a `TypedArrayHeader`-backed typed array (`Int8Array`
+/// … `Float64Array`, `BigInt64Array`/`BigUint64Array`, `Float16Array`, plus the
+/// `map`/`subarray`/`slice`/`filter` results) in Node's shape `{"0":v,…}`.
+///
+/// Like `stringify_buffer`, this MUST run BEFORE `gc_obj_type`: a small typed
+/// array is plain-`alloc`'d with NO `GcHeader`, so the gc-tag read 8 bytes
+/// before the header reads unrelated allocator memory and dispatches to a
+/// random arm — the SIGSEGV reported for `JSON.stringify(ta.map(...))`. Each
+/// element is funneled through `write_number`, which renders `NaN`/`±Infinity`
+/// as `null` and routes a `BigInt64`/`BigUint64` element to the throwing
+/// serializer (Node's "Do not know how to serialize a BigInt" `TypeError`).
+pub(crate) unsafe fn stringify_typed_array(ptr: *const u8, buf: &mut String) {
+    let ta = ptr as *const crate::typedarray::TypedArrayHeader;
+    let len = crate::typedarray::js_typed_array_length(ta);
+    buf.push('{');
+    for i in 0..len {
+        if i > 0 {
+            buf.push(',');
+        }
+        let mut idx_buf = itoa::Buffer::new();
+        buf.push('"');
+        buf.push_str(idx_buf.format(i));
+        buf.push_str("\":");
+        write_number(buf, crate::typedarray::js_typed_array_get(ta, i));
+    }
+    buf.push('}');
+}
+
+/// Pretty-printed (`space`-indented) form of `stringify_typed_array`, matching
+/// the layout of `stringify_buffer_pretty`'s plain-Uint8Array branch.
+pub(crate) unsafe fn stringify_typed_array_pretty(
+    ptr: *const u8,
+    buf: &mut String,
+    indent: &str,
+    depth: usize,
+) {
+    let ta = ptr as *const crate::typedarray::TypedArrayHeader;
+    let len = crate::typedarray::js_typed_array_length(ta);
+    if len <= 0 {
+        buf.push_str("{}");
+        return;
+    }
+    let push_indent = |buf: &mut String, levels: usize| {
+        for _ in 0..levels {
+            buf.push_str(indent);
+        }
+    };
+    buf.push_str("{\n");
+    for i in 0..len {
+        push_indent(buf, depth + 1);
+        let mut idx_buf = itoa::Buffer::new();
+        buf.push('"');
+        buf.push_str(idx_buf.format(i));
+        buf.push_str("\": ");
+        write_number(buf, crate::typedarray::js_typed_array_get(ta, i));
+        if i + 1 < len {
+            buf.push(',');
+        }
+        buf.push('\n');
+    }
+    push_indent(buf, depth);
+    buf.push('}');
+}
+
 /// Pretty-printed (`space`-indented) form of `stringify_buffer`. Emits the
 /// same `{type,data}` (Buffer) / `{index:byte}` (plain Uint8Array) shape as
 /// the compact version but with newlines + indentation, matching Node's
@@ -177,19 +241,54 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     }
 }
 
+/// True when `ptr` is a valid object with NO own (enumerable) keys: either a
+/// null `keys_array` (`{}`, `Object.fromEntries([])`) or a valid-but-empty one
+/// — the shape of a `class C {}` instance or a class whose only members are
+/// prototype methods/getters (those are not own properties). Such objects
+/// serialize as `{}`, never `null` or an array. Used by the value dispatchers
+/// to disambiguate an empty object from a corrupted pointer after the
+/// `keys_len > 0` `is_object_pointer` probe fails.
+pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
+    let keys = (*(ptr as *const crate::ObjectHeader)).keys_array;
+    if keys.is_null() {
+        return true;
+    }
+    let kp = keys as u64;
+    let top_16 = kp >> 48;
+    let looks_valid = (top_16 == 0 || top_16 == 1) && kp > 0x10000 && (kp & 0x7) == 0;
+    looks_valid && (*keys).length == 0
+}
+
 #[inline]
 pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
+    // A BigInt's NaN-boxed bits ARE an IEEE NaN, so it would otherwise fall into
+    // the `is_nan()` → "null" arm below. BigInt is unserializable (modulo a
+    // `toJSON`), so funnel it through the throwing serializer. Centralizes the
+    // BigInt rule for every object-field / array-element numeric fallback that
+    // reaches here (test262 JSON/stringify/value-bigint `{x: 0n}`).
+    if (value.to_bits() & 0xFFFF_0000_0000_0000) == BIGINT_TAG {
+        serialize_bigint(value, buf);
+        return;
+    }
     // #2089: a Date is now a NaN-boxed `DateCell` pointer, handled in
     // `stringify_value`/`stringify_value_depth` before this numeric funnel —
     // so no Date detection is needed here anymore.
     if value.is_nan() || value.is_infinite() {
+        // JSON has no NaN/Infinity literal; the spec serializes them as null.
         buf.push_str("null");
     } else if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+        // Fast path for in-range integers (the overwhelming majority of JSON
+        // numbers); identical to ECMAScript NumberToString over this range.
         let mut itoa_buf = itoa::Buffer::new();
         buf.push_str(itoa_buf.format(value as i64));
     } else {
-        let mut ryu_buf = ryu::Buffer::new();
-        buf.push_str(ryu_buf.format(value));
+        // ECMAScript Number::toString (spec 6.1.6.1.20): fixed notation for an
+        // exponent in -6..=20, else exponential with an `e+`/`e-` sign. `ryu`
+        // emits shortest round-trip digits but its own notation (`1e20`,
+        // `1e-6`, `1e21`), so JSON.stringify diverged from `String(n)` and
+        // Node. Reuse the shared JS formatter so `JSON.stringify(1e20)` is
+        // `100000000000000000000` (not `1e20`) and `1e21` is `1e+21`.
+        buf.push_str(&crate::string::js_format_f64(value));
     }
 }
 
@@ -298,6 +397,8 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
             b'\n' => Some("\\n"),
             b'\r' => Some("\\r"),
             b'\t' => Some("\\t"),
+            0x08 => Some("\\b"),
+            0x0c => Some("\\f"),
             0..=0x1f => {
                 if start < i {
                     buf_vec.extend_from_slice(&bytes[start..i]);
@@ -324,10 +425,84 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
     buf_vec.push(b'"');
 }
 
+/// ECMA-262 SerializeJSONProperty step 2 for a BigInt: `GetV(value, "toJSON")`
+/// resolves through `BigInt.prototype`. If a callable `toJSON` is installed
+/// (e.g. a userland `BigInt.prototype.toJSON`), invoke it with `this` bound to
+/// the BigInt and return the (serializable) result; otherwise `None` so the
+/// caller throws. Unlike objects, a primitive BigInt never reaches
+/// `object_get_to_json` (that helper only walks `GC_TYPE_OBJECT` layouts), so
+/// the toJSON application lives here.
+pub(crate) unsafe fn bigint_apply_to_json(value: f64) -> Option<f64> {
+    let proto = crate::object::builtin_prototype_value("BigInt");
+    let proto_bits = proto.to_bits();
+    if (proto_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let proto_ptr = (proto_bits & POINTER_MASK) as *const crate::ObjectHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let key = js_string_from_bytes(b"toJSON".as_ptr(), 6);
+    let key_handle = scope.root_string_ptr(key);
+    let method = crate::object::js_object_get_field_by_name(
+        proto_ptr,
+        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
+    );
+    let method_bits = method.bits();
+    if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
+        return None;
+    }
+    let method_ptr = (method_bits & POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(method_ptr) {
+        return None;
+    }
+    let recv = value_handle.get_nanbox_f64();
+    let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
+    let key_f64_arg = f64::from_bits(STRING_TAG | (empty_str as u64 & POINTER_MASK));
+    let prev_this = crate::object::js_implicit_this_set(recv);
+    let result = crate::closure::js_native_call_value(f64::from_bits(method_bits), &key_f64_arg, 1);
+    crate::object::js_implicit_this_set(prev_this);
+    Some(result)
+}
+
+/// Serialize a BigInt: apply `BigInt.prototype.toJSON` if present, else throw a
+/// TypeError. If `toJSON` returns another BigInt the value remains
+/// unserializable and we throw.
+pub(crate) unsafe fn serialize_bigint(value: f64, buf: &mut String) {
+    if let Some(converted) = bigint_apply_to_json(value) {
+        if (converted.to_bits() & 0xFFFF_0000_0000_0000) == BIGINT_TAG {
+            throw_bigint_serialize();
+        }
+        stringify_value(converted, TYPE_UNKNOWN, buf);
+        return;
+    }
+    throw_bigint_serialize();
+}
+
+/// ECMA-262 SerializeJSONProperty step for a BigInt value: throw a TypeError.
+/// A `toJSON`/replacer that converts the BigInt runs earlier in the walk, so
+/// any BigInt reaching a serializer is unconvertible.
+pub(crate) fn throw_bigint_serialize() -> ! {
+    let msg = "Do not know how to serialize a BigInt";
+    let msg_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+    crate::exception::js_throw(f64::from_bits(
+        POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+    ))
+}
+
 /// Check if a NaN-boxed value is a closure (function).
 #[inline]
 pub(crate) unsafe fn is_closure_value(bits: u64) -> bool {
     if let Some(ptr) = extract_pointer(bits) {
+        // #2154 / #4904 — a POINTER_TAG field can be a native *handle id* (a
+        // small integer, e.g. an `http.Agent` stored in an options object),
+        // not a real heap pointer. Reading the CLOSURE_MAGIC tag at offset 12
+        // of such a value segfaults (stringifying `{ agent, lookup: () => {} }`
+        // crashed exactly here). Skip the low-memory guard range, matching
+        // the has-function probe below.
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
+            return false;
+        }
         // Check for ClosureHeader magic at offset 8 (type_tag field)
         let type_tag = *((ptr as *const u8).add(12) as *const u32);
         type_tag == crate::closure::CLOSURE_MAGIC
@@ -484,15 +659,10 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         return;
     }
 
-    // BigInt: serialize as quoted string (matching JSON.stringify with BigInt replacer behavior)
+    // BigInt: apply `BigInt.prototype.toJSON` if present, else throw a TypeError
+    // (test262 JSON/stringify/value-bigint*).
     if tag == BIGINT_TAG {
-        let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
-            buf.push_str("null");
-        }
+        serialize_bigint(value, buf);
         return;
     }
 
@@ -524,6 +694,18 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             }
             return;
         }
+        // Temporal (#4686): `JSON.stringify(temporal)` calls `toJSON`, which
+        // returns the canonical ISO string — emitted quoted. Detect before the
+        // generic object path (the cell is not an enumerable ObjectHeader).
+        #[cfg(feature = "temporal")]
+        if crate::temporal::is_temporal_cell_addr(ptr as usize) {
+            if let Some(s) = crate::temporal::temporal_iso_string(value) {
+                write_escaped_string(buf, &s);
+            } else {
+                buf.push_str("null");
+            }
+            return;
+        }
         // #2900: a `JSON.rawJSON(text)` wrapper emits its stored text verbatim
         // (no quoting, no re-escaping) — at the root, as an object field, or as
         // an array element. Detect via the reserved class id before the
@@ -548,6 +730,12 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         // is_object_pointer's `keys_array` deref.
         if crate::buffer::is_registered_buffer(ptr as usize) {
             stringify_buffer(ptr, buf);
+            return;
+        }
+        // Issue #5111: TypedArray (no GcHeader on small ones) detection BEFORE
+        // gc_obj_type, same rationale as the buffer check above.
+        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+            stringify_typed_array(ptr, buf);
             return;
         }
 
@@ -580,12 +768,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
                             return;
                         }
                     }
-                    if (*(ptr as *const crate::ObjectHeader)).keys_array.is_null() {
-                        // #1704: a genuinely empty object (null keys_array, e.g.
-                        // `Object.fromEntries([])` / a never-mutated `{}`) fails
-                        // `is_object_pointer`'s `keys_len > 0` guard but is valid —
-                        // emit "{}" not "null". A non-empty object that fails the
-                        // check is treated as corrupted and still emits "null".
+                    if object_has_no_own_keys(ptr) {
+                        // A valid object with no own keys (null keys_array like
+                        // `Object.fromEntries([])` / `{}`, OR a valid-but-empty
+                        // keys_array like a `class C {}` instance or a class with
+                        // only prototype methods/getters) fails `is_object_pointer`'s
+                        // `keys_len > 0` guard but is still `{}`, not `null`. A
+                        // non-empty object that fails the check is corrupted → "null".
                         buf.push_str("{}");
                     } else {
                         buf.push_str("null");
@@ -702,13 +891,7 @@ pub(crate) unsafe fn stringify_value_depth(
     }
 
     if tag == BIGINT_TAG {
-        let bigint_ptr = (bits & POINTER_MASK) as *const crate::BigIntHeader;
-        let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-        if let Some(s) = str_from_header(str_ptr) {
-            write_escaped_string(buf, s);
-        } else {
-            buf.push_str("null");
-        }
+        serialize_bigint(value, buf);
         return;
     }
 
@@ -742,6 +925,17 @@ pub(crate) unsafe fn stringify_value_depth(
             }
             return;
         }
+        // Temporal (#4686): `toJSON` → quoted ISO string. See the matching
+        // branch in `stringify_value`.
+        #[cfg(feature = "temporal")]
+        if crate::temporal::is_temporal_cell_addr(ptr as usize) {
+            if let Some(s) = crate::temporal::temporal_iso_string(value) {
+                write_escaped_string(buf, &s);
+            } else {
+                buf.push_str("null");
+            }
+            return;
+        }
         // #2900: raw-JSON wrapper — emit stored text verbatim. See the matching
         // branch in `stringify_value`.
         if let Some(raw) = super::raw_json_text_bytes(ptr) {
@@ -760,6 +954,11 @@ pub(crate) unsafe fn stringify_value_depth(
         // the matching branch in `stringify_value`.
         if crate::buffer::is_registered_buffer(ptr as usize) {
             stringify_buffer(ptr, buf);
+            return;
+        }
+        // Issue #5111: TypedArray detection BEFORE gc_obj_type (see above).
+        if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+            stringify_typed_array(ptr, buf);
             return;
         }
         match gc_obj_type(ptr) {
@@ -808,6 +1007,30 @@ pub(crate) unsafe fn stringify_value_depth(
     }
 
     write_number(buf, value);
+}
+
+/// JSON.stringify serializes only own ENUMERABLE string-keyed properties.
+/// Returns `true` when the own key `key_f64` on `obj` carries an explicit
+/// `enumerable: false` descriptor (`Object.defineProperty`, `freeze`/`seal`,
+/// or a builtin descriptor such as `Uint8Array.prototype.BYTES_PER_ELEMENT`),
+/// so the caller must skip it. Callers gate this behind
+/// `crate::object::descriptors_in_use()` so the common no-descriptor object
+/// pays only a single relaxed atomic load and never touches the descriptor map.
+pub(crate) unsafe fn json_key_non_enumerable(
+    obj: *const crate::ObjectHeader,
+    key_f64: f64,
+) -> bool {
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if let Some(kb) =
+        crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_f64.to_bits()), &mut sso)
+    {
+        if let Ok(ks) = std::str::from_utf8(kb) {
+            if let Some(attrs) = crate::object::get_property_attrs(obj as usize, ks) {
+                return !attrs.enumerable();
+            }
+        }
+    }
+    false
 }
 
 #[inline]
@@ -887,7 +1110,18 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         let keys_arr = (*obj).keys_array;
         !keys_arr.is_null() && (*keys_arr).length > num_fields
     };
-    if num_fields >= 5 && !has_overflow_fields {
+    // The shape-template fast path emits every key in the shape; it can't
+    // honor per-key `enumerable: false`, so fall through to the slow path
+    // (which filters) whenever any descriptor exists on this thread.
+    // Class instances (class_id != 0) route through the slow path: it honours a
+    // prototype/own `toJSON` and filters private (`#x`) elements, neither of
+    // which the shape-template fast path handles. Plain data objects (class_id
+    // == 0 — the common JSON shape) keep the fast path.
+    if num_fields >= 5
+        && !has_overflow_fields
+        && !crate::object::descriptors_in_use()
+        && (*obj).class_id == 0
+    {
         if let Some(tmpl_ptr) = shape_template_for(ptr) {
             if try_emit_shape_element(make_pointer_bits(ptr), &*tmpl_ptr, buf, depth) {
                 if depth > MAX_FAST_DEPTH {
@@ -993,6 +1227,9 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
 
     buf.push('{');
     let mut first = true;
+    // Only own ENUMERABLE keys are serialized; gated so descriptor-free
+    // objects (the common case) pay a single relaxed atomic load.
+    let filter_non_enum = crate::object::descriptors_in_use();
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
     // order when array-index keys are present, else slot `j` (no allocation).
     let pos = |j: u32| -> u32 {
@@ -1003,9 +1240,35 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     for j in 0..actual_fields {
         let f = pos(j);
-        let field_bits = read_field_bits(f);
+        // Private elements (`#x`) live in a class instance's keys_array but are
+        // not serializable own properties. (`has_prototype_chain` == class_id != 0.)
+        if has_prototype_chain
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
+            continue;
+        }
+        // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
+        // { enumerable: false })`) before touching the value.
+        if filter_non_enum && json_key_non_enumerable(obj, *keys_elements.add(f as usize)) {
+            continue;
+        }
+        let mut field_bits = read_field_bits(f);
+        // Own accessor properties: serialize the getter's return value (Node
+        // invokes the getter), not the raw slot — which holds the getter
+        // closure (object-literal `get x() {}`) or an empty placeholder
+        // (`Object.defineProperty(o, k, { get })`). Gated on the descriptor flag.
+        if filter_non_enum {
+            if let Some(gv) =
+                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
+            {
+                field_bits = gv.to_bits();
+            }
+        }
         let field_val = f64::from_bits(field_bits);
-        // Skip undefined per JSON spec
+        // Skip undefined per JSON spec (incl. a getter that returned undefined).
         if field_bits == TAG_UNDEFINED {
             continue;
         }
@@ -1412,6 +1675,24 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         buf.push_str("[]");
         return;
     }
+    // Circular-reference detection (ECMA-262 25.5.2 SerializeJSONArray step
+    // 1-2). Unlike objects, the compact array path does NOT bump `depth`, so
+    // an all-array cycle (`a=[]; a.push(a)`) would otherwise recurse until the
+    // native stack overflows (crash, no output). Track the open-array pointers
+    // in `STRINGIFY_STACK` and throw a `TypeError` on revisit. The stack is
+    // cleared at the outermost `js_json_stringify` entry, so a `longjmp` out of
+    // this throw (which skips the pops below) cannot leak across top-level
+    // calls. A sibling array reused in two positions is NOT a cycle: each
+    // position pushes-then-pops, so the second visit sees an empty-of-it stack.
+    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(arr as usize))) {
+        let msg = "Converting circular structure to JSON";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
+        crate::exception::js_throw(f64::from_bits(
+            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
+        ));
+    }
+    STRINGIFY_STACK.with(|s| s.borrow_mut().push(arr as usize));
     let len = (*arr).length;
     let elements = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
 
@@ -1464,6 +1745,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             }
         }
         buf.push(']');
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
         return;
     }
 
@@ -1501,13 +1783,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         } else if elem_bits == TAG_FALSE {
             buf.push_str("false");
         } else if elem_tag == BIGINT_TAG {
-            let bigint_ptr = (elem_bits & POINTER_MASK) as *const crate::BigIntHeader;
-            let str_ptr = crate::bigint::js_bigint_to_string(bigint_ptr);
-            if let Some(s) = str_from_header(str_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
+            serialize_bigint(elem, buf);
         } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
             let elem_ptr = if elem_tag == POINTER_TAG {
                 (elem_bits & POINTER_MASK) as *const u8
@@ -1540,6 +1816,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // the matching branch in `stringify_value`.
             if crate::buffer::is_registered_buffer(elem_ptr as usize) {
                 stringify_buffer(elem_ptr, buf);
+                continue;
+            }
+            // Issue #5111: TypedArray element detection BEFORE gc_obj_type.
+            if crate::typedarray::lookup_typed_array_kind(elem_ptr as usize).is_some() {
+                stringify_typed_array(elem_ptr, buf);
                 continue;
             }
             match gc_obj_type(elem_ptr) {
@@ -1585,6 +1866,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         }
     }
     buf.push(']');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
 #[inline]

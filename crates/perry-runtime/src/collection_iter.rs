@@ -18,6 +18,7 @@
 
 use crate::array::ArrayHeader;
 use crate::value::{js_jsvalue_to_string, js_nanbox_get_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
+use std::os::raw::c_int;
 
 /// Outcome of classifying a constructor init argument.
 pub(crate) enum InitIter {
@@ -98,7 +99,7 @@ pub(crate) fn throw_not_iterable(value: f64) -> ! {
 /// True if `value` is a JS iterable (array, string, Map, Set, or any heap
 /// object carrying a callable `[Symbol.iterator]`). `null`/`undefined` are
 /// NOT iterable here (the caller handles them as empty before calling).
-fn is_iterable(value: f64) -> bool {
+pub(crate) fn is_iterable(value: f64) -> bool {
     let jsv = JSValue::from_bits(value.to_bits());
     if jsv.is_any_string() {
         return true;
@@ -112,6 +113,24 @@ fn is_iterable(value: f64) -> bool {
     }
     let addr = raw as usize;
     if crate::map::is_registered_map(addr) || crate::set::is_registered_set(addr) {
+        return true;
+    }
+    // A built-in iterator object — an array/map/set/string/buffer/iterator-
+    // helper iterator — IS already an iterator and is therefore iterable
+    // (`[Symbol.iterator]()` returns itself). Mirrors the equivalent
+    // `is_builtin_iterator_class_id` arm in `js_get_iterator`.
+    if crate::array::is_builtin_iterator_class_id(addr) {
+        return true;
+    }
+    // A generator object (`g()` from `function* g(){}`) is lowered by Perry to a
+    // plain object with own closure-valued `next`/`return`/`throw` methods and
+    // NO `[Symbol.iterator]` symbol property, so the generic check below misses
+    // it. Generators ARE iterable (`[Symbol.iterator]()` returns themselves), so
+    // without this `js_array_like_to_array` — call / `new` / super spread of a
+    // generator (`f(...g())`, `new C(...g())`) and `new Map/Set(g())` — fell
+    // through to the array-reinterpret garbage path. `js_get_iterator` returns
+    // the generator unchanged (its own `.next()` drives the state machine).
+    if crate::object::js_util_types_is_generator_object(value).to_bits() == crate::value::TAG_TRUE {
         return true;
     }
     // Generic object: iterable iff it exposes a callable `[Symbol.iterator]`.
@@ -129,6 +148,173 @@ fn is_iterable(value: f64) -> bool {
     }
     let fn_raw = js_nanbox_get_pointer(iter_fn);
     fn_raw != 0 && crate::closure::is_closure_ptr(fn_raw as usize)
+}
+
+pub(crate) fn is_null_or_undefined(value: f64) -> bool {
+    matches!(value.to_bits(), TAG_UNDEFINED | TAG_NULL)
+}
+
+pub(crate) fn throw_type_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+}
+
+pub(crate) fn is_callable(value: f64) -> bool {
+    let raw = js_nanbox_get_pointer(value) & !0x7;
+    if raw >= 0x10000 {
+        return true;
+    }
+    crate::proxy::js_proxy_is_proxy(value) == 1
+}
+
+pub(crate) fn require_callable(value: f64, name: &str) -> f64 {
+    if is_callable(value) {
+        return value;
+    }
+    throw_type_error(&format!("{name} is not a function"));
+}
+
+pub(crate) fn normalize_callable_value(value: f64) -> f64 {
+    let raw = js_nanbox_get_pointer(value) & !0x7;
+    if raw >= 0x10000 {
+        return crate::value::js_nanbox_pointer(raw as i64);
+    }
+    value
+}
+
+pub(crate) fn builtin_prototype_method(builtin_name: &str, method_name: &str) -> f64 {
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let proto = crate::object::builtin_prototype_value(builtin_name);
+    let proto_ptr = js_nanbox_get_pointer(proto) as *const crate::object::ObjectHeader;
+    if proto_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
+        crate::object::own_data_field_by_name(proto_ptr, key)
+            .map(|value| f64::from_bits(value.bits()))
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_builtin_prototype_method_value(
+    builtin_ptr: *const u8,
+    builtin_len: usize,
+    method_ptr: *const u8,
+    method_len: usize,
+) -> f64 {
+    let builtin = match std::str::from_utf8(std::slice::from_raw_parts(builtin_ptr, builtin_len)) {
+        Ok(value) => value,
+        Err(_) => return f64::from_bits(TAG_UNDEFINED),
+    };
+    let method = match std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)) {
+        Ok(value) => value,
+        Err(_) => return f64::from_bits(TAG_UNDEFINED),
+    };
+    // Prefer the actual method object installed on the built-in prototype so a
+    // folded `Number.prototype.toString` value-read resolves to the SAME
+    // closure that a boxed wrapper reaches via its [[Prototype]] chain
+    // (`(new Number()).toString === Number.prototype.toString`, test262
+    // S15.7.5_A1_T0*). The primitive-wrapper prototypes install their real
+    // thunks (`primitive_proto_thunks::install_primitive_proto_methods`), so
+    // the proto field is authoritative; only synthesize a fresh closure when
+    // the prototype carries no own method under that name.
+    let installed = builtin_prototype_method(builtin, method);
+    if installed.to_bits() != TAG_UNDEFINED {
+        return installed;
+    }
+    crate::object::primitive_proto_method_value(builtin, method)
+        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+
+pub(crate) enum ConstructorIter {
+    Empty,
+    Array(f64),
+    Iterator(f64),
+}
+
+pub(crate) fn constructor_iter(value: f64) -> ConstructorIter {
+    if is_null_or_undefined(value) {
+        return ConstructorIter::Empty;
+    }
+    let jsv = JSValue::from_bits(value.to_bits());
+    let is_array = crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE;
+    if is_array {
+        return ConstructorIter::Array(value);
+    }
+    if jsv.is_any_string() {
+        let arr_f64 = crate::array::js_for_of_to_array(value);
+        return ConstructorIter::Array(arr_f64);
+    }
+    if !is_iterable(value) {
+        throw_not_iterable(value);
+    }
+    let iter = crate::symbol::js_get_iterator(value);
+    ConstructorIter::Iterator(iter)
+}
+
+pub(crate) fn call_capturing_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
+    let result = if jumped == 0 {
+        Ok(call())
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(exc)
+    };
+    crate::exception::js_try_end();
+    result
+}
+
+pub(crate) fn call_with_this_capturing_throw(
+    callee: f64,
+    this_value: f64,
+    args: &[f64],
+) -> Result<f64, f64> {
+    let prev_this = crate::object::js_implicit_this_set(this_value);
+    let result = call_capturing_throw(|| unsafe {
+        crate::closure::js_native_call_value(callee, args.as_ptr(), args.len())
+    });
+    crate::object::js_implicit_this_set(prev_this);
+    result
+}
+
+pub(crate) fn iterator_close(iter: f64) {
+    let _ = call_capturing_throw(|| unsafe {
+        crate::object::js_native_call_method(
+            iter,
+            b"return".as_ptr() as *const i8,
+            "return".len(),
+            std::ptr::null(),
+            0,
+        )
+    });
+}
+
+pub(crate) fn iterator_next_value(iter: f64) -> Option<f64> {
+    let result = unsafe {
+        crate::object::js_native_call_method(
+            iter,
+            b"next".as_ptr() as *const i8,
+            "next".len(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if !is_entry_object(result) {
+        throw_type_error("Iterator result is not an object");
+    }
+    let result_ptr = js_nanbox_get_pointer(result) as *const crate::object::ObjectHeader;
+    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
+    let done = crate::object::js_object_get_field_by_name_f64(result_ptr, done_key);
+    if crate::value::js_is_truthy(done) != 0 {
+        return None;
+    }
+    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    let value = crate::object::js_object_get_field_by_name_f64(result_ptr, value_key);
+    Some(value)
 }
 
 /// True if a yielded value is a JS *object* (array, plain object, function,

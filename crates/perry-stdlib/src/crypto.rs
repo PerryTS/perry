@@ -19,7 +19,7 @@ mod keys;
 mod prime;
 mod random;
 mod sign;
-mod util;
+pub(crate) mod util;
 mod x509;
 
 #[allow(unused_imports)]

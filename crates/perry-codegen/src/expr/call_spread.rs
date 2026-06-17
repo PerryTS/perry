@@ -87,7 +87,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             CallArg::Spread(e) => {
                                 let part_box = lower_expr(ctx, e)?;
                                 let blk = ctx.block();
-                                let part_handle = unbox_to_i64(blk, &part_box);
+                                let part_handle =
+                                    blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
                                 acc_handle = ctx.block().call(
                                     I64,
                                     "js_array_concat",
@@ -114,7 +115,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.func_names.get(fid).cloned(),
                         ctx.func_signatures.get(fid).copied(),
                     ) {
-                        let (declared_count, has_rest, _) = sig;
+                        let (declared_count, has_rest, _, synthetic_is_rest) = sig;
 
                         // Find the spread source expression.
                         let spread_expr = args
@@ -136,15 +137,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // to that string's char count). The element-extract
                         // fast path stays correct for non-rest fixed-arity
                         // callees.
+                        if ctx.func_synthetic_arguments.contains(fid) && synthetic_is_rest {
+                            let arr_box = lower_expr(ctx, spread_expr)?;
+                            let blk = ctx.block();
+                            let arr_handle =
+                                blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
+                            let arr_value = nanbox_pointer_inline(ctx.block(), &arr_handle);
+                            let fixed_count = declared_count.saturating_sub(1);
+                            let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
+                            for i in 0..fixed_count {
+                                let idx = format!("{}", i);
+                                let blk = ctx.block();
+                                let elem = blk.call(
+                                    DOUBLE,
+                                    "js_array_get_f64",
+                                    &[(I64, &arr_handle), (I32, &idx)],
+                                );
+                                lowered.push(elem);
+                            }
+                            lowered.push(arr_value);
+                            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                                lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                            return Ok(ctx.block().call(DOUBLE, &fname, &arg_slices));
+                        }
+
                         if has_rest && declared_count == 1 {
                             let arr_box = lower_expr(ctx, spread_expr)?;
-                            return Ok(ctx.block().call(DOUBLE, &fname, &[(DOUBLE, &arr_box)]));
+                            let arr_handle = ctx.block().call(
+                                I64,
+                                "js_array_like_to_array",
+                                &[(DOUBLE, &arr_box)],
+                            );
+                            let arr_value = nanbox_pointer_inline(ctx.block(), &arr_handle);
+                            return Ok(ctx.block().call(DOUBLE, &fname, &[(DOUBLE, &arr_value)]));
                         }
 
                         // Lower the spread source as an array.
                         let arr_box = lower_expr(ctx, spread_expr)?;
                         let blk = ctx.block();
-                        let arr_handle = unbox_to_i64(blk, &arr_box);
+                        let arr_handle =
+                            blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
 
                         // Extract `declared_count` elements from the array.
                         let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
@@ -185,10 +217,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // (the previous `FuncRef` arm catches the FuncRef case; ExternFuncRef
             // here means a top-level imported function reference, not a method).
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
-                let skip = matches!(
+                let mut skip = matches!(
                     object.as_ref(),
                     Expr::GlobalGet(_) | Expr::NativeModuleRef(_) | Expr::ExternFuncRef { .. }
                 );
+                // `recv.prop(...args)` where `prop` is an instance ACCESSOR
+                // (`get prop()`) is NOT a method call: it must READ the accessor
+                // (running the getter, which yields a function) and CALL that
+                // function with the spread args. The method-apply path below
+                // dispatches `prop` by name via `js_native_call_method`, which
+                // looks up a same-named METHOD and throws "prop is not a
+                // function" for an accessor. Skip it so the closure-callee path
+                // lowers the callee `PropertyGet{recv, prop}` (invoking the
+                // getter) and applies the spread to its result. Refs test262
+                // language/arguments-object cls-*-spread-operator getter calls.
+                if !skip {
+                    if let Some(cls) = receiver_class_name(ctx, object) {
+                        let mut cur = Some(cls);
+                        while let Some(c) = cur {
+                            let Some(ci) = ctx.classes.get(&c) else {
+                                break;
+                            };
+                            if ci.getters.iter().any(|(n, _)| n == property) {
+                                skip = true;
+                                break;
+                            }
+                            cur = ci.extends_name.clone();
+                        }
+                    }
+                }
                 if !skip {
                     let recv_box = lower_expr(ctx, object)?;
                     // Build a single JS array containing every arg in order.
@@ -205,7 +262,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             }
                             CallArg::Spread(e) => {
                                 let part_box = lower_expr(ctx, e)?;
-                                let part_handle = unbox_to_i64(ctx.block(), &part_box);
+                                let part_handle = ctx.block().call(
+                                    I64,
+                                    "js_array_like_to_array",
+                                    &[(DOUBLE, &part_box)],
+                                );
                                 acc_handle = ctx.block().call(
                                     I64,
                                     "js_array_concat",
@@ -246,62 +307,109 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //      spread_arr_handle: i64) -> f64
             let cb_box = lower_expr(ctx, callee)?;
 
-            // Marshal regular args into a stack buffer (or null/0 if none).
-            let (regs_ptr, regs_len) = if regular_count == 0 {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, regular_count);
-                let mut idx = 0usize;
-                for a in args {
-                    if let CallArg::Expr(e) = a {
-                        let v = lower_expr(ctx, e)?;
-                        let slot = ctx
-                            .block()
-                            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", idx))]);
-                        ctx.block().store(DOUBLE, &v, &slot);
-                        idx += 1;
-                    }
-                }
-                let ptr_reg = ctx.block().next_reg();
-                ctx.block().emit_raw(format!(
-                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                    ptr_reg, regular_count, buf_reg
-                ));
-                (ptr_reg, regular_count.to_string())
-            };
+            // `js_closure_call_apply_with_spread` appends the spread array
+            // AFTER the register args, which silently reorders interleaved
+            // calls like `f(5, ...[6,7,8], 9)` → `[5, 9, 6, 7, 8]`. Detect a
+            // regular arg appearing *after* a spread and, in that case, build a
+            // single source-ordered array and pass everything through the
+            // spread channel (regs = none) so positional order is preserved
+            // (spec ArgumentListEvaluation). The split path stays for the
+            // common `f(a, b, ...c)` shape (regs strictly before spreads).
+            let first_spread = args.iter().position(|a| matches!(a, CallArg::Spread(_)));
+            let interleaved = first_spread
+                .map(|fs| args[fs + 1..].iter().any(|a| matches!(a, CallArg::Expr(_))))
+                .unwrap_or(false);
 
-            // Marshal spread sources. 0 → "0" handle; 1 → unbox the one
-            // array; multiple → concat onto a fresh array.
-            let spread_handle = if spread_count == 0 {
-                "0".to_string()
-            } else if spread_count == 1 {
-                let spread_expr = args
-                    .iter()
-                    .find_map(|a| match a {
-                        CallArg::Spread(e) => Some(e),
-                        _ => None,
-                    })
-                    .expect("spread_count == 1 guarantees one Spread");
-                let arr_box = lower_expr(ctx, spread_expr)?;
-                let blk = ctx.block();
-                unbox_to_i64(blk, &arr_box)
-            } else {
-                // Concat all spread sources into a fresh array.
-                let acc = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
-                let mut acc_handle = acc;
+            let (regs_ptr, regs_len, spread_handle) = if interleaved {
+                // Build one array containing every arg in source order, then
+                // apply it as the entire argument list.
+                let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
                 for a in args {
-                    if let CallArg::Spread(e) = a {
-                        let part_box = lower_expr(ctx, e)?;
-                        let blk = ctx.block();
-                        let part_handle = unbox_to_i64(blk, &part_box);
-                        acc_handle = ctx.block().call(
-                            I64,
-                            "js_array_concat",
-                            &[(I64, &acc_handle), (I64, &part_handle)],
-                        );
+                    match a {
+                        CallArg::Expr(e) => {
+                            let v = lower_expr(ctx, e)?;
+                            acc_handle = ctx.block().call(
+                                I64,
+                                "js_array_push_f64",
+                                &[(I64, &acc_handle), (DOUBLE, &v)],
+                            );
+                        }
+                        CallArg::Spread(e) => {
+                            let part_box = lower_expr(ctx, e)?;
+                            let part_handle = ctx.block().call(
+                                I64,
+                                "js_array_like_to_array",
+                                &[(DOUBLE, &part_box)],
+                            );
+                            acc_handle = ctx.block().call(
+                                I64,
+                                "js_array_concat",
+                                &[(I64, &acc_handle), (I64, &part_handle)],
+                            );
+                        }
                     }
                 }
-                acc_handle
+                ("null".to_string(), "0".to_string(), acc_handle)
+            } else {
+                // Marshal regular args into a stack buffer (or null/0 if none).
+                let (regs_ptr, regs_len) = if regular_count == 0 {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, regular_count);
+                    let mut idx = 0usize;
+                    for a in args {
+                        if let CallArg::Expr(e) = a {
+                            let v = lower_expr(ctx, e)?;
+                            let slot =
+                                ctx.block()
+                                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", idx))]);
+                            ctx.block().store(DOUBLE, &v, &slot);
+                            idx += 1;
+                        }
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg, regular_count, buf_reg
+                    ));
+                    (ptr_reg, regular_count.to_string())
+                };
+
+                // Marshal spread sources. 0 → "0" handle; 1 → unbox the one
+                // array; multiple → concat onto a fresh array.
+                let spread_handle = if spread_count == 0 {
+                    "0".to_string()
+                } else if spread_count == 1 {
+                    let spread_expr = args
+                        .iter()
+                        .find_map(|a| match a {
+                            CallArg::Spread(e) => Some(e),
+                            _ => None,
+                        })
+                        .expect("spread_count == 1 guarantees one Spread");
+                    let arr_box = lower_expr(ctx, spread_expr)?;
+                    let blk = ctx.block();
+                    blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)])
+                } else {
+                    // Concat all spread sources into a fresh array.
+                    let acc = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+                    let mut acc_handle = acc;
+                    for a in args {
+                        if let CallArg::Spread(e) = a {
+                            let part_box = lower_expr(ctx, e)?;
+                            let blk = ctx.block();
+                            let part_handle =
+                                blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
+                            acc_handle = ctx.block().call(
+                                I64,
+                                "js_array_concat",
+                                &[(I64, &acc_handle), (I64, &part_handle)],
+                            );
+                        }
+                    }
+                    acc_handle
+                };
+                (regs_ptr, regs_len, spread_handle)
             };
 
             let result = ctx.block().call(

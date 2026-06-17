@@ -27,7 +27,7 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             if top16 == 0x7FFC {
                 return 0;
             }
@@ -158,6 +158,18 @@ unsafe fn key_to_str_for_diag(key: *const crate::StringHeader) -> String {
         .unwrap_or_else(|_| "<unknown>".to_string())
 }
 
+unsafe fn string_key_eq(key: *const crate::StringHeader, expected: &[u8]) -> bool {
+    if key.is_null() || (key as usize) < 0x10000 {
+        return false;
+    }
+    let len = (*key).byte_len as usize;
+    if len != expected.len() {
+        return false;
+    }
+    let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    std::slice::from_raw_parts(data, len) == expected
+}
+
 /// Set a field value by its string key name (dynamic property access)
 /// This searches the keys array for a match and sets the corresponding value.
 /// If the key doesn't exist, it adds it to the object.
@@ -168,6 +180,80 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // #5135: the receiver may be a Proxy id arriving with its NaN-box tag
+    // already masked off (the `obj.prop++` / `PropertyUpdate` codegen path
+    // hands us the bare pointer band, not the full POINTER_TAG value). A Proxy
+    // is encoded as a small registered id; deref-ing one as an `ObjectHeader`
+    // reads unmapped memory and SIGSEGVs. Mirror the read-side dispatch in
+    // `js_object_get_field_by_name` so a `proxy.foo = v` write goes through the
+    // `set` trap instead of corrupting the cell. `js_proxy_is_proxy` validates
+    // the value is a *registered* proxy so a real heap object whose masked
+    // address happens to be small isn't misrouted.
+    {
+        let addr = obj as u64;
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                crate::proxy::js_proxy_set(boxed, key_f64, value);
+                return;
+            }
+        }
+    }
+    // `Object.prototype["2"] = v` (stringified-index write) makes the index
+    // visible through array hole/OOB reads. Cheap gate: one relaxed flag
+    // load, then an address compare against the cached canonical
+    // Object.prototype; the digit scan only runs on a match (test262
+    // concat/S15.4.4.4_A3_T3).
+    {
+        let raw = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::array::object_prototype_addr_matches(raw) && !key.is_null() {
+            if let Some(name) = unsafe { super::has_own_helpers::str_from_string_header(key) } {
+                if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+                    crate::array::note_object_prototype_index_write(raw);
+                }
+            }
+        }
+    }
+    // A `Temporal.*` value is an opaque, immutable NaN-boxed cell that is NOT
+    // an `ObjectHeader` — writing an arbitrary property (e.g. test262's
+    // `instance.constructor = …` subclassing probes) must NOT interpret the
+    // cell as an `ObjectHeader` and corrupt its boxed payload (which segfaults
+    // on the next deref). The cell's `temporal_rs` slots are immutable, but a
+    // user-defined *expando* property is legal and lives in the exotic side
+    // table (like Date/RegExp). `obj` still carries its NaN-box tag here
+    // (`0x7FFD…` for a real cell), so route through `exotic_expando_kind_of_value`,
+    // which checks the tag before masking to the cleaned heap address.
+    if let Some((addr, kind @ super::exotic_expando::ExoticKind::Temporal)) =
+        super::exotic_expando::exotic_expando_kind_of_value(f64::from_bits(obj as u64))
+    {
+        if !key.is_null() {
+            unsafe {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = String::from_utf8_lossy(std::slice::from_raw_parts(name_ptr, name_len))
+                    .into_owned();
+                let receiver = f64::from_bits(obj as u64);
+                let _ =
+                    super::exotic_expando::exotic_set_property(addr, kind, &name, value, receiver);
+            }
+        }
+        return;
+    }
+    if let Some(addr) =
+        crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
+    {
+        unsafe {
+            crate::typedarray_props::typed_array_set_own_property(
+                addr as *mut crate::typedarray::TypedArrayHeader,
+                key,
+                value,
+            );
+        }
+        return;
+    }
+
     // Issue #618-followup: detect INT32-tagged class ref (top16 == 0x7FFE).
     // Drizzle's `((SQL2) => { SQL2.Aliased = Aliased; })(SQL)` pattern sets
     // a static property on an imported class — Perry stores classes as
@@ -184,7 +270,66 @@ pub extern "C" fn js_object_set_field_by_name(
                 let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
                     .unwrap_or("")
                     .to_string();
+                // Empty-string is a legal accessor key (`set ''(v)`); the
+                // `!name.is_empty()` guard below skips it, so dispatch a
+                // prototype-ref instance setter / constructor-ref static setter
+                // named "" here (Test262 accessor-name-* literal-string-empty).
+                if name.is_empty() {
+                    let recv = f64::from_bits(bits);
+                    if super::class_prototype_ref_id(recv).is_some()
+                        && super::class_registry::class_instance_setter_apply(
+                            class_id, &name, recv, value,
+                        )
+                    {
+                        return;
+                    }
+                    if super::class_registry::class_static_accessor_setter_apply(
+                        class_id, &name, recv, value,
+                    ) {
+                        return;
+                    }
+                }
                 if !name.is_empty() {
+                    if name == "name"
+                        && !super::class_registry::class_is_key_deleted(class_id, &name)
+                        && super::class_registry::lookup_static_method_in_chain(class_id, &name)
+                            .is_none()
+                    {
+                        return;
+                    }
+                    let has_own_data = CLASS_DYNAMIC_PROPS.with(|m| {
+                        m.borrow()
+                            .get(&class_id)
+                            .is_some_and(|props| props.contains_key(&name))
+                    });
+                    // `C.prototype[key] = v` where `key` is an instance
+                    // `set key(v)` accessor defined on the prototype: invoke the
+                    // setter with `this` = the prototype ref. The prototype ref
+                    // and the constructor ref are both INT32-tagged class refs;
+                    // distinguish via `class_prototype_ref_id`. Instance setters
+                    // live in the vtable; static accessors (below) live in the
+                    // constructor ref's table (Test262 accessor-name-inst).
+                    if !has_own_data
+                        && super::class_prototype_ref_id(f64::from_bits(bits)).is_some()
+                        && super::class_registry::class_instance_setter_apply(
+                            class_id,
+                            &name,
+                            f64::from_bits(bits),
+                            value,
+                        )
+                    {
+                        return;
+                    }
+                    if !has_own_data
+                        && super::class_registry::class_static_accessor_setter_apply(
+                            class_id,
+                            &name,
+                            f64::from_bits(bits),
+                            value,
+                        )
+                    {
+                        return;
+                    }
                     class_dynamic_prop_root_store(class_id, name, value);
                 }
             }
@@ -208,12 +353,12 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
-    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. Setting
-    // an arbitrary property on it (`date.foo = x`) must NOT deref the small
-    // cell as an `ObjectHeader` below (memory corruption). Perry doesn't model
-    // expando properties on Date objects, so treat it as a no-op — the same
-    // observable result as the old value-type representation (a property set
-    // on a primitive number).
+    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`, and a
+    // RegExp is a `RegExpHeader` — neither is an `ObjectHeader`, so a write
+    // must NOT fall through to the object deref below (memory corruption).
+    // Expando properties on these exotic instances live in the side table
+    // (`object::exotic_expando`), honoring accessor descriptors and
+    // attribute writability installed by `Object.defineProperty`.
     {
         let bits = obj as u64;
         let top16 = bits >> 48;
@@ -224,15 +369,35 @@ pub extern "C" fn js_object_set_field_by_name(
         } else {
             0
         };
-        if addr != 0 && crate::date::is_date_cell_addr(addr) {
-            return;
+        if addr != 0 {
+            if let Some(kind) = super::exotic_expando::exotic_expando_kind(addr) {
+                if !key.is_null() {
+                    unsafe {
+                        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                        if let Some(name_bytes) = crate::string::js_string_key_bytes(
+                            crate::value::JSValue::string_ptr(key as *mut _),
+                            &mut sso,
+                        ) {
+                            if let Ok(name) = std::str::from_utf8(name_bytes) {
+                                let receiver = f64::from_bits(
+                                    crate::value::JSValue::pointer(addr as *const u8).bits(),
+                                );
+                                let _ = super::exotic_expando::exotic_set_property(
+                                    addr, kind, name, value, receiver,
+                                );
+                            }
+                        }
+                    }
+                }
+                return;
+            }
         }
     }
     // Strip NaN-boxing tags if present (defensive: handle POINTER_TAG, UNDEFINED, NULL, etc.)
     let obj = {
         let bits = obj as u64;
         let top16 = bits >> 48;
-        if top16 >= 0x7FF8 {
+        if top16 == 0x7FFD || top16 >= 0x7FF8 {
             // NaN-boxed value — extract lower 48 bits as pointer
             let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
             if raw.is_null() || top16 == 0x7FFC {
@@ -272,6 +437,26 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
         return;
+    }
+    unsafe {
+        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+            crate::typedarray_props::typed_array_set_own_property(
+                obj as *mut crate::typedarray::TypedArrayHeader,
+                key,
+                value,
+            );
+            return;
+        }
+    }
+    unsafe {
+        if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && string_key_eq(key, b"length") {
+            let gc_header =
+                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                crate::array::js_array_set_length(obj as *mut crate::array::ArrayHeader, value);
+                return;
+            }
+        }
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
@@ -317,6 +502,13 @@ pub extern "C" fn js_object_set_field_by_name(
                     return;
                 }
             }
+            if crate::array::array_is_frozen(arr) {
+                return;
+            }
+            let existing = crate::array::array_named_property_get(arr, key).is_some();
+            if !existing && crate::array::array_is_sealed_or_no_extend(arr) {
+                return;
+            }
             crate::array::array_named_property_set(arr, key, value);
             return;
         }
@@ -351,6 +543,40 @@ pub extern "C" fn js_object_set_field_by_name(
             }
         }
 
+        if gc_type == crate::gc::GC_TYPE_CLOSURE {
+            if !key.is_null() {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    // ECMAScript "poison pill" — assigning `caller`/`arguments`
+                    // on any strict-mode function (Perry compiles everything
+                    // strict: declarations, expressions, bound and built-in
+                    // closures, arrows) throws via the %ThrowTypeError%
+                    // accessor's missing setter. A genuine own data prop of
+                    // that name (defineProperty round-trip) still wins.
+                    // Refs test262 13.2-*-s / StrictFunction_restricted-*.
+                    if matches!(name_str, "caller" | "arguments")
+                        && !crate::closure::closure_has_own_dynamic_prop(obj as usize, name_str)
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property assignment",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
+                    if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
+                        if !attrs.writable() {
+                            return;
+                        }
+                    } else if matches!(name_str, "name" | "length") {
+                        return;
+                    }
+                    crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
+                }
+            }
+            return;
+        }
+
         // Check if this is a ClosureHeader — closures support dynamic props via separate storage.
         // ClosureHeader has CLOSURE_MAGIC (0x434C4F53) at offset 12.
         // Without this check, (*obj).keys_array reads capture[0] → corruption/crash.
@@ -361,6 +587,21 @@ pub extern "C" fn js_object_set_field_by_name(
                 let name_len = (*key).byte_len as usize;
                 let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
                 if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                    // ECMAScript "poison pill" — assigning `caller`/`arguments`
+                    // on any strict-mode function (Perry compiles everything
+                    // strict: declarations, expressions, bound and built-in
+                    // closures, arrows) throws via the %ThrowTypeError%
+                    // accessor's missing setter. A genuine own data prop of
+                    // that name (defineProperty round-trip) still wins.
+                    // Refs test262 13.2-*-s / StrictFunction_restricted-*.
+                    if matches!(name_str, "caller" | "arguments")
+                        && !crate::closure::closure_has_own_dynamic_prop(obj as usize, name_str)
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property assignment",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                     // #3143: honor a non-writable registered descriptor — a
                     // built-in method's `.name`/`.length` are spec'd
                     // `writable: false`, so a sloppy-mode write must be a silent
@@ -373,10 +614,16 @@ pub extern "C" fn js_object_set_field_by_name(
                         if !attrs.writable() {
                             return;
                         }
+                    } else if matches!(name_str, "name" | "length") {
+                        return;
                     }
                     crate::closure::closure_set_dynamic_prop(obj as usize, name_str, value);
                 }
             }
+            return;
+        }
+
+        if super::arguments_object_set_field(obj, key, value) {
             return;
         }
 
@@ -389,6 +636,18 @@ pub extern "C" fn js_object_set_field_by_name(
                 get_module_name_from_namespace(crate::value::js_nanbox_pointer(obj as i64));
             if module_name == "buffer.Buffer" && property_name == "poolSize" {
                 super::set_buffer_pool_size(value);
+                return;
+            }
+            // CommonJS module exports are MUTABLE in Node: monkey-patching
+            // like Next.js's `require('node:timers').setImmediate = patched`
+            // must store the override (read back via `vt_get_own_field`)
+            // instead of falling through to the frozen-object throw.
+            if !module_name.is_empty() && property_name != "__module__" {
+                super::native_module::native_namespace_prop_override_store(
+                    &module_name,
+                    property_name,
+                    value,
+                );
                 return;
             }
         }
@@ -649,6 +908,35 @@ pub extern "C" fn js_object_set_field_by_name(
             None
         };
 
+        // Accessor short-circuit — must precede the frozen/sealed and
+        // writable checks below: a property defined with a setter is invoked
+        // via [[Set]] regardless of the object's frozen/sealed state (freezing
+        // an accessor only clears [[Configurable]]; the setter still runs). A
+        // getter-only accessor is read-only. Hoisted above the sidecar + the
+        // linear-scan blocks so BOTH key-lookup paths honor it — previously the
+        // frozen check at the top of each block threw before the accessor was
+        // consulted (test262
+        // assign/target-is-frozen-accessor-property-set-succeeds).
+        if ACCESSORS_IN_USE.with(|c| c.get()) {
+            if let Some(ref k) = incoming_key_str {
+                if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
+                    if acc.set != 0 {
+                        let closure = (acc.set & crate::value::POINTER_MASK)
+                            as *const crate::closure::ClosureHeader;
+                        if !closure.is_null() {
+                            let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                            let previous_this = super::js_implicit_this_set(receiver);
+                            crate::closure::js_closure_call1(closure, value);
+                            super::js_implicit_this_set(previous_this);
+                        }
+                    } else {
+                        crate::error::throw_immutable_write(0, k);
+                    }
+                    return;
+                }
+            }
+        }
+
         // Search through the keys array for a match
         let key_count = crate::array::js_array_length(keys) as usize;
         let alloc_limit = std::cmp::max((*obj).field_count, 8) as usize;
@@ -800,28 +1088,12 @@ pub extern "C" fn js_object_set_field_by_name(
                 // Found it - update the field. Frozen objects must
                 // throw a TypeError on writes to existing keys
                 // (issue #615 — strict-mode behavior, default for TS).
+                // Accessors were already handled by the hoisted short-circuit
+                // above; a key found here is a data property, so a frozen object
+                // throws on the write (issue #615 — strict-mode default for TS).
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
                     crate::error::throw_immutable_write(0, &key_str);
-                }
-                // Accessor short-circuit: if a setter is registered, invoke
-                // it instead of writing the slot. A getter-only accessor is
-                // read-only under Perry's strict-by-default TS semantics.
-                if ACCESSORS_IN_USE.with(|c| c.get()) {
-                    if let Some(ref k) = incoming_key_str {
-                        if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
-                            if acc.set != 0 {
-                                let closure = (acc.set & crate::value::POINTER_MASK)
-                                    as *const crate::closure::ClosureHeader;
-                                if !closure.is_null() {
-                                    crate::closure::js_closure_call1(closure, value);
-                                }
-                            } else {
-                                crate::error::throw_immutable_write(0, k);
-                            }
-                            return;
-                        }
-                    }
                 }
                 // Per-property writable check (set by Object.defineProperty / freeze).
                 // Issue #615 — strict-mode throw on read-only assign.
@@ -968,5 +1240,44 @@ pub extern "C" fn js_object_set_field_by_name(
             new_keys as usize,
             new_index as u32,
         );
+    }
+}
+
+/// Set `obj[key] = value` as a non-enumerable (but writable + configurable)
+/// own data property. Used by derived-class `super(message)` into a built-in
+/// `Error`/`NativeError`: the spec sets `message` via DefinePropertyOrThrow
+/// with `{ writable: true, enumerable: false, configurable: true }`, whereas an
+/// ordinary assignment would create an enumerable property. (Test262
+/// subclass/.../NativeError/*-message.)
+#[no_mangle]
+pub extern "C" fn js_object_set_field_by_name_nonenum(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    js_object_set_field_by_name(obj, key, value);
+    // Only ordinary heap objects carry the attrs side-table. Class refs,
+    // TypedArrays, Temporal cells, etc. are handled by `set_field_by_name`'s own
+    // routing and never reach the ordinary enumerable default, so skip them.
+    let bits = obj as u64;
+    if (bits >> 48) == 0x7FFE
+        || crate::value::addr_class::is_handle_band(obj as usize)
+        || key.is_null()
+    {
+        return;
+    }
+    unsafe {
+        if !crate::object::is_valid_obj_ptr(obj as *const u8) {
+            return;
+        }
+        let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_len = (*key).byte_len as usize;
+        if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+            crate::object::set_property_attrs(
+                obj as usize,
+                name.to_string(),
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
     }
 }

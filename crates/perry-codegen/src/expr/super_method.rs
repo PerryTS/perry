@@ -72,6 +72,60 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
             }
             let Some(fn_name) = resolved_fn else {
+                // Static resolution failed. For a class with a DYNAMIC parent
+                // (`class X extends _mod.default` — the interop ESM
+                // default-export base, wall 38/42), `extends_name` is "default"
+                // and never resolves to a compile-time class, so the chain walk
+                // above finds nothing. Dispatch `super.method(...)` at runtime
+                // via the registered parent edge instead of returning the bogus
+                // numeric `0.0` (which made `super.getRequestHandler()` in
+                // Next.js's `NextNodeServer.makeRequestHandler` yield a number,
+                // and the handler it built threw "value is not a function").
+                let has_dyn_parent = ctx
+                    .classes
+                    .get(&current_class_name)
+                    .map(|c| c.extends_expr.is_some())
+                    .unwrap_or(false);
+                let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
+                if has_dyn_parent && cid != 0 {
+                    let this_box = match ctx.this_stack.last().cloned() {
+                        Some(slot) => ctx.block().load(DOUBLE, &slot),
+                        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                    };
+                    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+                    for a in args {
+                        lowered_args.push(lower_expr(ctx, a)?);
+                    }
+                    let (args_ptr, args_len) = if lowered_args.is_empty() {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let n = lowered_args.len();
+                        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                        for (i, v) in lowered_args.iter().enumerate() {
+                            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                            ctx.block().store(DOUBLE, v, &slot);
+                        }
+                        let ptr_reg = ctx.block().next_reg();
+                        ctx.block().emit_raw(format!(
+                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                            ptr_reg, n, buf
+                        ));
+                        (ptr_reg, n.to_string())
+                    };
+                    let name_global = emit_string_literal_global(ctx, method);
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_super_method_call_dynamic",
+                        &[
+                            (I32, &cid.to_string()),
+                            (PTR, &name_global),
+                            (I64, &method.len().to_string()),
+                            (DOUBLE, &this_box),
+                            (PTR, &args_ptr),
+                            (I64, &args_len),
+                        ],
+                    ));
+                }
                 for a in args {
                     let _ = lower_expr(ctx, a)?;
                 }
@@ -115,10 +169,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {
                 return Ok(undef);
             };
-            let mut parent = ctx
+            let immediate_parent = ctx
                 .classes
                 .get(&current_class_name)
                 .and_then(|c| c.extends_name.clone());
+            let mut parent = immediate_parent.clone();
             let mut resolved_fn: Option<String> = None;
             while let Some(p) = parent {
                 let key = (p.clone(), property.clone());
@@ -129,7 +184,39 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
             }
             let Some(fn_name) = resolved_fn else {
-                return Ok(undef);
+                // Not a method on the parent chain — `super.prop` then reads the
+                // property off the parent prototype with `this` as receiver:
+                // an accessor (getter) is INVOKED, a data property
+                // (`B.prototype.x = 42`) is returned. Route to the runtime,
+                // which walks the parent class chain. Refs
+                // class/super/in-{constructor,getter,methods,setter}.
+                let parent_cid = immediate_parent
+                    .as_ref()
+                    .and_then(|p| ctx.class_ids.get(p))
+                    .copied()
+                    .unwrap_or(0);
+                if parent_cid == 0 {
+                    return Ok(undef);
+                }
+                let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                    ctx.block().load(DOUBLE, &this_slot)
+                } else {
+                    let helper = if ctx.is_strict_fn {
+                        "js_implicit_this_get"
+                    } else {
+                        "js_implicit_this_get_sloppy"
+                    };
+                    ctx.block().call(DOUBLE, helper, &[])
+                };
+                let key_idx = ctx.strings.intern(property);
+                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+                let parent_cid_s = parent_cid.to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_super_accessor_get",
+                    &[(I32, &parent_cid_s), (DOUBLE, &key_box), (DOUBLE, &recv_v)],
+                ));
             };
             // Mirror Expr::FuncRef: route through the singleton wrapper
             // so callers can invoke via the closure-call ABI. The
@@ -157,6 +244,134 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let wrap_ptr = format!("@{}", wrap_name);
             let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
             Ok(nanbox_pointer_inline(blk, &closure_handle))
+        }
+
+        Expr::SuperPropertySet {
+            parent_class_id,
+            parent_class_name,
+            key,
+            value,
+        } => {
+            let parent_cid = if *parent_class_id != 0 {
+                *parent_class_id
+            } else if let Some(parent_name) = parent_class_name {
+                ctx.class_ids.get(parent_name).copied().unwrap_or(0)
+            } else {
+                let Some(current_class_name) = ctx.class_stack.last().cloned() else {
+                    return Err(anyhow!("super property assignment outside any method body"));
+                };
+                ctx.classes
+                    .get(&current_class_name)
+                    .and_then(|c| c.extends_name.as_ref())
+                    .and_then(|parent| ctx.class_ids.get(parent))
+                    .copied()
+                    .unwrap_or(0)
+            };
+            let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                ctx.block().load(DOUBLE, &this_slot)
+            } else {
+                let helper = if ctx.is_strict_fn {
+                    "js_implicit_this_get"
+                } else {
+                    "js_implicit_this_get_sloppy"
+                };
+                ctx.block().call(DOUBLE, helper, &[])
+            };
+            let key_v = lower_expr(ctx, key)?;
+            let value_v = lower_expr(ctx, value)?;
+            let parent_cid_s = parent_cid.to_string();
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_super_put_value_set",
+                &[
+                    (I32, &parent_cid_s),
+                    (DOUBLE, &key_v),
+                    (DOUBLE, &value_v),
+                    (DOUBLE, &recv_v),
+                    (I32, "1"),
+                ],
+            ))
+        }
+
+        Expr::ObjectSuperPropertyGet {
+            home,
+            key,
+            receiver,
+        } => {
+            let home_v = lower_expr(ctx, home)?;
+            let key_v = lower_expr(ctx, key)?;
+            let recv_v = lower_expr(ctx, receiver)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_super_get",
+                &[(DOUBLE, &home_v), (DOUBLE, &key_v), (DOUBLE, &recv_v)],
+            ))
+        }
+
+        Expr::ObjectSuperPropertySet {
+            home,
+            key,
+            value,
+            receiver,
+        } => {
+            let home_v = lower_expr(ctx, home)?;
+            let key_v = lower_expr(ctx, key)?;
+            let value_v = lower_expr(ctx, value)?;
+            let recv_v = lower_expr(ctx, receiver)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_super_put_value_set",
+                &[
+                    (DOUBLE, &home_v),
+                    (DOUBLE, &key_v),
+                    (DOUBLE, &value_v),
+                    (DOUBLE, &recv_v),
+                    (I32, "1"),
+                ],
+            ))
+        }
+
+        Expr::ObjectSuperMethodCall {
+            home,
+            key,
+            receiver,
+            args,
+        } => {
+            let home_v = lower_expr(ctx, home)?;
+            let key_v = lower_expr(ctx, key)?;
+            let recv_v = lower_expr(ctx, receiver)?;
+            let mut lowered_args = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let buf = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+                for (i, val) in lowered_args.iter().enumerate() {
+                    let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                    ctx.block().store(DOUBLE, val, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg,
+                    lowered_args.len(),
+                    buf
+                ));
+                (ptr_reg, lowered_args.len().to_string())
+            };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_object_super_call",
+                &[
+                    (DOUBLE, &home_v),
+                    (DOUBLE, &key_v),
+                    (DOUBLE, &recv_v),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            ))
         }
 
         // -------- fs.readFileSync(path) -> Buffer (no encoding) --------

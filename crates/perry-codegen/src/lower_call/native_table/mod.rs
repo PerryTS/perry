@@ -17,8 +17,11 @@ mod databases;
 mod dates;
 mod extras;
 mod fastify;
-mod http;
+mod http_client;
+mod http_http2;
+mod http_server;
 mod media;
+mod net_classes_state;
 mod net_events;
 mod node_core;
 mod node_core_process;
@@ -27,8 +30,10 @@ mod node_dns;
 mod node_domain;
 mod node_misc;
 mod thread_lodash;
+mod tls_events;
 mod tui;
 mod utils_crypto;
+mod yoga;
 
 // ============================================================================
 // Native stdlib module dispatch (fastify, mysql2, ws, pg, ioredis, mongodb,
@@ -41,7 +46,7 @@ mod utils_crypto;
 pub(super) enum NativeArgKind {
     /// NaN-boxed f64 — pass as-is (objects, generic JSValues).
     F64,
-    /// NaN-boxed string → extract raw i64 pointer via js_get_string_pointer_unified.
+    /// NaN-boxed value → extract/stringify to a raw i64 StringHeader pointer.
     /// Use for Rust signatures like `*const StringHeader`.
     StrPtr,
     /// NaN-boxed closure/pointer → unbox to i64 via the standard mask.
@@ -89,6 +94,11 @@ pub(super) enum NativeRetKind {
     BigInt,
     /// Returns f64 → pass through (NaN-boxed JSValue).
     F64,
+    /// Returns f64 `1.0`/`0.0` → box as a real JS boolean
+    /// (`TAG_TRUE`/`TAG_FALSE`) so `console.log` prints `true`/`false`
+    /// rather than `1`/`0`. Use for predicates whose runtime signature
+    /// returns the FFI bool-as-f64 convention (e.g. `uuid.validate`).
+    Bool,
     /// Returns i32 → ignored, return TAG_UNDEFINED.
     I32Void,
     /// Returns void → return TAG_UNDEFINED.
@@ -124,6 +134,7 @@ pub(super) const NR_STR: NativeRetKind = NativeRetKind::Str;
 pub(super) const NR_OBJ_FROM_JSON_STR: NativeRetKind = NativeRetKind::ObjFromJsonStr;
 pub(super) const NR_BIGINT: NativeRetKind = NativeRetKind::BigInt;
 pub(super) const NR_F64: NativeRetKind = NativeRetKind::F64;
+pub(super) const NR_BOOL: NativeRetKind = NativeRetKind::Bool;
 pub(super) const NR_I32: NativeRetKind = NativeRetKind::I32Void;
 pub(super) const NR_VOID: NativeRetKind = NativeRetKind::Void;
 
@@ -150,6 +161,8 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(fastify::FASTIFY_ROWS);
     v.extend_from_slice(databases::DATABASES_ROWS);
     v.extend_from_slice(net_events::NET_EVENTS_ROWS);
+    v.extend_from_slice(net_classes_state::NET_CLASSES_STATE_ROWS);
+    v.extend_from_slice(tls_events::TLS_EVENTS_ROWS);
     v.extend_from_slice(node_misc::NODE_MISC_ROWS);
     v.extend_from_slice(async_decimal::ASYNC_DECIMAL_ROWS);
     v.extend_from_slice(utils_crypto::UTILS_CRYPTO_ROWS);
@@ -157,8 +170,11 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(dates::DATES_ROWS);
     v.extend_from_slice(media::MEDIA_ROWS);
     v.extend_from_slice(tui::TUI_ROWS);
+    v.extend_from_slice(yoga::YOGA_ROWS);
     v.extend_from_slice(extras::EXTRAS_ROWS);
-    v.extend_from_slice(http::HTTP_ROWS);
+    v.extend_from_slice(http_client::HTTP_CLIENT_ROWS);
+    v.extend_from_slice(http_server::HTTP_SERVER_ROWS);
+    v.extend_from_slice(http_http2::HTTP_HTTP2_ROWS);
     v
 });
 
@@ -228,6 +244,7 @@ fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
         NativeRetKind::ObjFromJsonStr => "NR_OBJ_FROM_JSON_STR",
         NativeRetKind::BigInt => "NR_BIGINT",
         NativeRetKind::F64 => "NR_F64",
+        NativeRetKind::Bool => "NR_BOOL",
         NativeRetKind::I32Void => "NR_I32",
         NativeRetKind::Void => "NR_VOID",
     }

@@ -21,12 +21,12 @@ on:
       - '!CHANGELOG.md'
   # Manual escape hatch for the opt-in jobs. Maintainers (write access)
   # can dispatch the workflow against any ref with `run_extended_tests=true`
-  # to run parity / compile-smoke / doc-tests on demand without tagging
-  # a release.
+  # to run parity / compile-smoke / package smokes / doc-tests on demand
+  # without tagging a release.
   workflow_dispatch:
     inputs:
       run_extended_tests:
-        description: 'Run extended tests (parity, compile-smoke, doc-tests)'
+        description: 'Run extended tests (parity, compile-smoke, package smokes, doc-tests)'
         type: boolean
         default: false
 
@@ -74,6 +74,28 @@ jobs:
       - name: File size limit
         run: ./scripts/check_file_size.sh
 
+      # GC write-barrier store-site inventory: every raw heap-slot store in
+      # perry-codegen / perry-runtime / perry-stdlib must be barriered or
+      # carry a justified GC_STORE_AUDIT(...) marker (or a justified entry
+      # in scripts/gc_store_site_allowlist.txt). Catches new unbarriered
+      # old->young store paths before they become nondeterministic segfaults.
+      - name: GC store-site inventory
+        run: |
+          python3 scripts/gc_store_site_inventory.py --self-test
+          python3 scripts/gc_store_site_inventory.py
+
+      # Handle-vs-pointer address classification audit: POINTER_TAG payloads
+      # can be heap pointers OR small registry handles (fetch/zlib/proxy/...),
+      # and code must classify by magnitude through value/addr_class.rs before
+      # dereferencing. Catches new hand-typed band literals (0x100000 etc.)
+      # and new `as *const GcHeader` casts outside addr_class.rs / gc/ before
+      # they become Linux-only segfaults (#1843, #4004, #4665, #4800 class).
+      # Allowlist: scripts/addr_class_allowlist.txt.
+      - name: Address-classification audit
+        run: |
+          python3 scripts/addr_class_inventory.py --self-test
+          python3 scripts/addr_class_inventory.py
+
   # ---------------------------------------------------------------------------
   # API docs drift gate (#465)
   #
@@ -88,11 +110,19 @@ jobs:
   api-docs-drift:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "2G"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -145,11 +175,35 @@ jobs:
     # don't exercise any platform behavior; they're pure logic +
     # codegen.
     runs-on: ubuntu-latest
+    # Was unbounded (the workflow default of 360 min). This gate legitimately
+    # runs ~45-50 min (per-package serial build+prune loop below, plus the big
+    # stdlib links), and a cold sccache run can be a bit slower — so the bound
+    # is set well ABOVE the real runtime: it exists only to cut a true hang
+    # (e.g. a flaky link SIGBUS retry storm) at ~2 h instead of 6 h, never to
+    # fail a normal slow run.
+    timeout-minutes: 120
+    # sccache (compiler-level cache, shared across ALL branches/jobs via the
+    # GitHub Actions cache backend) on top of Swatinem/rust-cache (target/ +
+    # registry). rust-cache only writes on main (save-if below), so PRs can't
+    # warm it — and any change to the constantly-churning perry-runtime
+    # invalidates the whole downstream target/, whereas sccache still reuses
+    # the unchanged compilation units. CARGO_INCREMENTAL=0 is required: sccache
+    # cannot cache incremental builds. SCCACHE_CACHE_SIZE bounds the on-runner
+    # cache so it doesn't compound this job's known disk pressure (the prune
+    # loop below).
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "2G"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -165,6 +219,8 @@ jobs:
         #   image doesn't have libgtk-4-dev installed by default.
         # - perry-ui-android: needs Android NDK.
         # - perry-ui-windows: needs win32 headers.
+        # - perry-ui-windows-winui: re-exports perry-ui-windows, so it inherits
+        #   the same win32 / webview2-com dependency that won't build on Linux.
         env:
           # Rust's Ubuntu target can drive `cc` with `-fuse-ld=lld`; on the
           # shared runner this has repeatedly terminated large test links with
@@ -215,6 +271,7 @@ jobs:
               "perry-ui-gtk4",
               "perry-ui-android",
               "perry-ui-windows",
+              "perry-ui-windows-winui",
               "perry-doc-fixture-my-bindings",
           }
           metadata = json.load(sys.stdin)
@@ -234,6 +291,51 @@ jobs:
           done
 
   # ---------------------------------------------------------------------------
+  # GC write-barrier stress (optional / non-blocking)
+  #
+  # `crates/perry/tests/gc_write_barrier_stress.rs` runs compiled binaries
+  # under the slowest GC configuration (PERRY_GC_FORCE_EVACUATE +
+  # PERRY_GC_VERIFY_EVACUATION) to hunt a *rare* corruption window (#5029).
+  # Those tests are ~200s each and nondeterministic by nature, so they are a
+  # poor fit for the blocking per-PR `cargo-test` gate (one flake blocked
+  # every unrelated PR). They are `#[ignore]`d there and run here instead.
+  #
+  # Opt-in + informational: `continue-on-error` so a flake never fails the
+  # workflow; triggered by the `run-extended-tests` PR label, a
+  # `workflow_dispatch` with `run_extended_tests=true`, or a tag push.
+  # ---------------------------------------------------------------------------
+  gc-stress:
+    continue-on-error: true
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Run GC write-barrier stress tests
+        env:
+          # Match the cargo-test gate's linker workaround (lld SIGBUS on the
+          # shared runner during large test links).
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: cargo test -p perry --test gc_write_barrier_stress -- --ignored
+
+  # ---------------------------------------------------------------------------
   # Compiler-output regression gate
   #
   # Retains HIR, pre/post-opt LLVM IR, assembly, benchmark output, runtime
@@ -244,11 +346,19 @@ jobs:
   compiler-output-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "2G"
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -335,6 +445,14 @@ jobs:
   # Parity tests (Perry output vs Node.js)
   # ---------------------------------------------------------------------------
   parity:
+    # Release-publish decoupling: aspirational extended suite. Per maintainer
+    # decision it no longer BLOCKS package publishing — release-packages.yml's
+    # await-tests gate keys on this workflow's run conclusion, and job-level
+    # `continue-on-error: true` keeps a red result here from failing that
+    # conclusion. The job still runs on every tag + shows its own pass/fail as
+    # an informational signal (and core jobs — cargo-test/lint/api-docs-drift/
+    # compiler-output-regression — still gate publish).
+    continue-on-error: true
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. Parity tests
     # just compare Perry's stdout against `node --experimental-strip-types`'s
     # stdout per test file; both run cleanly on Linux. `gtimeout` on
@@ -382,23 +500,15 @@ jobs:
 
       - name: Check parity threshold
         run: |
-          REPORT="test-parity/reports/latest.json"
-          THRESHOLD_FILE="test-parity/threshold.json"
-
-          if [[ ! -f "$REPORT" ]]; then
-            echo "No parity report found"
-            exit 1
-          fi
-
-          ACTUAL=$(jq -r '.summary.parity_percentage' "$REPORT")
-          MIN=$(jq -r '.min_parity_pct' "$THRESHOLD_FILE")
-
-          echo "Parity: ${ACTUAL}% (threshold: ${MIN}%)"
-
-          awk -v a="$ACTUAL" -v m="$MIN" 'BEGIN {
-            if (a+0 < m+0) { print "FAIL: Parity " a "% is below threshold " m "%"; exit 1 }
-            print "OK: Parity " a "% meets threshold " m "%"
-          }'
+          set +e
+          python3 scripts/parity_threshold_gate.py \
+            --check \
+            --output-json test-parity/reports/parity_threshold_latest.json \
+            --output-md test-parity/reports/parity_threshold_latest.md
+          status=$?
+          set -e
+          cat test-parity/reports/parity_threshold_latest.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Check for new failures
         run: |
@@ -440,12 +550,25 @@ jobs:
           fi
           echo "All ${TOTAL} failures are known/triaged."
 
+      - name: Generate parity matrix trend
+        run: |
+          python3 scripts/parity_matrix_trend.py \
+            --check \
+            --output-json test-parity/reports/parity_matrix_latest.json \
+            --output-md test-parity/reports/parity_matrix_latest.md
+          cat test-parity/reports/parity_matrix_latest.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload parity report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: parity-report
-          path: test-parity/reports/latest.json
+          path: |
+            test-parity/reports/latest.json
+            test-parity/reports/parity_threshold_latest.json
+            test-parity/reports/parity_threshold_latest.md
+            test-parity/reports/parity_matrix_latest.json
+            test-parity/reports/parity_matrix_latest.md
 
       # Capture per-test compile stderr written by run_parity_tests.sh into
       # `test-parity/output/*.compile_error.log` so the long-tail
@@ -464,6 +587,9 @@ jobs:
   # Compile smoke test (all 130+ test files must compile)
   # ---------------------------------------------------------------------------
   compile-smoke:
+    # Release-publish decoupling (see `parity` above): aspirational extended
+    # suite, informational only — does not block package publishing.
+    continue-on-error: true
     # Was macos-14 — moved to ubuntu-latest in v0.5.392. The smoke
     # compiles every `test-files/*.ts` with the bare `perry foo.ts -o
     # out` path; the auto-optimize cache + clang link steps work
@@ -567,10 +693,21 @@ jobs:
           # ld-unresolved-reference failure observed on #1038 pre-merge.
           # Move to a jose-aware test runner once that crate's CI hook
           # is wired up.
+          # test_ui_on_keydown_smoke / test_issue_1495_image_systemname /
+          # test_issue_1867_audio_playback / test_issue_2022_canvas_draw_image
+          # all import `perry/ui` (App/Image/Canvas/loadImage/keydown). Like the
+          # rest of the test_ui_* / media family above they need `--target
+          # macos` to link the platform widgets; the bare `perry foo.ts -o out`
+          # smoke path doesn't pull in libperry_ui_* on Linux, so they fail with
+          # ld undefined-symbol errors. ci-env, not a Perry codegen bug.
           export SKIP_TESTS=" \
             test_ui_comprehensive \
             test_ui_controls \
             test_ui_phase4 \
+            test_ui_on_keydown_smoke \
+            test_issue_1495_image_systemname \
+            test_issue_1867_audio_playback \
+            test_issue_2022_canvas_draw_image \
             test_timer \
             test_phase2v3_3_show_toast_set_text \
             test_issue_351_media_playback \
@@ -843,6 +980,12 @@ jobs:
   # entries for the workflow).
   # ---------------------------------------------------------------------------
   harmonyos-smoke:
+    # Aspirational smoke (informational) — must not block package publish.
+    # release-packages await-tests keys on this workflow's run conclusion;
+    # continue-on-error keeps a red result here from failing it (same as
+    # parity/compile-smoke/doc-tests/drizzle/effect-basic-smoke). Core jobs
+    # (cargo-test/lint/api-docs-drift/compiler-output-regression) still gate.
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -884,6 +1027,9 @@ jobs:
   # default. Opt-in via the `run-extended-tests` label.
   # ---------------------------------------------------------------------------
   drizzle-mysql-smoke:
+    # Release-publish decoupling (see `parity` above): aspirational extended
+    # suite, informational only — does not block package publishing.
+    continue-on-error: true
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
@@ -944,6 +1090,113 @@ jobs:
           PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
 
   # ---------------------------------------------------------------------------
+  # ink-link-smoke: runs the tier-3 release fixture
+  # `tests/release/packages/ink-link-smoke/` as the CI counterpart to #803.
+  #
+  # This is intentionally compile/link-only. #348 tracks broader Ink runtime
+  # and rendering compatibility; this job guards the package-graph +
+  # compilePackages linker contract that the fixture documents.
+  #
+  # Gated to tag pushes + opt-in (parity with drizzle-mysql-smoke /
+  # compile-smoke / doc-tests). The fixture installs Ink + React and builds a
+  # release Perry compiler, so PRs shouldn't pay it by default. Opt-in via the
+  # `run-extended-tests` label or workflow dispatch.
+  # ---------------------------------------------------------------------------
+  ink-link-smoke:
+    # Aspirational smoke (informational) — see harmonyos-smoke. Does not block publish.
+    continue-on-error: true
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build perry compiler
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+
+      - name: Run Ink link fixture
+        run: |
+          cd tests/release/packages/ink-link-smoke
+          PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
+
+      - name: Upload Ink fixture logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ink-link-smoke-logs
+          path: |
+            tests/release/packages/ink-link-smoke/install.log
+            tests/release/packages/ink-link-smoke/perry-compile.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # effect-basic-smoke: runs the tier-3 release fixture
+  # `tests/release/packages/effect-basic/` as the CI counterpart to #802.
+  #
+  # This is intentionally advisory: #802 asks for a live Effect compile/run
+  # signal even while broader Effect end-to-end compatibility remains in
+  # progress. Gated to tag pushes + opt-in, matching the named package smokes.
+  # ---------------------------------------------------------------------------
+  effect-basic-smoke:
+    continue-on-error: true
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build perry compiler
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+
+      - name: Run Effect fixture
+        run: |
+          cd tests/release/packages/effect-basic
+          PERRY_EFFECT_BASIC_ADVISORY=1 PERRY_BIN="$GITHUB_WORKSPACE/target/release/perry" bash fixture.sh
+
+      - name: Upload Effect fixture logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: effect-basic-smoke-logs
+          path: |
+            tests/release/packages/effect-basic/install.log
+            tests/release/packages/effect-basic/perry-compile.log
+            tests/release/packages/effect-basic/perry-run.log
+            tests/release/packages/effect-basic/perry-out.txt
+            tests/release/packages/effect-basic/diff.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # Doc-example tests: compile + run every .ts under docs/examples/.
   # UI examples launch with PERRY_UI_TEST_MODE=1 so they auto-exit after one
   # frame. Gallery screenshots are diffed against per-OS baselines (advisory
@@ -959,6 +1212,9 @@ jobs:
   # demand. PR authors and maintainers can both apply labels.
   # ---------------------------------------------------------------------------
   doc-tests:
+    # Release-publish decoupling (see `parity` above): aspirational extended
+    # suite, informational only — does not block package publishing.
+    continue-on-error: true
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_extended_tests) ||

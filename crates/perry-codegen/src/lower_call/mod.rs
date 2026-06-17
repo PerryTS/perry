@@ -31,6 +31,7 @@ use crate::expr::{variant_name, FnCtx};
 //   `native_module_dispatch.rs` (#1105 followup): per-branch
 //   extraction of the original `lower_call.rs`'s 4.3k-LOC body so
 //   every file in this directory stays under 2000 lines.
+mod atomics;
 mod buffer_intrinsic;
 mod builtin;
 mod closure_analysis;
@@ -98,7 +99,10 @@ pub(crate) use native::lower_native_method_call;
 // Re-export pub(crate) `new.rs` items consumed outside this module
 // (codegen.rs / expr.rs / stmt.rs) so `crate::lower_call::lower_new`
 // etc. keep resolving after the split.
-pub(crate) use new::{apply_field_initializers_recursive, lower_new, FieldInitMode};
+pub(crate) use new::{
+    apply_field_initializers_recursive, bind_inline_constructor_params, lower_new,
+    restore_inline_constructor_scope, FieldInitMode,
+};
 // `extract_options_fields` is consumed by `expr.rs` as
 // `crate::lower_call::extract_options_fields` — keep that path stable.
 pub(crate) use options::extract_options_fields;
@@ -111,10 +115,34 @@ pub(crate) use native_table::iter_native_module_table;
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // #5253: localize the `ReferenceError: X is not defined` thrown by the
+    // unresolved-identifier runtime helper. A bare unresolved identifier
+    // (`module`, winston's stray globals, …) lowers to
+    // `Call { callee: ExternFuncRef("js_global_get_or_throw_unresolved"),
+    // args: [name], byte_offset }` (perry-hir lower_expr). That helper throws a
+    // ReferenceError through `js_referenceerror_new` → `make_stack`, which reads
+    // `CURRENT_CALL_LOCATION`. Emit a `js_set_call_location` from the call's
+    // recorded byte offset (set on `pending_call_offset` by the `Expr::Call`
+    // dispatcher) before lowering the call, so the throw carries `at file:line`.
+    // No-op in the default build; offset 0 (synthesized refs) resolves to none.
+    if let Expr::ExternFuncRef { name, .. } = callee {
+        if name == "js_global_get_or_throw_unresolved" {
+            let off = ctx.strings.pending_call_offset();
+            crate::expr::calls::emit_call_location_at(ctx, off);
+        }
+    }
+
     // #3656: `p.call(thisArg, …)` / `p.apply(thisArg, argsArray)` on a Proxy
     // routes through the proxy's `[[Call]]` (apply trap) rather than reading
     // `.call`/`.apply` off the forwarded target.
     if let Some(v) = crate::expr::proxy_reflect::try_lower_proxy_fn_call_apply(ctx, callee, args)? {
+        return Ok(v);
+    }
+
+    // #5196: `proxy.method(args)` (e.g. `proxyArray.map(fn)`) — the fused
+    // member-call form. Route through `js_native_call_method` so `this` binds
+    // to the proxy and array methods iterate it through its `get` trap.
+    if let Some(v) = crate::expr::proxy_reflect::try_lower_proxy_method_call(ctx, callee, args)? {
         return Ok(v);
     }
 
@@ -136,6 +164,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     // Namespace member call (#636) — `ns.foo(...)` where `ns` is an
     // ExternFuncRef namespace import.
     if let Some(v) = namespace_call::try_lower_namespace_member_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+
+    // `Atomics.load(...)` / `Atomics.add(...)` and related namespace statics.
+    if let Some(v) = atomics::try_lower_atomics_static_call(ctx, callee, args)? {
         return Ok(v);
     }
 

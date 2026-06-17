@@ -19,7 +19,10 @@ use anyhow::Result;
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
-use crate::analysis::{closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_stmt};
+use crate::analysis::{
+    closure_uses_new_target, closure_uses_this, collect_assigned_locals_stmt,
+    collect_local_refs_stmt,
+};
 use crate::ir::{Expr, Param, Stmt};
 use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, get_pat_type,
@@ -28,18 +31,26 @@ use crate::lower_patterns::{
 
 use super::{lower_expr, LoweringContext};
 
-fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
-    let ast::Stmt::Expr(expr_stmt) = stmt else {
-        return None;
+/// #4101: retain a function's original source text keyed by FuncId so
+/// `Function.prototype.toString` can reconstruct it. Slices the installed
+/// module source against `span`; when `is_async` is set but the slice doesn't
+/// already begin with `async` (SWC's `Function.span`/`ArrowExpr.span` start at
+/// the params/`function` keyword, excluding the leading `async`), the modifier
+/// is prepended so the result matches Node. A no-op when no module source is
+/// installed (unit tests / `check`).
+pub(crate) fn capture_function_source(
+    ctx: &mut LoweringContext,
+    func_id: perry_types::FuncId,
+    span: &swc_common::Span,
+    is_async: bool,
+) {
+    let Some(mut src) = crate::ir::current_module_source_slice(span.lo.0, span.hi.0) else {
+        return;
     };
-    let mut expr = expr_stmt.expr.as_ref();
-    while let ast::Expr::Paren(paren) = expr {
-        expr = paren.expr.as_ref();
+    if is_async && !src.trim_start().starts_with("async") {
+        src = format!("async {src}");
     }
-    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
-        return None;
-    };
-    s.value.as_str()
+    ctx.closure_source_text.insert(func_id, src);
 }
 
 fn block_has_use_strict(block: Option<&ast::BlockStmt>) -> bool {
@@ -47,10 +58,10 @@ fn block_has_use_strict(block: Option<&ast::BlockStmt>) -> bool {
         return false;
     };
     for stmt in &block.stmts {
-        let Some(directive) = stmt_is_string_directive(stmt) else {
+        let Some(directive) = super::string_directive_stmt_lit(stmt) else {
             break;
         };
-        if directive == "use strict" {
+        if super::is_raw_use_strict_directive(directive) {
             return true;
         }
     }
@@ -64,10 +75,132 @@ fn arrow_body_has_use_strict(body: &ast::BlockStmtOrExpr) -> bool {
     }
 }
 
+fn collect_direct_eval_var_names_from_pat(pat: &ast::Pat, out: &mut Vec<String>) {
+    match pat {
+        ast::Pat::Assign(assign) => {
+            collect_direct_eval_var_names_from_pat(&assign.left, out);
+            collect_direct_eval_var_names_from_expr(&assign.right, out);
+        }
+        ast::Pat::Array(arr) => {
+            for elem in arr.elems.iter().flatten() {
+                collect_direct_eval_var_names_from_pat(elem, out);
+            }
+        }
+        ast::Pat::Object(obj) => {
+            for prop in &obj.props {
+                match prop {
+                    ast::ObjectPatProp::Assign(assign) => {
+                        if let Some(default) = &assign.value {
+                            collect_direct_eval_var_names_from_expr(default, out);
+                        }
+                    }
+                    ast::ObjectPatProp::KeyValue(kv) => {
+                        collect_direct_eval_var_names_from_pat(&kv.value, out);
+                    }
+                    ast::ObjectPatProp::Rest(rest) => {
+                        collect_direct_eval_var_names_from_pat(&rest.arg, out);
+                    }
+                }
+            }
+        }
+        ast::Pat::Rest(rest) => collect_direct_eval_var_names_from_pat(&rest.arg, out),
+        _ => {}
+    }
+}
+
+fn collect_direct_eval_var_names_from_expr(expr: &ast::Expr, out: &mut Vec<String>) {
+    match expr {
+        ast::Expr::Call(call) => {
+            if let ast::Callee::Expr(callee) = &call.callee {
+                let mut callee_expr = callee.as_ref();
+                while let ast::Expr::Paren(paren) = callee_expr {
+                    callee_expr = paren.expr.as_ref();
+                }
+                if matches!(callee_expr, ast::Expr::Ident(id) if id.sym.as_ref() == "eval")
+                    && call.args.len() == 1
+                    && call.args[0].spread.is_none()
+                {
+                    if let Some(body) = crate::eval_classifier::const_string_of(&call.args[0].expr)
+                    {
+                        if let Some(name) = super::const_fold_fn::direct_eval_var_decl_name(&body) {
+                            out.push(name);
+                        }
+                    }
+                }
+                collect_direct_eval_var_names_from_expr(callee, out);
+            }
+            for arg in &call.args {
+                collect_direct_eval_var_names_from_expr(&arg.expr, out);
+            }
+        }
+        ast::Expr::Paren(paren) => collect_direct_eval_var_names_from_expr(&paren.expr, out),
+        ast::Expr::Seq(seq) => {
+            for expr in &seq.exprs {
+                collect_direct_eval_var_names_from_expr(expr, out);
+            }
+        }
+        ast::Expr::Assign(assign) => {
+            collect_direct_eval_var_names_from_expr(&assign.right, out);
+        }
+        ast::Expr::Cond(cond) => {
+            collect_direct_eval_var_names_from_expr(&cond.test, out);
+            collect_direct_eval_var_names_from_expr(&cond.cons, out);
+            collect_direct_eval_var_names_from_expr(&cond.alt, out);
+        }
+        ast::Expr::Bin(bin) => {
+            collect_direct_eval_var_names_from_expr(&bin.left, out);
+            collect_direct_eval_var_names_from_expr(&bin.right, out);
+        }
+        ast::Expr::Unary(unary) => collect_direct_eval_var_names_from_expr(&unary.arg, out),
+        ast::Expr::Update(update) => collect_direct_eval_var_names_from_expr(&update.arg, out),
+        ast::Expr::Member(member) => {
+            collect_direct_eval_var_names_from_expr(&member.obj, out);
+            if let ast::MemberProp::Computed(computed) = &member.prop {
+                collect_direct_eval_var_names_from_expr(&computed.expr, out);
+            }
+        }
+        ast::Expr::Array(arr) => {
+            for elem in arr.elems.iter().flatten() {
+                collect_direct_eval_var_names_from_expr(&elem.expr, out);
+            }
+        }
+        ast::Expr::Object(obj) => {
+            for prop in &obj.props {
+                if let ast::PropOrSpread::Prop(prop) = prop {
+                    match prop.as_ref() {
+                        ast::Prop::KeyValue(kv) => {
+                            collect_direct_eval_var_names_from_expr(&kv.value, out)
+                        }
+                        ast::Prop::Assign(assign) => {
+                            collect_direct_eval_var_names_from_expr(&assign.value, out)
+                        }
+                        ast::Prop::Getter(_)
+                        | ast::Prop::Setter(_)
+                        | ast::Prop::Method(_)
+                        | ast::Prop::Shorthand(_) => {}
+                    }
+                }
+            }
+        }
+        ast::Expr::Fn(_) | ast::Expr::Arrow(_) | ast::Expr::Class(_) => {}
+        _ => {}
+    }
+}
+
 pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> Result<Expr> {
     // Lower arrow function to a closure
     let func_id = ctx.fresh_func();
+    // #4101: retain source text for `fn.toString()`.
+    capture_function_source(ctx, func_id, &arrow.span, arrow.is_async);
     let scope_mark = ctx.enter_scope();
+    let strict = ctx.current_strict_mode()
+        || match &*arrow.body {
+            ast::BlockStmtOrExpr::BlockStmt(block) => {
+                crate::lower_decl::body_has_use_strict(&block.stmts)
+            }
+            ast::BlockStmtOrExpr::Expr(_) => false,
+        };
+    ctx.enter_strict_mode(strict);
 
     // Enter a type-parameter scope for arrow generics — `<T extends string>
     // (self: T) => ...`. Without this scope the `T` reference in `self: T`
@@ -86,19 +219,11 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         .unwrap_or_default();
     ctx.enter_type_param_scope(&arrow_type_params);
 
-    // Track which locals exist before entering the closure scope
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
-
     // Lower parameters and collect destructuring info
     let mut params = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &arrow.params {
         let param_name = get_pat_name(param)?;
-        let param_default = get_param_default(ctx, param)?;
         let is_rest = is_rest_param(param);
         let param_ty = get_pat_type(param, ctx);
         let param_id = ctx.define_local(param_name.clone(), param_ty.clone());
@@ -106,14 +231,55 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             id: param_id,
             name: param_name,
             ty: param_ty,
-            default: param_default,
+            default: None,
             decorators: Vec::new(),
             is_rest,
+            arguments_object: None,
         });
-        // Track destructuring patterns to generate extraction statements
-        if is_destructuring_pattern(param) {
-            destructuring_params.push((param_id, param.clone()));
+        // Track destructuring patterns to generate extraction statements. A
+        // `([x, y] = [1, 2]) =>` param is a `Pat::Assign` wrapping the array/
+        // object pattern; unwrap it so the destructuring binding is still
+        // emitted (the `= [1,2]` default is handled separately via
+        // `get_param_default`). Mirrors `lower_fn_decl`.
+        let inner_pat = if let ast::Pat::Assign(assign) = param {
+            assign.left.as_ref()
+        } else {
+            param
+        };
+        if is_destructuring_pattern(inner_pat) {
+            destructuring_params.push((param_id, inner_pat.clone()));
         }
+    }
+
+    let mut eval_var_names = Vec::new();
+    for param in &arrow.params {
+        collect_direct_eval_var_names_from_pat(param, &mut eval_var_names);
+    }
+    eval_var_names.sort();
+    eval_var_names.dedup();
+    let mut param_eval_var_stmts = Vec::new();
+    for name in eval_var_names {
+        let existing_current_scope = ctx
+            .locals
+            .iter()
+            .enumerate()
+            .rev()
+            .any(|(idx, (n, _, _))| n == &name && idx >= scope_mark.0);
+        if !existing_current_scope {
+            let id = ctx.define_local(name.clone(), Type::Any);
+            ctx.var_hoisted_ids.insert(id);
+            param_eval_var_stmts.push(Stmt::Let {
+                id,
+                name,
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+        }
+    }
+
+    for (idx, param) in arrow.params.iter().enumerate() {
+        params[idx].default = get_param_default(ctx, param)?;
     }
 
     // Register arrow function parameters with known native types as native instances
@@ -183,42 +349,6 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         destructuring_stmts.extend(stmts);
     }
 
-    // Hoist function declarations in block body (JS hoisting semantics).
-    // Track the hoisted-id set so we can emit `Stmt::PreallocateBoxes`
-    // for sibling/forward captures (issue #633).
-    //
-    // Issue #838 followup (b): see the matching comment in
-    // `lower_fn_expr` for the rationale — only reuse an existing local
-    // id when the binding is in THIS scope, otherwise dayjs's minified
-    // outer-`var M = {…}` / inner-`function M(t){…}` shadow trips the
-    // codegen-side global-promotion analysis.
-    let outer_locals_len = scope_mark.0;
-    let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
-    if let ast::BlockStmtOrExpr::BlockStmt(block) = &*arrow.body {
-        for stmt in &block.stmts {
-            if let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt {
-                // Generator FnDecls go through a different hoist path and
-                // aren't closure-bound at the source position.
-                if fn_decl.function.body.is_some() && !fn_decl.function.is_generator {
-                    let name = fn_decl.ident.sym.to_string();
-                    let existing_in_scope = ctx
-                        .locals
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find(|(idx, (n, _, _))| n == &name && *idx >= outer_locals_len)
-                        .map(|(_, (_, id, _))| *id);
-                    let local_id = if let Some(existing) = existing_in_scope {
-                        existing
-                    } else {
-                        ctx.define_local(name, Type::Any)
-                    };
-                    hoisted_id_set.insert(local_id);
-                }
-            }
-        }
-    }
-
     let outer_strict = ctx.current_strict;
     let is_strict = outer_strict || arrow_body_has_use_strict(&arrow.body);
     ctx.current_strict = is_strict;
@@ -233,46 +363,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // eagerly invoke the call and break user code.
     let mut body = match &*arrow.body {
         ast::BlockStmtOrExpr::BlockStmt(block) => {
-            let mut var_hoisted = Vec::new();
-            let mut func_decls = Vec::new();
-            let mut exec_stmts = Vec::new();
-            for stmt in &block.stmts {
-                let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
-                match stmt {
-                    ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
-                    ast::Stmt::Decl(ast::Decl::Var(var_decl))
-                        if var_decl.kind == ast::VarDeclKind::Var =>
-                    {
-                        var_hoisted.extend(lowered);
-                    }
-                    _ => exec_stmts.extend(lowered),
-                }
-            }
-            var_hoisted.extend(func_decls);
-            var_hoisted.extend(exec_stmts);
-            // Issue #633: if the arrow body has any hoisted FnDecls, run
-            // the prealloc-box analysis so sibling-captured FnDecl ids
-            // and outer let/const ids referenced from inside the hoisted
-            // closure get a pre-allocated box at function entry. Without
-            // this, the hoisted closure literal is built before the
-            // captured let's `Stmt::Let` runs, and the closure's
-            // captures list snapshots the slot's uninitialized value.
-            if !hoisted_id_set.is_empty() {
-                let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
-                    &var_hoisted,
-                    &hoisted_id_set,
-                );
-                if !prealloc.is_empty() {
-                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(var_hoisted.len() + 1);
-                    with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
-                    with_prealloc.extend(var_hoisted);
-                    with_prealloc
-                } else {
-                    var_hoisted
-                }
-            } else {
-                var_hoisted
-            }
+            crate::lower_decl::lower_fn_body_block_stmt(ctx, block)?
         }
         ast::BlockStmtOrExpr::Expr(expr) => {
             let return_expr = lower_expr(ctx, expr)?;
@@ -302,7 +393,12 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         new_body.append(&mut body);
         body = new_body;
     }
+    if !param_eval_var_stmts.is_empty() {
+        param_eval_var_stmts.append(&mut body);
+        body = param_eval_var_stmts;
+    }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Exit the type-parameter scope opened at the top of `lower_arrow`.
@@ -310,10 +406,15 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // arrows don't leak outer T/U bindings into sibling code.
     ctx.exit_type_param_scope();
 
-    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
+    // The closure's own scope has been popped, so `ctx.locals.id_set()` is now
+    // exactly the enclosing scope's live locals — the membership view capture
+    // analysis needs. (Previously rebuilt per closure from a cloned snapshot.)
+    let (captures, mutable_captures) =
+        compute_closure_captures(ctx, &body, ctx.locals.id_set(), &params);
 
     // Check if this arrow function uses `this` (needs to capture it from enclosing scope)
     let captures_this = closure_uses_this(&body);
+    let captures_new_target = closure_uses_new_target(&body);
 
     // Store enclosing class name for arrow functions that capture `this`
     let enclosing_class = if captures_this {
@@ -321,6 +422,12 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     } else {
         None
     };
+
+    if let Some(name) = ctx.assignment_inferred_name.as_ref() {
+        if !name.is_empty() {
+            ctx.closure_display_names.insert(func_id, name.clone());
+        }
+    }
 
     Ok(Expr::Closure {
         func_id,
@@ -330,26 +437,146 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         captures,
         mutable_captures,
         captures_this,
+        captures_new_target,
         enclosing_class,
+        is_arrow: true,
         is_async: arrow.is_async,
         is_generator: false,
         is_strict,
     })
 }
 
+/// #5126: a named function expression binds its own name as a read-only
+/// local *inside its own body* (the FunctionExpression name scope per
+/// spec) — `const fact = function f(n){ return n<=1?1:n*f(n-1); }` must
+/// see `f` from within the body even though the outer binding is `fact`.
+///
+/// We model this without a new HIR node by wrapping the (otherwise
+/// anonymous) function in an immediately-invoked arrow that binds the
+/// name to the function value:
+///   (() => { let f = <function expr>; return f; })()
+/// The `let f = <closure that references f>` shape is exactly the
+/// self-recursive-`const` pattern that `collect_boxed_vars` already
+/// boxes (step 5: a `Stmt::Let` whose `Closure` init references the
+/// Let's own id). So `f` resolves to the function through its heap box,
+/// reusing the proven recursion machinery.
 pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
+    // A named function expression with a non-empty ident may reference its
+    // own name from within its body. Lower it through the self-binding path,
+    // which keeps the IIFE wrapper only when the body actually captures the
+    // name (so plain `function f(){...}` and the synthetic `Function(...)`
+    // body stay a bare `Closure`).
+    if let Some(ident) = &fn_expr.ident {
+        let own_name = ident.sym.to_string();
+        if !own_name.is_empty() {
+            return lower_named_fn_expr(ctx, fn_expr, own_name);
+        }
+    }
+    lower_fn_expr_anon(ctx, fn_expr)
+}
+
+/// Lower a *named* function expression, binding its own name inside the
+/// body. We put the name in scope, lower the function anonymously, and
+/// inspect whether the lowered closure actually captured the name. If it
+/// didn't (the common case — no recursive self-reference), we discard the
+/// scaffolding and return the bare closure unchanged. If it did, we wrap
+/// it in an immediately-invoked arrow that binds the name to the function
+/// value:
+///   (() => { let f = <function expr>; return f; })()
+/// The `let f = <closure that references f>` shape is exactly the
+/// self-recursive-`const` pattern that `collect_boxed_vars` already boxes
+/// (a `Stmt::Let` whose `Closure` init references the Let's own id), so the
+/// name resolves to the function through its heap box — reusing the proven
+/// recursion machinery without a dedicated HIR node.
+fn lower_named_fn_expr(
+    ctx: &mut LoweringContext,
+    fn_expr: &ast::FnExpr,
+    own_name: String,
+) -> Result<Expr> {
+    // Wrapper scope: holds just the self-binding local. Collect the
+    // enclosing scope's locals first so they (not the self-binding) are
+    // what the wrapper itself captures and threads through to the inner
+    // function.
+    let wrapper_scope = ctx.enter_scope();
+    // Snapshot the enclosing locals *before* the self-binding is added, so the
+    // wrapper captures them (not the self-binding). Unlike the arrow/fn-expr
+    // paths, capture analysis runs here while the wrapper scope is still open
+    // (the self-binding lives in it), so we can't use `ctx.locals.id_set()` —
+    // it would wrongly include `self_id`. This is a rare path (named function
+    // expressions that recursively self-reference), so an explicit snapshot is
+    // fine.
+    let outer_local_ids: std::collections::HashSet<LocalId> =
+        ctx.locals.iter().map(|(_, id, _)| *id).collect();
+    let self_id = ctx.define_local(own_name.clone(), Type::Any);
+
+    // Lower the function itself as an anonymous closure. With `self_id`
+    // already in scope, any reference to the name inside the body resolves
+    // to it (correctly shadowing any outer binding of the same name) and is
+    // captured.
+    let inner = lower_fn_expr_anon(ctx, fn_expr)?;
+
+    let self_referenced =
+        matches!(&inner, Expr::Closure { captures, .. } if captures.contains(&self_id));
+    if !self_referenced {
+        // No recursive self-reference — drop the scaffolding.
+        ctx.exit_scope(wrapper_scope);
+        return Ok(inner);
+    }
+
+    let wrapper_func_id = ctx.fresh_func();
+    let body = vec![
+        Stmt::Let {
+            id: self_id,
+            name: own_name,
+            ty: Type::Any,
+            mutable: false,
+            init: Some(inner),
+        },
+        Stmt::Return(Some(Expr::LocalGet(self_id))),
+    ];
+    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_local_ids, &[]);
+    ctx.exit_scope(wrapper_scope);
+
+    Ok(Expr::Call {
+        callee: Box::new(Expr::Closure {
+            func_id: wrapper_func_id,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body,
+            captures,
+            mutable_captures,
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: ctx.current_strict,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    })
+}
+
+fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Result<Expr> {
     // Lower function expression to a closure (similar to arrow but
     // without `this` capture — function expressions have their own
     // `this` binding determined by how they're called).
     let func_id = ctx.fresh_func();
+    // #4101: retain source text for `fn.toString()`.
+    capture_function_source(
+        ctx,
+        func_id,
+        &fn_expr.function.span,
+        fn_expr.function.is_async,
+    );
     let scope_mark = ctx.enter_scope();
-
-    // Track which locals exist before entering the closure scope
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
+    // A plain function has its own `arguments` object, so a direct `eval`
+    // inside its body may reference `arguments` even when the function sits
+    // in a class field initializer. Cleared here, restored at the end.
+    let saved_field_init = ctx.in_class_field_init;
+    ctx.in_class_field_init = false;
 
     // Lower parameters and collect destructuring info.
     //
@@ -363,6 +590,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // remaining params are the real runtime ones. (`fn_decl` already has its
     // own param-lowering site that needs the same fix — handled below.)
     let mut params = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &fn_expr.function.params {
         let param_name = get_pat_name(&param.pat)?;
@@ -370,21 +598,36 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             // TS `this:` annotation — skip; it's type-only.
             continue;
         }
-        let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), Type::Any);
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: Type::Any,
-            default: param_default,
+            default: None,
             decorators: Vec::new(),
             is_rest,
+            arguments_object: None,
         });
-        // Track destructuring patterns to generate extraction statements
-        if is_destructuring_pattern(&param.pat) {
-            destructuring_params.push((param_id, param.pat.clone()));
+        default_param_pats.push(param.pat.clone());
+        // Track destructuring patterns to generate extraction statements. A
+        // `function*([x, y] = [1, 2]) {}` param is a `Pat::Assign` wrapping the
+        // array/object pattern; unwrap it so the destructuring binding is still
+        // emitted (the `= [1,2]` default is applied via `get_param_default`).
+        // Mirrors `lower_fn_decl`. Without this, an async-generator EXPRESSION
+        // with a destructured-default param dropped the binding and `x`/`y`
+        // lowered to `js_throw_reference_error_unresolved_get`.
+        let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
+            assign.left.as_ref()
+        } else {
+            &param.pat
+        };
+        if is_destructuring_pattern(inner_pat) {
+            destructuring_params.push((param_id, inner_pat.clone()));
         }
+    }
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // #677: synthesize `arguments` for non-arrow function expressions when the
@@ -395,13 +638,16 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = fn_expr
+    let strict = fn_expr
         .function
-        .params
-        .iter()
-        .any(|p| is_rest_param(&p.pat));
+        .body
+        .as_ref()
+        .map(|b| ctx.current_strict_mode() || crate::lower_decl::body_has_use_strict(&b.stmts))
+        .unwrap_or(false);
+    ctx.enter_strict_mode(strict);
+    let simple_parameters =
+        crate::lower_decl::params_are_simple_arguments_list(&fn_expr.function.params);
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && fn_expr
             .function
             .body
@@ -409,7 +655,20 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
             .map(|b| crate::lower_decl::body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        crate::lower_decl::append_synthetic_arguments_param(ctx, &mut params);
+        let mapped = !strict && simple_parameters;
+        let mapped_parameter_ids = if mapped {
+            crate::lower_decl::mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        crate::lower_decl::append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            strict,
+            simple_parameters,
+            !mapped,
+            mapped_parameter_ids,
+        );
     }
 
     let outer_strict = ctx.current_strict;
@@ -422,6 +681,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         let stmts = generate_param_destructuring_stmts(ctx, pat, *param_id)?;
         destructuring_stmts.extend(stmts);
     }
+    let destructuring_prologue_len = destructuring_stmts.len();
 
     // Hoist function declarations: pre-register all function declarations in the body
     // so they can be referenced before their lexical position (JS hoisting semantics).
@@ -443,6 +703,14 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // with that index or higher was defined in the current scope.
     let outer_locals_len = scope_mark.0;
     let mut hoisted_id_set: std::collections::HashSet<LocalId> = std::collections::HashSet::new();
+    // Forward-captured `let`/`const` boxes pre-registered for THIS fn-expr body
+    // (the cjs `const _cjs = (function(){…})()` wrapper) — see
+    // `pre_register_forward_captured_lets`. Kept out of `hoisted_id_set` and
+    // preallocated directly at the assembly below.
+    let mut forward_boxed_ids: Vec<LocalId> = Vec::new();
+    // #4950: undefined-initialised `Stmt::Let`s for `var`s found nested in
+    // compound statements — prepended to the lowered body below.
+    let mut nested_var_prologue: Vec<Stmt> = Vec::new();
     if let Some(ref block) = fn_expr.function.body {
         // Issue #838 followup (b): pre-register top-level `var` decls in
         // this function body BEFORE lowering any statement. dayjs's
@@ -468,10 +736,8 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                             let name = ident.id.sym.to_string();
                             let already_in_scope = ctx
                                 .locals
-                                .iter()
-                                .enumerate()
-                                .rev()
-                                .any(|(idx, (n, _, _))| n == &name && idx >= outer_locals_len);
+                                .lookup_index_in_scope(&name, outer_locals_len)
+                                .is_some();
                             if !already_in_scope {
                                 let id = ctx.define_local(name, Type::Any);
                                 // Mark as hoisted so closures created
@@ -512,11 +778,8 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                     let name = fn_decl.ident.sym.to_string();
                     let existing_in_scope = ctx
                         .locals
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find(|(idx, (n, _, _))| n == &name && *idx >= outer_locals_len)
-                        .map(|(_, (_, id, _))| *id);
+                        .lookup_index_in_scope(&name, outer_locals_len)
+                        .map(|pos| ctx.locals[pos].1);
                     let local_id = if let Some(existing) = existing_in_scope {
                         existing
                     } else {
@@ -526,6 +789,116 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
                 }
             }
         }
+        // #4973: pre-register top-level `let`/`const` Ident bindings of this
+        // function body so a hoisted sibling FUNCTION that references them
+        // before their lexical position binds the (boxed) function-scope
+        // local instead of falling through to a global read. The classic
+        // Node test shape (test-http-upgrade-server):
+        //   function t() { … server.close(); }
+        //   const server = createTestServer();
+        //   server.listen(0, () => t());
+        // JS hoists the *binding* (with a TDZ Perry is lax about); pre-fix,
+        // `server` inside `t` lowered to a globalThis read → undefined.
+        // Gated on the body containing at least one hoisted function
+        // declaration — the only consumers that can legally observe the
+        // binding before its source position — to bound the blast radius.
+        // Keyed by declarator-ident span: the Let site in var_decl.rs reuses
+        // the id only for the *exact* declarator (`lexical_forward_decls`),
+        // so a shadowing `const` in an inner block still gets a fresh
+        // binding.
+        let body_has_fn_decl = block
+            .stmts
+            .iter()
+            .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Fn(_))));
+        if body_has_fn_decl {
+            for stmt in &block.stmts {
+                if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
+                    if matches!(
+                        var_decl.kind,
+                        ast::VarDeclKind::Let | ast::VarDeclKind::Const
+                    ) {
+                        for decl in &var_decl.decls {
+                            if let ast::Pat::Ident(ident) = &decl.name {
+                                let name = ident.id.sym.to_string();
+                                let already_in_scope = ctx
+                                    .locals
+                                    .lookup_index_in_scope(&name, outer_locals_len)
+                                    .is_some();
+                                if !already_in_scope {
+                                    let id = ctx.define_local(name, Type::Any);
+                                    // Boxed-capture semantics: a closure
+                                    // created before the init must see the
+                                    // post-init value through the box, not a
+                                    // snapshot of the empty slot.
+                                    ctx.var_hoisted_ids.insert(id);
+                                    hoisted_id_set.insert(id);
+                                    ctx.lexical_forward_decls.insert(ident.id.span.lo.0, id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // #4950: pre-register `var` bindings nested inside compound
+        // statements (if/else arms, loops, try/catch, switch) of this
+        // function body. `var` is function-scoped, so react's
+        //   if (cond) { var getCurrentTime = function () {…}; }
+        //   else { getCurrentTime = function () {…}; }
+        // (react-reconciler's time source, factory shape) must resolve the
+        // else-arm write AND sibling-closure reads to ONE hoisted local.
+        // The top-level pre-pass above only saw direct `Stmt::Decl(Var)`
+        // children, so the if-arm declaration never registered, the
+        // else-arm assignment fell through to an implicit-global write,
+        // and `getCurrentTime()` inside prepareFreshStack threw
+        // `getCurrentTime is not defined` — silently swallowed by the
+        // scheduler pump, killing every React render. Mirrors the
+        // module-level nested-var hoisting in lower_module_fn.rs.
+        for stmt in &block.stmts {
+            // Direct top-level var decls are handled by the pre-pass above;
+            // only walk into compound statements for nested `var`s here.
+            if matches!(stmt, ast::Stmt::Decl(_)) {
+                continue;
+            }
+            let mut names = Vec::new();
+            crate::lower_decl::collect_var_binding_names_from_stmt(stmt, &mut names);
+            names.sort();
+            names.dedup();
+            for name in names {
+                let already_in_scope = ctx
+                    .locals
+                    .lookup_index_in_scope(&name, outer_locals_len)
+                    .is_some();
+                if !already_in_scope {
+                    let id = ctx.define_local(name.clone(), Type::Any);
+                    ctx.var_hoisted_ids.insert(id);
+                    hoisted_id_set.insert(id);
+                    // Emit an explicit undefined-initialised slot at body
+                    // entry (same rationale as the module-level pass: a
+                    // read or LocalSet compiled before the nested decl
+                    // needs storage to exist; the nested `Stmt::Let`
+                    // later reuses the slot via the var-redeclaration
+                    // path).
+                    nested_var_prologue.push(Stmt::Let {
+                        id,
+                        name,
+                        ty: Type::Any,
+                        mutable: true,
+                        init: Some(Expr::Undefined),
+                    });
+                }
+            }
+        }
+        // Forward-captured `let`/`const` (incl. destructuring) referenced by an
+        // EARLIER closure than their declaration. The `#4973` pass above only
+        // covers `Pat::Ident` and only when the body has a `function`
+        // declaration; the cjs IIFE's `_export(exports, { SpanKind: () =>
+        // SpanKind })` getter forward-captures the later `const { SpanKind } =
+        // api` (Next.js tracer), which it misses. Shared with arrow / fn-decl
+        // bodies (`lower_fn_body_block_stmt`). Bindings already pre-registered
+        // above are skipped (the `already_in_scope` guard inside).
+        forward_boxed_ids =
+            crate::lower_decl::pre_register_forward_captured_lets(ctx, block, outer_locals_len);
     }
 
     // Lower body with JS hoisting: only function declarations are fully
@@ -547,37 +920,88 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
     // threw `TypeError: value is not a function`. Function declarations
     // must run before any var-init in the body, then var-inits and other
     // executable statements run in source order.
-    let mut body = if let Some(ref block) = fn_expr.function.body {
-        let mut func_decls = Vec::new();
-        let mut exec_stmts = Vec::new();
+    // Pre-register sibling class DECLARATION names so forward references in
+    // earlier statements (and nested closures lowered before the class) resolve
+    // to `ClassRef` rather than the unknown-global sentinel — the same Phase 1.5
+    // that `lower_fn_body_block_stmt` (arrow / fn-decl bodies) performs. Plain
+    // function expressions previously skipped it: the cjs_wrap IIFE is exactly
+    // such an expression, and a class it can't hoist out (one whose body
+    // references an IIFE-local, e.g. `class X extends imp.Base { constructor(){
+    // super(imp2.CONST) } }`) stays inside the IIFE with its export getter
+    // `() => X` lowered ABOVE it — that forward read fell through to
+    // `js_global_get_or_throw_unresolved("X")` → `ReferenceError: X is not
+    // defined` (Next.js RSCPathnameNormalizer). Scoped: restored after the body.
+    let saved_forward_class_names = ctx.forward_class_names.clone();
+    if let Some(ref block) = fn_expr.function.body {
         for stmt in &block.stmts {
-            let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
-            match stmt {
-                ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
-                _ => exec_stmts.extend(lowered),
+            if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                ctx.forward_class_names
+                    .insert(class_decl.ident.sym.to_string());
             }
         }
-        let mut combined: Vec<Stmt> = Vec::with_capacity(func_decls.len() + exec_stmts.len());
-        combined.extend(func_decls);
-        combined.extend(exec_stmts);
-        // Issue #633: prealloc-box for sibling/forward captures.
-        if !hoisted_id_set.is_empty() {
-            let prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
-                &combined,
-                &hoisted_id_set,
-            );
-            if !prealloc.is_empty() {
-                let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
-                with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
-                with_prealloc.extend(combined);
-                combined = with_prealloc;
+    }
+    let mut body = if let Some(ref block) = fn_expr.function.body {
+        // #4795: a `using` / `await using` declaration in a function-expression
+        // body must be desugared (scope-exit disposal + declaration-time
+        // disposability check). The hand-rolled per-statement loop below routes
+        // through `lower_body_stmt`, which lowers `using` as a plain `const`
+        // with no disposal — so route the whole body through the using-aware
+        // lowering (the same path arrow/fn-decl bodies use) when any top-level
+        // `using` is present. Forward references stay resolvable via the
+        // FnDecl/var pre-registration done above.
+        let has_using = block
+            .stmts
+            .iter()
+            .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Using(_))));
+        if has_using {
+            crate::lower_decl::lower_stmts_using_aware(ctx, &block.stmts)?
+        } else {
+            let mut func_decls = Vec::new();
+            let mut exec_stmts = Vec::new();
+            for stmt in &block.stmts {
+                let lowered = crate::lower_decl::lower_body_stmt(ctx, stmt)?;
+                match stmt {
+                    ast::Stmt::Decl(ast::Decl::Fn(_)) => func_decls.extend(lowered),
+                    _ => exec_stmts.extend(lowered),
+                }
             }
+            let mut combined: Vec<Stmt> =
+                Vec::with_capacity(nested_var_prologue.len() + func_decls.len() + exec_stmts.len());
+            // Nested-var undefined slots first so every later read/write —
+            // including from hoisted function-declaration closures — sees
+            // initialised storage (#4950).
+            combined.extend(std::mem::take(&mut nested_var_prologue));
+            combined.extend(func_decls);
+            combined.extend(exec_stmts);
+            // Issue #633: prealloc-box for sibling/forward captures. Merge the
+            // forward-captured `let`/`const` boxes (kept out of `hoisted_id_set`
+            // to avoid hoist-reordering their non-hoistable declarations) so
+            // their boxes exist before the earlier capturing closure literal.
+            if !hoisted_id_set.is_empty() || !forward_boxed_ids.is_empty() {
+                let mut prealloc = crate::lower_decl::compute_prealloc_for_hoisted_closures(
+                    &combined,
+                    &hoisted_id_set,
+                );
+                for id in &forward_boxed_ids {
+                    if !prealloc.contains(id) {
+                        prealloc.push(*id);
+                    }
+                }
+                prealloc.sort();
+                if !prealloc.is_empty() {
+                    let mut with_prealloc: Vec<Stmt> = Vec::with_capacity(combined.len() + 1);
+                    with_prealloc.push(Stmt::PreallocateBoxes(prealloc));
+                    with_prealloc.extend(combined);
+                    combined = with_prealloc;
+                }
+            }
+            combined
         }
-        combined
     } else {
         Vec::new()
     };
     ctx.current_strict = outer_strict;
+    ctx.forward_class_names = saved_forward_class_names;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {
@@ -588,15 +1012,29 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
 
     // Refs #486: same default-param desugar as lower_arrow above.
     let default_stmts = crate::lower_decl::build_default_param_stmts(&params);
+    // Record the param-prologue length for generator function expressions
+    // (`async function*([x] = d){}`) so the generator transform runs param
+    // binding synchronously at call time (spec FunctionDeclarationInstantiation
+    // order). See `Module.gen_param_prologue_len`.
+    if fn_expr.function.is_generator {
+        let prologue_len = default_stmts.len() + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.append(&mut body);
         body = new_body;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.in_class_field_init = saved_field_init;
 
-    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
+    // Scope popped: `ctx.locals.id_set()` is now the enclosing scope's locals.
+    let (captures, mutable_captures) =
+        compute_closure_captures(ctx, &body, ctx.locals.id_set(), &params);
 
     // #2076: a named function expression's own ident is its `fn.name`
     // per spec, regardless of the binding identifier it's later assigned
@@ -605,6 +1043,10 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         let own_name = ident.sym.to_string();
         if !own_name.is_empty() {
             ctx.closure_display_names.insert(func_id, own_name);
+        }
+    } else if let Some(name) = ctx.assignment_inferred_name.as_ref() {
+        if !name.is_empty() {
+            ctx.closure_display_names.insert(func_id, name.clone());
         }
     }
 
@@ -616,7 +1058,9 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
         captures,
         mutable_captures,
         captures_this: false,
+        captures_new_target: false,
         enclosing_class: None,
+        is_arrow: false,
         is_async: fn_expr.function.is_async,
         is_generator: fn_expr.function.is_generator,
         is_strict,
@@ -633,7 +1077,7 @@ pub(crate) fn lower_fn_expr(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) ->
 fn compute_closure_captures(
     ctx: &LoweringContext,
     body: &[Stmt],
-    outer_locals: &[(String, LocalId)],
+    outer_local_ids: &std::collections::HashSet<LocalId>,
     params: &[Param],
 ) -> (Vec<LocalId>, Vec<LocalId>) {
     // Detect captured variables: locals referenced in the body that
@@ -644,10 +1088,13 @@ fn compute_closure_captures(
         collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
     }
 
-    // Filter to only include outer locals (not parameters or locals
-    // defined within the closure).
-    let outer_local_ids: std::collections::HashSet<LocalId> =
-        outer_locals.iter().map(|(_, id)| *id).collect();
+    // `outer_local_ids` is the membership view of the enclosing scope's
+    // locals, supplied by the caller (the live `ctx.locals.id_set()` once the
+    // closure's own scope has been popped). Previously this was rebuilt into a
+    // fresh `HashSet` from an `&[(String, LocalId)]` snapshot on *every*
+    // closure — O(scope) per closure, i.e. O(n²) over n sibling closures in a
+    // large scope. We only ever need membership tests here, so the caller's
+    // incrementally-maintained set is reused directly.
     let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
 
     // dayjs (issue: format() returned `292278994-08`): local IDs are

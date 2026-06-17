@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::collectors::{collect_let_ids, collect_ref_ids_in_stmts};
+use perry_hir::WithSetFallback;
 
 /// Determine which local ids in the given statement sequence need
 /// heap-boxed storage. An id gets boxed when:
@@ -319,6 +320,12 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             for i in items {
                 collect_nested_closure_boxed_vars_in_expr(i, out);
             }
+        }
+        Expr::LinkGeneratorPrototype { obj, .. } => {
+            // #4141: the generator iterator object (with its next/return/throw
+            // closures capturing+mutating the state-machine locals) is wrapped
+            // here in return position — recurse so those locals still get boxed.
+            collect_nested_closure_boxed_vars_in_expr(obj, out);
         }
         Expr::Object(props) => {
             for (_, v) in props {
@@ -957,6 +964,18 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             out.insert(*id);
             collect_outer_writes_in_expr(v, out);
         }
+        Expr::WithSet {
+            object,
+            value,
+            fallback,
+            ..
+        } => {
+            if let WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) = fallback {
+                out.insert(*id);
+            }
+            collect_outer_writes_in_expr(object, out);
+            collect_outer_writes_in_expr(value, out);
+        }
         Expr::Update { id, .. } => {
             out.insert(*id);
         }
@@ -1151,6 +1170,18 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::LocalSet(id, v) => {
             out.insert(*id);
             collect_write_ids_in_expr(v, out);
+        }
+        Expr::WithSet {
+            object,
+            value,
+            fallback,
+            ..
+        } => {
+            if let WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) = fallback {
+                out.insert(*id);
+            }
+            collect_write_ids_in_expr(object, out);
+            collect_write_ids_in_expr(value, out);
         }
         Expr::Update { id, .. } => {
             out.insert(*id);
@@ -1373,17 +1404,49 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
         | Expr::ArrayFlat { .. }
         | Expr::ArrayFlatMap { .. }
         | Expr::ObjectKeys(_)
+        | Expr::ForInKeys(_)
         | Expr::ObjectValues(_)
         | Expr::ObjectEntries(_)
         | Expr::ArrayEntries { .. }
         | Expr::ArrayKeys { .. }
         | Expr::ArrayValues { .. }
-        | Expr::StringMatch { .. }
-        | Expr::StringMatchAll { .. } => Some(Type::Array(Box::new(Type::Any))),
+        | Expr::StringMatch { .. } => Some(Type::Array(Box::new(Type::Any))),
+        Expr::StringMatchAll { .. } => Some(Type::Any),
         Expr::String(_) | Expr::ArrayJoin { .. } | Expr::StringCoerce(_) => Some(Type::String),
         Expr::Bool(_) => Some(Type::Boolean),
         Expr::BigInt(_) | Expr::BigIntCoerce(_) => Some(Type::BigInt),
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                perry_hir::BinaryOp::Add
+                    | perry_hir::BinaryOp::Sub
+                    | perry_hir::BinaryOp::Mul
+                    | perry_hir::BinaryOp::Div
+                    | perry_hir::BinaryOp::Mod
+                    | perry_hir::BinaryOp::Pow
+                    | perry_hir::BinaryOp::BitAnd
+                    | perry_hir::BinaryOp::BitOr
+                    | perry_hir::BinaryOp::BitXor
+                    | perry_hir::BinaryOp::Shl
+                    | perry_hir::BinaryOp::Shr
+            ) && matches!(
+                (
+                    refine_type_from_init_simple(left),
+                    refine_type_from_init_simple(right)
+                ),
+                (Some(Type::BigInt), _) | (_, Some(Type::BigInt))
+            ) =>
+        {
+            Some(Type::BigInt)
+        }
+        Expr::Unary { op, operand }
+            if matches!(op, perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot)
+                && matches!(refine_type_from_init_simple(operand), Some(Type::BigInt)) =>
+        {
+            Some(Type::BigInt)
+        }
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
+        Expr::NetCreateServer { .. } => Some(Type::Named("Server".to_string())),
         // `const ta = new Int32Array(n)` — refine to Named("Int32Array") so
         // that `.length` and method dispatch use the typed-array fast paths.
         Expr::TypedArrayNew { kind, .. } => {
@@ -1401,6 +1464,9 @@ fn refine_type_from_init_simple(init: &perry_hir::Expr) -> Option<perry_types::T
                 _ => return None,
             };
             Some(Type::Named(name.to_string()))
+        }
+        e if crate::type_analysis_net::net_result_class(e).is_some() => {
+            crate::type_analysis_net::net_result_class(e).map(|name| Type::Named(name.to_string()))
         }
         Expr::NativeMethodCall {
             module,

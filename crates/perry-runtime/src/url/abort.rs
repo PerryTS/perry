@@ -190,6 +190,18 @@ pub(crate) fn is_abort_signal_value(value: f64) -> bool {
     abort_signal_ptr_from_value(value).is_some()
 }
 
+extern "C" fn abort_error_constructor_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::error::js_throw_illegal_constructor_type_error()
+}
+
+fn abort_error_constructor_value() -> f64 {
+    let func = abort_error_constructor_thunk as *const u8;
+    crate::closure::js_register_closure_arity(func, 0);
+    let closure = crate::closure::js_closure_alloc(func, 0);
+    crate::object::set_bound_native_closure_name(closure, "AbortError");
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
 /// Construct a Node-compatible AbortError value.
 #[no_mangle]
 pub extern "C" fn js_abort_error_value() -> f64 {
@@ -197,6 +209,11 @@ pub extern "C" fn js_abort_error_value() -> f64 {
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ABORT_ERR");
+    crate::node_submodules::set_error_user_prop(
+        err as usize,
+        "constructor",
+        abort_error_constructor_value(),
+    );
     crate::value::js_nanbox_pointer(err as i64)
 }
 

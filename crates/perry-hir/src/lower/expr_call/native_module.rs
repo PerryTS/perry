@@ -26,6 +26,22 @@ fn path_submodule_name(module_name: &str) -> Option<&'static str> {
     }
 }
 
+fn is_cluster_default_event_emitter_method(method_name: &str) -> bool {
+    matches!(
+        method_name,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "emit"
+            | "eventNames"
+            | "listenerCount"
+            | "removeListener"
+            | "off"
+            | "removeAllListeners"
+    )
+}
+
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
@@ -45,11 +61,101 @@ fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
+fn require_literal_native_module(ctx: &LoweringContext, expr: &ast::Expr) -> Option<String> {
+    let ast::Expr::Call(call) = unwrap_ts_wrappers(expr) else {
+        return None;
+    };
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Ident(ident) = callee_expr.as_ref() else {
+        return None;
+    };
+    if ident.sym.as_ref() != "require"
+        || ctx.lookup_local("require").is_some()
+        || ctx.lookup_func("require").is_some()
+        || ctx.lookup_imported_func("require").is_some()
+        || call.args.len() != 1
+        || call.args[0].spread.is_some()
+    {
+        return None;
+    }
+    let ast::Expr::Lit(ast::Lit::Str(s)) = call.args[0].expr.as_ref() else {
+        return None;
+    };
+    let spec = s.value.as_str().unwrap_or("");
+    crate::destructuring::resolvable_native_module_for_spec(spec)
+}
+
 fn is_node_stream_class_name(name: &str) -> bool {
     matches!(
         name,
         "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
     )
+}
+
+fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
+    let Some(receiver) = args.first().cloned() else {
+        return Expr::Undefined;
+    };
+    if !matches!(receiver, Expr::This | Expr::LocalGet(_)) {
+        return Expr::Undefined;
+    }
+    let mut exprs = vec![
+        Expr::PropertySet {
+            object: Box::new(receiver.clone()),
+            property: "_events".to_string(),
+            value: Box::new(Expr::Object(Vec::new())),
+        },
+        Expr::PropertySet {
+            object: Box::new(receiver.clone()),
+            property: "_eventsCount".to_string(),
+            value: Box::new(Expr::Number(0.0)),
+        },
+        Expr::PropertySet {
+            object: Box::new(receiver),
+            property: "_maxListeners".to_string(),
+            value: Box::new(Expr::Undefined),
+        },
+    ];
+    exprs.extend(args.into_iter().skip(1));
+    exprs.push(Expr::Undefined);
+    Expr::Sequence(exprs)
+}
+
+fn lower_os_module_method_call(
+    call: &ast::CallExpr,
+    method_name: &str,
+    args: &[Expr],
+) -> Option<Expr> {
+    match method_name {
+        "availableParallelism" => Some(Expr::OsAvailableParallelism),
+        "platform" => Some(Expr::OsPlatform),
+        "arch" => Some(Expr::OsArch),
+        "endianness" => Some(Expr::OsEndianness),
+        "hostname" => Some(Expr::OsHostname),
+        "homedir" => Some(Expr::OsHomedir),
+        "tmpdir" => Some(Expr::OsTmpdir),
+        "loadavg" => Some(Expr::OsLoadavg),
+        "machine" => Some(Expr::OsMachine),
+        "totalmem" => Some(Expr::OsTotalmem),
+        "freemem" => Some(Expr::OsFreemem),
+        "uptime" => Some(Expr::OsUptime),
+        "type" => Some(Expr::OsType),
+        "release" => Some(Expr::OsRelease),
+        "version" => Some(Expr::OsVersion),
+        "cpus" => Some(Expr::OsCpus),
+        "networkInterfaces" => Some(Expr::OsNetworkInterfaces),
+        "userInfo" => Some(user_info_expr_for_call(call, args.to_vec())),
+        "getPriority" | "setPriority" => Some(Expr::NativeMethodCall {
+            module: "os".to_string(),
+            class_name: None,
+            object: None,
+            method: method_name.to_string(),
+            args: args.to_vec(),
+        }),
+        _ => None,
+    }
 }
 
 pub(super) fn try_native_module_methods(
@@ -60,6 +166,20 @@ pub(super) fn try_native_module_methods(
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // Check for native module method calls (e.g., mysql.createConnection())
     if let ast::Expr::Member(member) = expr {
+        // Inline `require("node:os").platform()` reaches this outer member
+        // call before the inner bare `require(...)` lowering can produce a
+        // NativeModuleRef. Recognize the same literal-native namespace shape
+        // here so it dispatches like `import * as os from "node:os"`.
+        if require_literal_native_module(ctx, member.obj.as_ref()).as_deref() == Some("os") {
+            if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                if let Some(expr) =
+                    lower_os_module_method_call(call, method_ident.sym.as_ref(), &args)
+                {
+                    return Ok(Ok(expr));
+                }
+            }
+        }
+
         // #1534/#1540/#1541: the stream acceptance tests deliberately cast
         // the class / namespace before a static call —
         // `(Readable as any).isErrored(r)`, `(Readable as any).toWeb(r)`,
@@ -70,8 +190,38 @@ pub(super) fn try_native_module_methods(
         if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
             let obj_name = obj_ident.sym.to_string();
 
-            // Check for process module methods
-            if obj_name == "process" {
+            if matches!(
+                ctx.lookup_native_module(&obj_name),
+                Some(("stream/web", Some("ReadableStream")))
+                    | Some(("node:stream/web", Some("ReadableStream")))
+            ) {
+                if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                    if method_ident.sym.as_ref() == "from" {
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            module: "readable_stream".to_string(),
+                            class_name: Some("ReadableStream".to_string()),
+                            object: None,
+                            method: "from".to_string(),
+                            args,
+                        }));
+                    }
+                }
+            }
+
+            // Check for process module methods. `import processModule from
+            // "node:process"` registers as the native `process` object, while
+            // `import * as processNamespace` registers as `process.namespace`;
+            // both must use the same strict method gate as the global object.
+            let process_name_is_shadowed =
+                obj_name == "process" && ctx.shadows_unqualified_global("process");
+            let is_process_ref = !process_name_is_shadowed
+                && (obj_name == "process"
+                    || ctx.lookup_builtin_module_alias(&obj_name) == Some("process")
+                    || matches!(
+                        ctx.lookup_native_module(&obj_name),
+                        Some(("process", _)) | Some(("process.namespace", _))
+                    ));
+            if is_process_ref {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
@@ -131,13 +281,13 @@ pub(super) fn try_native_module_methods(
                             }
                         }
                         "ref" | "unref" => {
-                            // #1410: process.ref() / process.unref() — no-ops
-                            // in Node (process always keeps the loop alive,
-                            // so there's nothing to ref/unref). Return
-                            // undefined so callers that probe and invoke them
-                            // (e.g. graceful-shutdown helpers) don't crash on
-                            // "value is not a function".
-                            return Ok(Ok(Expr::Undefined));
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
                         }
                         "setSourceMapsEnabled" => {
                             // #1400 / #3108: process.setSourceMapsEnabled(bool)
@@ -162,6 +312,15 @@ pub(super) fn try_native_module_methods(
                                 class_name: None,
                                 object: None,
                                 method: "getBuiltinModule".to_string(),
+                                args,
+                            }));
+                        }
+                        "execve" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "process".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "execve".to_string(),
                                 args,
                             }));
                         }
@@ -374,7 +533,43 @@ pub(super) fn try_native_module_methods(
                             };
                             return Ok(Ok(Expr::ProcessHrtime(prior)));
                         }
-                        _ => {} // Fall through to generic handling
+                        _ => {
+                            let hint = unimpl_hints::module_member_hint("process", method_name)
+                                .map(|h| format!(" {h}"))
+                                .unwrap_or_default();
+                            let msg = format!(
+                                "`process.{}` is not implemented in Perry — see `perry --print-api-manifest` for the supported surface, \
+                                 or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
+                                method_name, hint,
+                            );
+                            // #5245: default → throw-on-reach + notice; strict
+                            // (`perry.strict` / `--strict-unimplemented`) → hard
+                            // #463 refusal. Tree-shake deferral handled inside.
+                            let api = format!("process.{method_name}");
+                            let location = crate::eval_classifier::location_string(
+                                &ctx.source_file_path,
+                                member.span.lo.0,
+                            );
+                            match crate::check_unimplemented_api(
+                                &msg,
+                                &api,
+                                &location,
+                                member.span.lo.0,
+                            ) {
+                                crate::UnimplementedDecision::Refuse => {
+                                    crate::lower_bail!(member.span, "{}", msg);
+                                }
+                                crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                    return Ok(Ok(
+                                        super::super::const_fold_fn::synth_deferred_throw_value(
+                                            ctx,
+                                            &runtime_msg,
+                                            member.span,
+                                        )?,
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -396,43 +591,18 @@ pub(super) fn try_native_module_methods(
                 obj_name == "os" || ctx.lookup_builtin_module_alias(&obj_name) == Some("os");
             if is_os_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
-                    match method_name {
-                        "availableParallelism" => return Ok(Ok(Expr::OsAvailableParallelism)),
-                        "platform" => return Ok(Ok(Expr::OsPlatform)),
-                        "arch" => return Ok(Ok(Expr::OsArch)),
-                        "endianness" => return Ok(Ok(Expr::OsEndianness)),
-                        "hostname" => return Ok(Ok(Expr::OsHostname)),
-                        "homedir" => return Ok(Ok(Expr::OsHomedir)),
-                        "tmpdir" => return Ok(Ok(Expr::OsTmpdir)),
-                        "loadavg" => return Ok(Ok(Expr::OsLoadavg)),
-                        "machine" => return Ok(Ok(Expr::OsMachine)),
-                        "totalmem" => return Ok(Ok(Expr::OsTotalmem)),
-                        "freemem" => return Ok(Ok(Expr::OsFreemem)),
-                        "uptime" => return Ok(Ok(Expr::OsUptime)),
-                        "type" => return Ok(Ok(Expr::OsType)),
-                        "release" => return Ok(Ok(Expr::OsRelease)),
-                        "version" => return Ok(Ok(Expr::OsVersion)),
-                        "cpus" => return Ok(Ok(Expr::OsCpus)),
-                        "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
-                        "getPriority" | "setPriority" => {
-                            return Ok(Ok(Expr::NativeMethodCall {
-                                module: "os".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: method_name.to_string(),
-                                args,
-                            }));
-                        }
-                        _ => {} // Fall through to generic handling
+                    if let Some(expr) =
+                        lower_os_module_method_call(call, method_ident.sym.as_ref(), &args)
+                    {
+                        return Ok(Ok(expr));
                     }
                 }
             }
 
-            // node:v8 module methods (#3137/#3138). serialize/deserialize and
-            // the heap-stat helpers lower to a receiver-less NativeMethodCall
-            // dispatched in codegen to the `js_v8_*` runtime entry points.
+            // node:v8 module methods (#3137/#3138/#3140).
+            // serialize/deserialize, heap-stat helpers, and heap-snapshot
+            // helpers lower to a receiver-less NativeMethodCall dispatched in
+            // codegen to the `js_v8_*` runtime entry points.
             let is_v8_module =
                 obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
             if is_v8_module {
@@ -444,7 +614,9 @@ pub(super) fn try_native_module_methods(
                         | "getHeapStatistics"
                         | "getHeapCodeStatistics"
                         | "getHeapSpaceStatistics"
-                        | "cachedDataVersionTag" => {
+                        | "cachedDataVersionTag"
+                        | "getHeapSnapshot"
+                        | "writeHeapSnapshot" => {
                             return Ok(Ok(Expr::NativeMethodCall {
                                 module: "v8".to_string(),
                                 class_name: None,
@@ -587,6 +759,7 @@ pub(super) fn try_native_module_methods(
                                     }),
                                     args: vec![b],
                                     type_args: vec![],
+                                    byte_offset: 0,
                                 }));
                             }
                         }
@@ -805,20 +978,28 @@ pub(super) fn try_native_module_methods(
                                 // Static descriptor literal — desugar to a Sequence
                                 // of `defineProperty(target, key, desc)` calls and
                                 // yield `target` as the result value.
-                                let target = target;
-                                let mut exprs: Vec<Expr> = Vec::with_capacity(props.len() + 1);
-                                for (key_name, desc_expr) in props {
-                                    exprs.push(Expr::ObjectDefineProperty(
-                                        Box::new(target.clone()),
-                                        Box::new(Expr::String(key_name.clone())),
-                                        Box::new(desc_expr.clone()),
-                                    ));
+                                //
+                                // An EMPTY literal must NOT fold to a bare `target`:
+                                // `Object.defineProperties(O, {})` still performs the
+                                // spec's step-1 `If Type(O) is not Object, throw a
+                                // TypeError`, so `Object.defineProperties(undefined,
+                                // {})` must throw. With no keys there is no per-key
+                                // `defineProperty` to enforce that, so route the
+                                // empty case through the runtime helper (which
+                                // validates the target).
+                                if !props.is_empty() {
+                                    let target = target;
+                                    let mut exprs: Vec<Expr> = Vec::with_capacity(props.len() + 1);
+                                    for (key_name, desc_expr) in props {
+                                        exprs.push(Expr::ObjectDefineProperty(
+                                            Box::new(target.clone()),
+                                            Box::new(Expr::String(key_name.clone())),
+                                            Box::new(desc_expr.clone()),
+                                        ));
+                                    }
+                                    exprs.push(target);
+                                    return Ok(Ok(Expr::Sequence(exprs)));
                                 }
-                                exprs.push(target);
-                                if exprs.len() == 1 {
-                                    return Ok(Ok(exprs.into_iter().next().unwrap()));
-                                }
-                                return Ok(Ok(Expr::Sequence(exprs)));
                             }
                             return Ok(Ok(Expr::ObjectDefineProperties(
                                 Box::new(target),
@@ -992,10 +1173,14 @@ pub(super) fn try_native_module_methods(
                             let target = it.next().unwrap_or(Expr::Undefined);
                             let key = it.next().unwrap_or(Expr::Undefined);
                             let value = it.next().unwrap_or(Expr::Undefined);
+                            // Optional `receiver` (4th arg): default `undefined`
+                            // and the runtime substitutes `target`.
+                            let receiver = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectSet {
                                 target: Box::new(target),
                                 key: Box::new(key),
                                 value: Box::new(value),
+                                receiver: Box::new(receiver),
                             }));
                         }
                         "has" => {
@@ -1052,6 +1237,7 @@ pub(super) fn try_native_module_methods(
                                                 class_name: cls_name,
                                                 args: new_args,
                                                 type_args: vec![],
+                                                byte_offset: 0,
                                             }));
                                         }
                                     }
@@ -1083,6 +1269,15 @@ pub(super) fn try_native_module_methods(
                         "getPrototypeOf" => {
                             let target = args.into_iter().next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectGetPrototypeOf(Box::new(target))));
+                        }
+                        "getOwnPropertyDescriptor" => {
+                            let mut it = args.into_iter();
+                            let target = it.next().unwrap_or(Expr::Undefined);
+                            let key = it.next().unwrap_or(Expr::Undefined);
+                            return Ok(Ok(Expr::ReflectGetOwnPropertyDescriptor {
+                                target: Box::new(target),
+                                key: Box::new(key),
+                            }));
                         }
                         "defineMetadata" => {
                             let (key, value, target, property_key) = take_reflect_kvtp_args(args);
@@ -1238,8 +1433,15 @@ pub(super) fn try_native_module_methods(
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
                         "createServer" => {
-                            let options = args.first().cloned().map(Box::new);
-                            let connection_listener = args.get(1).cloned().map(Box::new);
+                            let (options, connection_listener) = match args.as_slice() {
+                                [Expr::Closure { .. }] => {
+                                    (None, args.first().cloned().map(Box::new))
+                                }
+                                _ => (
+                                    args.first().cloned().map(Box::new),
+                                    args.get(1).cloned().map(Box::new),
+                                ),
+                            };
                             return Ok(Ok(Expr::NetCreateServer {
                                 options,
                                 connection_listener,
@@ -1324,6 +1526,80 @@ pub(super) fn try_native_module_methods(
                         if module_name == "worker_threads" && method_name == "workerData" {
                             return Ok(Err(args));
                         }
+                        if module_name.strip_prefix("node:").unwrap_or(module_name) == "vm"
+                            && imported_method.is_none()
+                            && method_name == "Module"
+                        {
+                            let mut exprs = args;
+                            exprs.push(Expr::Call {
+                                callee: Box::new(Expr::ExternFuncRef {
+                                    name: "js_vm_module_call".to_string(),
+                                    param_types: Vec::new(),
+                                    return_type: Type::Any,
+                                }),
+                                args: Vec::new(),
+                                type_args: Vec::new(),
+                                byte_offset: 0,
+                            });
+                            return Ok(Ok(Expr::Sequence(exprs)));
+                        }
+                        let normalized_module =
+                            module_name.strip_prefix("node:").unwrap_or(module_name);
+                        if normalized_module == "cluster"
+                            && matches!(imported_method, Some("default"))
+                            && is_cluster_default_event_emitter_method(&method_name)
+                        {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: module_name.to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
+                        if method_name == "call" {
+                            if normalized_module == "stream"
+                                && matches!(imported_method, None | Some("Stream"))
+                            {
+                                return Ok(Ok(event_emitter_constructor_call(args)));
+                            }
+                            if normalized_module == "events"
+                                && matches!(imported_method, Some("EventEmitter"))
+                            {
+                                return Ok(Ok(event_emitter_constructor_call(args)));
+                            }
+                            // #4973: named-import form of the inherits
+                            // pattern — `const { Server } = require('http');
+                            // Server.call(this, handler)`. Same extern as
+                            // the dotted `http.Server.call(...)` form in
+                            // module_class_static.rs.
+                            if matches!(normalized_module, "http" | "https")
+                                && matches!(imported_method, Some("Server"))
+                                && !args.is_empty()
+                            {
+                                let mut it = args.into_iter();
+                                let this_arg = it.next().unwrap();
+                                let mut rest: Vec<Expr> = it.collect();
+                                rest.resize(2, Expr::Undefined);
+                                let mut call_args = vec![this_arg];
+                                call_args.extend(rest);
+                                let extern_name = if normalized_module == "https" {
+                                    "js_https_server_construct_with_this"
+                                } else {
+                                    "js_http_server_construct_with_this"
+                                };
+                                return Ok(Ok(Expr::Call {
+                                    callee: Box::new(Expr::ExternFuncRef {
+                                        name: extern_name.to_string(),
+                                        param_types: Vec::new(),
+                                        return_type: Type::Any,
+                                    }),
+                                    args: call_args,
+                                    type_args: Vec::new(),
+                                    byte_offset: 0,
+                                }));
+                            }
+                        }
                         // Unimplemented-API gate (#463 / #525) for the 2-deep
                         // `mod.method()` call form. Without this, perry/* and
                         // other native-module call sites short-circuited past
@@ -1333,12 +1609,9 @@ pub(super) fn try_native_module_methods(
                         // wording, different escape hatch, harder for users to
                         // recognize as the same class of mistake. Mirrors the
                         // 3-deep gate above for `mod.X.Y()`.
-                        let allow_unimplemented =
-                            std::env::var_os("PERRY_ALLOW_UNIMPLEMENTED").is_some();
                         let manifest_entry =
                             perry_api_manifest::module_has_symbol(module_name, &method_name);
-                        if !allow_unimplemented
-                            && perry_api_manifest::module_has_any_entries(module_name)
+                        if perry_api_manifest::module_has_any_entries(module_name)
                             && manifest_entry.is_none()
                         {
                             // #925: this is the gate that fires
@@ -1354,10 +1627,31 @@ pub(super) fn try_native_module_methods(
                                  or set `PERRY_ALLOW_UNIMPLEMENTED=1` to ignore. (#463){}",
                                 module_name, method_name, hint,
                             );
-                            // #2309: defer under tree-shaking; re-raised only
-                            // if the module survives pruning.
-                            if !crate::try_defer_refusal(msg.clone(), member.span.lo.0) {
-                                crate::lower_bail!(member.span, "{}", msg);
+                            // #5245: default → throw-on-reach + notice; strict →
+                            // hard #463 refusal. #2309 tree-shake handled inside.
+                            let api = format!("{module_name}.{method_name}");
+                            let location = crate::eval_classifier::location_string(
+                                &ctx.source_file_path,
+                                member.span.lo.0,
+                            );
+                            match crate::check_unimplemented_api(
+                                &msg,
+                                &api,
+                                &location,
+                                member.span.lo.0,
+                            ) {
+                                crate::UnimplementedDecision::Refuse => {
+                                    crate::lower_bail!(member.span, "{}", msg);
+                                }
+                                crate::UnimplementedDecision::DeferToRuntimeError(runtime_msg) => {
+                                    return Ok(Ok(
+                                        super::super::const_fold_fn::synth_deferred_throw_value(
+                                            ctx,
+                                            &runtime_msg,
+                                            member.span,
+                                        )?,
+                                    ));
+                                }
                             }
                         }
                         if let Some(entry) = manifest_entry {

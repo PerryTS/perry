@@ -1,0 +1,7 @@
+{
+  "name": "perry/container",
+  "version": "0.5.18",
+  "private": true,
+  "description": "Type declarations for perry/container - Perry's OCI container management module",
+  "types": "index.d.ts"
+}

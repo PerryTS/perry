@@ -6,7 +6,7 @@ use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
-use super::helpers::sanitize;
+use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
 
 /// Emit the string pool into the module: byte-array constants, handle
 /// globals, and the `__perry_init_strings_<prefix>` function that
@@ -27,6 +27,8 @@ pub(super) fn emit_string_pool(
     closure_arities: &HashMap<u32, u32>,
     // ECMAScript-visible `.length` for all closures.
     closure_lengths: &HashMap<u32, u32>,
+    // Closure body func_ids that came from arrow function syntax.
+    closure_arrow_functions: &std::collections::HashSet<u32>,
     // Issue #653: wrappers (`__perry_wrap_<name>`) for top-level user functions
     // that declare a rest param. Each entry is `(wrapper_symbol, fixed_arity)`
     // — the runtime side-table is keyed on the wrapper's func_ptr, NOT the
@@ -47,6 +49,10 @@ pub(super) fn emit_string_pool(
     // wrapper path: each entry is `wrapper_symbol` whose underlying
     // function has its synthesized `arguments` rest param.
     user_fn_wrapper_synthetic_arguments: &std::collections::HashSet<String>,
+    // Functions with both user `...rest` and a hidden raw-arguments slot need
+    // two arrays at dynamic dispatch: the user rest tail and all arguments.
+    closure_rest_and_arguments: &std::collections::HashSet<u32>,
+    user_fn_wrapper_rest_and_arguments: &std::collections::HashSet<String>,
     // ABI param count for every top-level user-function wrapper
     // (`__perry_wrap_<original_name>`) — used to register the wrapper's
     // declared arity in the runtime's `CLOSURE_ARITY_REGISTRY` so dynamic
@@ -64,12 +70,26 @@ pub(super) fn emit_string_pool(
     // function. Registered so util.types.isGeneratorFunction can distinguish
     // lowered generator state-machine closures from ordinary functions.
     user_fn_wrapper_generator: &std::collections::HashSet<String>,
+    // #3664: wrapper/closure symbols whose source form was `async function*`.
+    // Registered in the runtime's async-generator registry so the
+    // `%AsyncGeneratorFunction%`/`%AsyncGenerator%` intrinsic chain (and
+    // `util.types.isAsyncFunction`) resolve correctly for them.
+    user_fn_wrapper_async_generator: &std::collections::HashSet<String>,
+    // Strict-mode user functions (wrapper or inline-closure symbols).
+    // Each entry produces one `js_register_closure_strict_function` call so
+    // call/apply/bind can apply spec OrdinaryCallBindThis (#4850).
+    user_fn_wrapper_strict: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
     // JS name. Each entry produces one `js_register_function_name` call
     // in `__perry_init_strings_<prefix>` so the registry is populated
     // before user code runs. See #1202.
     user_fn_display_names: &[(String, String)],
+    // #4101: `(wrapper_symbol, source_text)` for every user function whose
+    // original source we retained. Each entry produces one
+    // `js_register_function_source` call in `__perry_init_strings_<prefix>`
+    // so `fn.toString()` can reconstruct the source.
+    user_fn_source: &[(String, String)],
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -118,6 +138,18 @@ pub(super) fn emit_string_pool(
         }
         let (const_name, byte_len) = llmod.add_string_constant(display_name);
         user_fn_name_constants.push((wrapper_sym.clone(), const_name, byte_len));
+    }
+
+    // #4101: pre-allocate string constants for function-source registration,
+    // mirroring the name constants above (same borrow ordering: mint the
+    // rodata globals BEFORE `init_fn` claims `&mut llmod`).
+    let mut user_fn_source_constants: Vec<(String, String, usize)> = Vec::new();
+    for (wrapper_sym, source_text) in user_fn_source {
+        if wrapper_sym.is_empty() || source_text.is_empty() {
+            continue;
+        }
+        let (const_name, byte_len) = llmod.add_string_constant(source_text);
+        user_fn_source_constants.push((wrapper_sym.clone(), const_name, byte_len));
     }
 
     // Pre-allocate string constants for class-name registration. We need
@@ -223,6 +255,19 @@ pub(super) fn emit_string_pool(
         );
     }
 
+    // #4101: register each function's retained source text against the same
+    // wrapper/closure address `js_closure_alloc_singleton` stamps into the
+    // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
+    for (wrapper_sym, source_const, source_len) in &user_fn_source_constants {
+        let wrapper_ref = format!("@{}", wrapper_sym);
+        let source_ref = format!("@{}", source_const);
+        let len_str = source_len.to_string();
+        blk.call_void(
+            "js_register_function_source",
+            &[(PTR, &wrapper_ref), (PTR, &source_ref), (I32, &len_str)],
+        );
+    }
+
     // Build per-class keys arrays via js_build_class_keys_array,
     // store the result in the per-class keys global. Done ONCE at
     // module init; every `new ClassName()` call from then on does a
@@ -264,7 +309,20 @@ pub(super) fn emit_string_pool(
                 (I32, &len_str),
             ],
         );
-        crate::expr::emit_root_heap_word_store_on_block(blk, &arr, &format!("@{}", global_name));
+        let global_ref = format!("@{}", global_name);
+        crate::expr::emit_root_heap_word_store_on_block(blk, &arr, &global_ref);
+        // #5042: register the per-class keys global as a GC root so the
+        // evacuation rewrite pass fixes up its raw pointer after the keys
+        // array is moved. The array lives in the longlived (old-gen) arena
+        // and is held alive by the shape-cache scanner, so old-page defrag
+        // (C4b) can relocate it; without registering this slot the codegen
+        // global keeps a stale pointer and every `new ClassName()` afterwards
+        // builds an instance over a forwarded/freed keys array. Mirrors the
+        // module-var data-table and string-handle registrations above (this
+        // global holds a *raw* I64 pointer, which `mark_global_root_bits` and
+        // the evacuation `try_rewrite_value` raw fallback already handle).
+        let addr_i64 = blk.ptrtoint(&global_ref, I64);
+        blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }
 
     // Register the parent-class chain for every class with a parent.
@@ -283,6 +341,14 @@ pub(super) fn emit_string_pool(
                     if parent_cid != 0 {
                         parent_pairs.push((cid, parent_cid));
                     }
+                } else if let Some(reserved) =
+                    crate::expr::builtin_parent_reserved_class_id(parent_name)
+                {
+                    // `class S extends Array {}` — the parent is a built-in
+                    // with a reserved runtime class id, not a user class. Wire
+                    // the edge so `new S() instanceof Array` walks the chain to
+                    // the reserved id and matches. Refs class/subclass-builtins.
+                    parent_pairs.push((cid, reserved));
                 }
             }
         }
@@ -311,13 +377,14 @@ pub(super) fn emit_string_pool(
     // symbols for those live in the defining module's object file.
     // Each module's init registers its own classes; the linker
     // ensures all init functions run before main.
-    let mut method_triples: Vec<(u32, String, String, u32)> = Vec::new();
+    // (class_id, name, llvm_symbol, total_param_count, has_synth_args, has_rest, spec_length)
+    let mut method_triples: Vec<(u32, String, String, u32, bool, bool, u32)> = Vec::new();
     // #1788: (cid, static-method name, perry_static_* symbol, param_count,
     // has_rest). Registered into the runtime CLASS_STATIC_METHODS table so a
     // subclass whose parent is a class-expression value inherits the parent's
     // static methods (`class Sub extends make(...) {}; Sub.greet()`); has_rest
     // tells the dispatcher to bundle trailing args for a `...rest` param.
-    let mut static_method_triples: Vec<(u32, String, String, u32, bool)> = Vec::new();
+    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32)> = Vec::new();
     // #1787: (cid, standalone-constructor symbol, total_param_count).
     // Registered into CLASS_CONSTRUCTORS so `new <classObjectValue>()` (a
     // class-expression value constructed dynamically) can replay the class's
@@ -353,32 +420,68 @@ pub(super) fn emit_string_pool(
             let llvm_name = format!(
                 "perry_method_{}__{}__{}",
                 module_prefix,
-                sanitize(class_name),
-                sanitize(&method.name),
+                sanitize_member(class_name),
+                sanitize_member(&method.name),
             );
+            let has_synth_args = method
+                .params
+                .last()
+                .map(|p| p.arguments_object.is_some())
+                .unwrap_or(false);
+            // A trailing user rest param (`method(a, ...rest)`) — distinct from
+            // the synthesized-`arguments` param above. The runtime needs this
+            // so an apply/dynamic dispatch (`recv.method(...spread)`) bundles
+            // the call args into the rest array instead of passing `rest =
+            // args[0]` as a scalar (marked's `this.use(...e)` blocker).
+            let has_rest = method
+                .params
+                .last()
+                .map(|p| p.is_rest && p.arguments_object.is_none())
+                .unwrap_or(false);
+            // Spec `.length`: count leading formal params before the first one
+            // with a default or rest (and excluding the synthesized `arguments`
+            // slot). Distinct from the total param_count used for call dispatch.
+            let mut spec_length = 0u32;
+            for p in &method.params {
+                if p.arguments_object.is_some() || p.is_rest || p.default.is_some() {
+                    break;
+                }
+                spec_length += 1;
+            }
             method_triples.push((
                 cid,
                 method.name.clone(),
                 llvm_name,
                 method.params.len() as u32,
+                has_synth_args,
+                has_rest,
+                spec_length,
             ));
         }
         // #1788: static methods are emitted as `perry_static_*` (no `this`
         // param). Collect them for the runtime CLASS_STATIC_METHODS table.
         for sm in &class.static_methods {
-            let llvm_name = format!(
-                "perry_static_{}__{}__{}",
-                module_prefix,
-                sanitize(class_name),
-                sanitize(&sm.name),
-            );
+            let llvm_name = scoped_static_method_name(module_prefix, cid, class_name, &sm.name);
             let has_rest = sm.params.last().map(|p| p.is_rest).unwrap_or(false);
+            // Spec `.length`: leading formal params before the first default/rest
+            // (and excluding the synthesized `arguments` slot). For static
+            // generator/async methods the raw param_count over-counts (`static
+            // *gen(a, b = 1,).length === 1`, not 2). (Test262 *-method-static
+            // dflt-params-trailing-comma / -length.)
+            let mut spec_length = 0u32;
+            for p in &sm.params {
+                if p.arguments_object.is_some() || p.is_rest || p.default.is_some() {
+                    break;
+                }
+                spec_length += 1;
+            }
             static_method_triples.push((
                 cid,
                 sm.name.clone(),
                 llvm_name,
                 sm.params.len() as u32,
                 has_rest,
+                spec_length,
             ));
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -400,7 +503,9 @@ pub(super) fn emit_string_pool(
         ));
     }
     method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count) in method_triples {
+    for (cid, method_name, llvm_name, param_count, has_synth_args, has_rest, spec_length) in
+        method_triples
+    {
         // The pre-intern pass before `emit_string_pool` ensured every
         // method name has a string pool entry; look it up here without
         // mutating the pool.
@@ -417,6 +522,8 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        let has_synth_args_str = if has_synth_args { "1" } else { "0" };
+        let has_rest_str = if has_rest { "1" } else { "0" };
         blk.call_void(
             "js_register_class_method",
             &[
@@ -425,6 +532,19 @@ pub(super) fn emit_string_pool(
                 (I64, &len_str),
                 (I64, &func_i64),
                 (I64, &param_count.to_string()),
+                (I64, has_synth_args_str),
+                (I64, has_rest_str),
+            ],
+        );
+        // Record the default-aware spec `.length` so `C.prototype.m.length`
+        // reflects params-before-first-default, not the raw param count.
+        blk.call_void(
+            "js_register_class_method_bind_length",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, &spec_length.to_string()),
             ],
         );
     }
@@ -432,7 +552,7 @@ pub(super) fn emit_string_pool(
     // static methods (subclass extends a class-expression value) resolve at
     // runtime via the class_id parent-chain walk.
     static_method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count, has_rest) in static_method_triples {
+    for (cid, method_name, llvm_name, param_count, has_rest, spec_length) in static_method_triples {
         let entry = match strings.iter().find(|e| e.value == method_name) {
             Some(e) => e,
             None => continue,
@@ -452,6 +572,18 @@ pub(super) fn emit_string_pool(
                 (I64, &func_i64),
                 (I64, &param_count.to_string()),
                 (I64, has_rest_str),
+            ],
+        );
+        // Record the default-aware spec `.length` for the static method so
+        // `C.staticGen.length` reflects params-before-first-default rather than
+        // the raw param count (which over-counts generator/async methods).
+        blk.call_void(
+            "js_register_class_static_method_bind_length",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, &spec_length.to_string()),
             ],
         );
     }
@@ -556,7 +688,9 @@ pub(super) fn emit_string_pool(
     // the logger middleware reads `c.req.url` from a JS-bundled hono
     // dist via `compilePackages`, and pre-fix `c.req` always returned
     // `undefined`.
-    let mut getter_pairs: Vec<(u32, String, String)> = Vec::new();
+    // (class_id, prop_name, llvm_symbol, is_static) — static accessors register
+    // onto the class constructor (CLASS_STATIC_ACCESSORS), not the instance vtable.
+    let mut getter_pairs: Vec<(u32, String, String, bool)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (see method-emission loop above).
         if *class_name != class.name {
@@ -581,18 +715,31 @@ pub(super) fn emit_string_pool(
             // the LLVM symbol `perry_method_<modprefix>__<class>__<sanitize(__get_get_<prop>)>`.
             // Use the same mangling here so the registered func_ptr
             // matches the actual emitted body.
-            let inner = format!("__get_{}", getter_fn.name);
-            let llvm_name = format!(
-                "perry_method_{}__{}__{}",
-                module_prefix,
-                sanitize(class_name),
-                sanitize(&inner),
-            );
-            getter_pairs.push((cid, prop.clone(), llvm_name));
+            let is_static = class.static_accessor_fn_ids.contains(&getter_fn.id);
+            // Static accessors are emitted via compile_static_method (no-this
+            // ABI) under a `perry_static_…` symbol keyed on `__get_<prop>`;
+            // instance accessors via compile_method under `perry_method_…`.
+            let llvm_name = if is_static {
+                super::helpers::scoped_static_method_name(
+                    module_prefix,
+                    cid,
+                    class_name,
+                    &format!("__get_{}", prop),
+                )
+            } else {
+                let inner = format!("__get_{}", getter_fn.name);
+                format!(
+                    "perry_method_{}__{}__{}",
+                    module_prefix,
+                    sanitize_member(class_name),
+                    sanitize_member(&inner),
+                )
+            };
+            getter_pairs.push((cid, prop.clone(), llvm_name, is_static));
         }
     }
     getter_pairs.sort_unstable();
-    for (cid, prop_name, llvm_name) in getter_pairs {
+    for (cid, prop_name, llvm_name, is_static) in getter_pairs {
         let entry = match strings.iter().find(|e| e.value == prop_name) {
             Some(e) => e,
             None => continue,
@@ -602,8 +749,13 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        let register_fn = if is_static {
+            "js_register_class_static_getter"
+        } else {
+            "js_register_class_getter"
+        };
         blk.call_void(
-            "js_register_class_getter",
+            register_fn,
             &[
                 (I64, &cid.to_string()),
                 (I64, &bytes_i64),
@@ -622,7 +774,7 @@ pub(super) fn emit_string_pool(
     // getter-pairs loop above; emission mangling matches the
     // setter-method-emission path at codegen.rs:2041 (renamed.name =
     // "__set_<prop>" → LLVM symbol perry_method_<mp>__<class>____set_<f.name>).
-    let mut setter_pairs: Vec<(u32, String, String)> = Vec::new();
+    let mut setter_pairs: Vec<(u32, String, String, bool)> = Vec::new();
     for (class_name, class) in classes.iter() {
         if *class_name != class.name {
             continue;
@@ -641,18 +793,28 @@ pub(super) fn emit_string_pool(
             _ => continue,
         };
         for (prop, setter_fn) in &class.setters {
-            let inner = format!("__set_{}", setter_fn.name);
-            let llvm_name = format!(
-                "perry_method_{}__{}__{}",
-                module_prefix,
-                sanitize(class_name),
-                sanitize(&inner),
-            );
-            setter_pairs.push((cid, prop.clone(), llvm_name));
+            let is_static = class.static_accessor_fn_ids.contains(&setter_fn.id);
+            let llvm_name = if is_static {
+                super::helpers::scoped_static_method_name(
+                    module_prefix,
+                    cid,
+                    class_name,
+                    &format!("__set_{}", prop),
+                )
+            } else {
+                let inner = format!("__set_{}", setter_fn.name);
+                format!(
+                    "perry_method_{}__{}__{}",
+                    module_prefix,
+                    sanitize_member(class_name),
+                    sanitize_member(&inner),
+                )
+            };
+            setter_pairs.push((cid, prop.clone(), llvm_name, is_static));
         }
     }
     setter_pairs.sort_unstable();
-    for (cid, prop_name, llvm_name) in setter_pairs {
+    for (cid, prop_name, llvm_name, is_static) in setter_pairs {
         let entry = match strings.iter().find(|e| e.value == prop_name) {
             Some(e) => e,
             None => continue,
@@ -662,8 +824,13 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        let register_fn = if is_static {
+            "js_register_class_static_setter"
+        } else {
+            "js_register_class_setter"
+        };
         blk.call_void(
-            "js_register_class_setter",
+            register_fn,
             &[
                 (I64, &cid.to_string()),
                 (I64, &bytes_i64),
@@ -694,7 +861,9 @@ pub(super) fn emit_string_pool(
         // Refs #915 (gap 1 from #899): closures whose rest param is the
         // synthesized `arguments` use the synthetic-arguments registration
         // so the runtime bundles ALL args into the rest slot.
-        let runtime_fn = if closure_synthetic_arguments.contains(&fid) {
+        let runtime_fn = if closure_rest_and_arguments.contains(&fid) {
+            "js_register_closure_rest_and_arguments"
+        } else if closure_synthetic_arguments.contains(&fid) {
             "js_register_closure_synthetic_arguments"
         } else {
             "js_register_closure_rest"
@@ -743,6 +912,14 @@ pub(super) fn emit_string_pool(
         );
     }
 
+    let mut sorted_arrows: Vec<u32> = closure_arrow_functions.iter().copied().collect();
+    sorted_arrows.sort_unstable();
+    for fid in sorted_arrows {
+        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
+        let func_ref = format!("@{}", closure_sym);
+        blk.call_void("js_register_closure_arrow_function", &[(PTR, &func_ref)]);
+    }
+
     // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user
     // functions whose source signature includes a rest param. Mirrors the
     // closure-rest loop above but keyed on the wrapper's symbol rather than
@@ -756,7 +933,9 @@ pub(super) fn emit_string_pool(
         // Refs #915 (gap 1 from #899): wrappers whose underlying function
         // declared a synthesized `arguments` rest param need the
         // synthetic-arguments registration.
-        let runtime_fn = if user_fn_wrapper_synthetic_arguments.contains(&wrap_sym) {
+        let runtime_fn = if user_fn_wrapper_rest_and_arguments.contains(&wrap_sym) {
+            "js_register_closure_rest_and_arguments"
+        } else if user_fn_wrapper_synthetic_arguments.contains(&wrap_sym) {
             "js_register_closure_synthetic_arguments"
         } else {
             "js_register_closure_rest"
@@ -813,6 +992,28 @@ pub(super) fn emit_string_pool(
             "js_register_closure_generator_function",
             &[(PTR, &func_ref)],
         );
+    }
+
+    // #3664: async-generator wrappers. These are ALSO in
+    // `user_fn_wrapper_generator` above (they share the sync generator
+    // lowering); this extra registration is what lets the runtime tell an
+    // `async function*` apart from a `function*`.
+    let mut sorted_async_generator_wrappers: Vec<String> =
+        user_fn_wrapper_async_generator.iter().cloned().collect();
+    sorted_async_generator_wrappers.sort();
+    for wrap_sym in sorted_async_generator_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void(
+            "js_register_closure_async_generator_function",
+            &[(PTR, &func_ref)],
+        );
+    }
+
+    let mut sorted_strict_wrappers: Vec<String> = user_fn_wrapper_strict.iter().cloned().collect();
+    sorted_strict_wrappers.sort();
+    for wrap_sym in sorted_strict_wrappers {
+        let func_ref = format!("@{}", wrap_sym);
+        blk.call_void("js_register_closure_strict_function", &[(PTR, &func_ref)]);
     }
 
     blk.ret_void();

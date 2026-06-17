@@ -386,6 +386,18 @@ pub(crate) fn try_read_as_search_params(
         return None;
     }
     unsafe {
+        // A genuine URLSearchParams is always allocated with `class_id == 0`
+        // (an ordinary object, see `create_url_search_params`). Other native
+        // classes — notably `util.MIMEParams` — ALSO store their data in a
+        // leading `_entries` slot but carry a distinct registered class id and
+        // a different field layout (no `_owner` slot). Without this guard such
+        // an object is mis-detected below, then read with the URLSearchParams
+        // layout (an out-of-bounds `_owner` field read) → segfault when e.g.
+        // `String(mimeParams)` / `mimeParams.toString()` routes through
+        // `js_jsvalue_to_string`. Bail for any non-zero class id.
+        if (*params).class_id != 0 {
+            return None;
+        }
         // URLSearchParams stores entries in field index 0 (URL_SEARCH_PARAMS_ENTRIES).
         // If this isn't a URLSearchParams, that slot likely holds a string or
         // is missing — we detect by checking the keys array shape.

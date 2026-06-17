@@ -10,6 +10,41 @@ use perry_types::{FuncId, GlobalId, LocalId, Type, TypeParam};
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::*;
+use crate::ClassAccessorNames;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WithEnvFrame {
+    pub(crate) local_id: LocalId,
+    pub(crate) local_mark: usize,
+}
+
+/// Kind of a private class element, for the read/write legality checks that
+/// `obj.#name` access performs (in addition to the brand check). The numeric
+/// values are the wire codes passed to the `js_private_guard` runtime helper —
+/// keep them in sync with `crates/perry-runtime/src/object/field_get_set.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrivKind {
+    Field = 0,
+    Method = 1,
+    Get = 2,
+    Set = 3,
+    GetSet = 4,
+}
+
+/// One private element declared by a class: its kind and whether it is static.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrivMember {
+    pub(crate) kind: PrivKind,
+    pub(crate) is_static: bool,
+}
+
+/// Private-name scope for one class body. `members` is keyed by the
+/// `#name` string (with the leading `#`).
+#[derive(Debug, Clone)]
+pub(crate) struct PrivateScope {
+    pub(crate) class_name: String,
+    pub(crate) members: HashMap<String, PrivMember>,
+}
 
 pub struct LoweringContext {
     /// Counter for generating unique local IDs
@@ -29,8 +64,13 @@ pub struct LoweringContext {
     pub(crate) next_interface_id: InterfaceId,
     /// Counter for generating unique type alias IDs
     pub(crate) next_type_alias_id: TypeAliasId,
-    /// Current scope's local variables: name -> (id, type)
-    pub(crate) locals: Vec<(String, LocalId, Type)>,
+    /// Deterministic per-module salt for tagged-template call-site cache keys.
+    pub(crate) tagged_template_site_salt: u64,
+    /// Counter for generating unique tagged-template call-site IDs.
+    pub(crate) next_tagged_template_site_id: u32,
+    /// Current scope's local variables: name -> (id, type), with an O(1)
+    /// name→position index for innermost-binding resolution (#5267).
+    pub(crate) locals: crate::lower::Locals,
     /// LocalIds that represent immutable bindings (`const`, imports, and
     /// other lexical bindings that must throw when assigned).
     pub(crate) immutable_locals: HashSet<LocalId>,
@@ -68,7 +108,7 @@ pub struct LoweringContext {
     /// avoiding the creation of shadow fields that cause later index shift bugs after
     /// inheritance resolution in codegen.
     pub(crate) class_field_names: Vec<(String, Vec<String>)>,
-    /// Issue #665 (sixth pass): per-class set of getter+setter property names.
+    /// Issue #665 (sixth pass): per-class set of getter and setter property names.
     /// Used by the "infer fields from ctor body `this.x = ...`" pass to avoid
     /// mis-categorising a setter assignment as an own data field — the
     /// rate-limiter-flexible `set points(v)` / `this.points = opts.points`
@@ -78,7 +118,7 @@ pub struct LoweringContext {
     /// Populated alongside `register_class_field_names`; looked up via
     /// `lookup_class_accessor_names` and walked across the parent chain when
     /// processing a subclass's ctor body.
-    pub(crate) class_accessor_names: Vec<(String, Vec<String>)>,
+    pub(crate) class_accessor_names: Vec<(String, ClassAccessorNames)>,
     /// Issue #562: class name → `(module, class)` tuple from
     /// `native_extends`. Populated when lowering each class, consumed by
     /// `destructuring.rs` to register `let x = new SubclassOfStream()`
@@ -117,6 +157,10 @@ pub struct LoweringContext {
     pub(crate) interface_object_types: std::collections::HashMap<String, perry_types::ObjectType>,
     /// Imported functions: local_name -> original_name (the exported name in the source module)
     pub(crate) imported_functions: Vec<(String, String)>,
+    /// Built-in named imports: local_name -> (module_name, exported_name).
+    /// Kept separate from `imported_functions`, whose identity mapping is part
+    /// of cross-module codegen symbol disambiguation.
+    pub(crate) builtin_named_imports: Vec<(String, String, String)>,
     /// Native module imports: local_name -> (module_name, method_name)
     /// For namespace imports (import * as x), method_name is None
     /// For named imports (import { v4 as uuid }), method_name is Some("v4")
@@ -160,6 +204,20 @@ pub struct LoweringContext {
     pub(crate) ui_widget_type_aliases: HashMap<String, String>,
     /// Current class being lowered (for arrow function `this` capture)
     pub(crate) current_class: Option<String>,
+    /// True while lowering a static class member body.
+    pub(crate) current_class_member_is_static: bool,
+    /// Lexical stack of private-name scopes — one entry per enclosing class
+    /// body, innermost last. Each access of `obj.#name` resolves `#name` to
+    /// the nearest enclosing class that DECLARES it, yielding the declaring
+    /// class (for the brand check) and the member kind (for the
+    /// read-on-setter-only / write-on-method etc. TypeError checks). This is
+    /// kept on the context (not derived from `current_class`) so it survives
+    /// nested plain-function / arrow lowering — a private name referenced from
+    /// an inner function still lexically resolves to its declaring class.
+    pub(crate) private_scopes: Vec<PrivateScope>,
+    /// Home-object local for object-literal methods while their bodies are
+    /// lowered. Used to preserve `super` in object methods.
+    pub(crate) object_super_home_stack: Vec<LocalId>,
     /// Extern function types: name -> (param_types, return_type)
     /// Stores type information for declare function statements (FFI)
     pub(crate) extern_func_types: Vec<(String, Vec<Type>, Type)>,
@@ -178,6 +236,19 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// Per-generator count of leading parameter-prologue statements (default
+    /// guards + destructuring binding stmts) prepended to the body. Flushed
+    /// into `Module.gen_param_prologue_len`; the generator transform uses it to
+    /// run param binding synchronously at call time. See that field's docs.
+    pub(crate) gen_param_prologue_len: HashMap<FuncId, usize>,
+    /// Test262 assignment name inference: when lowering `lhs = rhs`, a bare
+    /// identifier lhs can provide the `NamedEvaluation` name for an anonymous
+    /// function/class rhs. This slot is set only while lowering that rhs.
+    pub(crate) assignment_inferred_name: Option<String>,
+    /// #4101: original source text keyed by FuncId, captured by slicing the
+    /// module source against each function's AST span at lowering time.
+    /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
+    pub(crate) closure_source_text: HashMap<FuncId, String>,
     /// Functions that return native module instances: func_name -> (module_name, class_name)
     /// Tracks user-defined functions whose return type annotation is a native module type
     /// (e.g., initializePool(): mysql.Pool -> ("mysql2/promise", "Pool"))
@@ -194,6 +265,10 @@ pub struct LoweringContext {
     /// Module-level variable names pre-registered in the forward-declaration pass.
     /// Used to avoid duplicate define_local calls when the actual declaration is lowered.
     pub(crate) pre_registered_module_vars: HashSet<String>,
+    /// Subset of `pre_registered_module_vars` that came from syntactic `var`
+    /// declarations. Sloppy assignments before a later `var` need an early
+    /// backing slot; `let`/`const` should not use that path.
+    pub(crate) pre_registered_module_var_decls: HashSet<String>,
     /// LocalIds that are defined at module top level (outside any function or
     /// block). Closure `captures` referencing these IDs are filtered out at
     /// lowering time because codegen loads module-level bindings from their
@@ -201,6 +276,21 @@ pub struct LoweringContext {
     /// capture-slot would race with self-referential `const f = () => f(...)`
     /// and double-book state shared between sibling closures.
     pub(crate) module_level_ids: HashSet<LocalId>,
+    /// Sloppy assignments to unresolvable identifiers create properties on
+    /// the global object. We model the subset Perry can compile by minting a
+    /// module-level LocalId plus a synthetic top-level `var` slot after module
+    /// lowering, so closures and later top-level reads share storage.
+    pub(crate) sloppy_implicit_globals: Vec<(String, LocalId)>,
+    pub(crate) sloppy_implicit_global_ids: HashSet<LocalId>,
+    /// Sloppy implicit globals minted as `with`-set FALLBACKS. Whether the
+    /// binding ever materialises is a runtime question (the with-env may own
+    /// the property and take the write), so these locals start as a HOLE
+    /// sentinel and bare reads route through `js_with_implicit_read` which
+    /// throws ReferenceError while unset. id → identifier name.
+    pub(crate) with_sloppy_implicit_ids: std::collections::HashMap<LocalId, String>,
+    /// (id, name) pairs whose sentinel-init `Stmt::Let` still needs to be
+    /// emitted ahead of the with statement currently being lowered.
+    pub(crate) pending_with_implicit_inits: Vec<(LocalId, String)>,
     /// Current function/closure nesting depth (`enter_scope` bumps this,
     /// `exit_scope` decrements). 0 == still at module top level.
     pub(crate) scope_depth: usize,
@@ -225,6 +315,16 @@ pub struct LoweringContext {
     pub(crate) uses_fetch: bool,
     /// Issue #76 — set when any `WebAssembly.*` HIR variant is lowered.
     pub(crate) uses_webassembly: bool,
+    /// #4950: local binding name of a default import from the npm `react`
+    /// package (`import React from 'react'`). When set, JSX lowers to
+    /// `<local>.createElement(type, props)` so REACT controls when function
+    /// components run (the reconciler installs the hooks dispatcher first).
+    /// Perry's native `js_jsx` adapter calls function components EAGERLY
+    /// (SSR-to-HTML semantics, hono-style) — under a real React renderer
+    /// (ink, react-three-fiber, …) that ran `<Text>`'s `useContext` outside
+    /// any render and threw React's "Invalid hook call" / null-dispatcher
+    /// TypeError.
+    pub(crate) react_default_import_local: Option<String>,
     /// #1723 — one-shot flag set by an enclosing `ns[dynamicKey].staticMember`
     /// access to tell the *immediately-nested* computed-member lowering to skip
     /// the #503 dynamic-stdlib-dispatch refusal. The dynamic index there only
@@ -245,7 +345,21 @@ pub struct LoweringContext {
     /// unresolvable identifiers throw ReferenceError, but member receivers are
     /// still allowed to use the existing GlobalGet sentinel path.
     pub(crate) unresolved_ident_as_global: bool,
+    /// Active `with` object environment records. Each frame points at the
+    /// synthetic local that stores the object value and the locals length when
+    /// the frame was entered, so declarations inside the block/function can
+    /// continue to lexically shadow the object environment.
+    pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// #4973: top-of-function-body `let`/`const` Ident bindings pre-registered
+    /// by the function-body hoist pass so hoisted sibling FUNCTIONS that
+    /// reference them before their lexical position bind the (boxed) local
+    /// instead of falling through to a global read (the classic Node test
+    /// shape: `function t() { server.close(); }` … `const server = …`).
+    /// Keyed by the declarator-ident span (`span.lo.0`) so ONLY the exact
+    /// declarator reuses the id at its Let site — a shadowing `const` in an
+    /// inner block still lowers a fresh binding.
+    pub(crate) lexical_forward_decls: HashMap<u32, LocalId>,
     /// Shadow index: function name -> index in `functions` Vec (last entry for shadowing)
     pub(crate) functions_index: HashMap<String, usize>,
     /// Shadow index: class name -> index in `classes` Vec
@@ -254,6 +368,32 @@ pub struct LoweringContext {
     pub(crate) imported_functions_index: HashMap<String, usize>,
     /// Shadow index: local alias name -> index in `builtin_module_aliases` Vec
     pub(crate) builtin_module_aliases_index: HashMap<String, usize>,
+    /// Perf index for `native_instances` (which is scope-stack-like: pushed on
+    /// scope entry, truncated on scope exit). Maps name -> STACK of indices into
+    /// the `native_instances` Vec, innermost (last) on top. `lookup_native_instance`
+    /// reads the top index for O(1) last-match-wins resolution (mirrors the old
+    /// reverse scan's shadowing); on `truncate(mark)` every index >= mark is
+    /// popped off each name's stack (and empty stacks removed), so an inner
+    /// binding stops shadowing the moment its scope pops. See
+    /// `register_native_instance` / `truncate_native_instances`.
+    pub(crate) native_instances_index: HashMap<String, Vec<usize>>,
+    /// Perf index for `module_native_instances` (module-level, push-only, never
+    /// truncated). Scanned in reverse (last-match-wins) by
+    /// `lookup_native_instance`'s fallback arm, so the index stores the LAST
+    /// pushed index per name (overwritten on every push). O(1) lookup.
+    pub(crate) module_native_instances_index: HashMap<String, usize>,
+    /// Perf index for `func_return_native_instances` (push-only, never
+    /// truncated). The old lookup scanned FORWARD (first-match-wins), so the
+    /// index keeps the FIRST pushed index per name (`entry().or_insert`).
+    pub(crate) func_return_native_instances_index: HashMap<String, usize>,
+    /// Perf index for `native_modules` (push-only, never truncated). The old
+    /// `lookup_native_module` scanned FORWARD (first-match-wins), so the index
+    /// keeps the FIRST pushed index per name (`entry().or_insert`).
+    pub(crate) native_modules_index: HashMap<String, usize>,
+    /// Perf index for `class_statics` (push-only, never truncated). The old
+    /// `has_static_method`/`has_static_field` scanned FORWARD (first-match-wins),
+    /// so the index keeps the FIRST pushed index per class name.
+    pub(crate) class_statics_index: HashMap<String, usize>,
     /// Local names bound to a `path` sub-namespace (`const w = path.win32`).
     /// Maps the local name -> (root identifier name, sub "win32"|"posix").
     /// Resolution of the root identifier to the `path` module is deferred to
@@ -283,6 +423,13 @@ pub struct LoweringContext {
     /// default imports of actual classes (`import { MongoClient }`) are NOT in
     /// this set and keep the static-method path.
     pub(crate) namespace_import_locals: HashSet<String>,
+    /// Maps a namespace-import local (`import * as z from "src"`) to its source
+    /// module. Used so a later bare `export { z }` re-export of that local routes
+    /// to `Export::NamespaceReExport` (equivalent to `export * as z from "src"`)
+    /// rather than `Export::Named`, which would resolve `z` to a bare function
+    /// symbol in the importer and drop every namespace member. Closes the zod
+    /// `import { z }` breakage (zod's index does `import * as z; export { z }`).
+    pub(crate) namespace_import_sources: std::collections::HashMap<String, String>,
     /// Names of functions declared with `function*` — used to detect generator
     /// calls in `for...of` so the iterator protocol loop is emitted instead of
     /// the array-index loop.
@@ -296,10 +443,6 @@ pub struct LoweringContext {
     /// takes `this` as its first parameter. Consumed by `for...of` to
     /// dispatch through the iterator protocol via a direct FuncRef call.
     pub(crate) iterator_func_for_class: std::collections::HashMap<String, perry_types::FuncId>,
-    /// Local names whose value was assigned from `regex.exec(...)`. Used to
-    /// route `local.index` / `local.groups` to the bare RegExpExecIndex/Groups
-    /// HIR variants which read the runtime's thread-local exec metadata.
-    pub(crate) regex_exec_locals: HashSet<String>,
     pub(crate) proxy_locals: HashSet<String>,
     /// #3144: local name -> builtin prototype method name, for bindings like
     /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
@@ -320,10 +463,6 @@ pub struct LoweringContext {
     /// timestamp and print `1970-01-01T00:00:00.000Z`).
     pub(crate) plain_object_locals: HashSet<String>,
     pub(crate) proxy_revoke_locals: HashMap<String, String>,
-    /// For `const p = new Proxy(ClassName, handler)`, record the class name
-    /// so `new p(args)` can fold to `new ClassName(args)` (pragmatic — lets
-    /// the test's construct trap see the expected value).
-    pub(crate) proxy_target_classes: HashMap<String, String>,
     /// Alias map for class expressions: `const MyClass = class { ... }`
     /// binds the local `MyClass` to the synthetic class name created
     /// by `lower_class_from_ast`. The `new MyClass(...)` lowering looks
@@ -339,6 +478,17 @@ pub struct LoweringContext {
     /// Used to resolve `new.target` to a placeholder object whose `.name`
     /// returns the class name. None outside any constructor.
     pub(crate) in_constructor_class: Option<String>,
+    /// True while lowering inside a class declaration/expression whose
+    /// heritage clause is present (`class C extends ... {}`). Combined with
+    /// `in_constructor_class` to decide whether a direct `eval` body may
+    /// contain `super()` (spec: PerformEval early errors). Saved/restored
+    /// alongside `current_class` at both class lowering entry points.
+    pub(crate) current_class_is_derived: bool,
+    /// True while lowering a class field initializer expression. A direct
+    /// `eval` body containing `arguments` in this context is a SyntaxError at
+    /// the eval call (field initializers have no arguments object). Set in
+    /// `lower_class_prop` / `lower_private_prop`.
+    pub(crate) in_class_field_init: bool,
     /// Issue #562 — set to the parent class identifier (e.g. `"WritableStream"`,
     /// `"ReadableStream"`, `"TransformStream"`, or any ident from `class X
     /// extends Y`) when lowering inside a class declaration. Used by the
@@ -355,6 +505,15 @@ pub struct LoweringContext {
     /// field layout. Dedup is per-module only; cross-module dedup would need
     /// a stable hash and is deferred.
     pub(crate) anon_shape_classes: HashMap<String, String>,
+    /// Class DECLARATION names at the top level of the function body
+    /// currently being lowered. JS resolves a method-body reference to a
+    /// sibling class declared LATER in the same function at call time
+    /// (vendored zod: `ZodType.optional()` calls `ZodOptional.create(...)`
+    /// with ZodOptional declared hundreds of lines below) — without this
+    /// set the Ident lowered to the unknown-global sentinel and the member
+    /// call dispatched into `Object.create`. Scoped save/restore in
+    /// `lower_fn_body_block_stmt`.
+    pub(crate) forward_class_names: std::collections::HashSet<String>,
     /// Counter for generating anon-class names (`__AnonShape_N`).
     // #854: initialized in `new` but unread — anon-shape classes are now named
     // by content-addressed FNV hash (see `synthesize_anon_shape_class`), not by
@@ -385,6 +544,10 @@ pub struct LoweringContext {
     /// the HIR (where codegen consumes them) rather than being patched in
     /// after lowering.
     pub(crate) let_class_aliases: Vec<(String, String)>,
+    /// LocalIds known to hold the global object (`globalThis`). This lets
+    /// value-read recognisers treat `const g = globalThis; g.Response` like
+    /// `globalThis.Response` without relying on source-level names.
+    pub(crate) global_this_aliases: HashSet<LocalId>,
     /// Issue #838: locals whose initializer is `<ClassName>.prototype`.
     /// Lets the assignment lowering recognise `proto.method = fn` as a
     /// prototype-method assignment on the underlying class (rather than
@@ -436,11 +599,24 @@ pub struct LoweringContext {
     /// for methods that already have a dedicated recogniser arm — see
     /// `lower/expr_call.rs` for the dispatch list.
     pub(crate) object_static_method_aliases: HashMap<LocalId, String>,
+    /// Same alias-call repair for selected `Array.<staticMethod>` captures.
+    /// Test262's descriptor helper stores `Array.isArray` in a local and calls
+    /// that alias; Perry's direct-call intrinsic already works, but the value
+    /// read currently lowers to a non-callable sentinel.
+    pub(crate) array_static_method_aliases: HashMap<LocalId, String>,
     /// Issue #444: true when this module is the user-supplied entry file.
     /// Drives `import.meta.main` — Node 24+ / Bun semantics where the entry
     /// module reports `true` and every imported module reports `false`. Set
     /// by `lower_module_with_class_id_types_seed_and_entry`; default false.
     pub(crate) is_entry_module: bool,
+    /// Strictness inherited from the module/script directive prologue or from
+    /// ECMAScript module syntax. Function lowering consults this before
+    /// deciding whether its `arguments` object should be mapped.
+    pub(crate) module_strict: bool,
+    /// Stack of strict-mode state for currently lowered function/arrow bodies.
+    /// Nested ordinary functions inherit strictness from strict parents, while
+    /// a body-level `"use strict"` directive pushes strictness for children.
+    pub(crate) strict_mode_stack: Vec<bool>,
     /// Issue #668: true when this module was reached via an npm-package import
     /// (file lives under a `node_modules/` segment in either the canonical or
     /// the un-canonical resolution path). External libraries are exempt from
@@ -456,4 +632,31 @@ pub struct LoweringContext {
     /// observe the failure instead of rejecting the whole user source at
     /// compile time. Outside try blocks, `require(literal)` still hard-errors.
     pub(crate) optional_require_try_depth: u32,
+    /// Pre-scanned constant environment for `new Function` / `Function(...)`
+    /// argument resolution (single-assignment module vars, `toString`-bearing
+    /// object literals, counters). Built once per module in
+    /// `lower_module_full`; consumed by `const_fold_fn`.
+    pub(crate) fn_ctor_env: super::fn_ctor_env::FnCtorEnv,
+    /// Current recursion depth of `lower_expr` (#5259). Incremented on entry,
+    /// decremented on exit. Once it exceeds either the broad
+    /// `MAX_EXPR_LOWER_DEPTH` ceiling or the lower stack-heavy chain ceiling,
+    /// lowering bails with a clean "nested too deeply" diagnostic instead of
+    /// letting pathologically-nested expressions overflow the native stack and
+    /// SIGABRT.
+    pub(crate) expr_lower_depth: u32,
+    /// Perf: a single-slot memo of an already-lowered member receiver, keyed by
+    /// its source span `(lo, hi)`. Set by the chained-native-method dispatch
+    /// helper (`try_static_method_and_instance`) just before it returns
+    /// `Err(args)` after lowering `member.obj` to inspect it; consumed once by
+    /// `lower_member_inner` when the `lower_call_inner` fall-through tail
+    /// re-lowers the same member callee. Without it, a long native-fluent
+    /// method chain (`K.name(..).description(..).option(..)…` — commander/minified
+    /// CLI builders) re-lowers the entire receiver prefix at every chain level
+    /// (the helper lowers it, finds the inner result is not a `NativeMethodCall`,
+    /// discards it, and the tail lowers it again — compounding to exponential
+    /// blowup). The memo lets the tail reuse the helper's lowering, so each
+    /// receiver subtree is lowered exactly once. Lowering a receiver is
+    /// idempotent w.r.t. the value produced (the fluent-success path already
+    /// reuses the same lowered receiver), so reusing it is semantics-preserving.
+    pub(crate) prelowered_member_receiver: Option<((u32, u32), Expr)>,
 }

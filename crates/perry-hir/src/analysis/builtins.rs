@@ -31,6 +31,10 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
     matches!(
         name,
         "globalThis"
+            // #4511: Node's `global` alias for the global object. Resolves to
+            // `globalThis.global`, a self-reference installed in
+            // `populate_global_this_builtins`.
+            | "global"
             | "Array"
             | "Object"
             | "String"
@@ -75,9 +79,12 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "TextDecoder"
             | "TextEncoderStream"
             | "TextDecoderStream"
+            | "CompressionStream"
+            | "DecompressionStream"
             | "Navigator"
             | "URL"
             | "URLSearchParams"
+            | "URLPattern"
             | "AbortController"
             | "AbortSignal"
             | "EventTarget"
@@ -116,8 +123,20 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "fetch"
             | "process"
             | "console"
+            | "Math"
+            | "JSON"
+            | "Reflect"
+            | "Atomics"
+            // Test262 installs `globalThis.print`; bare `print(...)` must
+            // resolve through the global object instead of the unknown-ident
+            // numeric fallback.
+            | "print"
             | "crypto"
             | "WebAssembly"
+            // TC39 Temporal namespace (#4686): a bare `Temporal` (and the
+            // member-access base in `Temporal.Duration`) resolves to the
+            // installed `globalThis.Temporal` namespace object.
+            | "Temporal"
             // #3579: `var myEval = eval; myEval(...)` needs the same callable
             // globalThis function value as direct `globalThis.eval` reads.
             | "eval"
@@ -133,6 +152,26 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "decodeURI"
             | "encodeURIComponent"
             | "decodeURIComponent"
+            // #4511: legacy escape/unescape (ES Annex B). Bare calls and value
+            // reads both resolve through `globalThis.<name>` → the runtime
+            // thunk (no dedicated HIR variant). Used by `qs` (→ `stripe`).
+            | "escape"
+            | "unescape"
+            // #5015: callable global helpers that have a `globalThis.<name>`
+            // thunk and are recognized as known globals + folded to typeof
+            // "function" (#3986), but were never added here — so a bare *value*
+            // read (`const m = queueMicrotask`, `{ scheduleMicrotask:
+            // queueMicrotask }`) fell through to the `GlobalGet(0)` sentinel and
+            // evaluated to the number `0`, not a function. react-reconciler's
+            // host config (`scheduleMicrotask: queueMicrotask`) hit exactly this:
+            // `updateContainerSync` → `scheduleImmediateRootScheduleTask` called
+            // the stored `0` and threw "value is not a function". Direct CALLS
+            // (`queueMicrotask(fn)`, `btoa(s)`) are picked off earlier in
+            // expr_call/globals.rs, so this only affects value reads.
+            | "queueMicrotask"
+            | "structuredClone"
+            | "atob"
+            | "btoa"
     )
 }
 
@@ -160,12 +199,28 @@ pub(crate) fn builtin_constructor_length(name: &str) -> Option<u32> {
         }
         "Symbol" | "Map" | "Set" | "WeakMap" | "WeakSet" | "MessageChannel" | "MessagePort"
         | "Navigator" | "TextEncoderStream" | "TextDecoderStream" | "DOMException" | "Storage" => 0,
+        "CompressionStream" | "DecompressionStream" => 1,
         "RegExp" | "Proxy" | "File" => 2,
         "BroadcastChannel" => 1,
         "Date" => 7,
         "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array" | "Uint32Array"
         | "Int32Array" | "Float16Array" | "Float32Array" | "Float64Array" | "BigInt64Array"
         | "BigUint64Array" | "Uint8ClampedArray" => 3,
+        _ => return None,
+    };
+    Some(len)
+}
+
+/// Spec-defined `.length` for callable global function values that lower as
+/// `globalThis.<name>` reads when used as bare values.
+pub(crate) fn builtin_global_function_length(name: &str) -> Option<u32> {
+    let len = match name {
+        "structuredClone" => 2,
+        "setTimeout" | "setInterval" | "parseInt" => 2,
+        "eval" | "fetch" | "atob" | "btoa" | "clearTimeout" | "clearInterval" | "setImmediate"
+        | "clearImmediate" | "queueMicrotask" | "parseFloat" | "isNaN" | "isFinite"
+        | "encodeURI" | "decodeURI" | "encodeURIComponent" | "decodeURIComponent" | "escape"
+        | "unescape" => 1,
         _ => return None,
     };
     Some(len)
@@ -288,6 +343,22 @@ pub(crate) fn is_builtin_static_function_member(namespace: &str, member: &str) -
                 | "set"
                 | "setPrototypeOf"
         ),
+        "Atomics" => matches!(
+            member,
+            "load"
+                | "isLockFree"
+                | "store"
+                | "add"
+                | "sub"
+                | "and"
+                | "or"
+                | "xor"
+                | "exchange"
+                | "compareExchange"
+                | "notify"
+                | "wait"
+                | "waitAsync"
+        ),
         "WebAssembly" => matches!(
             member,
             "compile" | "compileStreaming" | "instantiate" | "instantiateStreaming" | "validate"
@@ -398,6 +469,16 @@ pub(crate) fn builtin_static_function_length(namespace: &str, member: &str) -> O
             | "has"
             | "setPrototypeOf" => 2,
             "getPrototypeOf" | "isExtensible" | "ownKeys" | "preventExtensions" => 1,
+            _ => return None,
+        },
+        "Atomics" => match member {
+            "load" => 2,
+            "isLockFree" => 1,
+            "store" | "add" | "sub" | "and" | "or" | "xor" | "exchange" => 3,
+            "compareExchange" => 4,
+            "notify" => 3,
+            "wait" => 4,
+            "waitAsync" => 4,
             _ => return None,
         },
         "WebAssembly" => match member {

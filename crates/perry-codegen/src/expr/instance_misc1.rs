@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, bail, Result};
 #[allow(unused_imports)]
-use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
+use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp, WithSetFallback};
 #[allow(unused_imports)]
 use perry_types::Type as HirType;
 
@@ -20,7 +20,7 @@ use crate::lower_string_method::{
     lower_string_concat_chain, lower_string_self_append,
 };
 #[allow(unused_imports)]
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::{double_literal, i64_literal, POINTER_MASK_I64};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -32,12 +32,12 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 #[allow(unused_imports)]
 use super::{
     buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
-    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    emit_root_nanbox_store_on_block, emit_shadow_slot_bind_for_local, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_string_literal_global, emit_v8_export_call,
+    emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
+    expr_is_known_non_pointer_shadow_value, extract_array_of_object_shape, i32_bool_to_nanbox,
+    import_origin_suffix, is_global_this_builtin_function_name, is_global_this_builtin_name,
+    is_known_finite, lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, try_flat_const_2d_int,
@@ -46,8 +46,242 @@ use super::{
     I18nLowerCtx,
 };
 
+/// Reserved runtime class id for a built-in constructor usable as a class
+/// heritage (`class S extends Array {}`). Used to register the subclass →
+/// built-in parent edge so `new S() instanceof Array` walks the class chain
+/// and matches. The ids MUST stay in sync with the `instanceof <Builtin>`
+/// match in `lower_instanceof` (this file) and the per-id branches in
+/// perry-runtime/src/object/instanceof.rs. Returns `None` for names without a
+/// reserved id (those can't be subclassed with working `instanceof` yet).
+pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
+    Some(match name {
+        "Error" => 0xFFFF0001,
+        "TypeError" => 0xFFFF0010,
+        "RangeError" => 0xFFFF0011,
+        "ReferenceError" => 0xFFFF0012,
+        "SyntaxError" => 0xFFFF0013,
+        "AggregateError" => 0xFFFF0014,
+        "EvalError" => 0xFFFF0015,
+        "URIError" => 0xFFFF0016,
+        "Date" => 0xFFFF0020,
+        "RegExp" => 0xFFFF0021,
+        "Map" => 0xFFFF0022,
+        "Set" => 0xFFFF0023,
+        "Array" => 0xFFFF0024,
+        "ArrayBuffer" => 0xFFFF0025,
+        "DataView" => 0xFFFF002B,
+        "WeakMap" => 0xFFFF002C,
+        "WeakSet" => 0xFFFF002D,
+        "Promise" => 0xFFFF0027,
+        "Number" => 0xFFFF00D0,
+        "String" => 0xFFFF00D1,
+        "Boolean" => 0xFFFF00D2,
+        "BigInt" => 0xFFFF00D3,
+        "Symbol" => 0xFFFF00D4,
+        "Int8Array" => 0xFFFF0030,
+        "Uint8Array" => 0xFFFF0004,
+        "Int16Array" => 0xFFFF0032,
+        "Uint16Array" => 0xFFFF0033,
+        "Int32Array" => 0xFFFF0034,
+        "Uint32Array" => 0xFFFF0035,
+        "Float32Array" => 0xFFFF0036,
+        "Float64Array" => 0xFFFF0037,
+        "Uint8ClampedArray" => 0xFFFF0038,
+        "BigInt64Array" => 0xFFFF0039,
+        "BigUint64Array" => 0xFFFF003A,
+        "Function" => 0xFFFF00F0,
+        _ => return None,
+    })
+}
+
+fn emit_with_key(ctx: &mut FnCtx<'_>, property: &str) -> (String, String) {
+    let key_idx = ctx.strings.intern(property);
+    let key_entry = ctx.strings.entry(key_idx);
+    let key_global = format!("@{}", key_entry.handle_global);
+    let key_box = ctx.block().load(DOUBLE, &key_global);
+    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+    let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+    (key_box, key_raw)
+}
+
+fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<String> {
+    super::invalidate_local_write_facts(ctx, id);
+    if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
+        let closure_ptr = ctx
+            .current_closure_ptr
+            .clone()
+            .ok_or_else(|| anyhow!("captured with-fallback set but no current_closure_ptr"))?;
+        let idx_str = capture_idx.to_string();
+        if ctx.boxed_vars.contains(&id) {
+            let blk = ctx.block();
+            let cap_dbl = blk.call(
+                DOUBLE,
+                "js_closure_get_capture_f64",
+                &[(I64, &closure_ptr), (I32, &idx_str)],
+            );
+            let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
+            blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, value)]);
+            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            emit_write_barrier(ctx, &box_ptr, &value_bits);
+        } else {
+            ctx.block().call_void(
+                "js_closure_set_capture_f64",
+                &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, value)],
+            );
+            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            emit_write_barrier(ctx, &closure_ptr, &value_bits);
+        }
+    } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {
+        if let Some(slot) = ctx.locals.get(&id).cloned() {
+            let blk = ctx.block();
+            let box_dbl = blk.load(DOUBLE, &slot);
+            let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+            blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, value)]);
+            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            emit_write_barrier(ctx, &box_ptr, &value_bits);
+        }
+    } else if let Some(slot) = ctx.locals.get(&id).cloned() {
+        ctx.block().store(DOUBLE, value, &slot);
+        if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
+            emit_shadow_slot_bind_for_local(ctx, id);
+            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            ctx.block().call_void(
+                "js_shadow_slot_set",
+                &[(I32, &slot_idx.to_string()), (I64, &value_bits)],
+            );
+        }
+        if let Some(i32_slot) = ctx.i32_counter_slots.get(&id).cloned() {
+            let value_i64 = ctx.block().fptosi(DOUBLE, value, I64);
+            let value_i32 = ctx.block().trunc(I64, &value_i64, I32);
+            ctx.block().store(I32, &value_i32, &i32_slot);
+        }
+    } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
+        let g_ref = format!("@{}", global_name);
+        emit_root_nanbox_store_on_block(ctx.block(), value, &g_ref);
+    }
+    Ok(value.to_string())
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
+        Expr::WithGet {
+            object,
+            property,
+            fallback,
+        } => {
+            let obj = lower_expr(ctx, object)?;
+            let (_key_box, key_raw) = emit_with_key(ctx, property);
+            let has = ctx.block().call(
+                I32,
+                "js_with_has_binding",
+                &[(DOUBLE, &obj), (I64, &key_raw)],
+            );
+            let has_bool = ctx.block().icmp_ne(I32, &has, "0");
+
+            let hit_idx = ctx.new_block("with.get.hit");
+            let miss_idx = ctx.new_block("with.get.miss");
+            let merge_idx = ctx.new_block("with.get.merge");
+            let hit_label = ctx.block_label(hit_idx);
+            let miss_label = ctx.block_label(miss_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(&has_bool, &hit_label, &miss_label);
+
+            ctx.current_block = hit_idx;
+            let hit = ctx.block().call(
+                DOUBLE,
+                "js_with_get_binding",
+                &[(DOUBLE, &obj), (I64, &key_raw)],
+            );
+            let hit_after = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
+
+            ctx.current_block = miss_idx;
+            let miss = lower_expr(ctx, fallback)?;
+            let miss_after = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
+
+            ctx.current_block = merge_idx;
+            Ok(ctx
+                .block()
+                .phi(DOUBLE, &[(&hit, &hit_after), (&miss, &miss_after)]))
+        }
+        Expr::WithSet {
+            object,
+            property,
+            value,
+            fallback,
+            strict,
+        } => {
+            let obj = lower_expr(ctx, object)?;
+            let (key_box, key_raw) = emit_with_key(ctx, property);
+            // HasBinding probe AFTER the RHS evaluates — matches V8/node
+            // (`with (o) { var x = delete o.x; }` writes the hoisted var,
+            // not o.x — test262 variable/binding-resolution.js judges
+            // against node's order, not the spec's resolve-reference-first).
+            let value_reg = lower_expr(ctx, value)?;
+            let had = ctx.block().call(
+                I32,
+                "js_with_has_binding",
+                &[(DOUBLE, &obj), (I64, &key_raw)],
+            );
+            let had_bool = ctx.block().icmp_ne(I32, &had, "0");
+
+            let hit_idx = ctx.new_block("with.set.hit");
+            let miss_idx = ctx.new_block("with.set.miss");
+            let merge_idx = ctx.new_block("with.set.merge");
+            let hit_label = ctx.block_label(hit_idx);
+            let miss_label = ctx.block_label(miss_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(&had_bool, &hit_label, &miss_label);
+
+            ctx.current_block = hit_idx;
+            let strict_i32 = if *strict { "1" } else { "0" };
+            let hit = ctx.block().call(
+                DOUBLE,
+                "js_with_set_binding",
+                &[
+                    (DOUBLE, &obj),
+                    (I64, &key_raw),
+                    (DOUBLE, &value_reg),
+                    (I32, strict_i32),
+                ],
+            );
+            let hit_after = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
+
+            ctx.current_block = miss_idx;
+            let miss = match fallback {
+                WithSetFallback::Local(id) | WithSetFallback::SloppyImplicit(id) => {
+                    store_prelowered_local(ctx, *id, &value_reg)?
+                }
+                WithSetFallback::ThrowReferenceError => ctx.block().call(
+                    DOUBLE,
+                    "js_throw_reference_error_unresolvable_assignment",
+                    &[(DOUBLE, &key_box)],
+                ),
+                WithSetFallback::ThrowConstAssignment => ctx.block().call(
+                    DOUBLE,
+                    "js_throw_type_error_const_assignment",
+                    &[(DOUBLE, &key_box)],
+                ),
+                WithSetFallback::Ignore => value_reg.clone(),
+            };
+            let miss_after = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
+
+            ctx.current_block = merge_idx;
+            Ok(ctx
+                .block()
+                .phi(DOUBLE, &[(&hit, &hit_after), (&miss, &miss_after)]))
+        }
         Expr::InstanceOf {
             expr: e,
             ty,
@@ -71,11 +305,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if submod_key == "diagnostics_channel"
                     && matches!(exported_name.as_str(), "Channel" | "BoundedChannel")
                 {
+                    let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
                     let submod_label = emit_string_literal_global(ctx, submod_key);
                     let name_label = emit_string_literal_global(ctx, exported_name);
                     let submod_len = submod_key.len();
                     let name_len = exported_name.len();
                     let blk = ctx.block();
+                    if let Some(s) = install_sym {
+                        blk.call_void(s, &[]);
+                    }
                     let ty_v = blk.call(
                         DOUBLE,
                         "js_node_submodule_export_as_function",
@@ -101,6 +339,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .imported_class_sources
                 .get(ty)
                 .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")
+                .unwrap_or(false);
+            let imported_from_net = ctx
+                .imported_class_sources
+                .get(ty)
+                .map(|source| source.strip_prefix("node:").unwrap_or(source) == "net")
                 .unwrap_or(false);
             let cid = match ty.as_str() {
                 "Error" => 0xFFFF0001u32,
@@ -141,9 +384,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Set" => 0xFFFF0023u32,
                 // `Array` — runtime detects via GC_TYPE_ARRAY at obj-8.
                 "Array" => 0xFFFF0024u32,
+                "Number" => 0xFFFF00D0u32,
+                "String" => 0xFFFF00D1u32,
+                "Boolean" => 0xFFFF00D2u32,
+                "BigInt" => 0xFFFF00D3u32,
+                "Symbol" => 0xFFFF00D4u32,
                 // `ArrayBuffer` — runtime detects BufferHeader storage marked
                 // with Perry's ArrayBuffer side registry.
                 "ArrayBuffer" => 0xFFFF0025u32,
+                // WeakMap / WeakSet / DataView — no runtime probe for real
+                // instances yet (those return false independently), but the
+                // reserved ids let a `class S extends WeakMap {}` subclass
+                // instance match via the class-chain walk in
+                // perry-runtime/src/object/instanceof.rs. Refs
+                // class/subclass-builtins/subclass-{WeakMap,WeakSet,DataView}.
+                "DataView" => 0xFFFF002Bu32,
+                "WeakMap" => 0xFFFF002Cu32,
+                "WeakSet" => 0xFFFF002Du32,
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
@@ -164,6 +421,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "ReadableStream" => 0xFFFF0060u32,
                 "WritableStream" => 0xFFFF0061u32,
                 "TransformStream" => 0xFFFF0062u32,
+                // node:stream/web codec stream constructors are heap
+                // ObjectHeader instances with runtime-owned class IDs.
+                "TextEncoderStream" => 0x7FFFFF30u32,
+                "TextDecoderStream" => 0x7FFFFF31u32,
+                "CompressionStream" => 0x7FFFFF32u32,
+                "DecompressionStream" => 0x7FFFFF33u32,
                 // node:perf_hooks entry classes. Runtime classifies the
                 // shaped entry objects returned by performance.mark/measure.
                 // #3871: Performance / PerformanceObserverEntryList /
@@ -177,6 +440,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "PerformanceObserverEntryList" => 0xFFFF008Fu32,
                 "PerformanceResourceTiming" => 0xFFFF008Du32,
                 "Console" => 0xFFFF0083u32,
+                // Temporal reference types. A Temporal value is a NaN-boxed
+                // brand-tagged cell; the runtime resolves these reserved ids via
+                // a brand-kind probe in object/instanceof.rs. Keep in sync with
+                // perry-runtime/src/temporal/mod.rs (CLASS_ID_TEMPORAL_*).
+                "Temporal.Duration" => 0xFFFF0200u32,
+                "Temporal.Instant" => 0xFFFF0201u32,
+                "Temporal.PlainDate" => 0xFFFF0202u32,
+                "Temporal.PlainTime" => 0xFFFF0203u32,
+                "Temporal.PlainDateTime" => 0xFFFF0204u32,
+                "Temporal.PlainYearMonth" => 0xFFFF0205u32,
+                "Temporal.PlainMonthDay" => 0xFFFF0206u32,
+                "Temporal.ZonedDateTime" => 0xFFFF0207u32,
                 "Event" | "globalThis.Event" => 0xFFFF2403u32,
                 "CustomEvent" | "globalThis.CustomEvent" => 0xFFFF2404u32,
                 "DOMException" | "globalThis.DOMException" => 0xFFFF2405u32,
@@ -194,6 +469,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Stats" if imported_from_fs => 0xFFFF008Au32,
                 "fs.Utf8Stream" => 0xFFFF008Bu32,
                 "Utf8Stream" if imported_from_fs => 0xFFFF008Bu32,
+                // node:net `Stream` is an alias for `Socket`. Both are native
+                // small-handle values, so runtime probes the net socket map.
+                "net.Socket" | "net.Stream" => 0xFFFF00B4u32,
+                "Socket" | "Stream" if imported_from_net => 0xFFFF00B4u32,
                 "ReadStream" | "tty.ReadStream" => 0xFFFF0084u32,
                 "WriteStream" | "tty.WriteStream" => 0xFFFF0085u32,
                 "SecureContext" | "tls.SecureContext" => 0xFFFF00B5u32,
@@ -209,6 +488,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // → false, so `{} instanceof Object` would otherwise
                 // regress; thread a real id through here instead.
                 "Object" => 0xFFFF0050u32,
+                // `Function` — every callable value (function declaration,
+                // expression, arrow, method, bound function, native handle,
+                // built-in constructor) is `instanceof Function`. The runtime
+                // resolves this reserved id by testing callability rather than
+                // walking a class chain. Keep in sync with
+                // perry-runtime/src/object/instanceof.rs (CLASS_ID_FUNCTION).
+                "Function" => 0xFFFF00F0u32,
                 _ => ctx.class_ids.get(ty).copied().unwrap_or_else(|| {
                     // Keep in sync with perry-runtime/src/object/instanceof.rs.
                     let classic_stream_cid = match ty.as_str() {
@@ -260,6 +546,61 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // dynamic key. Anything else is a no-op stub returning true.
         Expr::Delete(operand) => {
             match operand.as_ref() {
+                Expr::WithGet {
+                    object,
+                    property,
+                    fallback,
+                } => {
+                    let obj = lower_expr(ctx, object)?;
+                    let (_key_box, key_raw) = emit_with_key(ctx, property);
+                    let has = ctx.block().call(
+                        I32,
+                        "js_with_has_binding",
+                        &[(DOUBLE, &obj), (I64, &key_raw)],
+                    );
+                    let has_bool = ctx.block().icmp_ne(I32, &has, "0");
+
+                    let hit_idx = ctx.new_block("with.delete.hit");
+                    let miss_idx = ctx.new_block("with.delete.miss");
+                    let merge_idx = ctx.new_block("with.delete.merge");
+                    let hit_label = ctx.block_label(hit_idx);
+                    let miss_label = ctx.block_label(miss_idx);
+                    let merge_label = ctx.block_label(merge_idx);
+                    ctx.block().cond_br(&has_bool, &hit_label, &miss_label);
+
+                    ctx.current_block = hit_idx;
+                    let deleted = ctx.block().call(
+                        I32,
+                        "js_with_delete_binding",
+                        &[(DOUBLE, &obj), (I64, &key_raw)],
+                    );
+                    let deleted_bit = ctx.block().icmp_ne(I32, &deleted, "0");
+                    let hit_tagged = ctx.block().select(
+                        crate::types::I1,
+                        &deleted_bit,
+                        I64,
+                        crate::nanbox::TAG_TRUE_I64,
+                        crate::nanbox::TAG_FALSE_I64,
+                    );
+                    let hit = ctx.block().bitcast_i64_to_double(&hit_tagged);
+                    let hit_after = ctx.block().label.clone();
+                    if !ctx.block().is_terminated() {
+                        ctx.block().br(&merge_label);
+                    }
+
+                    ctx.current_block = miss_idx;
+                    let fallback_delete = Expr::Delete(fallback.clone());
+                    let miss = lower_expr(ctx, &fallback_delete)?;
+                    let miss_after = ctx.block().label.clone();
+                    if !ctx.block().is_terminated() {
+                        ctx.block().br(&merge_label);
+                    }
+
+                    ctx.current_block = merge_idx;
+                    Ok(ctx
+                        .block()
+                        .phi(DOUBLE, &[(&hit, &hit_after), (&miss, &miss_after)]))
+                }
                 // #1344: `delete process.env.X` must unset the real OS
                 // environment, not just the cached env dict — reads lower to
                 // `EnvGet` → `js_getenv_value` → `std::env::var`, so a generic
@@ -287,9 +628,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 Expr::PropertyGet { object, property } => {
                     let obj_box = lower_expr(ctx, object)?;
+                    // `delete null.x` / `delete undefined.x` → TypeError. The
+                    // `delete` algorithm calls `ToObject(GetBase)` on a property
+                    // reference, which throws for a nullish base.
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
@@ -299,19 +646,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_field",
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 Expr::IndexGet { object, index } if is_string_expr(ctx, index) => {
                     let obj_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;
+                    // `delete null[k]` / `delete undefined[k]` → TypeError, after
+                    // the key expression is evaluated (spec
+                    // EvaluatePropertyAccessWithExpressionKey: RequireObjectCoercible
+                    // runs after ToPropertyKey's operand is evaluated).
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
                     let obj_handle = unbox_to_i64(blk, &obj_box);
                     // SSO-safe key unbox — `js_object_delete_field`
@@ -322,39 +668,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "js_object_delete_field",
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
-                // delete arr[numericIndex] — set element to undefined
+                // delete obj[expr] — route dynamic keys through the runtime so
+                // string-valued locals (for example `delete fn[name]`) still
+                // use the ordinary property-delete path instead of being
+                // misread as numeric array indexes.
                 Expr::IndexGet { object, index } => {
-                    let arr_box = lower_expr(ctx, object)?;
+                    let obj_box = lower_expr(ctx, object)?;
                     let idx_box = lower_expr(ctx, index)?;
+                    ctx.block()
+                        .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
+                    let strict = if ctx.is_strict_fn { "1" } else { "0" };
                     let blk = ctx.block();
-                    let arr_handle = unbox_to_i64(blk, &arr_box);
-                    // Convert index to i32. It may be a double (NaN-boxed
-                    // number) or a raw integer literal.
-                    let idx_i32 = blk.fptosi(DOUBLE, &idx_box, I32);
+                    let obj_handle = unbox_to_i64(blk, &obj_box);
                     let i32_v = blk.call(
                         I32,
-                        "js_array_delete",
-                        &[(I64, &arr_handle), (I32, &idx_i32)],
+                        "js_object_delete_dynamic",
+                        &[(I64, &obj_handle), (DOUBLE, &idx_box)],
                     );
-                    let bit = blk.icmp_ne(I32, &i32_v, "0");
-                    let tagged = blk.select(
-                        crate::types::I1,
-                        &bit,
-                        I64,
-                        crate::nanbox::TAG_TRUE_I64,
-                        crate::nanbox::TAG_FALSE_I64,
-                    );
-                    Ok(blk.bitcast_i64_to_double(&tagged))
+                    Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
                 _ => {
                     let _ = lower_expr(ctx, operand)?;
@@ -389,12 +722,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
+        Expr::ArrayFromArrayLikeHoley(iter) => {
+            let iter_box = lower_expr(ctx, iter)?;
+            let blk = ctx.block();
+            let result = blk.call(
+                I64,
+                "js_array_from_arraylike_holey_value",
+                &[(DOUBLE, &iter_box)],
+            );
+            Ok(nanbox_pointer_inline(blk, &result))
+        }
+
+        // `Iterator.from(x)` (#2874) — wrap any iterable/iterator in a TC39
+        // iterator-helper object so the lazy helper methods (map/filter/take/
+        // drop/flatMap/reduce/toArray/...) dispatch at runtime against
+        // `ITERATOR_HELPER_CLASS_ID`. `js_iterator_from` takes and returns a
+        // NaN-boxed f64, so pass the boxed value straight through and return
+        // the boxed result directly.
+        Expr::IteratorFrom(iter) => {
+            let iter_box = lower_expr(ctx, iter)?;
+            let blk = ctx.block();
+            Ok(blk.call(DOUBLE, "js_iterator_from", &[(DOUBLE, &iter_box)]))
+        }
+
         // Tagged-template strings literal — build cooked array, build raw
-        // array, register the (cooked, raw) pair so subsequent `.raw`
-        // reads resolve via `js_template_raw`, return the cooked array.
+        // array, then fetch/init the frozen per-call-site template object.
         // Same emit shape as the generic `Expr::Array` lowering but with
-        // the side-table registration sandwiched in.
-        Expr::TaggedTemplateStrings { cooked, raw } => {
+        // the template-object initialization sandwiched in.
+        Expr::TaggedTemplateStrings {
+            site_id,
+            cooked,
+            raw,
+        } => {
             // Materialize cooked array — go through lower_array_literal so
             // SSO + GC + length-init logic stays in one place.
             let cooked_box = lower_array_literal(ctx, cooked)?;
@@ -406,10 +765,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let cooked_handle = unbox_to_i64(blk, &cooked_box);
             let raw_handle = unbox_to_i64(blk, &raw_box);
+            let site_id = i64_literal(*site_id);
             let registered = blk.call(
                 I64,
-                "js_tagged_template_register_raw",
-                &[(I64, &cooked_handle), (I64, &raw_handle)],
+                "js_tagged_template_get_or_init",
+                &[(I64, &site_id), (I64, &cooked_handle), (I64, &raw_handle)],
             );
             Ok(nanbox_pointer_inline(blk, &registered))
         }
@@ -467,11 +827,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let iter_box = lower_expr(ctx, iter)?;
             let blk = ctx.block();
             let arr = blk.call(I64, "js_array_from_value", &[(DOUBLE, &iter_box)]);
-            let ta = blk.call(
-                I64,
-                "js_typed_array_new_from_array",
-                &[(I32, "1"), (I64, &arr)],
-            );
+            // Perry represents `Uint8Array` as a buffer-backed object
+            // (`BufferHeader`, see buffer/from.rs), NOT the generic
+            // `TypedArrayHeader` kind-1 produced by
+            // `js_typed_array_new_from_array`. `new Uint8Array([...])` already
+            // builds the buffer form; routing `Uint8Array.of/from` through the
+            // same `js_uint8array_from_array` keeps the representation
+            // consistent so element reads (`u[i]`) go through the registered
+            // buffer path instead of mis-reading a TypedArrayHeader as a plain
+            // array (issue #871: of/from produced garbage bytes).
+            let ta = blk.call(I64, "js_uint8array_from_array", &[(I64, &arr)]);
             Ok(nanbox_pointer_inline(blk, &ta))
         }
 
@@ -686,10 +1051,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
             let regex_handle = unbox_to_i64(blk, &regex_box);
-            // String pointer extraction goes through the unified
-            // helper because the receiver may be a literal, a local,
-            // or a concat result.
-            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            // Per spec `RegExp.prototype.test` does `ToString(argument)`, so a
+            // String wrapper (`re.test(new String("x"))`), a number
+            // (`re.test(123)`), or an object with a custom `toString` must be
+            // coerced — and a throwing `toString`/`valueOf` must propagate.
+            // `js_get_string_pointer_unified` only unwraps real strings, so use
+            // the coercing ToString that dispatches `toString` on objects.
+            let str_handle = blk.call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_regexp_test",
@@ -707,7 +1075,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let str_box = lower_expr(ctx, string)?;
             let blk = ctx.block();
             let regex_handle = unbox_to_i64(blk, &regex_box);
-            let str_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &str_box)]);
+            // `RegExp.prototype.exec` does `ToString(argument)` — coerce String
+            // wrappers / numbers / objects (and propagate a throwing toString)
+            // rather than only unwrapping real strings (see RegExpTest above).
+            let str_handle = blk.call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]);
             let result = blk.call(
                 I64,
                 "js_regexp_exec",
@@ -825,7 +1196,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let out_slot = blk.alloca(I64);
             blk.store(I64, "0", &out_slot);
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
+            // ToIntegerOrInfinity via the clamping helper: `fptosi` on
+            // ±Infinity/NaN is LLVM poison — `splice(Infinity, 3)` deleted
+            // from index 0 (test262 splice/S15.4.4.12_A2.1_T3).
+            let start_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &start_d)]);
             let count_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
 
             let (items_ptr, items_count_str) = if item_vals.is_empty() {
@@ -927,24 +1301,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_string_match",
                 &[(I64, &s_handle), (I64, &r_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            // #4858: js_string_match returns null (0) on no-match. NaN-boxing
+            // 0 with POINTER_TAG yields a value that is neither `null` nor a
+            // valid heap pointer — `s.match(/x/g) === null` was false and
+            // consumers that deref the result (JSON.stringify, .map) crashed.
+            // Branchless null → TAG_NULL select, same as RegExpExec above.
+            let is_null = blk.icmp_eq(I64, &result, "0");
+            let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
+            let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
+            let selected =
+                ctx.block()
+                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &ptr_bits);
+            Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
 
-        // -------- string.matchAll(regex) --------
-        // Returns Array<Array<string>>, never null. Each inner array is
-        // [fullMatch, ...captureGroups], matching the shape Node produces
-        // when iterating `for (const m of s.matchAll(re))`. SSO-safe receiver
-        // unbox via `unbox_str_handle` for the same reason as `StringMatch`.
+        // -------- string.matchAll(pattern) --------
+        // Returns a RegExp String Iterator object. SSO-safe receiver unbox via
+        // `unbox_str_handle` for the same reason as `StringMatch`; pass the raw
+        // pattern value so runtime can validate RegExp globals or create a
+        // global RegExp for string/non-RegExp patterns.
         Expr::StringMatchAll { string, regex } => {
             let s_box = lower_expr(ctx, string)?;
             let r_box = lower_expr(ctx, regex)?;
             let blk = ctx.block();
             let s_handle = unbox_str_handle(blk, &s_box);
-            let r_handle = unbox_to_i64(blk, &r_box);
             let result = blk.call(
                 I64,
-                "js_string_match_all",
-                &[(I64, &s_handle), (I64, &r_handle)],
+                "js_string_match_all_value",
+                &[(I64, &s_handle), (DOUBLE, &r_box)],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
@@ -1011,11 +1395,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_object_get_field_by_name_f64",
                 &[(I64, &obj_handle), (I64, &key_handle)],
             );
-            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-            let new = match op {
-                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                _ => blk.fadd(&old_num, "1.0"),
+            // ToNumeric + Type(old)::add/sub(old, unit): a BigInt field stays a
+            // BigInt (`var x = {y:0n}; ++x.y === 1n`), not the Number `1`. Mirrors
+            // the identifier `Expr::Update` path. #4918 prefix/postfix bigint.
+            let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+            let step_arg = match op {
+                BinaryOp::Sub => "0",
+                _ => "1",
             };
+            let new = blk.call(
+                DOUBLE,
+                "js_numeric_step",
+                &[(DOUBLE, &old_num), (I32, step_arg)],
+            );
             blk.call_void(
                 "js_object_set_field_by_name",
                 &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &new)],
@@ -1048,11 +1440,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_dyn_index_get",
                 &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
             );
-            let old_num = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &old)]);
-            let new = match op {
-                BinaryOp::Sub => blk.fsub(&old_num, "1.0"),
-                _ => blk.fadd(&old_num, "1.0"),
+            // ToNumeric + numeric step so a BigInt element stays BigInt
+            // (`var x = [0n]; ++x[0] === 1n`). Mirrors the identifier Update +
+            // PropertyUpdate paths. #4918 prefix/postfix bigint.
+            let old_num = blk.call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+            let step_arg = match op {
+                BinaryOp::Sub => "0",
+                _ => "1",
             };
+            let new = blk.call(
+                DOUBLE,
+                "js_numeric_step",
+                &[(DOUBLE, &old_num), (I32, step_arg)],
+            );
             blk.call(
                 DOUBLE,
                 "js_dyn_index_set",
@@ -1099,14 +1499,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::JsonParse(text) => {
             let s_box = lower_expr(ctx, text)?;
             let blk = ctx.block();
-            // Materialize the operand to a real heap `*StringHeader`. A bare
-            // `unbox_to_i64` passes an SSO short-string's INLINE bytes as the
-            // pointer, and `js_json_parse` then dereferences them as a
-            // StringHeader → SIGSEGV (e.g. `JSON.parse('e' + 'n')`, or any
-            // short runtime/`.slice`-derived string). `js_get_string_pointer_
-            // unified` returns the heap pointer for heap strings and
-            // materializes SSO / number receivers to the heap. Refs #214.
-            let s_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &s_box)]);
+            // ECMA-262 JSON.parse step 1: jsonText = ? ToString(text). So
+            // `JSON.parse(null)` → "null" → null, `JSON.parse(123)` → "123" →
+            // 123, and a Symbol arg throws TypeError. `js_json_text_to_string`
+            // is ToString (throwing on symbols) and returns a real heap
+            // `*StringHeader` (identity for heap strings, materializes SSO to
+            // the heap), so it also fixes the #214 SIGSEGV that a bare
+            // `unbox_to_i64` of an SSO short-string caused.
+            let s_handle = blk.call(I64, "js_json_text_to_string", &[(DOUBLE, &s_box)]);
             let result_i64 = blk.call(I64, "js_json_parse", &[(I64, &s_handle)]);
             Ok(blk.bitcast_i64_to_double(&result_i64))
         }

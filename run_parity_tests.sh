@@ -74,6 +74,32 @@ run_with_timeout() {
     fi
 }
 
+wait_for_tcp_port() {
+    local host=$1
+    local port=$2
+    local attempts=$3
+    local delay=${4:-0.1}
+    python3 - "$host" "$port" "$attempts" "$delay" <<'PY'
+import socket
+import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+attempts = int(sys.argv[3])
+delay = float(sys.argv[4])
+
+for _ in range(attempts):
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            sys.exit(0)
+    except OSError:
+        time.sleep(delay)
+
+sys.exit(1)
+PY
+}
+
 # ── TLS-upgrade companion server (issue #275) ──────────────────────────────
 # Spawned once per test_net_upgrade_tls* test; killed immediately after.
 # Uses a self-signed cert; test calls upgradeToTLS(host, verify=0) so cert
@@ -82,14 +108,19 @@ run_with_timeout() {
 TLS_UPGRADE_SERVER_PID=""
 
 start_tls_upgrade_server() {
-    python3 "$SCRIPT_DIR/test-files/test_net_upgrade_tls_server.py" --port 17892 &
+    local server_script="$SCRIPT_DIR/test-files/test_net_upgrade_tls_server.py"
+    if ! command -v python3 &>/dev/null; then
+        echo -e "${YELLOW}WARN${NC}  python3 not found — test_net_upgrade_tls will fail parity" >&2
+        return 1
+    fi
+    if [[ ! -f "$server_script" ]]; then
+        echo -e "${YELLOW}WARN${NC}  $server_script not found — test_net_upgrade_tls will fail parity" >&2
+        return 1
+    fi
+    python3 "$server_script" --port 17892 &
     TLS_UPGRADE_SERVER_PID=$!
     # Wait up to 3 s for the port to open.
-    local i
-    for i in $(seq 1 30); do
-        nc -z 127.0.0.1 17892 2>/dev/null && return 0
-        sleep 0.1
-    done
+    wait_for_tcp_port 127.0.0.1 17892 30 0.1 && return 0
     echo -e "${YELLOW}WARN${NC}  TLS-upgrade server did not come up in time (pid $TLS_UPGRADE_SERVER_PID)" >&2
     return 1
 }
@@ -253,6 +284,8 @@ for raw in sys.stdin:
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: glob is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) ExperimentalWarning: WASI is an experimental feature/d' | \
         sed -E '/^\(node:[0-9]+\) Warning: tracePromise was called with the function .* returned a non-thenable\.$/d' | \
+        sed -E '/^Debugger listening on ws:\/\/[^[:space:]]+$/d' | \
+        sed -E '/^For help, see: https:\/\/nodejs\.org\/en\/docs\/inspector$/d' | \
         sed -E 's/^\(node:[0-9]+\) (Timeout(Overflow|Negative|NaN)Warning:)/(node:<pid>) \1/' | \
         sed -E '/^Timeout duration was set to [0-9]+\.$/d' | \
         sed -E '/^\(Use `node --trace-deprecation/d' | \
@@ -317,16 +350,93 @@ echo ""
 TARGET_DIR="${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}"
 PERRY_BIN="$TARGET_DIR/release/perry"
 echo "Building compiler (release)..."
-if ! cargo build --release --quiet -p perry -p perry-runtime -p perry-stdlib 2>/dev/null; then
-    echo -e "${RED}Failed to build compiler${NC}"
+BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib)
+BUILD_FEATURES=()
+needs_wasm_host=0
+if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
+    case "$MODULE_FILTER" in
+        ""|http|http/*|https|https/*|http2|http2/*)
+            # No-auto optimized links still consume prebuilt well-known ext archives
+            # and need the matching stdlib pump hooks compiled into libperry_stdlib.a.
+            # HTTP fixtures can also emit net + ws well-known owners via the codegen
+            # FFI registry, so build those wrappers too (#4373).
+            BUILD_PACKAGES+=(-p perry-ext-http -p perry-ext-net -p perry-ext-ws)
+            BUILD_FEATURES+=(perry-stdlib/external-http-server-pump perry-stdlib/external-http-client-pump)
+            ;;
+    esac
+    case "$MODULE_FILTER" in
+        ""|zlib|zlib/*)
+            # zlib no-auto node-suite runs still route `node:zlib` through the
+            # well-known external archive, so build that archive and the stdlib
+            # bridge that drains its stream queue and dispatches stream handles.
+            BUILD_PACKAGES+=(-p perry-ext-zlib)
+            BUILD_FEATURES+=(perry-stdlib/external-zlib-pump)
+            ;;
+    esac
+fi
+needs_wasm_host=0
+if [[ "$TEST_SUITE" == "node-suite" ]]; then
+    case "$MODULE_FILTER" in
+        ""|globals|globals/*)
+            if [[ -z "$TEST_FILTER" || "$TEST_FILTER" == *webassembly* || "$TEST_FILTER" == *wasm* ]]; then
+                needs_wasm_host=1
+            fi
+            ;;
+    esac
+    case "$MODULE_FILTER:$TEST_FILTER" in
+        :|:webassembly*|:*webassembly*|globals:|globals:webassembly*|globals:*webassembly*|globals/*:|globals/*:webassembly*|globals/*:*webassembly*)
+            # WebAssembly metadata fixtures lower to wasm-host runtime calls. In
+            # no-auto mode, build the feature-enabled runtime and host archive
+            # up front so compile/link matches the auto-detected path.
+            needs_wasm_host=1
+            ;;
+    esac
+fi
+needs_ext_net=0
+if [[ "$TEST_SUITE" == "node-suite" ]]; then
+    case "$MODULE_FILTER" in
+        ""|net|net/*)
+            # node-suite/net commonly runs with PERRY_NO_AUTO_OPTIMIZE=1.
+            # That path links prebuilt well-known archives, so build ext-net
+            # once up front instead of failing on unresolved js_net_* symbols.
+            needs_ext_net=1
+            ;;
+    esac
+fi
+BUILD_FEATURE_ARGS=()
+if [[ "${#BUILD_FEATURES[@]}" -gt 0 ]]; then
+    feature_csv=$(IFS=,; echo "${BUILD_FEATURES[*]}")
+    BUILD_FEATURE_ARGS=(--features "$feature_csv")
+fi
+if ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" 2>/dev/null; then
+    echo -e "${RED}Failed to build compiler/runtime archives${NC}"
     exit 1
+fi
+if [[ "$needs_wasm_host" -eq 1 ]]; then
+    # WebAssembly metadata fixtures exercise the real host shims. Build the
+    # wasm-enabled runtime staticlib after the CLI build above; enabling this
+    # feature while building the `perry` binary would make the CLI link against
+    # unresolved perry_wasm_host_* symbols.
+    echo "Building WebAssembly host runtime (release)..."
+    if ! cargo build --release --quiet -p perry-runtime -p perry-wasm-host --features perry-runtime/wasm-host 2>/dev/null; then
+        echo -e "${RED}Failed to build WebAssembly host runtime archives${NC}"
+        exit 1
+    fi
+fi
+if [[ "$needs_ext_net" -eq 1 ]]; then
+    echo "Building net extension (release)..."
+    ext_net_jobs="${CARGO_BUILD_JOBS:-1}"
+    if ! cargo build --release --quiet -p perry-ext-net -j "$ext_net_jobs" 2>/dev/null; then
+        echo -e "${RED}Failed to build net extension library${NC}"
+        exit 1
+    fi
 fi
 if [[ ! -x "$PERRY_BIN" ]]; then
     echo -e "${RED}Expected $PERRY_BIN after release build${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}Compiler and runtime built successfully${NC}"
+echo -e "${GREEN}Compiler and runtime archives built successfully${NC}"
 echo ""
 echo "Running parity tests (backend: $BACKEND_LABEL, suite: $TEST_SUITE${MODULE_FILTER:+, module: $MODULE_FILTER})..."
 echo ""
@@ -353,13 +463,9 @@ start_echo_server() {
     ECHO_SERVER_PID=$!
     # Poll up to 5 s (50 × 100 ms) for the server to accept connections.
     local ready=0
-    for _i in $(seq 1 50); do
-        if nc -z 127.0.0.1 17891 2>/dev/null; then
-            ready=1
-            break
-        fi
-        sleep 0.1
-    done
+    if wait_for_tcp_port 127.0.0.1 17891 50 0.1; then
+        ready=1
+    fi
     if [[ $ready -eq 1 ]]; then
         echo "Echo server started on 127.0.0.1:17891 (PID $ECHO_SERVER_PID)"
     else
@@ -389,8 +495,14 @@ echo ""
 REPORT_FILE="$REPORT_DIR/parity_report_$(date +%Y%m%d_%H%M%S).json"
 LATEST_REPORT="$REPORT_DIR/latest.json"
 
-# Start JSON array for test results
-TEST_RESULTS="[]"
+# Compact per-test records consumed by scripts/parity_matrix_trend.py.
+declare -a TEST_RESULTS=()
+
+record_result() {
+    local test_id=$1
+    local status=$2
+    TEST_RESULTS+=("{\"id\":\"$test_id\",\"status\":\"$status\"}")
+}
 
 declare -a TEST_FILES=()
 case "$TEST_SUITE" in
@@ -451,6 +563,7 @@ for test_file in "${TEST_FILES[@]}"; do
     perry_binary="/tmp/perry_parity_$safe_test_id"
     parity_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     parity_node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
+    parity_env_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-env:[[:space:]]*(.*)$|\1|p' "$test_file" | head -1)
     test_argv=()
     if [[ -n "$parity_argv_line" ]]; then
         read -r -a test_argv <<< "$parity_argv_line"
@@ -459,11 +572,16 @@ for test_file in "${TEST_FILES[@]}"; do
     if [[ -n "$parity_node_argv_line" ]]; then
         read -r -a node_argv <<< "$parity_node_argv_line"
     fi
+    parity_env=()
+    if [[ -n "$parity_env_line" ]]; then
+        read -r -a parity_env <<< "$parity_env_line"
+    fi
 
     # Check if test should be skipped
     if should_skip "$test_name"; then
         echo -e "${YELLOW}SKIP${NC}  $test_id (async/timer test)"
         ((SKIPPED++))
+        record_result "$test_id" "skipped"
         continue
     fi
 
@@ -497,6 +615,7 @@ for test_file in "${TEST_FILES[@]}"; do
         if ! has_expected_output "$test_name"; then
             echo -e "${YELLOW}SKIP${NC}  $test_id (Node.js error: exit $node_exit)"
             ((NODE_FAIL++))
+            record_result "$test_id" "node_fail"
             [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
             continue
         fi
@@ -513,6 +632,13 @@ for test_file in "${TEST_FILES[@]}"; do
     if [[ "$test_name" == test_parity_* || "$test_id" == node-suite/* ]]; then
         compile_env="PERRY_ALLOW_UNIMPLEMENTED=1"
     fi
+    compile_flags=()
+    if [[ -n "$BACKEND_FLAG" ]]; then
+        compile_flags+=("$BACKEND_FLAG")
+    fi
+    if [[ "$needs_wasm_host" -eq 1 && ( "$test_id" == node-suite/*/*webassembly* || "$test_id" == node-suite/*/*wasm* ) ]]; then
+        compile_flags+=(--enable-wasm-runtime)
+    fi
     # #499: some parity tests transitively pull in `.js` fixtures
     # (jsruntime/* tests by design, plus a long-tail of others: V8
     # fallback fixtures, js_interop callbacks, nest_js_common decorators,
@@ -522,10 +648,10 @@ for test_file in "${TEST_FILES[@]}"; do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG "$test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${compile_flags[@]}" "$test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(env $compile_env "$PERRY_BIN" $BACKEND_FLAG --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${compile_flags[@]}" --enable-js-runtime "$test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 
@@ -533,6 +659,7 @@ for test_file in "${TEST_FILES[@]}"; do
         echo -e "${RED}FAIL${NC}  $test_id (compile error)"
         ((COMPILE_FAIL++))
         COMPILE_FAILURES+=("$test_id")
+        record_result "$test_id" "compile_fail"
         echo "" > "$perry_output_file"
         # Persist the actual compile stderr so CI artifacts can be inspected
         # to diagnose long-tail compile failures (e.g. the macOS-14 SDK gap
@@ -546,8 +673,13 @@ for test_file in "${TEST_FILES[@]}"; do
     fi
 
     # Run Perry binary — same cap-via-tempfile protocol as Node above (#796).
+    # Silence the stub-elimination first-call diagnostics (#4919): parity
+    # measures *behavioral* byte-parity against Node, and Node never emits
+    # Perry's `[perry] warning: ... is a stub` lines. They'd otherwise show
+    # up on the 2>&1-captured stream for any test that exercises a flagged
+    # API (dns/dgram loopback, v8 heap snapshot, …) and diff against Node.
     perry_tmp=$(mktemp)
-    run_with_timeout 10 "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
+    run_with_timeout 10 env PERRY_STUB_DIAG=off "${parity_env[@]}" "$perry_binary" "${test_argv[@]}" > "$perry_tmp" 2>&1
     perry_exit=$?
     perry_output=$(cap_output < "$perry_tmp")
     rm -f "$perry_tmp"
@@ -571,7 +703,7 @@ for test_file in "${TEST_FILES[@]}"; do
             echo -e "${RED}FAIL${NC}  $test_id (expected-output mismatch)"
             ((PARITY_FAIL++))
             PARITY_FAILURES+=("$test_id")
-            status="fail"
+            status="parity_fail"
             echo "       Expected exit: $expected_exit"
             echo "       Perry exit:    $perry_exit"
             echo "       Expected: $(cat "$EXPECTED_DIR/${test_name}.txt" | head -1)"
@@ -591,13 +723,15 @@ for test_file in "${TEST_FILES[@]}"; do
             echo -e "${RED}FAIL${NC}  $test_id (output mismatch)"
             ((PARITY_FAIL++))
             PARITY_FAILURES+=("$test_id")
-            status="fail"
+            status="parity_fail"
 
             # Show diff for failures (first few lines)
             echo "       Node.js:    $(echo "$node_output" | head -1)"
             echo "       Perry:  $(echo "$perry_output" | head -1)"
         fi
     fi
+
+    record_result "$test_id" "$status"
 
     # Stop any per-test companion server that was started for this test.
     [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
@@ -644,6 +778,8 @@ if [[ ${#COMPILE_FAILURES[@]} -gt 0 ]]; then
     echo ""
 fi
 
+RESULTS_JSON=$(printf '%s\n' "${TEST_RESULTS[@]}" | paste -sd, -)
+
 # Generate JSON report
 cat > "$REPORT_FILE" << EOF
 {
@@ -662,7 +798,8 @@ cat > "$REPORT_FILE" << EOF
 ,
     "compile": [$(printf '"%s",' "${COMPILE_FAILURES[@]}" | sed 's/,$//')]
 
-  }
+  },
+  "results": [${RESULTS_JSON}]
 }
 EOF
 

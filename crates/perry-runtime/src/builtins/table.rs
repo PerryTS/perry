@@ -465,7 +465,9 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                 let mut rows: Vec<Vec<String>> = Vec::with_capacity(length);
                 for i in 0..length {
                     let elem = *data_ptr.add(i);
-                    if JSValue::from_bits(elem.to_bits()).is_undefined() {
+                    if elem.to_bits() == crate::value::TAG_HOLE
+                        || JSValue::from_bits(elem.to_bits()).is_undefined()
+                    {
                         continue;
                     }
                     rows.push(vec![i.to_string(), format_table_cell(elem)]);

@@ -19,6 +19,7 @@ pub fn lower_constructor(
     ctor: &ast::Constructor,
 ) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Track that we're inside a constructor body so `new.target` can resolve
     // to a placeholder object with `.name = class_name`. Saved/restored in
@@ -51,6 +52,7 @@ pub fn lower_constructor(
                     default: param_default,
                     decorators: lower_decorators(ctx, &p.decorators),
                     is_rest,
+                    arguments_object: None,
                 });
                 let inner_pat = if let ast::Pat::Assign(assign) = &p.pat {
                     assign.left.as_ref()
@@ -107,6 +109,7 @@ pub fn lower_constructor(
                     default: param_default,
                     decorators: lower_decorators(ctx, &ts_prop.decorators),
                     is_rest: false, // TsParamProp cannot be a rest parameter
+                    arguments_object: None,
                 });
             }
         }
@@ -116,16 +119,14 @@ pub fn lower_constructor(
     // param already binds it (TsParamProp can't be a rest, so the only
     // conflicts come from explicit `arguments` params or other rest params).
     let user_has_arguments_param = params.iter().any(|p| p.name == "arguments");
-    let user_has_rest = params.iter().any(|p| p.is_rest);
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
         && ctor
             .body
             .as_ref()
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
     // Issue #572: generate destructuring extractions BEFORE lowering the
@@ -173,7 +174,7 @@ pub fn lower_constructor(
         // touch only params (not `this`), so they stay at the very top.
         if let Some(super_pos) = body
             .iter()
-            .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_))))
+            .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))))
         {
             let tail = body.split_off(super_pos + 1);
             body.extend(assignments);
@@ -207,6 +208,7 @@ pub fn lower_constructor(
         body = new_body;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
     ctx.in_constructor_class = saved_ctor_class;
 
@@ -409,6 +411,9 @@ pub fn lower_class_method(
     let name = match &method.key {
         ast::PropName::Ident(ident) => ident.sym.to_string(),
         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+        // Numeric-literal method name (`42() {}`): the registration key (and
+        // func name) is the canonical ToString of the value.
+        ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
         ast::PropName::Computed(computed) if is_symbol_iterator_key(&computed.expr) => {
             "@@iterator".to_string()
         }
@@ -440,7 +445,14 @@ pub fn lower_class_method(
         }
         _ => return Err(anyhow!("Unsupported method key")),
     };
+    lower_class_method_with_name(ctx, method, name)
+}
 
+pub fn lower_class_method_with_name(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    name: String,
+) -> Result<Function> {
     // Lower decorators from the method's function
     let decorators = lower_decorators(ctx, &method.function.decorators);
 
@@ -457,6 +469,7 @@ pub fn lower_class_method(
     ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Add 'this' for instance methods
     if !method.is_static {
@@ -469,6 +482,7 @@ pub fn lower_class_method(
     // rather than reading from a synthetic `__obj_destruct_*` local that the
     // method body can't reach by name.
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     for param in &method.function.params {
         let param_name = get_pat_name(&param.pat)?;
         // TypeScript's `this: T` is a TYPE-only marker (SWC emits it as a
@@ -482,17 +496,18 @@ pub fn lower_class_method(
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
-        let param_default = get_param_default(ctx, &param.pat)?;
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: param_default,
+            default: None,
             decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
+            arguments_object: None,
         });
+        default_param_pats.push(param.pat.clone());
         // Mirror the lower_fn_decl shape: an `Assign` pattern can wrap a
         // destructure (e.g. `({ a } = {}) => ...`). Unwrap before testing.
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
@@ -504,24 +519,29 @@ pub fn lower_class_method(
             destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
-
-    // #677: synthesize `arguments` if the method body references it.
+    // #677: synthesize `arguments` if the method body — or any parameter
+    // DEFAULT expression (`method(x = arguments[2]) {}`) — references it.
+    // Appended BEFORE the defaults are lowered below so `arguments` inside a
+    // default resolves to the synthetic local instead of an unknown global.
     let user_has_arguments_param = method
         .function
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = method.function.params.iter().any(|p| is_rest_param(&p.pat));
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
-        && method
+        && (method
             .function
             .body
             .as_ref()
             .map(|b| body_uses_arguments(&b.stmts))
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || params_use_arguments(&method.function.params));
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
+    }
+
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // Extract return type (with context). Phase 4: when the method has no
@@ -567,6 +587,10 @@ pub fn lower_class_method(
         Vec::new()
     };
 
+    // Capture the destructuring-prologue length before it is drained into the
+    // body, so generator methods can replay param binding synchronously at call
+    // time (see the `gen_param_prologue_len` recording below).
+    let destructuring_prologue_len = destructuring_stmts.len();
     if !destructuring_stmts.is_empty() {
         destructuring_stmts.append(&mut body);
         body = destructuring_stmts;
@@ -582,6 +606,7 @@ pub fn lower_class_method(
     // `undefined` post-padding because the method body just did `return a + b`
     // with no default check.
     let default_stmts = build_default_param_stmts(&params);
+    let default_prologue_len = default_stmts.len();
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.extend(body);
@@ -612,13 +637,28 @@ pub fn lower_class_method(
         }
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Exit method's type param scope
     ctx.exit_type_param_scope();
 
+    let func_id = ctx.fresh_func();
+    // Record the param-prologue length for generator methods so the generator
+    // transform runs param binding (default guards + destructuring) synchronously
+    // at call time per spec FunctionDeclarationInstantiation order. Without this,
+    // a `*method`/`async *method` with a destructuring/default param leaves the
+    // binding inside the lazy state-machine body, so a throwing default
+    // initializer never fires at call time (test262 class/dstr async-gen-meth-*).
+    if method.function.is_generator {
+        let prologue_len = default_prologue_len + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
+
     Ok(Function {
-        id: ctx.fresh_func(),
+        id: func_id,
         name,
         type_params,
         params,
@@ -643,6 +683,10 @@ pub fn lower_getter_method(
     let name = match &method.key {
         ast::PropName::Ident(ident) => format!("get_{}", ident.sym),
         ast::PropName::Str(s) => format!("get_{}", s.value.as_str().unwrap_or("")),
+        // Numeric-literal getter (`get 0()`): synthetic internal symbol; the
+        // accessor is registered under the canonical numeric prop key by the
+        // caller (lower_class_decl), not this name.
+        ast::PropName::Num(n) => format!("get_{}", n.value),
         ast::PropName::Computed(computed) => {
             // Well-known symbol getters (e.g., `get [Symbol.toStringTag]()`)
             // get a synthetic `get_@@<short>` name. The caller is
@@ -655,8 +699,16 @@ pub fn lower_getter_method(
         }
         _ => return Err(anyhow!("Unsupported getter key")),
     };
+    lower_getter_method_with_name(ctx, method, name)
+}
 
+pub fn lower_getter_method_with_name(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    name: String,
+) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Add 'this' for instance getters
     ctx.define_local("this".to_string(), Type::Any);
@@ -691,6 +743,7 @@ pub fn lower_getter_method(
         }
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     Ok(Function {
@@ -719,10 +772,21 @@ pub fn lower_setter_method(
     let name = match &method.key {
         ast::PropName::Ident(ident) => format!("set_{}", ident.sym),
         ast::PropName::Str(s) => format!("set_{}", s.value.as_str().unwrap_or("")),
+        // Numeric-literal setter (`set 0(v)`): synthetic internal symbol;
+        // registered under the canonical numeric prop key by the caller.
+        ast::PropName::Num(n) => format!("set_{}", n.value),
         _ => return Err(anyhow!("Unsupported setter key")),
     };
+    lower_setter_method_with_name(ctx, method, name)
+}
 
+pub fn lower_setter_method_with_name(
+    ctx: &mut LoweringContext,
+    method: &ast::ClassMethod,
+    name: String,
+) -> Result<Function> {
     let scope_mark = ctx.enter_scope();
+    ctx.enter_strict_mode(true);
 
     // Add 'this' for instance setters
     ctx.define_local("this".to_string(), Type::Any);
@@ -747,6 +811,7 @@ pub fn lower_setter_method(
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         });
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
             assign.left.as_ref()
@@ -777,6 +842,7 @@ pub fn lower_setter_method(
         body = destructuring_stmts;
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     Ok(Function {
@@ -797,55 +863,6 @@ pub fn lower_setter_method(
     })
 }
 
-/// Lower a generic computed-key method (`[expr](args) { body }`, where `expr`
-/// is *not* a well-known symbol or a key we special-case) into a per-instance
-/// closure field keyed by the runtime-evaluated key expression.
-///
-/// We can't reduce `expr` to a static vtable name at compile time — it may be a
-/// cross-module const (`[OpCodes.OP_ON_SUCCESS]` resolves to `"OnSuccess"` only
-/// at runtime). Instead we desugar to `this[expr] = function (args) { body }`:
-/// the field's `key_expr` is evaluated at construction and the method body is
-/// lowered as a plain function-expression closure so `this` binds dynamically
-/// to the receiver when called via `recv[k](...)`. This is exactly what
-/// effect's `FiberRuntime` op-dispatch (`this[(cur)._op](cur)`) needs. Refs
-/// #321 — the fiber-runtime op-handler dispatch was an infinite loop because
-/// these methods were silently dropped (`c["myOp"]` read `undefined`).
-pub fn lower_computed_key_method_as_field(
-    ctx: &mut LoweringContext,
-    method: &ast::ClassMethod,
-    computed: &ast::ComputedPropName,
-) -> Result<ClassField> {
-    // Key expression evaluated at construction time (e.g. `OpCodes.OP_SYNC`).
-    let key = lower_expr(ctx, &computed.expr)?;
-
-    // Lower the method's function as a function-expression closure: this
-    // reuses the full fn-expr path (params, default params, destructuring,
-    // synthetic `arguments`, capture analysis) and crucially leaves `this`
-    // dynamically bound (`captures_this: false`) so a `recv[k]()` call binds
-    // `this` to `recv` — matching how the method would behave on the vtable.
-    let fn_expr = ast::FnExpr {
-        ident: None,
-        function: method.function.clone(),
-    };
-    let closure = crate::lower::lower_fn_expr(ctx, &fn_expr)?;
-
-    // Synthetic name for HIR identity; the real key is `key_expr`.
-    let synth = format!(
-        "__computed_method_{}_{}",
-        computed.span.lo.0, computed.span.hi.0
-    );
-
-    Ok(ClassField {
-        name: synth,
-        key_expr: Some(key),
-        ty: Type::Any,
-        init: Some(closure),
-        is_private: false,
-        is_readonly: false,
-        decorators: Vec::new(),
-    })
-}
-
 pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Result<ClassField> {
     // Computed property keys (`[Symbol.for("k")]`, `[Parent.Symbol.X]`, etc.)
     // can't be reduced to a string at compile time — the key expression is
@@ -855,6 +872,10 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     let (name, key_expr) = match &prop.key {
         ast::PropName::Ident(ident) => (ident.sym.to_string(), None),
         ast::PropName::Str(s) => (s.value.as_str().unwrap_or("").to_string(), None),
+        // Numeric field keys (`0 = 'bar'`, `1e-7;`) use the canonical JS number
+        // -to-string conversion so reads via `c[0]` / `c['1e-7']` agree.
+        ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), None),
+        ast::PropName::BigInt(b) => (b.value.to_string(), None),
         ast::PropName::Computed(c) => {
             let key = lower_expr(ctx, &c.expr)?;
             // Synthetic name — uniqueness within a class is enforced by the
@@ -865,7 +886,6 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             let synth = format!("__computed_field_{}_{}", c.span.lo.0, c.span.hi.0);
             (synth, Some(key))
         }
-        _ => return Err(anyhow!("Unsupported property key")),
     };
 
     // Extract type from type annotation (using context for class type param resolution).
@@ -882,12 +902,31 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             .unwrap_or(Type::Any),
     };
 
-    // Lower initializer expression if present
+    // Lower initializer expression if present. Mark the field-initializer
+    // context so a direct `eval` in the initializer rejects `arguments`
+    // (PerformEval early error — field initializers have no arguments object).
+    // NamedEvaluation: an anonymous function/arrow/class initializer takes
+    // the field's name (`static fromArgs = function(){}` → `.name ===
+    // "fromArgs"`, test262 elements/static-field-anonymous-function-name).
+    // Computed keys (key_expr) have no compile-time name to confer.
+    let saved_field_init = ctx.in_class_field_init;
+    ctx.in_class_field_init = true;
     let init = prop
         .value
         .as_ref()
-        .map(|e| lower_expr(ctx, e))
-        .transpose()?;
+        .map(|e| {
+            if key_expr.is_none() && crate::lower::expr_assign::rhs_accepts_assignment_name(e) {
+                let old = ctx.assignment_inferred_name.replace(name.clone());
+                let result = lower_expr(ctx, e);
+                ctx.assignment_inferred_name = old;
+                result
+            } else {
+                lower_expr(ctx, e)
+            }
+        })
+        .transpose();
+    ctx.in_class_field_init = saved_field_init;
+    let init = init?;
 
     Ok(ClassField {
         name,

@@ -59,6 +59,30 @@ thread_local! {
 
 static NEXT_FD: AtomicI32 = AtomicI32::new(100);
 
+pub(crate) fn scan_fs_handle_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    scan_filehandle_object_fd_metadata_roots_mut(visitor);
+    scan_filehandle_roots_mut(visitor);
+    scan_fs_dir_roots_mut(visitor);
+}
+
+fn scan_filehandle_object_fd_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    FILEHANDLE_OBJECT_FDS.with(|fds| {
+        let mut fds = fds.borrow_mut();
+        let mut moved = Vec::new();
+        for (&owner, _) in fds.iter() {
+            let mut new_owner = owner;
+            if visitor.visit_metadata_usize_slot(&mut new_owner) {
+                moved.push((owner, new_owner));
+            }
+        }
+        for (old_owner, new_owner) in moved {
+            if let Some(fd) = fds.remove(&old_owner) {
+                fds.insert(new_owner, fd);
+            }
+        }
+    });
+}
+
 pub(crate) fn allocate_synthetic_fd() -> i32 {
     NEXT_FD.fetch_add(1, Ordering::Relaxed)
 }
@@ -72,6 +96,10 @@ pub(crate) fn allocate_synthetic_fd() -> i32 {
 /// numeric fd (#2013).
 pub(crate) fn fd_is_registered(fd: i32) -> bool {
     FD_REGISTRY.with(|r| r.borrow().contains_key(&fd))
+}
+
+pub(crate) fn try_clone_registered_fd(fd: i32) -> Option<fs::File> {
+    FD_REGISTRY.with(|r| r.borrow().get(&fd).and_then(|file| file.try_clone().ok()))
 }
 
 pub(crate) fn filehandle_object_fd(value: f64) -> Option<i32> {
@@ -90,6 +118,7 @@ struct DirState {
     entries: Vec<f64>,
     index: usize,
     closed: bool,
+    operation_pending: bool,
 }
 
 fn object_class_id(value: f64) -> Option<u32> {
@@ -99,7 +128,7 @@ fn object_class_id(value: f64) -> Option<u32> {
         return None;
     }
     let obj = js_value.as_pointer::<crate::object::ObjectHeader>();
-    if obj.is_null() || (obj as usize) < 0x100000 {
+    if crate::value::addr_class::is_handle_band(obj as usize) {
         return None;
     }
     unsafe {
@@ -211,7 +240,7 @@ pub extern "C" fn js_fs_read_file_sync_options(
             extern "C" {
                 fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
             }
-            let c_path = std::ffi::CString::new(path_str_for_log).unwrap_or_default();
+            let c_path = std::ffi::CString::new(_path_str_for_log).unwrap_or_default();
             __android_log_print(
                 3,
                 b"PerryFS\0".as_ptr(),
@@ -566,6 +595,7 @@ pub extern "C" fn js_fs_mkdir_sync(path_value: f64) -> i32 {
 
 pub(crate) unsafe fn js_fs_mkdir_result(path_value: f64, options_value: f64) -> Result<(), f64> {
     validate::validate_path("path", path_value);
+    validate::validate_mkdir_options(options_value);
     let path_str = match decode_path_value(path_value) {
         Some(s) => s,
         None => validate::throw_invalid_path_arg("path", path_value),
@@ -1162,7 +1192,7 @@ pub(crate) unsafe fn js_fs_copy_file_result(
     crate::fs::validate::validate_path("dest", to_value);
     let flags_jv = crate::value::JSValue::from_bits(flags_value.to_bits());
     if !flags_jv.is_undefined() {
-        crate::fs::validate::validate_int32(flags_value, "mode", 0, 7);
+        crate::fs::validate::validate_fs_mode(flags_value);
     }
     let from = match decode_path_value(from_value) {
         Some(s) => s,

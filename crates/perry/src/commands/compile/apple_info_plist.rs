@@ -254,6 +254,113 @@ pub(super) fn inject_ios_app_group_entitlement(
     Some(())
 }
 
+/// #5074 — write (or augment) `app.entitlements` with the `aps-environment`
+/// entitlement when `[ios] push_notifications = true` is set in perry.toml.
+/// Without this entitlement `[UIApplication registerForRemoteNotifications]`
+/// (`notificationRegisterRemote` in `perry/system`) always fails and no APNs
+/// token is ever produced.
+///
+/// The value defaults to `development` (matching the dev-signed bundles
+/// `perry compile --target ios` produces); an explicit
+/// `[ios] push_environment = "production"` overrides it for distribution
+/// builds. Any value other than `production` (including a typo) resolves to
+/// `development`, the safe default for on-device debugging.
+///
+/// Idempotent with `inject_ios_deeplinks` / `inject_ios_app_group_entitlement`:
+/// if an entitlements file already exists we splice our `<key>...</key>` before
+/// the closing `</dict>` (and leave any hand-written `aps-environment` alone);
+/// otherwise we emit the full plist wrapper. Either way the user's signing
+/// pipeline picks up a single `app.entitlements` at codesign time, and the
+/// dev-resign path (`build_dev_entitlements_xml`) layers its development keys
+/// on top without dropping this one.
+pub(super) fn inject_ios_push_entitlement(
+    input: &std::path::Path,
+    app_dir: &std::path::Path,
+    format: OutputFormat,
+) -> Option<()> {
+    let (enabled, environment) = read_ios_push_config(input)?;
+    if !enabled {
+        return None;
+    }
+
+    let entitlements_path = app_dir.join("app.entitlements");
+    let key_block = format!(
+        "    <key>aps-environment</key>\n    <string>{}</string>\n",
+        environment
+    );
+
+    let new_contents = match fs::read_to_string(&entitlements_path) {
+        Ok(existing) => {
+            // Already declared (hand-written or a previous run)? leave it alone.
+            if existing.contains("aps-environment") {
+                return Some(());
+            }
+            existing.replace(
+                "</dict>\n</plist>",
+                &format!("{}</dict>\n</plist>", key_block),
+            )
+        }
+        Err(_) => format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n{}</dict>\n</plist>\n",
+            key_block
+        ),
+    };
+
+    fs::write(&entitlements_path, new_contents).ok()?;
+
+    if let OutputFormat::Text = format {
+        println!(
+            "  Push notifications: aps-environment={} → {} (#5074)",
+            environment,
+            entitlements_path.display()
+        );
+        println!(
+            "  Sign with: codesign --entitlements {} ...",
+            entitlements_path.display()
+        );
+    }
+    Some(())
+}
+
+/// Resolve `[ios] push_notifications` (bool) and `[ios] push_environment`
+/// (string) from the nearest `perry.toml` walking up from `input`. Returns
+/// `(enabled, environment)` where `environment` is normalized to
+/// `"development"` unless explicitly set to `"production"`. `None` on any
+/// missing-file / parse failure (caller skips injection — matches the
+/// config-helper convention in this file).
+fn read_ios_push_config(input: &std::path::Path) -> Option<(bool, String)> {
+    let mut dir = input.canonicalize().ok()?;
+    let mut data: Option<String> = None;
+    for _ in 0..5 {
+        dir = dir.parent()?.to_path_buf();
+        let toml_path = dir.join("perry.toml");
+        if toml_path.exists() {
+            data = fs::read_to_string(&toml_path).ok();
+            break;
+        }
+    }
+    let doc: toml::Table = data?.parse().ok()?;
+    Some(parse_ios_push_config(&doc))
+}
+
+/// Pure resolver shared by `read_ios_push_config` and the unit tests.
+/// `[ios] push_notifications` opts in; `[ios] push_environment` selects the
+/// APNs environment (`production`, else `development`).
+fn parse_ios_push_config(doc: &toml::Table) -> (bool, String) {
+    let ios = doc.get("ios").and_then(|v| v.as_table());
+    let enabled = ios
+        .and_then(|t| t.get("push_notifications"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let environment = ios
+        .and_then(|t| t.get("push_environment"))
+        .and_then(|v| v.as_str())
+        .filter(|s| *s == "production")
+        .unwrap_or("development")
+        .to_string();
+    (enabled, environment)
+}
+
 /// Cheap CFBundleIdentifier extraction from an in-memory Info.plist string.
 /// We need it for the CFBundleURLName field (Apple's convention is
 /// `<bundle-id>.<scheme>`). Falls back to `perry.deeplink` when the
@@ -265,4 +372,142 @@ fn lookup_bundle_id_from_info_plist(info_plist: &str) -> Option<String> {
     let start = rest.find("<string>")? + "<string>".len();
     let end = rest[start..].find("</string>")?;
     Some(rest[start..start + end].trim().to_string())
+}
+
+#[cfg(test)]
+mod push_entitlement_tests {
+    use super::{inject_ios_push_entitlement, parse_ios_push_config};
+    use crate::OutputFormat;
+
+    fn parse(src: &str) -> toml::Table {
+        src.parse::<toml::Table>().unwrap()
+    }
+
+    #[test]
+    fn push_config_defaults_to_development_when_opted_in() {
+        // #5074 — `push_notifications = true` opts in; environment defaults to
+        // `development` (the dev-signed bundles `perry compile --target ios`
+        // produces).
+        let (enabled, env) = parse_ios_push_config(&parse("[ios]\npush_notifications = true\n"));
+        assert!(enabled);
+        assert_eq!(env, "development");
+    }
+
+    #[test]
+    fn push_config_honors_production_environment() {
+        let (enabled, env) = parse_ios_push_config(&parse(
+            "[ios]\npush_notifications = true\npush_environment = \"production\"\n",
+        ));
+        assert!(enabled);
+        assert_eq!(env, "production");
+    }
+
+    #[test]
+    fn push_config_clamps_unknown_environment_to_development() {
+        let (enabled, env) = parse_ios_push_config(&parse(
+            "[ios]\npush_notifications = true\npush_environment = \"sandbox\"\n",
+        ));
+        assert!(enabled);
+        assert_eq!(env, "development");
+    }
+
+    #[test]
+    fn push_config_off_when_absent_or_false() {
+        assert!(!parse_ios_push_config(&parse("[ios]\nbundle_id = \"a\"\n")).0);
+        assert!(!parse_ios_push_config(&parse("[ios]\npush_notifications = false\n")).0);
+        assert!(!parse_ios_push_config(&parse("")).0);
+    }
+
+    #[test]
+    fn injects_full_plist_when_no_entitlements_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("src").join("main.ts");
+        std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+        std::fs::write(&input, "console.log('x')").unwrap();
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            "[ios]\npush_notifications = true\n",
+        )
+        .unwrap();
+        let app_dir = dir.path().join("out.app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+
+        assert!(inject_ios_push_entitlement(&input, &app_dir, OutputFormat::Json).is_some());
+
+        let ent = std::fs::read_to_string(app_dir.join("app.entitlements")).unwrap();
+        assert!(ent.starts_with("<?xml"));
+        assert!(ent.contains("<key>aps-environment</key>"));
+        assert!(ent.contains("<string>development</string>"));
+        assert_eq!(ent.matches("</dict>").count(), 1);
+        assert_eq!(ent.matches("</plist>").count(), 1);
+    }
+
+    #[test]
+    fn splices_into_existing_app_group_entitlements_without_clobbering() {
+        // Idempotent with #1178: an existing app.entitlements (e.g. App Group)
+        // gets the aps-environment key spliced in, both keys survive, and the
+        // wrapper stays single.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            "[ios]\npush_notifications = true\npush_environment = \"production\"\n",
+        )
+        .unwrap();
+        let app_dir = dir.path().join("out.app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(
+            app_dir.join("app.entitlements"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n    \
+             <key>com.apple.security.application-groups</key>\n    <array>\n        \
+             <string>group.com.example.shared</string>\n    </array>\n</dict>\n</plist>\n",
+        )
+        .unwrap();
+
+        assert!(inject_ios_push_entitlement(&input, &app_dir, OutputFormat::Json).is_some());
+
+        let ent = std::fs::read_to_string(app_dir.join("app.entitlements")).unwrap();
+        assert!(ent.contains("com.apple.security.application-groups"));
+        assert!(ent.contains("group.com.example.shared"));
+        assert!(ent.contains("<key>aps-environment</key>"));
+        assert!(ent.contains("<string>production</string>"));
+        assert_eq!(ent.matches("</dict>").count(), 1);
+        assert_eq!(ent.matches("</plist>").count(), 1);
+    }
+
+    #[test]
+    fn idempotent_when_aps_environment_already_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            "[ios]\npush_notifications = true\n",
+        )
+        .unwrap();
+        let app_dir = dir.path().join("out.app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let hand_written = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n    <key>aps-environment</key>\n    <string>production</string>\n</dict>\n</plist>\n";
+        std::fs::write(app_dir.join("app.entitlements"), hand_written).unwrap();
+
+        assert!(inject_ios_push_entitlement(&input, &app_dir, OutputFormat::Json).is_some());
+
+        // Hand-written value preserved (not downgraded to development).
+        let ent = std::fs::read_to_string(app_dir.join("app.entitlements")).unwrap();
+        assert_eq!(ent, hand_written);
+    }
+
+    #[test]
+    fn skips_when_not_opted_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+        std::fs::write(dir.path().join("perry.toml"), "[ios]\nbundle_id = \"a\"\n").unwrap();
+        let app_dir = dir.path().join("out.app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+
+        assert!(inject_ios_push_entitlement(&input, &app_dir, OutputFormat::Json).is_none());
+        assert!(!app_dir.join("app.entitlements").exists());
+    }
 }

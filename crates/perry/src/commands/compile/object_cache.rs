@@ -17,10 +17,10 @@
 //!    via `perry_hir::stable_hash::hash_module`) instead of the raw
 //!    source-bytes hash, so formatter-only and comment-only edits
 //!    that lower to identical HIR reuse the cached `.o`.
-//! 3. **`ObjectCache`** — the `lookup` / `store` surface used by the
-//!    rayon codegen workers. Atomic (tmp + rename) writes, silent
-//!    IO-error degradation, lock-free shared `&self` access (each
-//!    cache key is per-module so writes never conflict).
+//! 3. **`ObjectCache`** — the `lookup_path` / `lookup` / `store`
+//!    surface used by the rayon codegen workers. Atomic (tmp + rename)
+//!    writes, silent IO-error degradation, lock-free shared `&self`
+//!    access (each cache key is per-module so writes never conflict).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -80,6 +80,12 @@ impl Djb2Hasher {
     }
     /// Feed a named field: "<name>=<value>\x1f".
     fn field(&mut self, name: &str, value: &str) {
+        static DEBUG_KEY_FIELDS: OnceLock<bool> = OnceLock::new();
+        if *DEBUG_KEY_FIELDS
+            .get_or_init(|| std::env::var("PERRY_CACHE_DEBUG_KEY").as_deref() == Ok("1"))
+        {
+            eprintln!("cache-key-field {name}={value:?}");
+        }
         self.write(name.as_bytes());
         self.write(b"=");
         self.write(value.as_bytes());
@@ -88,6 +94,10 @@ impl Djb2Hasher {
     fn finish(self) -> u64 {
         self.state
     }
+}
+
+fn stable_type_key(ty: &perry_types::Type) -> String {
+    format!("{:016x}", perry_hir::stable_hash::hash_type(ty))
 }
 
 /// Compute the on-disk object cache key for one module.
@@ -155,6 +165,11 @@ fn compute_object_cache_key_with_env(
     // doesn't usually move between rebuilds.
     h.field("build_id", &format!("{:016x}", perry_build_id()));
     h.field("ir_only", if opts.emit_ir_only { "1" } else { "0" });
+    // #5247: `--debug-symbols` flips per-call `js_set_call_location` emission,
+    // which changes the emitted IR (and `.o` bytes). Without this in the key,
+    // toggling the flag would serve the previously-cached object and the
+    // source locations would silently not appear.
+    h.field("dbgloc", if opts.debug_locations { "1" } else { "0" });
     h.field(
         "verify_native_regions",
         if opts.verify_native_regions { "1" } else { "0" },
@@ -244,10 +259,19 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
-    h.field("js_specs", &opts.js_module_specifiers.join("|"));
     {
+        let mut v: Vec<&String> = opts.js_module_specifiers.iter().collect();
+        v.sort();
+        h.field(
+            "js_specs",
+            &v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("|"),
+        );
+    }
+    {
+        let mut v: Vec<&(String, String)> = opts.bundled_extensions.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         let mut buf = String::new();
-        for (path, prefix) in &opts.bundled_extensions {
+        for (path, prefix) in v {
             buf.push_str(path);
             buf.push('@');
             buf.push_str(prefix);
@@ -256,8 +280,10 @@ fn compute_object_cache_key_with_env(
         h.field("bundled_ext", &buf);
     }
     {
+        let mut v: Vec<_> = opts.native_library_functions.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
         let mut buf = String::new();
-        for (name, params, ret) in &opts.native_library_functions {
+        for (name, params, ret) in v {
             buf.push_str(name);
             buf.push(':');
             for (idx, param) in params.iter().enumerate() {
@@ -416,10 +442,12 @@ fn compute_object_cache_key_with_env(
         let mut buf = String::new();
         for c in v {
             buf.push_str(&format!(
-                "{}@{}:ctor={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
+                "{}@{}:ctor={}:own_ctor={}:instance_fields={}:parent={}:alias={}:id={}:fields={}:methods={}:method_arities={}|",
                 c.name,
                 c.source_prefix,
                 c.constructor_param_count,
+                if c.has_own_constructor { "1" } else { "0" },
+                if c.has_instance_fields { "1" } else { "0" },
                 c.parent_name.as_deref().unwrap_or(""),
                 c.local_alias.as_deref().unwrap_or(""),
                 c.source_class_id.map(|i| i.to_string()).unwrap_or_default(),
@@ -451,7 +479,7 @@ fn compute_object_cache_key_with_env(
             buf.push_str(
                 &c.field_types
                     .iter()
-                    .map(|ty| format!("{:?}", ty))
+                    .map(stable_type_key)
                     .collect::<Vec<_>>()
                     .join(","),
             );
@@ -517,16 +545,15 @@ fn compute_object_cache_key_with_env(
         );
     }
 
-    // Imported return types (HashMap — MUST sort). Type has Debug but no
-    // Display; Debug is deterministic for this type (all enum/Vec, no
-    // HashMap internally as of v0.5.156).
+    // Imported return types (HashMap — MUST sort). Type can contain nested
+    // HashMaps (ObjectType::properties), so never use Debug output here.
     {
         let mut v: Vec<(&String, &perry_types::Type)> =
             opts.imported_func_return_types.iter().collect();
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s = v
             .iter()
-            .map(|(k, vv)| format!("{}={:?}", k, vv))
+            .map(|(k, vv)| format!("{}={}", k, stable_type_key(vv)))
             .collect::<Vec<_>>()
             .join(",");
         h.field("imported_return_types", &s);
@@ -548,7 +575,7 @@ fn compute_object_cache_key_with_env(
         v.sort_by(|a, b| a.0.cmp(b.0));
         let s = v
             .iter()
-            .map(|(k, vv)| format!("{}={:?}", k, vv))
+            .map(|(k, vv)| format!("{}={}", k, stable_type_key(vv)))
             .collect::<Vec<_>>()
             .join(",");
         h.field("type_aliases", &s);
@@ -703,13 +730,14 @@ fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out:
 }
 /// On-disk per-module object cache at `.perry-cache/objects/<target>/<hash:016x>.o`.
 ///
-/// Each rayon codegen worker calls `lookup(key)`; on hit, it skips the LLVM
-/// pipeline and hands the cached bytes to the linker; on miss, it runs
-/// `compile_module` as usual and then calls `store(key, bytes)` to
-/// populate the cache for the next build. Atomic (tmp + rename) writes
-/// and silent IO-error handling mean the cache is strictly an optimization
-/// — any corruption or permission failure degrades gracefully to the
-/// uncached codepath.
+/// Each rayon codegen worker calls `lookup_path(key)`; on hit, it skips the
+/// LLVM pipeline and links the cached object file directly. Older callers may
+/// still call `lookup(key)` to materialize cached bytes. On miss, the worker
+/// runs `compile_module` as usual and then calls `store_and_get_path(key,
+/// bytes)` to populate the cache and link from the same stable cache path
+/// future hits will use. Atomic (tmp + rename) writes and silent IO-error
+/// handling mean the cache is strictly an optimization — any missing or
+/// unreadable entry degrades gracefully to the uncached codepath.
 ///
 /// Shared across rayon workers via `&self` — no locking is needed because
 /// each key corresponds to a distinct file (the key includes this module's
@@ -723,6 +751,8 @@ pub struct ObjectCache {
     misses: AtomicUsize,
     stores: AtomicUsize,
     store_errors: AtomicUsize,
+    path_reuses: AtomicUsize,
+    bytes_materialized: AtomicUsize,
 }
 
 impl ObjectCache {
@@ -749,6 +779,8 @@ impl ObjectCache {
             misses: AtomicUsize::new(0),
             stores: AtomicUsize::new(0),
             store_errors: AtomicUsize::new(0),
+            path_reuses: AtomicUsize::new(0),
+            bytes_materialized: AtomicUsize::new(0),
         }
     }
 
@@ -762,11 +794,14 @@ impl ObjectCache {
 
     /// Look up a cached object by key. Returns `Some(bytes)` on hit,
     /// `None` on miss (cache disabled, file missing, or IO error).
+    #[allow(dead_code)]
     pub fn lookup(&self, key: u64) -> Option<Vec<u8>> {
         let path = self.path_for(key)?;
         match fs::read(&path) {
             Ok(bytes) => {
                 self.hits.fetch_add(1, Ordering::Relaxed);
+                self.bytes_materialized
+                    .fetch_add(bytes.len(), Ordering::Relaxed);
                 Some(bytes)
             }
             Err(_) => {
@@ -776,15 +811,32 @@ impl ObjectCache {
         }
     }
 
-    /// Store the freshly-compiled bytes under `key`. Atomic via tmp +
-    /// rename so a concurrent reader in another process never sees a
-    /// partial file. IO errors are counted but not reported — the cache
-    /// is strictly an optimization.
-    pub fn store(&self, key: u64, bytes: &[u8]) {
-        let path = match self.path_for(key) {
-            Some(p) => p,
-            None => return,
-        };
+    /// Look up a cached object by key and return its on-disk path without
+    /// reading the object bytes into memory. We still open the file once so
+    /// unreadable cache entries fall back to a fresh compile just like
+    /// `lookup` would.
+    pub fn lookup_path(&self, key: u64) -> Option<PathBuf> {
+        let path = self.path_for(key)?;
+        match fs::File::open(&path).and_then(|f| f.metadata()) {
+            Ok(meta) if meta.is_file() => {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                self.path_reuses.fetch_add(1, Ordering::Relaxed);
+                Some(path)
+            }
+            _ => {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Store the freshly-compiled bytes under `key` and return the final
+    /// cache path on success. Atomic via tmp + rename so a concurrent reader
+    /// in another process never sees a partial file. IO errors are counted
+    /// but not reported — the cache is strictly an optimization.
+    pub fn store_and_get_path(&self, key: u64, bytes: &[u8]) -> Option<PathBuf> {
+        let path = self.path_for(key)?;
+
         // Write to a unique tmp path in the same directory, then rename.
         // The tmp name mixes the key with a nanosecond timestamp so two
         // workers racing on the same key don't clobber each other's tmp
@@ -798,13 +850,22 @@ impl ObjectCache {
         match result {
             Ok(()) => {
                 self.stores.fetch_add(1, Ordering::Relaxed);
+                Some(path)
             }
             Err(_) => {
                 // Best-effort cleanup of the tmp file.
                 let _ = fs::remove_file(&tmp_path);
                 self.store_errors.fetch_add(1, Ordering::Relaxed);
+                None
             }
         }
+    }
+
+    /// Store the freshly-compiled bytes under `key`. This compatibility
+    /// wrapper keeps older tests/callers from depending on the returned path.
+    #[allow(dead_code)]
+    pub fn store(&self, key: u64, bytes: &[u8]) {
+        let _ = self.store_and_get_path(key, bytes);
     }
 
     /// Whether the cache is actually writing to disk. `false` when
@@ -828,6 +889,14 @@ impl ObjectCache {
 
     pub fn store_errors(&self) -> usize {
         self.store_errors.load(Ordering::Relaxed)
+    }
+
+    pub fn path_reuses(&self) -> usize {
+        self.path_reuses.load(Ordering::Relaxed)
+    }
+
+    pub fn bytes_materialized(&self) -> usize {
+        self.bytes_materialized.load(Ordering::Relaxed)
     }
 }
 #[cfg(test)]
@@ -884,6 +953,8 @@ mod object_cache_tests {
             deferred_module_prefixes: std::collections::HashSet::new(),
             module_init_deps: Vec::new(),
             is_dynamic_import_target: false,
+            debug_locations: false,
+            module_source: None,
         }
     }
 
@@ -947,6 +1018,20 @@ mod object_cache_tests {
         let mut b = empty_opts();
         a.is_entry_module = false;
         b.is_entry_module = true;
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_debug_locations_flag() {
+        // #5247: toggling --debug-symbols (debug_locations) flips per-call
+        // location emission, so cached objects must not be shared across it.
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.debug_locations = false;
+        b.debug_locations = true;
         assert_ne!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")
@@ -1041,6 +1126,148 @@ mod object_cache_tests {
     }
 
     #[test]
+    fn key_stable_for_order_insensitive_graph_lists() {
+        // These graph-wide lists are either derived from collections or are
+        // consumed as lookup metadata, not as an ordered codegen sequence.
+        // Hashing their raw Vec order would make every module key depend on
+        // upstream collection/traversal order.
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.js_module_specifiers = vec!["z.js".into(), "a.js".into()];
+        b.js_module_specifiers = vec!["a.js".into(), "z.js".into()];
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        a.bundled_extensions = vec![
+            ("/project/ext/z.ts".into(), "project_ext_z_ts".into()),
+            ("/project/ext/a.ts".into(), "project_ext_a_ts".into()),
+        ];
+        b.bundled_extensions = vec![
+            ("/project/ext/a.ts".into(), "project_ext_a_ts".into()),
+            ("/project/ext/z.ts".into(), "project_ext_z_ts".into()),
+        ];
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        a.native_library_functions = vec![
+            (
+                "zeta".into(),
+                vec![perry_api_manifest::NativeAbiType::I32],
+                perry_api_manifest::NativeAbiType::F64,
+            ),
+            (
+                "alpha".into(),
+                vec![perry_api_manifest::NativeAbiType::String],
+                perry_api_manifest::NativeAbiType::Bool,
+            ),
+        ];
+        b.native_library_functions = vec![
+            (
+                "alpha".into(),
+                vec![perry_api_manifest::NativeAbiType::String],
+                perry_api_manifest::NativeAbiType::Bool,
+            ),
+            (
+                "zeta".into(),
+                vec![perry_api_manifest::NativeAbiType::I32],
+                perry_api_manifest::NativeAbiType::F64,
+            ),
+        ];
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    fn record_row_type(property_insert_order: &[&str]) -> perry_types::Type {
+        let mut properties = std::collections::HashMap::new();
+        for name in property_insert_order {
+            let ty = match *name {
+                "name" => perry_types::Type::String,
+                "id" | "value" => perry_types::Type::Number,
+                _ => panic!("unexpected property"),
+            };
+            properties.insert(
+                (*name).to_string(),
+                perry_types::PropertyInfo {
+                    ty,
+                    optional: false,
+                    readonly: false,
+                },
+            );
+        }
+        perry_types::Type::Object(perry_types::ObjectType {
+            name: None,
+            properties,
+            property_order: Some(vec!["id".into(), "name".into(), "value".into()]),
+            index_signature: None,
+        })
+    }
+
+    #[test]
+    fn key_stable_for_nested_type_hashmap_order() {
+        let type_a = record_row_type(&["name", "id", "value"]);
+        let type_b = record_row_type(&["id", "name", "value"]);
+
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.type_aliases.insert("RecordRow".into(), type_a.clone());
+        b.type_aliases.insert("RecordRow".into(), type_b.clone());
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        a = empty_opts();
+        b = empty_opts();
+        a.imported_func_return_types
+            .insert("loadRecord".into(), type_a.clone());
+        b.imported_func_return_types
+            .insert("loadRecord".into(), type_b.clone());
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+
+        let class_for = |field_type| ImportedClass {
+            name: "RowBox".into(),
+            local_alias: None,
+            source_prefix: "feature_ts".into(),
+            constructor_param_count: 0,
+            has_own_constructor: false,
+            has_instance_fields: true,
+            method_names: vec![],
+            method_param_counts: vec![],
+            method_has_rest: vec![],
+            static_method_names: vec![],
+            getter_names: vec![],
+            setter_names: vec![],
+            parent_name: None,
+            field_names: vec!["row".into()],
+            field_types: vec![field_type],
+            static_field_names: vec![],
+            source_class_id: Some(7),
+        };
+
+        a = empty_opts();
+        b = empty_opts();
+        a.imported_classes.push(class_for(type_a));
+        b.imported_classes.push(class_for(type_b));
+        assert_eq!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
     fn key_changes_with_imported_class_signature() {
         let mut a = empty_opts();
         let mut b = empty_opts();
@@ -1049,6 +1276,8 @@ mod object_cache_tests {
             local_alias: None,
             source_prefix: "src".into(),
             constructor_param_count: 1,
+            has_own_constructor: true,
+            has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
             method_has_rest: vec![false],
@@ -1066,6 +1295,8 @@ mod object_cache_tests {
             local_alias: None,
             source_prefix: "src".into(),
             constructor_param_count: 2, // different arity
+            has_own_constructor: true,
+            has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
             method_has_rest: vec![false],
@@ -1091,6 +1322,8 @@ mod object_cache_tests {
             local_alias: None,
             source_prefix: "src".into(),
             constructor_param_count: 1,
+            has_own_constructor: true,
+            has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![1],
             method_has_rest: vec![false],
@@ -1109,6 +1342,14 @@ mod object_cache_tests {
             compute_object_cache_key(&opts, 1, "0.5.156")
         };
         let base_key = key_for(base.clone());
+
+        let mut changed = base.clone();
+        changed.has_own_constructor = false;
+        assert_ne!(base_key, key_for(changed));
+
+        let mut changed = base.clone();
+        changed.has_instance_fields = false;
+        assert_ne!(base_key, key_for(changed));
 
         let mut changed = base.clone();
         changed.method_has_rest = vec![true];
@@ -1278,6 +1519,24 @@ mod object_cache_tests {
         assert_eq!(got, payload);
         assert_eq!(cache.hits(), 1);
         assert_eq!(cache.misses(), 0);
+        assert_eq!(cache.bytes_materialized(), payload.len());
+        assert_eq!(cache.path_reuses(), 0);
+    }
+
+    #[test]
+    fn store_then_lookup_path_reuses_cached_file_without_materializing_bytes() {
+        let dir = tempdir().unwrap();
+        let cache = ObjectCache::new(dir.path(), "test-target", true);
+        let key = 0xfeedface;
+        cache.store(key, b"object bytes");
+
+        let path = cache.lookup_path(key).expect("must hit by path");
+        assert!(path.is_file(), "missing cached object: {}", path.display());
+        assert_eq!(std::fs::read(path).unwrap(), b"object bytes");
+        assert_eq!(cache.hits(), 1);
+        assert_eq!(cache.misses(), 0);
+        assert_eq!(cache.path_reuses(), 1);
+        assert_eq!(cache.bytes_materialized(), 0);
     }
 
     #[test]
@@ -1285,8 +1544,9 @@ mod object_cache_tests {
         let dir = tempdir().unwrap();
         let cache = ObjectCache::new(dir.path(), "test-target", true);
         assert!(cache.lookup(0x1234).is_none());
+        assert!(cache.lookup_path(0x5678).is_none());
         assert_eq!(cache.hits(), 0);
-        assert_eq!(cache.misses(), 1);
+        assert_eq!(cache.misses(), 2);
     }
 
     #[test]

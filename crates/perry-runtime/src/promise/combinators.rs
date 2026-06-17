@@ -114,7 +114,7 @@ fn promise_try_type_error_value(callback: f64) -> f64 {
 
 fn promise_try_closure_ptr(callback: f64) -> Option<*const crate::closure::ClosureHeader> {
     let ptr = crate::value::js_nanbox_get_pointer(callback) as usize;
-    if ptr < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr) {
         return None;
     }
     crate::closure::is_closure_ptr(ptr).then_some(ptr as *const crate::closure::ClosureHeader)
@@ -201,7 +201,12 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     // Pointer-tagged native handles (Fetch/Headers/Timers/etc.) also carry
     // small payloads. They are not GC allocations and must not be probed as
     // Promise headers before the handle dispatch tables see them.
-    if ptr_usize < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr_usize) {
+        return 0;
+    }
+    // Off-GC-heap header-less allocations (small typed arrays / buffers) are
+    // never Promises and must not be header-probed (#5226).
+    if crate::typedarray::is_offheap_sidetable_alloc(ptr_usize) {
         return 0;
     }
     unsafe {
@@ -263,7 +268,7 @@ fn not_iterable_prefix(value: f64) -> String {
     "object".to_string()
 }
 
-fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
+pub(super) fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
     let env = crate::exception::js_try_push();
     let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
     if jumped == 0 {
@@ -281,7 +286,7 @@ fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
 /// Build the `TypeError: <prefix> is not iterable (cannot read property
 /// Symbol(Symbol.iterator))` value — Node's exact message for a non-iterable
 /// Promise-combinator argument (issue #2822).
-fn not_iterable_error_value(value: f64) -> f64 {
+pub(super) fn not_iterable_error_value(value: f64) -> f64 {
     let msg = format!(
         "{} is not iterable (cannot read property Symbol(Symbol.iterator))",
         not_iterable_prefix(value)
@@ -323,7 +328,7 @@ pub(crate) fn combinator_iterable_to_array(
     }
 
     let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if raw < 0x100000 {
+    if crate::value::addr_class::is_handle_band(raw) {
         return Err(not_iterable_error_value(value));
     }
 
@@ -385,7 +390,9 @@ pub(crate) fn combinator_iterable_to_array(
     Err(not_iterable_error_value(value))
 }
 
-fn combinator_iterable_to_array_caught(value: f64) -> Result<*mut crate::array::ArrayHeader, f64> {
+pub(super) fn combinator_iterable_to_array_caught(
+    value: f64,
+) -> Result<*mut crate::array::ArrayHeader, f64> {
     let mut out = std::ptr::null_mut();
     let result = combinator_catch_js(|| match combinator_iterable_to_array(value) {
         Ok(arr) => {
@@ -400,58 +407,45 @@ fn combinator_iterable_to_array_caught(value: f64) -> Result<*mut crate::array::
     }
 }
 
-/// Iterable-accepting entry for `Promise.all` (issue #2822). Coerces any
-/// iterable to an array (rejecting non-iterables with a `TypeError`) before
-/// delegating to the array-shaped `js_promise_all`.
+/// Unwrap a spec-combinator result (NaN-boxed native Promise pointer, since the
+/// codegen direct-call path always uses the intrinsic `Promise` as `this`) back
+/// to a `*mut Promise` for the codegen ABI.
+#[inline]
+fn spec_result_to_promise(result: f64) -> *mut Promise {
+    crate::value::js_nanbox_get_pointer(result) as *mut Promise
+}
+
+/// Iterable-accepting entry for `Promise.all` (issue #2822 / #4521). Codegen's
+/// direct-call path (`Promise.all([...])`) lands here with `this` = intrinsic
+/// `Promise`; supply that constructor explicitly and delegate to the
+/// spec-compliant combinator.
 #[no_mangle]
 pub extern "C" fn js_promise_all_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_all(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_all_spec(c, value))
 }
 
-/// Iterable-accepting entry for `Promise.race` (issue #2822).
+/// Iterable-accepting entry for `Promise.race` (issue #2822 / #4521).
 #[no_mangle]
 pub extern "C" fn js_promise_race_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_race(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_race_spec(c, value))
 }
 
-/// Iterable-accepting entry for `Promise.allSettled` (issue #2822).
+/// Iterable-accepting entry for `Promise.allSettled` (issue #2822 / #4521).
 #[no_mangle]
 pub extern "C" fn js_promise_all_settled_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_all_settled(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_all_settled_spec(
+        c, value,
+    ))
 }
 
-/// Iterable-accepting entry for `Promise.any` (issue #2822).
+/// Iterable-accepting entry for `Promise.any` (issue #2822 / #4521).
 #[no_mangle]
 pub extern "C" fn js_promise_any_iterable(value: f64) -> *mut Promise {
-    match combinator_iterable_to_array_caught(value) {
-        Ok(arr) => js_promise_any(arr),
-        Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            p
-        }
-    }
+    let c = super::spec_combinators::default_promise_ctor();
+    spec_result_to_promise(super::spec_combinators::js_promise_any_spec(c, value))
 }
 
 /// #2822/#3320: keepalive anchors so the whole-program LLVM (auto-optimize)
@@ -506,52 +500,205 @@ pub(super) fn process_scheduled_resolves() -> i32 {
 pub extern "C" fn js_promise_new_with_executor(
     executor: *const crate::closure::ClosureHeader,
 ) -> *mut Promise {
-    use crate::closure::{js_closure_alloc, js_closure_call2, js_closure_set_capture_ptr};
+    use crate::closure::js_closure_call2;
 
     let promise = js_promise_new();
-    let promise_i64 = promise as i64;
 
-    // Create resolve closure that captures the promise pointer
-    // The resolve function signature is: (closure: *const ClosureHeader, value: f64) -> f64
-    let resolve_closure = js_closure_alloc(promise_resolve_fn as *const u8, 1);
-    js_closure_set_capture_ptr(resolve_closure, 0, promise_i64);
+    // Create the resolve/reject pair sharing a [[AlreadyResolved]] guard, so
+    // calling one disables the other (27.2.1.3 CreateResolvingFunctions). The
+    // resolve fn also assimilates thenables/promises and rejects self-resolution.
+    let (resolve_closure, reject_closure) = make_resolving_functions(promise);
 
-    // Create reject closure that captures the promise pointer
-    let reject_closure = js_closure_alloc(promise_reject_fn as *const u8, 1);
-    js_closure_set_capture_ptr(reject_closure, 0, promise_i64);
-
-    // Call the executor with (resolve_closure, reject_closure)
-    // The closures are passed as f64 by bitcasting the pointer bits
-    // This preserves the exact bits of the pointer when passed through f64 ABI
-    let resolve_f64: f64 = f64::from_bits(i64::cast_unsigned(resolve_closure as i64));
-    let reject_f64: f64 = f64::from_bits(i64::cast_unsigned(reject_closure as i64));
-    js_closure_call2(executor, resolve_f64, reject_f64);
+    // Call the executor with (resolve_closure, reject_closure) as proper
+    // NaN-boxed POINTER_TAG closure values — so user code that *reflects* on
+    // them (`resolve.length` === 1, `resolve.name` === "", `new resolve()`
+    // throws, `Object.getOwnPropertyNames(resolve)`) sees a real function
+    // object, not a bare number. The call path already accepts POINTER_TAG
+    // closures (this mirrors `NewPromiseCapability`'s fast path, which has
+    // always boxed them). test262 `resolve-function-*` / `reject-function-*`.
+    let resolve_f64: f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
+    let reject_f64: f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
+    // 27.2.3.1: a non-callable executor throws a TypeError SYNCHRONOUSLY at
+    // step 2 (before/instead of being run) — that throw must propagate out of
+    // `new Promise(...)`, not be converted into a rejection. Only a genuinely
+    // callable executor's abrupt completion (step 10) is caught and rejected.
+    if crate::closure::is_closure_ptr(executor as usize) {
+        // Callable executor: catch a throw from its body and reject the promise
+        // with the thrown value via the resolving `reject` function (so the
+        // shared [[AlreadyResolved]] guard makes a throw AFTER a resolve/reject a
+        // no-op). test262 reject-via-abrupt / exception-after-resolve-in-executor.
+        if let Err(reason) =
+            combinator_catch_js(|| js_closure_call2(executor, resolve_f64, reject_f64))
+        {
+            crate::closure::js_closure_call1(reject_closure, reason);
+        }
+    } else {
+        // Non-callable: preserve the prior synchronous TypeError (uncaught).
+        js_closure_call2(executor, resolve_f64, reject_f64);
+    }
 
     promise
 }
 
+/// A resolving function's shared `[[AlreadyResolved]]` record. Per ECMA-262
+/// 27.2.1.3 CreateResolvingFunctions, the resolve and reject functions handed to
+/// a Promise executor share ONE boolean: once either fires, the other is a
+/// no-op — *even while the promise itself is still pending* (e.g. `resolve` was
+/// called with an unsettled thenable, so the promise stays pending while the
+/// thenable job runs, but a later `reject(x)` must be ignored). The `state !=
+/// Pending` guard inside `js_promise_resolve`/`js_promise_reject` is NOT enough
+/// to model this; we need the explicit flag.
+///
+/// Stored as a 1-element array (slot 0: 0.0 = not resolved, 1.0 = resolved) so
+/// the resolve and reject closures can both capture the same heap cell. A NULL
+/// capture means "no shared guard" (legacy single-shot callers that rely solely
+/// on the promise-state check).
+fn alloc_already_resolved_guard() -> *mut crate::array::ArrayHeader {
+    use crate::array::{js_array_alloc, js_array_set_f64};
+    let guard = js_array_alloc(1);
+    unsafe {
+        (*guard).length = 1;
+    }
+    js_array_set_f64(guard, 0, 0.0);
+    guard
+}
+
+/// Take the shared `[[AlreadyResolved]]` flag: returns true if this resolving
+/// function may proceed (and marks it resolved), false if already consumed. A
+/// NULL guard always proceeds.
+#[inline]
+fn take_already_resolved(guard: *mut crate::array::ArrayHeader) -> bool {
+    use crate::array::{js_array_get_f64, js_array_set_f64};
+    if guard.is_null() {
+        return true;
+    }
+    if js_array_get_f64(guard, 0) != 0.0 {
+        return false;
+    }
+    js_array_set_f64(guard, 0, 1.0);
+    true
+}
+
+/// Register the dispatch arity (= 1) of the native resolving / thenable-job
+/// functions, once per thread. Each is an `extern "C" fn(closure, value)`, so a
+/// JS call that passes FEWER arguments — a thenable whose `then` does
+/// `resolve()` with no args (27.2.1.3.2 step 9) — must pad the missing `value`
+/// to `undefined`. Without a registered arity, `js_closure_call0` falls to the
+/// zero-arg direct-call arm and the function reads a GARBAGE second register
+/// (observed as the denormal `5e-324`, i.e. bits = 1), corrupting the
+/// resolution value. (test262 exception-after-resolve-in-{executor,thenable-job}.)
+fn ensure_native_resolving_arity_registered() {
+    thread_local! {
+        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    DONE.with(|d| {
+        if d.get() {
+            return;
+        }
+        d.set(true);
+        for f in [
+            promise_resolve_fn as *const u8,
+            promise_reject_fn as *const u8,
+            thenable_job_resolve_fn as *const u8,
+            thenable_job_reject_fn as *const u8,
+        ] {
+            crate::closure::js_register_closure_arity(f, 1);
+        }
+    });
+}
+
+/// Wire a resolve/reject closure pair to a promise with a shared
+/// `[[AlreadyResolved]]` guard. Returns `(resolve_closure, reject_closure)`.
+pub(super) fn make_resolving_functions(
+    promise: *mut Promise,
+) -> (
+    *mut crate::closure::ClosureHeader,
+    *mut crate::closure::ClosureHeader,
+) {
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    ensure_native_resolving_arity_registered();
+    let guard = alloc_already_resolved_guard();
+    let resolve = js_closure_alloc(promise_resolve_fn as *const u8, 2);
+    js_closure_set_capture_ptr(resolve, 0, promise as i64);
+    js_closure_set_capture_ptr(resolve, 1, guard as i64);
+    let reject = js_closure_alloc(promise_reject_fn as *const u8, 2);
+    js_closure_set_capture_ptr(reject, 0, promise as i64);
+    js_closure_set_capture_ptr(reject, 1, guard as i64);
+    // Spec 27.2.1.3: the resolving functions are anonymous built-in functions
+    // with own `length` = 1, `name` = "" (both non-writable, non-enumerable,
+    // configurable), and NO `[[Construct]]` (`new resolve()` throws). test262
+    // `resolve-function-*` / `reject-function-*` assert all four.
+    for f in [resolve, reject] {
+        crate::object::set_builtin_closure_length(f as usize, 1);
+        crate::object::set_bound_native_closure_name(f, "");
+        crate::object::set_builtin_closure_non_constructable(f as usize);
+    }
+    (resolve, reject)
+}
+
 /// Internal resolve function for Promise executor callbacks.
 /// Called when user calls resolve(value) inside the executor.
-extern "C" fn promise_resolve_fn(closure: *const crate::closure::ClosureHeader, value: f64) -> f64 {
+///
+/// Implements ECMA-262 27.2.1.3.2 Promise Resolve Functions:
+///   * honour the shared `[[AlreadyResolved]]` flag (capture slot 1);
+///   * if `resolution` is the promise itself, reject with a TypeError;
+///   * if `resolution` is a thenable/promise, assimilate it (enqueue a job)
+///     rather than fulfilling with the thenable as a plain value.
+pub(super) extern "C" fn promise_resolve_fn(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
 
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    js_promise_resolve(promise_ptr, value);
-    0.0 // resolve returns undefined
+    let guard = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    if !take_already_resolved(guard) {
+        return undef;
+    }
+
+    // Self-resolution: `resolve(thePromise)` rejects with a TypeError (27.2.1.3.2
+    // step 6). Detect by comparing the resolution value's pointer to the promise.
+    if !promise_ptr.is_null() {
+        let bits = value.to_bits();
+        if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+            let ptr = (bits & crate::value::POINTER_MASK) as usize;
+            if ptr == promise_ptr as usize {
+                let msg = b"Chaining cycle detected for promise #<Promise>";
+                let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+                let err_ptr = crate::error::js_typeerror_new(s);
+                let err =
+                    f64::from_bits(crate::value::JSValue::pointer(err_ptr as *const u8).bits());
+                js_promise_reject(promise_ptr, err);
+                return undef;
+            }
+        }
+    }
+
+    promise_resolve_assimilating(promise_ptr, value);
+    undef // resolve returns undefined
 }
 
 /// Internal reject function for Promise executor callbacks.
 /// Called when user calls reject(reason) inside the executor.
-extern "C" fn promise_reject_fn(closure: *const crate::closure::ClosureHeader, reason: f64) -> f64 {
+pub(super) extern "C" fn promise_reject_fn(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
     use crate::closure::js_closure_get_capture_ptr;
 
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let guard = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    if !take_already_resolved(guard) {
+        return undef;
+    }
     js_promise_reject(promise_ptr, reason);
-    0.0 // reject returns undefined
+    undef // reject returns undefined
 }
 
 #[inline]
-fn callable_closure_value(value: f64) -> Option<*const crate::closure::ClosureHeader> {
+pub(super) fn callable_closure_value(value: f64) -> Option<*const crate::closure::ClosureHeader> {
     let bits = value.to_bits();
     let tag = bits & crate::value::TAG_MASK;
     let raw = if tag == crate::value::POINTER_TAG || tag == crate::value::STRING_TAG {
@@ -575,7 +722,12 @@ fn is_native_array_value(value: f64) -> bool {
         return false;
     }
     let ptr = crate::value::js_nanbox_get_pointer(value) as usize;
-    if ptr < 0x100000 {
+    if crate::value::addr_class::is_handle_band(ptr) {
+        return false;
+    }
+    // Off-GC-heap header-less typed arrays / buffers are not Arrays and must
+    // not be header-probed (#5226).
+    if crate::typedarray::is_offheap_sidetable_alloc(ptr) {
         return false;
     }
     unsafe {
@@ -651,7 +803,7 @@ fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_action: f64) 
     crate::event_pump::js_notify_main_thread();
 }
 
-fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
+pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
     if promise.is_null() {
         return;
     }
@@ -734,6 +886,10 @@ extern "C" fn promise_resolve_thenable_job(closure: *const crate::closure::Closu
         js_promise_resolve(promise, thenable);
         return 0.0;
     }
+    // The resolve/reject closures below may be invoked with zero arguments by
+    // the thenable's `then`; ensure their dispatch arity is registered so the
+    // missing value pads to `undefined`.
+    ensure_native_resolving_arity_registered();
 
     let guard_arr = js_array_alloc(1);
     unsafe {
@@ -951,7 +1107,6 @@ fn promise_all_reject_direct(
 pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_get_f64, js_array_length};
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
-    use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
 
@@ -973,28 +1128,14 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
     let shared_reject = js_closure_alloc(promise_race_reject_handler as *const u8, 1);
     js_closure_set_capture_ptr(shared_reject, 0, result_promise as i64);
 
-    // For each promise, attach resolve/reject handlers that settle the result promise.
-    // Per the spec, even when an input promise is already settled we MUST route the
-    // resolution through the microtask queue (by registering `.then` handlers) rather
-    // than calling js_promise_resolve synchronously.  The synchronous short-circuit was
-    // causing race / any results to appear too early in the output when compared against
-    // Node's microtask-ordered output.
+    // Normalize each input with PromiseResolve semantics before attaching handlers.
+    // This keeps plain values asynchronous and gives thenables a chance to settle
+    // through the same guarded job path used by Promise.all/allSettled.
     for i in 0..count {
-        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
-        // Discriminate via GC-header obj_type — string/bigint NaN-boxed
-        // values would otherwise pass through pointer extraction and crash
-        // js_promise_then.
-        if js_value_is_promise(promise_f64) == 0 {
-            // Non-promise value — wrap as an already-resolved promise so the
-            // resolution goes through the normal microtask path.
-            let wrapped = js_promise_resolved(promise_f64);
-            js_promise_then(wrapped, shared_resolve, shared_reject);
-            continue;
-        }
-        let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
-
-        // Attach handlers via then — if the input is already settled this will
-        // push a microtask rather than resolving result_promise synchronously.
+        let promise_ptr = match promise_resolve_for_combinator(js_array_get_f64(promises_arr, i)) {
+            Ok(promise) => promise,
+            Err(reason) => js_promise_rejected(reason),
+        };
         js_promise_attach_handlers(promise_ptr, shared_resolve, shared_reject);
     }
 
@@ -1086,12 +1227,16 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     }
 
     let raw_ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if raw_ptr < 0x100000 {
+    if crate::value::addr_class::is_handle_band(raw_ptr) {
         return value;
     }
 
     // Side-table-tracked heap types don't have ClassVTable entries; skip.
-    if crate::buffer::is_registered_buffer(raw_ptr)
+    // Off-GC-heap header-less allocations (small typed arrays / buffers) come
+    // first: they have no GcHeader, so they must be excluded before any probe
+    // that back-reads `raw_ptr - GC_HEADER_SIZE` — including the
+    // `is_date_cell_addr` call in this very chain (#5226).
+    if crate::typedarray::is_offheap_sidetable_alloc(raw_ptr)
         || crate::set::is_registered_set(raw_ptr)
         || crate::map::is_registered_map(raw_ptr)
         || crate::symbol::is_registered_symbol(raw_ptr)
@@ -1118,15 +1263,29 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         (*obj_ptr).class_id
     };
     if class_id == 0 {
-        return value;
+        // A plain object literal (`{ then(resolve, reject) {…} }` / `{ get then()
+        // {…} }`) has no class vtable, so the method-chain probe below can't see
+        // its `then`. Per ECMA-262 PromiseResolveThenableJob the thenable check
+        // is `Get(value, "then")` + IsCallable — independent of how `then` is
+        // stored. Route object literals through the property-based fallback so
+        // `await { then(r){ r(v) } }` and delegated async-iterator results (whose
+        // `next()` returns object-literal promises — test262 yield-star-async-*)
+        // assimilate instead of resolving with the thenable object itself.
+        return assimilate_via_then_property(value);
     }
 
-    // Probe the vtable chain for `then`. Bail out on plain objects (no class
-    // method) so the await passes the original value through unchanged.
-    let (then_func_ptr, then_param_count) =
+    // Probe the vtable chain for `then` (a class *method*). If that fails, fall
+    // back to reading `then` as an own/inherited DATA property — object-literal
+    // thenables (`{ then(resolve, reject) { … } }`, the common test262 and real-
+    // world shape) carry `then` as a plain property, not a class method, so the
+    // vtable probe alone never assimilates them. Per ECMA-262 PromiseResolve /
+    // PromiseResolveThenableJob: `thenAction = Get(value, "then")`; if callable,
+    // run `Call(thenAction, value, «resolve, reject»)`. Otherwise resolve plain
+    // (return the value unchanged).
+    let (then_func_ptr, then_param_count, _then_has_synthetic_arguments, _then_has_rest) =
         match crate::object::lookup_class_method_in_chain(class_id, "then") {
             Some(p) => p,
-            None => return value,
+            None => return assimilate_via_then_property(value),
         };
 
     // Allocate the wrapper promise plus resolve/reject closures pointing at it.
@@ -1165,6 +1324,60 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
             }
         }
     }
+
+    crate::value::js_nanbox_pointer(new_promise as i64)
+}
+
+/// Assimilate an object-literal thenable whose `then` is an own/inherited DATA
+/// property (not a class method). Reads `Get(value, "then")`; if it is callable,
+/// allocates a wrapper promise and runs `value.then(resolve, reject)` to follow
+/// its eventual state. Returns the wrapper promise, or — when `then` is absent
+/// or not callable — the original `value` unchanged (resolve-plain).
+fn assimilate_via_then_property(value: f64) -> f64 {
+    // `Get(value, "then")` (27.2.1.3.2 step 8). A throwing getter is an abrupt
+    // completion → resolve-with-thenable rejects the wrapper promise with the
+    // thrown value (step 9), rather than letting the exception unwind out of the
+    // resolve path. Return that rejected wrapper so callers chain it.
+    let then_val = match combinator_catch_js(|| unsafe {
+        crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
+    }) {
+        Ok(v) => v,
+        Err(reason) => {
+            let p = js_promise_new();
+            js_promise_reject(p, reason);
+            return crate::value::js_nanbox_pointer(p as i64);
+        }
+    };
+    if callable_closure_value(then_val).is_none() {
+        return value;
+    }
+
+    let new_promise = js_promise_new();
+    let promise_i64 = new_promise as i64;
+
+    let resolve_closure = crate::closure::js_closure_alloc(promise_resolve_fn as *const u8, 1);
+    crate::closure::js_closure_set_capture_ptr(resolve_closure, 0, promise_i64);
+    let reject_closure = crate::closure::js_closure_alloc(promise_reject_fn as *const u8, 1);
+    crate::closure::js_closure_set_capture_ptr(reject_closure, 0, promise_i64);
+
+    // Pass the resolving functions as proper NaN-boxed function values (not the
+    // raw closure-pointer-bits convention used internally by
+    // `js_promise_new_with_executor`): a thenable's `then(onFulfilled,
+    // onRejected)` is a USER-visible call, and spec/Node hand it real functions —
+    // so `typeof onFulfilled === "function"` must hold (test262
+    // yield-star-async-* / yield-star-next-then-* check this). A NaN-boxed
+    // closure is still invoked through the normal call path.
+    let resolve_f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
+    let reject_f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
+    let args = [resolve_f64, reject_f64];
+
+    // Bind `this` to the thenable so a non-arrow `then` body reads the right
+    // receiver, then call `Get(value, "then")` as a value (own data property).
+    let prev = crate::object::js_implicit_this_set(value);
+    unsafe {
+        crate::closure::js_native_call_value(then_val, args.as_ptr(), args.len());
+    }
+    crate::object::js_implicit_this_set(prev);
 
     crate::value::js_nanbox_pointer(new_promise as i64)
 }
@@ -1352,7 +1565,6 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     use crate::closure::{
         js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
     };
-    use crate::value::js_nanbox_get_pointer;
 
     let result_promise = js_promise_new();
 
@@ -1405,20 +1617,10 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     js_closure_set_capture_ptr(shared_fulfill, 1, state_arr as i64);
 
     for i in 0..count {
-        let promise_f64 = adapt_foreign_promise_value(js_array_get_f64(promises_arr, i));
-        // Discriminate via GC-header obj_type — string/bigint NaN-boxed
-        // values would otherwise pass through pointer extraction and crash
-        // js_promise_then.
-        if js_value_is_promise(promise_f64) == 0 {
-            // Non-promise value — treat as fulfilled, settle immediately if not yet settled
-            let already_settled = js_array_get_f64(state_arr, 1);
-            if already_settled == 0.0 {
-                js_array_set_f64(state_arr, 1, 1.0);
-                js_promise_resolve(result_promise, promise_f64);
-            }
-            return result_promise;
-        }
-        let promise_ptr = js_nanbox_get_pointer(promise_f64) as *mut Promise;
+        let promise_ptr = match promise_resolve_for_combinator(js_array_get_f64(promises_arr, i)) {
+            Ok(promise) => promise,
+            Err(reason) => js_promise_rejected(reason),
+        };
 
         let reject_closure = js_closure_alloc(promise_any_reject_handler as *const u8, 4);
         js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
@@ -1520,6 +1722,43 @@ mod tests {
     fn promise_probe_rejects_pointer_tagged_native_handles() {
         let fetch_family_handle = js_nanbox_pointer(0x40001);
         assert_eq!(js_value_is_promise(fetch_family_handle), 0);
+    }
+
+    // #5226: small typed arrays / buffers are system-`alloc`'d off the GC heap
+    // with NO 8-byte GcHeader prefix and are tracked only in side tables. The
+    // type-dispatch probes (`js_value_is_promise`, `is_date_cell_addr`, …) must
+    // recognize them via the side table and must NOT back-read
+    // `ptr - GC_HEADER_SIZE` — a read on a block at the start of a freshly
+    // mapped region crosses into the (unmapped) preceding page and segfaults.
+    // Reproduce that worst case with a guarded mapping: without the side-table
+    // skip these probes SIGSEGV; with it, they classify the block correctly.
+    #[cfg(unix)]
+    #[test]
+    fn type_probes_skip_offheap_typed_array_with_unmapped_preceding_page() {
+        unsafe {
+            let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+            let total = page * 2;
+            let base = libc::mmap(
+                std::ptr::null_mut(),
+                total,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(base, libc::MAP_FAILED);
+            // Guard the first page so any `ptr - GC_HEADER_SIZE` back-read faults.
+            assert_eq!(libc::mprotect(base, page, libc::PROT_NONE), 0);
+            let ta = (base as *mut u8).add(page) as *const crate::typedarray::TypedArrayHeader;
+            crate::typedarray::register_typed_array(ta, 0);
+
+            let value = js_nanbox_pointer(ta as i64);
+            assert_eq!(js_value_is_promise(value), 0);
+            assert!(!crate::date::is_date_cell_addr(ta as usize));
+
+            crate::typedarray::unregister_typed_array(ta);
+            assert_eq!(libc::munmap(base, total), 0);
+        }
     }
 
     extern "C" fn test_thenable_resolve_twice(

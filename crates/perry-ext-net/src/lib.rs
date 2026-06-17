@@ -11,11 +11,11 @@
 //!
 //! # Differences from the perry-stdlib version
 //!
-//! - Uses `perry_ffi::spawn_blocking` + `tokio::runtime::Handle::current().block_on`
-//!   instead of `crate::common::async_bridge::spawn` (cooperative async over
-//!   the shared runtime). Each socket reader task ties up one blocking-pool
-//!   thread for the socket's lifetime — fine for v0.5.x (default blocking
-//!   pool is 512); cooperative `spawn_async` is a v0.6.0 optimization.
+//! - Uses `perry_ffi::spawn_blocking` plus an explicit current-thread Tokio
+//!   runtime instead of `crate::common::async_bridge::spawn` (cooperative async
+//!   over the shared runtime). Each socket reader task ties up one
+//!   blocking-pool thread for the socket's lifetime — fine for v0.5.x (default
+//!   blocking pool is 512); cooperative `spawn_async` is a v0.6.0 optimization.
 //! - Uses `perry_ffi::JsClosure` instead of raw `js_closure_call*` extern fns.
 //! - Uses `perry_ffi::alloc_buffer` / `BufferHeader` instead of
 //!   `perry-runtime::buffer::*` directly.
@@ -61,6 +61,9 @@ mod tls;
 // the rest of the FFI surface.
 mod lifecycle;
 pub use lifecycle::*;
+mod classes;
+pub use classes::*;
+mod dispatch;
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
 mod raw_bridge;
@@ -69,17 +72,25 @@ use raw_bridge::RawReadState;
 // perry-runtime (split out to keep lib.rs under the 2000-line gate). The
 // `#[no_mangle]` setter/setTimeout symbols re-export at the crate root; the
 // validator `extern` declarations are imported for the listen/connect sites.
+mod adopt;
+pub use adopt::{adopt_upgraded_tcp_stream, ensure_adopted_socket_dispatch};
 mod option_setters;
 pub use option_setters::{
-    js_net_server_noop_self, js_net_socket_noop_self, js_net_socket_set_timeout,
+    js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
+    js_net_socket_set_encoding, js_net_socket_set_timeout, js_net_socket_set_type_of_service,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
+
+mod server_state;
+#[cfg(test)]
+mod test_async_shims;
+pub use server_state::*;
 
 use crate::tls::do_tls_handshake;
 
 // ─── Transport enum (plain or TLS, swappable at runtime) ─────────────────────
 
-enum Transport {
+pub(crate) enum Transport {
     Plain(TcpStream),
     Tls(Box<TlsStream<TcpStream>>),
 }
@@ -179,6 +190,16 @@ pub(crate) mod statics {
         static S: OnceLock<Mutex<HashMap<i64, ServerState>>> = OnceLock::new();
         S.get_or_init(|| Mutex::new(HashMap::new()))
     }
+
+    /// #4973 — per-socket read encoding set via `socket.setEncoding(enc)`.
+    /// When present, the main-thread pump delivers `'data'` as a decoded
+    /// string instead of a Buffer (Node readable-stream semantics). Side
+    /// table (not a SocketState field) so the many SocketState literal
+    /// constructions stay untouched.
+    pub fn encodings() -> &'static Mutex<HashMap<i64, String>> {
+        static E: OnceLock<Mutex<HashMap<i64, String>>> = OnceLock::new();
+        E.get_or_init(|| Mutex::new(HashMap::new()))
+    }
 }
 
 /// Backing state for an `net.Server` handle (`net.createServer(...)`).
@@ -196,15 +217,29 @@ pub(crate) struct ServerState {
     pub bound_port: u16,
     pub bound_host: String,
     pub listening: bool,
+    pub active_connections: usize,
+    pub max_connections: Option<usize>,
+    pub drop_max_connection: Option<bool>,
 }
 
 static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+
+extern "C" {
+    fn js_register_net_socket_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+}
+
+unsafe extern "C" fn ext_net_socket_handle_probe(handle: i64) -> bool {
+    is_net_socket_handle(handle)
+}
 
 /// Register the net GC root scanner exactly once. Safe to call from any
 /// `js_net_*` entry point on the main thread.
 pub(crate) fn ensure_gc_scanner_registered() {
     NET_GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
+        unsafe {
+            js_register_net_socket_handle_probe(ext_net_socket_handle_probe);
+        }
         // #2154 — publish the raw-consumer vtable for perry-ext-http (runs on
         // the first net FFI entry, before http could reference a socket).
         raw_bridge::register();
@@ -234,8 +269,8 @@ pub(crate) struct SocketState {
     /// `js_net_socket_method_connect`. Held here so the deferred-connect
     /// path (issue #422: `new net.Socket()` then `sock.connect(port,host)`)
     /// can move it into the spawned task at connect time.
-    pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
-    is_open: bool,
+    pub(crate) pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
+    pub(crate) is_open: bool,
     /// Issue #2131 — the kernel-assigned local address, populated after
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
@@ -253,6 +288,8 @@ pub(crate) struct SocketState {
     pub(crate) bytes_read: u64,
     pub(crate) bytes_written: u64,
     pub(crate) timeout: Option<u64>,
+    pub(crate) type_of_service: u8,
+    pub(crate) server_id: Option<i64>,
 }
 
 pub(crate) enum SocketCommand {
@@ -295,6 +332,7 @@ enum PendingNetEvent {
     /// Fires `'error'` listeners with an Error-shaped object.
     ///   `.0` = server id, `.1` = error message.
     ServerError(i64, String),
+    ServerDrop(i64, server_state::DropInfo),
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -316,6 +354,7 @@ pub(crate) unsafe fn string_from_header_i64(ptr: i64) -> Option<String> {
 extern "C" {
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
     fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+    fn js_net_callback_ptr(value: f64) -> i64;
     /// Issue #1131 — returns 1 if `ptr` is a registered Buffer /
     /// Uint8Array in the runtime's `BUFFER_REGISTRY`. This is the only
     /// safe way to tell a `BufferHeader` apart from a `StringHeader`
@@ -414,13 +453,13 @@ pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
 /// missing user args with `TAG_UNDEFINED` (`0x7FFC` band), so this
 /// check has to reject `undefined` cleanly to keep "user passed only
 /// 2 args" from misfiring as "user passed a callback". Issue #770.
-fn is_nanboxed_pointer(val_f64: f64) -> bool {
+pub(crate) fn is_nanboxed_pointer(val_f64: f64) -> bool {
     (val_f64.to_bits() >> 48) == 0x7FFD
 }
 
 /// Unbox a NaN-boxed value to the raw 48-bit pointer payload, regardless
 /// of which `0x7FFx` tag it carries.
-unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
+pub(crate) unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
     let bits = val_f64.to_bits();
     (bits & 0x0000_FFFF_FFFF_FFFF) as *mut u8
 }
@@ -428,7 +467,7 @@ unsafe fn unbox_pointer(val_f64: f64) -> *mut u8 {
 /// Extract a string field from a NaN-boxed JS object. Accepts string
 /// values and numeric values (numbers stringified) — Node accepts both
 /// shapes for `port` etc.
-unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
+pub(crate) unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<String> {
     if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
@@ -451,7 +490,7 @@ unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<Stri
     None
 }
 
-unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
+pub(crate) unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
     if !is_nanboxed_pointer(obj_f64) {
         return None;
     }
@@ -479,6 +518,31 @@ unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64>
     None
 }
 
+/// Read a boolean option off a NaN-boxed JS object. Accepts real
+/// booleans plus numbers (`rejectUnauthorized: 0` shows up in npm
+/// code). `None` when the field is absent/undefined/null. #4971.
+pub(crate) unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Option<bool> {
+    if !is_nanboxed_pointer(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
+    if obj_ptr.is_null() {
+        return None;
+    }
+    let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let val = JsValue::from_bits(js_object_get_field_by_name_f64(obj_ptr, key).to_bits());
+    if val.is_undefined() || val.is_null() {
+        return None;
+    }
+    if val.is_bool() {
+        return Some(val.to_bool());
+    }
+    if val.is_number() {
+        return Some(val.to_number() != 0.0);
+    }
+    None
+}
+
 /// Build an `Error`-shaped object `{ message: msg }` so user code can
 /// read `err.message` from the `'error'` listener — Node emits Error
 /// instances, not raw strings. Returns a NaN-boxed `f64` pointing at
@@ -501,7 +565,7 @@ unsafe fn build_error_object(msg: &str) -> f64 {
     f64::from_bits(obj_v.bits())
 }
 
-fn next_id() -> i64 {
+pub(crate) fn next_id() -> i64 {
     let mut g = statics::next_net_id().lock().unwrap();
     let id = *g;
     *g += 1;
@@ -517,9 +581,27 @@ fn push_event(ev: PendingNetEvent) {
     perry_ffi::notify_main_thread();
 }
 
+fn is_local_server_target(host: &str, port: u16) -> bool {
+    let local_host = matches!(host, "localhost" | "127.0.0.1" | "::1" | "0.0.0.0");
+    if !local_host {
+        return false;
+    }
+    statics::servers().lock().ok().is_some_and(|servers| {
+        servers
+            .values()
+            .any(|server| server.listening && server.bound_port == port)
+    })
+}
+
 fn mark_closed(id: i64) {
-    if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
+    let owner = if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
         s.is_open = false;
+        s.server_id.take()
+    } else {
+        None
+    };
+    if let Some(server_id) = owner {
+        server_state::socket_closed(server_id);
     }
 }
 
@@ -538,50 +620,16 @@ fn spawn_socket_runner<F>(fut_factory: F)
 where
     F: FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + 'static,
 {
-    // Schedule the future onto a tokio runtime worker (which has
-    // the I/O reactor) instead of spawn_blocking + block_on (which
-    // creates a fresh current_thread runtime without I/O reactor).
-    // The v0.5.578 `spawn_blocking_with_reactor` shim runs the
-    // closure inside an `async` block on the multi-thread runtime,
-    // so `tokio::spawn(fut)` from inside picks up the I/O reactor
-    // properly. Detached spawn — we don't wait for the socket task
-    // to complete (that's the whole point: it loops until close).
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        // We're already inside a tokio task (the
-        // spawn_blocking_with_reactor shim wraps us in
-        // `runtime().spawn(async {...})`), so `block_on` would
-        // panic with "cannot start a runtime from within a
-        // runtime". Schedule the socket future as a fresh
-        // detached task on the same multi-thread runtime
-        // instead — the future will drive itself to completion
-        // via `await` chains while we return immediately.
-        //
-        // Defeat the LTO pass that dead-strips perry-ext-net's
-        // private copy of tokio's CONTEXT statics. Without these
-        // touches, the subsequent `Handle::current()` panics with
-        // "there is no reactor running" — even though perry-stdlib's
-        // tokio runtime has the context entered. Two layers:
-        //   - eprintln of try_current() debug result keeps the
-        //     CONTEXT static referenced AT MULTIPLE call sites.
-        //   - black_box on the spawn handle prevents the
-        //     compiler from collapsing this whole closure into a
-        //     no-op when nothing later uses the result.
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-net] BUG: spawn_socket_runner Handle::try_current returned Err — \
-                 LTO has likely dead-stripped tokio's CONTEXT statics. This will panic on \
-                 the subsequent `Handle::current()`."
-            );
-        }
-        let handle = tokio::runtime::Handle::current();
-        let fut = fut_factory();
-        // Detach via JoinHandle drop — tokio doesn't cancel on drop
-        // (only on explicit `abort()`), unlike `JoinSet` semantics.
-        let jh = handle.spawn(fut);
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
+    // Run each socket future on an explicit current-thread runtime. Relying on
+    // the FFI callback's ambient Handle has proven brittle under release/LTO
+    // builds, while the socket task already occupies one blocking-pool thread
+    // for its lifetime.
+    perry_ffi::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create net socket runtime");
+        rt.block_on(fut_factory());
     });
 }
 
@@ -658,15 +706,20 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
         fn js_get_string_pointer_unified(value: f64) -> i64;
     }
     let host_ptr = js_get_string_pointer_unified(arg2_f64);
-    let host = match string_from_header_i64(host_ptr) {
-        Some(h) => h,
-        None => return 0,
+    let (host, listener_f64) = match string_from_header_i64(host_ptr) {
+        Some(h) => (h, arg3_f64),
+        // #4905: `connect(port)` / `connect(port, connectListener)` —
+        // Node defaults the host to localhost when arg2 isn't a string
+        // (it may carry the connectListener instead). Pre-fix this
+        // returned handle 0, so the socket never connected and no
+        // 'connect'/'error' event ever fired.
+        None => ("127.0.0.1".to_string(), arg2_f64),
     };
     // #2013: positional `port` must be a valid integer in [0, 65536).
     js_net_validate_connect_port(arg1_f64);
     let port = arg1_f64 as u16;
     let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
-    register_connect_cb(handle, arg3_f64);
+    register_connect_cb(handle, listener_f64);
     handle
 }
 
@@ -679,6 +732,7 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     ensure_gc_scanner_registered();
+    dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     statics::sockets().lock().unwrap().insert(
@@ -693,6 +747,8 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             bytes_read: 0,
             bytes_written: 0,
             timeout: None,
+            type_of_service: 0,
+            server_id: None,
         },
     );
     statics::listeners()
@@ -704,38 +760,14 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
 
 // ─── FFI: net.createServer(options?, connectionListener?) ────────────────────
 
-/// Issue #1123 — `net.createServer(options?, connectionListener?)`. Allocates
-/// a placeholder server handle so the dotted (`net.createServer(...)`) and
-/// named-import (`import { createServer } from "node:net"`) forms both have
-/// a non-undefined return value to bind to `server`. The full event-driven
-/// accept loop (mirroring `js_node_http_server_listen`) is a separate
-/// follow-up — today this is just enough for the codegen lowering (`Expr::
-/// NetCreateServer` in `crates/perry-codegen/src/expr.rs`) and the HIR
-/// named-import bridge (`crates/perry-hir/src/lower/expr_call.rs`'s
-/// `("net", "createServer")` arm) to compile + link + run without
-/// "expression NetCreateServer not yet supported" / `_js_net_create_server`
-/// link errors.
-///
-/// Returns a positive integer handle as `f64` (the same convention as
-/// `js_net_socket_alloc` for the i64 socket id — callers store it through
-/// the codegen's DOUBLE return slot, so a raw small-integer f64 is the
-/// expected wire format here). If a `connectionListener` closure is
-/// provided (POINTER_TAG-tagged i64 from the codegen's `unbox_to_i64`),
-/// we stash it under the `'connection'` event slot in `NET_LISTENERS`
-/// so a future full implementation of `js_net_server_listen` can fire
-/// it. Options are accepted but ignored for now.
-///
-/// # Safety
-///
-/// `connection_listener_i64` may be 0 (no listener provided) or a raw
-/// (`POINTER_TAG`-stripped) `*const RawClosureHeader`. We only walk the
-/// pointer through `JsClosure::from_raw`'s null-tolerant API.
+/// `net.createServer(options?, connectionListener?)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_create_server(
     _options_i64: i64,
     connection_listener_i64: i64,
 ) -> i64 {
     ensure_gc_scanner_registered();
+    dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     statics::listeners()
         .lock()
@@ -753,6 +785,9 @@ pub unsafe extern "C" fn js_net_create_server(
             bound_port: 0,
             bound_host: String::new(),
             listening: false,
+            active_connections: 0,
+            max_connections: None,
+            drop_max_connection: None,
         },
     );
     if connection_listener_i64 != 0 {
@@ -765,35 +800,10 @@ pub unsafe extern "C" fn js_net_create_server(
                 .push(connection_listener_i64);
         }
     }
-    // Issue #1123 followup — return the raw `i64` handle so the codegen
-    // can NaN-box it with POINTER_TAG (mirroring `js_node_http_create_server`).
-    // Without this, downstream `server.listen(...)` couldn't recover
-    // the handle: `unbox_to_i64` on a bare `1.0` would mask to 0 because
-    // the lower 48 bits of `0x3FF0_0000_0000_0000` are all zero.
-    //
-    // Side effect: `typeof server` now reports `"object"` (the canonical
-    // Node value — `net.Server extends EventEmitter`) instead of the
-    // `"number"` the initial #1123 placeholder briefly surfaced. The
-    // existing test fixture's expected stdout was updated to match.
     id
 }
 
 // ─── FFI: net.Server.listen / .close / .address / .on ────────────────────────
-//
-// Issue #1123 followup — full accept-loop wiring for the server handle
-// allocated by `js_net_create_server` above. Mirrors the shape of
-// `perry-ext-http-server::js_node_http_server_listen` (bind + spawn
-// accept loop on the multi-thread tokio runtime, then return
-// immediately; per-event dispatch happens on the main thread inside
-// `js_net_process_pending`).
-//
-// **Why not reuse the http-server scaffolding?** That crate hard-wires
-// hyper's HTTP/1 service path into every accepted connection — every
-// byte goes through `service_fn` + `Response<Full<Bytes>>`. raw TCP
-// (`net.createServer`) emits the accepted `TcpStream` directly to the
-// user's `'connection'` listener wrapped in a `net.Socket` handle. The
-// two paths share the "spawn accept loop + drain on main thread"
-// pattern but nothing past the listener.bind() call.
 
 /// `server.listen(port, callback?)` — bind a tokio `TcpListener` on
 /// `0.0.0.0:port` and spawn an accept loop on the shared multi-thread
@@ -814,8 +824,12 @@ pub unsafe extern "C" fn js_net_create_server(
 /// `callback_i64` may be 0 (no callback) or a raw `*const RawClosureHeader`
 /// cast to `i64` — the codegen ABI for NA_PTR-unboxed closures.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i64: i64) {
+pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64, arg3: f64) {
     ensure_gc_scanner_registered();
+    let callback_i64 = match js_net_callback_ptr(arg3) {
+        0 => js_net_callback_ptr(arg2),
+        cb => cb,
+    };
     // #2013: a numeric `port` must be an integer in [0, 65536); Node throws
     // RangeError [ERR_SOCKET_BAD_PORT] otherwise. (A string is a pipe path and
     // is left alone.)
@@ -859,23 +873,15 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
     let host_for_spawn = host.clone();
     let server_id = handle;
 
-    // Schedule the accept loop on the multi-thread tokio runtime that
-    // perry-stdlib hosts. Mirrors `js_node_http_server_listen`'s
-    // spawn_blocking_with_reactor → tokio::spawn pattern: the outer
-    // closure tickles tokio's CONTEXT statics through LTO; the inner
-    // `tokio::spawn` actually runs the async work.
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        // Same LTO-defeating dance as `spawn_socket_runner` above.
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            eprintln!(
-                "[perry-ext-net] BUG: js_net_server_listen Handle::try_current returned Err — \
-                 LTO has likely dead-stripped tokio's CONTEXT statics."
-            );
-        }
-        let rt = tokio::runtime::Handle::current();
-        let jh = rt.spawn(async move {
+    // Run the accept loop inside a current-thread runtime on a blocking-pool
+    // thread. This avoids relying on an ambient Handle in the FFI callback,
+    // which can be absent under some release/LTO builds.
+    perry_ffi::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create net server runtime");
+        rt.block_on(async move {
             let bind_str = format!("{}:{}", host_for_spawn, port_u16);
             let listener = match TcpListener::bind(&bind_str).await {
                 Ok(l) => l,
@@ -918,6 +924,12 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, _peer)) => {
+                                if let Some(info) =
+                                    server_state::should_drop_connection(server_id, &stream)
+                                {
+                                    push_event(PendingNetEvent::ServerDrop(server_id, info));
+                                    continue;
+                                }
                                 // Allocate a fresh Socket handle that
                                 // shares the existing socket machinery
                                 // (run_socket_task, command channel,
@@ -949,6 +961,8 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                                         bytes_read: 0,
                                         bytes_written: 0,
                                         timeout: None,
+                                        type_of_service: 0,
+                                        server_id: Some(server_id),
                                     },
                                 );
                                 statics::listeners()
@@ -1012,8 +1026,6 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, callback_i
                 }
             }
         });
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
     });
 }
 
@@ -1166,6 +1178,11 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
                 s.is_open = true;
                 s.local_addr = local;
             }
+            if is_local_server_target(&host, port) {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            } else {
+                tokio::task::yield_now().await;
+            }
             push_event(PendingNetEvent::Connect(handle));
 
             run_socket_task(handle, Transport::Plain(tcp), &mut rx).await;
@@ -1173,41 +1190,20 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
     });
 }
 
-// ─── FFI: tls.connect(host, port, servername) ────────────────────────────────
-
-/// `tls.connect(host, port, servername, verify)` — opens a plain TCP socket
-/// and runs the TLS handshake before firing `'connect'`. Use this for
-/// HTTPS-style protocols that start TLS from byte 0.
-///
-/// # Safety
-///
-/// `host_ptr` and `servername_ptr` must be null or Perry-runtime
-/// `StringHeader` pointers cast to `i64`.
-#[no_mangle]
-pub unsafe extern "C" fn js_tls_connect(
-    host_ptr: i64,
-    port: f64,
-    servername_ptr: i64,
-    verify: f64,
-) -> i64 {
-    let host = match string_from_header_i64(host_ptr) {
-        Some(h) => h,
-        None => return 0,
-    };
-    let servername = match string_from_header_i64(servername_ptr) {
-        Some(s) => s,
-        None => host.clone(),
-    };
-    let port = port as u16;
-    let verify = verify != 0.0;
-    spawn_socket_task(host, port, Some((servername, verify)))
-}
+// ─── FFI: tls.connect ────────────────────────────────────────────────────────
+// `js_tls_connect` lives in tls.rs (this file is at the 2000-line gate);
+// it resolves Node's connect overloads and reuses `spawn_socket_task`.
 
 /// Internal: allocate the handle, spawn the tokio task.
 /// `direct_tls = Some((servername, verify))` runs a TLS handshake before
 /// firing 'connect'; None keeps the socket in plain TCP mode.
-fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>) -> i64 {
+pub(crate) fn spawn_socket_task(
+    host: String,
+    port: u16,
+    direct_tls: Option<(String, bool)>,
+) -> i64 {
     ensure_gc_scanner_registered();
+    dispatch::ensure_runtime_dispatch_registered();
     let id = next_id();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
 
@@ -1223,6 +1219,8 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
             bytes_read: 0,
             bytes_written: 0,
             timeout: None,
+            type_of_service: 0,
+            server_id: None,
         },
     );
     statics::listeners()
@@ -1267,6 +1265,11 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
                 s.is_open = true;
                 s.local_addr = local;
             }
+            if is_local_server_target(&host, port) {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            } else {
+                tokio::task::yield_now().await;
+            }
             push_event(PendingNetEvent::Connect(id));
 
             run_socket_task(id, transport, &mut rx).await;
@@ -1277,7 +1280,7 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
 }
 
 /// The read/write/command loop. Shared by plain-TCP and direct-TLS paths.
-async fn run_socket_task(
+pub(crate) async fn run_socket_task(
     id: i64,
     initial_transport: Transport,
     rx: &mut mpsc::UnboundedReceiver<SocketCommand>,
@@ -1496,6 +1499,27 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 /// capacity retained → zero steady-state allocation).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_process_pending() -> i32 {
+    js_ext_net_drain_pending()
+}
+
+/// Drain ext-net's own pending-event queue.
+///
+/// This carries a DISTINCT `#[no_mangle]` symbol (`js_ext_net_drain_pending`),
+/// deliberately NOT the `js_net_process_pending` name that the bundled stdlib
+/// net ALSO exports. In a workspace/auto-optimize build both crates are
+/// linked, so `js_net_process_pending` is a duplicate symbol; the link binds
+/// every reference to whichever twin wins (stdlib's). The aux pump
+/// (`process_pending_aux`) and the extern wrapper above therefore call THIS
+/// uniquely-named entry point instead — a symbol with no twin and nothing to
+/// fold against — so the adopted raw-`'upgrade'` socket's `Close` event in
+/// ext-net's own queue is actually drained rather than left to pin the event
+/// loop forever. Without this the loop hung, and the behavior flipped with
+/// unrelated code-size changes (link-order roulette). (#5010)
+///
+/// # Safety
+/// Fires user JS closures (listeners); callers must hold a valid runtime.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
     thread_local! {
         static SCRATCH: std::cell::RefCell<Vec<PendingNetEvent>> =
             const { std::cell::RefCell::new(Vec::new()) };
@@ -1517,22 +1541,49 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                     }
                 }
                 lifecycle::drain_once_listeners(id, "connect");
+                // TLS sockets additionally fire 'secureConnect' once the
+                // handshake completes — the direct-TLS connect path only
+                // signals Connect after the handshake, so this is the right
+                // tick. Plain sockets simply have no listeners here. #4971.
+                for cb in listeners_for(id, "secureConnect") {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
+                    }
+                }
+                lifecycle::drain_once_listeners(id, "secureConnect");
             }
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
                 if cbs.is_empty() {
                     continue;
                 }
-                let buf = alloc_buffer(&bytes);
-                if buf.is_null() {
-                    continue;
-                }
-                // POINTER_TAG over the buffer pointer.
-                let buf_f64 =
-                    f64::from_bits(0x7FFD_0000_0000_0000 | (buf as u64 & 0x0000_FFFF_FFFF_FFFF));
+                // #4973: `socket.setEncoding(enc)` switches 'data' delivery
+                // from Buffers to decoded strings (Node readable-stream
+                // semantics). 'hex'/'base64' render their text forms; the
+                // remaining text encodings decode as UTF-8 (lossy).
+                let encoding = statics::encodings().lock().unwrap().get(&id).cloned();
+                let payload_f64 = if let Some(enc) = encoding {
+                    let s = match enc.as_str() {
+                        "hex" => bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                        "base64" => adopt::base64_encode(&bytes),
+                        _ => String::from_utf8_lossy(&bytes).into_owned(),
+                    };
+                    let hdr = alloc_string(&s);
+                    f64::from_bits(
+                        0x7FFF_0000_0000_0000 | (hdr.as_raw() as u64 & 0x0000_FFFF_FFFF_FFFF),
+                    )
+                } else {
+                    let buf = alloc_buffer(&bytes);
+                    if buf.is_null() {
+                        continue;
+                    }
+                    // POINTER_TAG over the buffer pointer.
+                    f64::from_bits(0x7FFD_0000_0000_0000 | (buf as u64 & 0x0000_FFFF_FFFF_FFFF))
+                };
                 for cb in cbs {
                     if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(buf_f64);
+                        let _ =
+                            JsClosure::from_raw(cb as *const RawClosureHeader).call1(payload_f64);
                     }
                 }
                 lifecycle::drain_once_listeners(id, "data");
@@ -1567,14 +1618,16 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "end");
             }
             PendingNetEvent::Close(id) => {
+                let had_error = f64::from_bits(JsValue::from_bool(false).bits());
                 for cb in listeners_for(id, "close") {
                     if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(had_error);
                     }
                 }
                 statics::listeners().lock().unwrap().remove(&id);
                 statics::sockets().lock().unwrap().remove(&id);
                 statics::once_flags().lock().unwrap().remove(&id);
+                statics::encodings().lock().unwrap().remove(&id);
             }
             // Issue #1123 followup — server-side events. The
             // accept loop pushes `ServerConnection`/`ServerListening`/
@@ -1672,6 +1725,20 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 }
                 lifecycle::drain_once_listeners(server_id, "error");
             }
+            PendingNetEvent::ServerDrop(server_id, info) => {
+                let cbs = listeners_for(server_id, "drop");
+                if cbs.is_empty() {
+                    lifecycle::drain_once_listeners(server_id, "drop");
+                    continue;
+                }
+                let info = server_state::build_drop_object(&info);
+                for cb in cbs {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(info);
+                    }
+                }
+                lifecycle::drain_once_listeners(server_id, "drop");
+            }
         }
     }
 
@@ -1700,24 +1767,10 @@ fn listeners_for(id: i64, event: &str) -> Vec<i64> {
 // `drain_once_listeners` lives in `lifecycle::drain_once_listeners` so
 // the file-size gate keeps a single owner for the EventEmitter surface.
 
-/// Returns 1 if there are pending events or live sockets keeping the
-/// runtime's main loop alive.
+/// Returns 1 if queued events or live net handles keep the loop alive.
 #[no_mangle]
 pub extern "C" fn js_net_has_pending() -> i32 {
-    if !statics::pending_events().lock().unwrap().is_empty() {
-        return 1;
-    }
-    if !statics::sockets().lock().unwrap().is_empty() {
-        return 1;
-    }
-    // Issue #1123 followup — a listening `net.Server` keeps the loop
-    // alive too: pre-fix, `createServer(...).listen(port, cb)` would
-    // exit before any client ever connected because the gate only
-    // counted accepted sockets.
-    if !statics::servers().lock().unwrap().is_empty() {
-        return 1;
-    }
-    0
+    server_state::has_active_handles() as i32
 }
 
 /// True iff `handle` is a currently-registered net socket id. Mirrors the
@@ -1777,34 +1830,10 @@ pub extern "C" fn js_ext_net_is_server_handle(handle: i64) -> i32 {
     }
 }
 
-/// Returns 1 if there are pending socket events or live socket handles
-/// keeping the runtime's event loop alive.
-///
-/// "Live" here means *registered* — including sockets still establishing
-/// their TCP connection. Counting only fully-open sockets caused the
-/// runtime to exit before async `connect` ever completed (the open flag
-/// flips inside the spawned task, after `await TcpStream::connect`).
-///
-/// Without this, `await new Promise(r => sock.on('connect', r))` from
-/// a TS-source npm driver (e.g. `@perryts/mysql`) returns a Promise the
-/// runtime can't see is pending, so the event loop exits before the
-/// socket's 'connect' event ever fires through the pump. Issue #536.
+/// Auxiliary liveness hook registered with the runtime for mixed stdlib links.
 #[no_mangle]
 pub extern "C" fn js_ext_net_has_active_handles() -> i32 {
-    if !statics::pending_events().lock().unwrap().is_empty() {
-        return 1;
-    }
-    if !statics::sockets().lock().unwrap().is_empty() {
-        return 1;
-    }
-    // Issue #1123 followup — same rationale as `js_net_has_pending`:
-    // a listening server must keep the event loop alive until
-    // `.close()` drops the shutdown sender and the accept-loop task
-    // pushes its terminal `ServerClose` event.
-    if !statics::servers().lock().unwrap().is_empty() {
-        return 1;
-    }
-    0
+    server_state::has_active_handles() as i32
 }
 
 #[cfg(test)]

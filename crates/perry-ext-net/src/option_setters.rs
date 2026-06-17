@@ -16,6 +16,7 @@ extern "C" {
     pub(crate) fn js_net_validate_listen_port(value: f64);
     pub(crate) fn js_net_validate_connect_port(value: f64);
     fn js_net_validate_socket_timeout(value: f64);
+    fn js_net_validate_tos(value: f64) -> i32;
 }
 
 // ─── Chainable no-op socket/server options (issue #1852) ─────────────────────
@@ -73,5 +74,47 @@ pub extern "C" fn js_net_socket_set_timeout(handle: i64, msecs: f64, _callback_i
 /// handle unchanged.
 #[no_mangle]
 pub extern "C" fn js_net_server_noop_self(handle: i64) -> i64 {
+    handle
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_socket_get_type_of_service(handle: i64) -> f64 {
+    crate::statics::sockets()
+        .lock()
+        .ok()
+        .and_then(|sockets| sockets.get(&handle).map(|s| s.type_of_service as f64))
+        .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub extern "C" fn js_net_socket_set_type_of_service(handle: i64, tos: f64) -> i64 {
+    let tos = unsafe { js_net_validate_tos(tos) } as u8;
+    if let Some(s) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
+        s.type_of_service = tos;
+    }
+    handle
+}
+
+/// #4973: `socket.setEncoding(enc?)` — record the read encoding so the
+/// main-thread pump delivers `'data'` events as decoded strings (Node
+/// readable-stream semantics). Calling with no/nullish arg clears it
+/// (back to Buffers). Recognized text encodings decode as UTF-8 (lossy);
+/// 'hex'/'base64' render their respective text forms in the pump.
+///
+/// # Safety
+/// `enc_ptr` is either 0 or a StringHeader pointer (codegen NA_STR slot).
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_set_encoding(handle: i64, enc_ptr: i64) -> i64 {
+    match crate::string_from_header_i64(enc_ptr) {
+        Some(enc) if !enc.is_empty() => {
+            crate::statics::encodings()
+                .lock()
+                .unwrap()
+                .insert(handle, enc.to_ascii_lowercase());
+        }
+        _ => {
+            crate::statics::encodings().lock().unwrap().remove(&handle);
+        }
+    }
     handle
 }

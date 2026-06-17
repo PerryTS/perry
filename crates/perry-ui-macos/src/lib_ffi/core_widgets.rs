@@ -218,6 +218,13 @@ pub extern "C" fn perry_ui_toggle_create(label_ptr: i64, on_change: f64) -> i64 
     widgets::toggle::create(label_ptr as *const u8, on_change)
 }
 
+/// Set an existing Toggle's on/off state (issue #5076). `on` is 0 for
+/// off, non-zero for on.
+#[no_mangle]
+pub extern "C" fn perry_ui_toggle_set_state(handle: i64, on: i64) {
+    widgets::toggle::set_state(handle, on);
+}
+
 /// Create a Slider. min/max are f64, on_change = NaN-boxed closure.
 /// Returns widget handle. Initial value defaults to `min` (the TS
 /// surface `Slider(min, max, onChange)` doesn't expose `initial`, and
@@ -441,6 +448,13 @@ pub extern "C" fn perry_ui_text_set_number_of_lines(handle: i64, lines: i64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
     widgets::text::set_truncation_mode(handle, mode);
+}
+
+/// Issue #3621 — horizontal text alignment. `alignment`: 0=left, 1=right,
+/// 2=center, 3=justified, 4=natural.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) {
+    widgets::text::set_text_alignment(handle, alignment);
 }
 
 /// Set the text color of a Button.

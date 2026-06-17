@@ -366,6 +366,20 @@ pub struct CompileOptions {
     /// Without this, side-effect-only dynamic-import targets fail at
     /// link with `Undefined symbols: ___perry_ns_<prefix>`.
     pub is_dynamic_import_target: bool,
+
+    /// #5247: emit source-location tracking for the dynamic call-dispatch
+    /// throw path (`X is not a function`). Gated by the CLI `--debug-symbols`
+    /// flag; default `false` so release builds are byte-identical and incur
+    /// no per-call overhead. When `true` (and `module_source` is present),
+    /// each dynamic method-call dispatch is preceded by a
+    /// `js_set_call_location(file, line)` so the thrown TypeError's `.stack`
+    /// shows `at <file>:<line>`.
+    pub debug_locations: bool,
+    /// #5247: this module's original source text, used at codegen to resolve a
+    /// `Call`'s `byte_offset` to a 1-based line number. Only set when
+    /// `debug_locations` is on (avoids cloning source for every module in the
+    /// common build). `None` falls back to the `<anonymous>` frame.
+    pub module_source: Option<String>,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
@@ -429,6 +443,10 @@ pub struct ImportedClass {
     pub source_prefix: String,
     /// Number of constructor parameters (needed for dispatch).
     pub constructor_param_count: usize,
+    /// Whether the source class declared its own constructor body.
+    pub has_own_constructor: bool,
+    /// Whether the source class has instance fields that require initializer replay.
+    pub has_instance_fields: bool,
     /// Method names defined on this class.
     pub method_names: Vec<String>,
     /// Per-method explicit param counts, parallel to `method_names`. Issue #235:
@@ -487,6 +505,23 @@ pub struct ImportedClass {
     pub source_class_id: Option<u32>,
 }
 
+/// Constructor metadata for a class imported from another module.
+#[derive(Debug, Clone)]
+pub(crate) struct ImportedCtor {
+    pub symbol: String,
+    pub param_count: usize,
+    pub has_own_constructor: bool,
+    pub has_instance_fields: bool,
+}
+
+impl ImportedCtor {
+    /// True when constructor resolution must stop at this imported class even
+    /// when its standalone constructor takes zero user parameters.
+    pub(crate) fn stops_constructor_walk(&self) -> bool {
+        self.param_count > 0 || self.has_own_constructor || self.has_instance_fields
+    }
+}
+
 /// Cross-module import context, bundled into a single struct to avoid
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
@@ -503,6 +538,18 @@ pub(crate) struct CrossModuleCtx {
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`
     /// chains route through `js_promise_then`.
     pub local_async_funcs: std::collections::HashSet<u32>,
+    /// FuncIds of locally-defined generator functions after generator lowering.
+    /// `Function.is_generator` is cleared by the transform, so this is built
+    /// from the lowered iterator-return body shape and used by call lowering
+    /// to attach instances to the closure-owned `g.prototype`.
+    pub local_generator_funcs: std::collections::HashSet<u32>,
+    /// FuncIds of locally-defined plain functions whose body reads the
+    /// dynamic `this` binding (directly or via a this-capturing arrow).
+    /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS
+    /// slot to `undefined` for the duration of the call so the callee's
+    /// sloppy/strict `this` resolution sees "no receiver" instead of a
+    /// leaked receiver from an enclosing method dispatch (#3576).
+    pub funcs_reading_dynamic_this: std::collections::HashSet<u32>,
     pub type_aliases: std::collections::HashMap<String, perry_types::Type>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.
@@ -591,7 +638,7 @@ pub(crate) struct CrossModuleCtx {
     /// Imported class constructor function names. Maps class_name →
     /// full constructor symbol (e.g. "Editor" → "hone_editor_...__Editor_constructor").
     /// Populated from `opts.imported_classes`.
-    pub imported_class_ctors: std::collections::HashMap<String, (String, usize)>,
+    pub imported_class_ctors: std::collections::HashMap<String, ImportedCtor>,
     /// Compile-time i18n table for resolving `Expr::I18nString` against
     /// the project's default locale. `None` when i18n is not configured.
     /// Built from `opts.i18n_table` once at the top of `compile_module`

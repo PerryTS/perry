@@ -233,7 +233,21 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
     // `Undefined variable in update expression`. The conservative rule
     // is to leave the class inside the IIFE when *any* of its referenced
     // identifiers would lose their binding to the IIFE-local state.
-    let iife_locals = collect_top_level_let_const_var_names(source);
+    let mut iife_locals = collect_top_level_let_const_var_names(source);
+    // Issue #5251 — the cjs_wrap preamble injects `var exports`, `var module`,
+    // and a `require` function as IIFE-local bindings (see `wrap.rs`'s
+    // `cjs_preamble`). They are NOT declared in the original source, so the
+    // textual top-level scan above never sees them. A class whose body reads
+    // `exports.X` / `module.exports` / `require(...)` must therefore ALSO stay
+    // inside the IIFE — hoisting it out severs the closure over the injected
+    // `var exports`, and `exports` then resolves as an unknown global
+    // (`exports.X` lowers to the numeric `0` sentinel → `(number).test is not a
+    // function` inside class methods/constructors of CJS packages like ajv).
+    for injected in ["exports", "module", "require"] {
+        if !iife_locals.iter().any(|n| n == injected) {
+            iife_locals.push(injected.to_string());
+        }
+    }
 
     let mut i = 0usize;
     while i < bytes.len() {
@@ -248,11 +262,14 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
             continue;
         };
 
-        // Match optional leading whitespace.
-        let mut p = line_start;
-        while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
-            p += 1;
-        }
+        // Column-0 only: an indented `class` is (almost always) nested inside
+        // a function — `function mod() {\n  const f = ...;\n  class Event2 {
+        // constructor(t) { this[f] = t; } }\n}` (the `ws` package's event
+        // classes have this shape). Hoisting a nested class out of the IIFE
+        // severs its closure over the enclosing function's locals, turning
+        // `f` into a ReferenceError at runtime. The #2310 let/const/var
+        // guard below can't catch those — it only collects TOP-LEVEL names.
+        let p = line_start;
 
         if p + 6 <= bytes.len() && &bytes[p..p + 6] == b"class " {
             // Skip past "class ".
@@ -350,8 +367,22 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
                         // in which case hoisting would sever the closure (#2310).
                         let block_text = std::str::from_utf8(&bytes[line_start..r]).unwrap_or("");
                         let body_text = std::str::from_utf8(&bytes[body_start..r]).unwrap_or("");
+                        // The `extends` clause head (between the class name and the
+                        // body's opening `{`) can reference an IIFE-local require
+                        // alias, e.g. `class Derived extends _suffix.default { ... }`
+                        // (the Next.js `NextNodeServer extends base-server.default`
+                        // interop pattern). Hoisting the class above its
+                        // `const _suffix = _interop(require(...))` evaluates the
+                        // parent before the alias is assigned, so the dynamic
+                        // parent-registration sees `undefined` and throws "Class
+                        // extends value is not a constructor". Treat an extends-head
+                        // reference to an IIFE-local the same as a body reference:
+                        // keep the class inside the IIFE at its source position.
+                        let extends_head =
+                            std::str::from_utf8(&bytes[name_end..body_start]).unwrap_or("");
                         let references_iife_local =
-                            class_body_references_any(body_text, &iife_locals);
+                            class_body_references_any(body_text, &iife_locals)
+                                || class_body_references_any(extends_head, &iife_locals);
                         if !hoisted_names.contains(&class_name) && !references_iife_local {
                             hoisted_blocks.push(block_text);
                             hoisted_names.push(class_name);
@@ -563,6 +594,150 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
     }
 
     names
+}
+
+/// Issue #4933 — collect the names of every **top-level** `class <Name>`
+/// declaration anchored at column 0, regardless of whether it would hoist.
+/// `extract_top_level_class_decls` only returns the classes it actually
+/// hoists (it refuses any whose body references an IIFE-local binding,
+/// #2310), so a `module.exports = StackUtils` whose `StackUtils` reads a
+/// top-level `const natives = …` is invisible to the hoisted-name list.
+/// The flat-emit path (wrap.rs) needs to know the assignment target is a
+/// real top-level class before it drops the IIFE, hence this companion
+/// scan. Uses the same column-0 anchor + identifier rule as the hoist scan.
+pub fn top_level_class_names(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let mut names: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let at_line_start = i == 0 || bytes[i - 1] == b'\n';
+        if !at_line_start {
+            i += 1;
+            continue;
+        }
+        let mut p = i;
+        while p < bytes.len() && (bytes[p] == b' ' || bytes[p] == b'\t') {
+            p += 1;
+        }
+        if p + 6 <= bytes.len() && &bytes[p..p + 6] == b"class " {
+            let name_start = p + 6;
+            let mut name_end = name_start;
+            while name_end < bytes.len() {
+                let c = bytes[name_end];
+                if !(c.is_ascii_alphanumeric() || c == b'_' || c == b'$') {
+                    break;
+                }
+                name_end += 1;
+            }
+            if name_end > name_start {
+                if let Ok(name) = std::str::from_utf8(&bytes[name_start..name_end]) {
+                    if !name.is_empty() && !names.contains(&name.to_string()) {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Issue #4933 — true if the CJS body has a `return` statement at the very
+/// top level (brace depth 0). The IIFE wrap turns the module body into a
+/// function, so a top-level `return` (legal in a CommonJS module, where
+/// Node wraps the body in a function) is valid there. The flat-emit path
+/// drops the IIFE and runs the body at ESM module scope, where such a
+/// `return` would change meaning — so we keep the IIFE for those modules.
+/// Detection is brace-depth-aware with string/template/comment skipping,
+/// mirroring `collect_top_level_let_const_var_names`. A braced top-level
+/// return (`if (x) { return; }`) sits at depth ≥ 1 and is not caught here;
+/// Perry already treats a module-scope `return` as a no-op rather than an
+/// error, so the residual risk is a rare semantic nuance, not a miscompile.
+pub fn source_has_top_level_return(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            // Track only `{`/`}` — block / function / class bodies — like the
+            // sibling `collect_top_level_let_const_var_names`. Counting `(`/`[`
+            // too would let an un-skipped regex literal's brackets corrupt the
+            // depth and mis-flag a function-body `return` as top-level (the
+            // stack-utils `const methodRe = /…\[as…\]…/` false positive).
+            b'{' => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                continue;
+            }
+            b'"' | b'\'' => {
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            b'`' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                if i + 1 < bytes.len() {
+                    i += 2;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if depth == 0 && bytes[i] == b'r' && source[i..].starts_with("return") {
+            let before_ok = i == 0
+                || !(bytes[i - 1].is_ascii_alphanumeric()
+                    || bytes[i - 1] == b'_'
+                    || bytes[i - 1] == b'$'
+                    || bytes[i - 1] == b'.');
+            let after = i + "return".len();
+            let after_ok = after >= bytes.len()
+                || !(bytes[after].is_ascii_alphanumeric()
+                    || bytes[after] == b'_'
+                    || bytes[after] == b'$');
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Issue #2310 — true if `class_body` contains any of the given names as a

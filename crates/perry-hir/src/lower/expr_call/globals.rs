@@ -24,6 +24,13 @@ pub(super) fn try_global_builtins(
     // Check for global built-in function calls (parseInt, parseFloat, Number, String, isNaN, isFinite)
     if let ast::Expr::Ident(ident) = expr {
         let func_name = ident.sym.as_ref();
+        if ctx.lookup_local(func_name).is_some()
+            || ctx.lookup_func(func_name).is_some()
+            || ctx.lookup_imported_func(func_name).is_some()
+            || ctx.lookup_class(func_name).is_some()
+        {
+            return Ok(Err(args));
+        }
         match func_name {
             "parseInt" => {
                 let string_arg = if !args.is_empty() {
@@ -130,6 +137,7 @@ pub(super) fn try_global_builtins(
                     class_name: "Array".to_string(),
                     args,
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 }));
             }
             "isNaN" => {
@@ -282,6 +290,7 @@ pub(super) fn try_global_builtins(
                             let mut method = Expr::String("GET".to_string());
                             let mut body = Expr::Undefined;
                             let mut headers_obj: Vec<(String, Expr)> = Vec::new();
+                            let mut headers_dynamic: Option<Box<Expr>> = None;
 
                             for prop in &obj.props {
                                 if let ast::PropOrSpread::Prop(prop) = prop {
@@ -304,35 +313,75 @@ pub(super) fn try_global_builtins(
                                                     body = lower_expr(ctx, &kv.value)?;
                                                 }
                                                 "headers" => {
-                                                    // Extract headers object
-                                                    if let ast::Expr::Object(headers_ast) =
-                                                        &*kv.value
-                                                    {
-                                                        for hprop in &headers_ast.props {
-                                                            if let ast::PropOrSpread::Prop(hprop) =
-                                                                hprop
-                                                            {
-                                                                if let ast::Prop::KeyValue(hkv) =
-                                                                    hprop.as_ref()
+                                                    // The headers value can be serialized statically
+                                                    // only if it is an object *literal* whose props
+                                                    // are all plain (non-computed) string/ident keys.
+                                                    // Anything else — a variable (`headers: h`), a
+                                                    // spread literal (`{...h}`), a call such as
+                                                    // `Object.assign({}, h)` / `new Headers(h)` /
+                                                    // `JSON.parse(...)`, or a computed/getter prop —
+                                                    // must be serialized at runtime, so capture the
+                                                    // whole expression in `headers_dynamic`. Without
+                                                    // this, dynamically-built header objects silently
+                                                    // dropped every header (#4932).
+                                                    let static_literal = match &*kv.value {
+                                                        ast::Expr::Object(headers_ast) => {
+                                                            headers_ast.props.iter().all(|p| {
+                                                                match p {
+                                                                    ast::PropOrSpread::Prop(prop) => {
+                                                                        matches!(
+                                                                            prop.as_ref(),
+                                                                            ast::Prop::KeyValue(hkv)
+                                                                                if matches!(
+                                                                                    &hkv.key,
+                                                                                    ast::PropName::Ident(_)
+                                                                                        | ast::PropName::Str(_)
+                                                                                )
+                                                                        )
+                                                                    }
+                                                                    ast::PropOrSpread::Spread(_) => false,
+                                                                }
+                                                            })
+                                                        }
+                                                        _ => false,
+                                                    };
+                                                    if static_literal {
+                                                        if let ast::Expr::Object(headers_ast) =
+                                                            &*kv.value
+                                                        {
+                                                            for hprop in &headers_ast.props {
+                                                                if let ast::PropOrSpread::Prop(
+                                                                    hprop,
+                                                                ) = hprop
                                                                 {
-                                                                    let hkey = match &hkv.key {
-                                                                        ast::PropName::Ident(
-                                                                            ident,
-                                                                        ) => ident.sym.to_string(),
-                                                                        ast::PropName::Str(s) => s
-                                                                            .value
-                                                                            .as_str()
-                                                                            .unwrap_or("")
-                                                                            .to_string(),
-                                                                        _ => continue,
-                                                                    };
-                                                                    let hval = lower_expr(
-                                                                        ctx, &hkv.value,
-                                                                    )?;
-                                                                    headers_obj.push((hkey, hval));
+                                                                    if let ast::Prop::KeyValue(
+                                                                        hkv,
+                                                                    ) = hprop.as_ref()
+                                                                    {
+                                                                        let hkey = match &hkv.key {
+                                                                            ast::PropName::Ident(
+                                                                                ident,
+                                                                            ) => ident.sym.to_string(),
+                                                                            ast::PropName::Str(s) => s
+                                                                                .value
+                                                                                .as_str()
+                                                                                .unwrap_or("")
+                                                                                .to_string(),
+                                                                            _ => continue,
+                                                                        };
+                                                                        let hval = lower_expr(
+                                                                            ctx, &hkv.value,
+                                                                        )?;
+                                                                        headers_obj
+                                                                            .push((hkey, hval));
+                                                                    }
                                                                 }
                                                             }
                                                         }
+                                                    } else {
+                                                        headers_dynamic = Some(Box::new(
+                                                            lower_expr(ctx, &kv.value)?,
+                                                        ));
                                                     }
                                                 }
                                                 _ => {}
@@ -365,6 +414,7 @@ pub(super) fn try_global_builtins(
                                 method: Box::new(method),
                                 body: Box::new(body),
                                 headers: headers_obj,
+                                headers_dynamic,
                             }));
                         }
                     }
@@ -377,6 +427,7 @@ pub(super) fn try_global_builtins(
                     method: Box::new(Expr::String("GET".to_string())),
                     body: Box::new(Expr::Undefined),
                     headers: Vec::new(),
+                    headers_dynamic: None,
                 }));
             }
             _ => {} // Fall through to generic handling
@@ -773,6 +824,7 @@ pub(super) fn try_global_builtins(
                                 }),
                                 args: new_args,
                                 type_args: vec![],
+                                byte_offset: 0,
                             }));
                         }
                     }
@@ -794,6 +846,7 @@ pub(super) fn try_global_builtins(
                                 }),
                                 args: vec![alg_arg, options_arg],
                                 type_args: vec![],
+                                byte_offset: 0,
                             }));
                         }
                     }
@@ -896,10 +949,9 @@ pub(super) fn try_global_builtins(
         }
     }
 
-    // #854: lower the callee for its side effects (registration/tagging done
-    // inside `lower_expr`) even though the resulting value is unused on the
-    // fall-through path that hands the args back to the generic dispatcher.
-    let _callee_expr = lower_expr(ctx, expr)?;
-
+    // Fall through to the shared call tail. It owns lowering the callee for
+    // the generic dispatcher; doing it speculatively here relowers every
+    // receiver in a fluent generic chain and turns `a.b().c().d()` into an
+    // exponential lowering walk.
     Ok(Err(args))
 }

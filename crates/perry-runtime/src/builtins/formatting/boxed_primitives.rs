@@ -5,11 +5,11 @@ thread_local! {
         std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_0060;
-const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_0061;
-const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_0062;
-const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_0063;
-const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_0064;
+const CLASS_ID_BOXED_NUMBER: u32 = 0xFFFF_00D0;
+const CLASS_ID_BOXED_STRING: u32 = 0xFFFF_00D1;
+const CLASS_ID_BOXED_BOOLEAN: u32 = 0xFFFF_00D2;
+const CLASS_ID_BOXED_BIGINT: u32 = 0xFFFF_00D3;
+const CLASS_ID_BOXED_SYMBOL: u32 = 0xFFFF_00D4;
 
 pub(super) unsafe fn boxed_primitive_base_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
@@ -36,10 +36,37 @@ pub(super) unsafe fn boxed_primitive_base_for_object(
     }
 }
 
+/// For a boxed `String` wrapper (`new String("abc")`), the integer-index own
+/// properties `"0".."len-1"` mirror the underlying characters. Node's
+/// `util.inspect` treats those as the wrapped primitive (shown via the
+/// `[String: '…']` base) and never lists them in the `{ … }` body — only extra
+/// own keys appear there. Returns the wrapped string's length for a boxed
+/// String, otherwise `None`.
+///
+/// The count is in UTF-16 code units, NOT Unicode scalar values: the index
+/// properties are installed over `0..js_string_length` (`utf16_len`) by
+/// `install_string_wrapper_indices`, so a non-BMP char (e.g. an emoji, two
+/// UTF-16 units) occupies two indices. Counting `.chars()` would under-count
+/// and leak a trailing index (e.g. `new String("a😀b")` → `{ 3: 'b' }`).
+pub(super) unsafe fn boxed_string_char_index_count(
+    obj_ptr: *const crate::object::ObjectHeader,
+) -> Option<usize> {
+    let (class_id, payload) = boxed_primitive_payload_for_object(obj_ptr)?;
+    if class_id != CLASS_ID_BOXED_STRING {
+        return None;
+    }
+    Some(
+        jsvalue_string_content(payload)
+            .unwrap_or_default()
+            .encode_utf16()
+            .count(),
+    )
+}
+
 unsafe fn boxed_primitive_payload_for_object(
     obj_ptr: *const crate::object::ObjectHeader,
 ) -> Option<(u32, f64)> {
-    if obj_ptr.is_null() || (obj_ptr as usize) < 0x100000 {
+    if !crate::value::addr_class::is_plausible_heap_addr(obj_ptr as usize) {
         return None;
     }
     let class_id = (*obj_ptr).class_id;
@@ -121,6 +148,38 @@ fn install_string_wrapper_length(
     );
 }
 
+/// String exotic objects (ECMA-262 §10.4.3) expose each UTF-16 code unit as an
+/// integer-indexed own property `"0".."len-1"` with the descriptor
+/// `{ value: <char>, writable: false, enumerable: true, configurable: false }`.
+/// `new String("abc")` therefore reports `getOwnPropertyDescriptor(s, "0")`,
+/// `s.hasOwnProperty("0")`, and `Object.keys(s)`/enumeration over the indices.
+/// Installed eagerly at construction (typical `new String` receivers are
+/// short); the wrapper's `length` is installed separately and stays last.
+fn install_string_wrapper_indices(
+    obj: *mut crate::object::ObjectHeader,
+    string_ptr: *const crate::string::StringHeader,
+) {
+    if obj.is_null() || string_ptr.is_null() {
+        return;
+    }
+    let len = crate::string::js_string_length(string_ptr);
+    for i in 0..len {
+        let ch = crate::string::js_string_char_at(string_ptr, i as i32);
+        if ch.is_null() {
+            continue;
+        }
+        let name = i.to_string();
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let ch_value = f64::from_bits(crate::value::JSValue::string_ptr(ch).bits());
+        crate::object::js_object_set_field_by_name(obj, key, ch_value);
+        crate::object::set_builtin_property_attrs(
+            obj as usize,
+            name,
+            crate::object::PropertyAttrs::new(false, true, false),
+        );
+    }
+}
+
 pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut moved = Vec::new();
     BOXED_PRIMITIVE_PAYLOADS.with(|m| {
@@ -164,12 +223,21 @@ pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
     let bits = value.to_bits();
     let ptr = if jv.is_pointer() {
         jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
-    } else if (bits >> 48) == 0 && bits >= 0x100000 {
+    } else if (bits >> 48) == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
         bits as *mut crate::object::ObjectHeader
     } else {
         return None;
     };
-    if ptr.is_null() || (ptr as usize) < 0x100000 {
+    // This is a defensive type-probe over arbitrary `f64` bits, so a candidate
+    // that isn't a real heap object must be rejected *before* the `class_id`
+    // read — otherwise a small subnormal double (e.g. raw bits `0x2800000207`)
+    // that slips through the raw-pointer heuristic above is dereferenced as an
+    // `ObjectHeader` and faults. `is_plausible_heap_addr` keeps the
+    // small-handle floor (the fetch/Headers id-space lives below it and
+    // `is_valid_obj_ptr`'s Linux `HEAP_MIN` of `0x1000` would otherwise let
+    // those handles through) and additionally gates on the real heap range
+    // (#4099).
+    if !crate::value::addr_class::is_plausible_heap_addr(ptr as usize) {
         return None;
     }
     unsafe { boxed_primitive_payload_for_object(ptr) }
@@ -213,6 +281,7 @@ pub extern "C" fn js_boxed_string_new(value: f64) -> f64 {
     };
     let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
     register_boxed_primitive_payload(obj, boxed);
+    install_string_wrapper_indices(obj, ptr);
     install_string_wrapper_length(obj, ptr);
     attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_STRING);
     crate::value::js_nanbox_pointer(obj as i64)

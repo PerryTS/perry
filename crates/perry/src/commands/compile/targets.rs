@@ -290,6 +290,9 @@ pub(super) fn compile_for_ios_widget(
         bundle_info_plist = Some(bundle.info_plist.clone());
     }
 
+    // Emit the shared per-bundle runtime FFI block exactly once (#5069).
+    write_shared_widget_runtime(&output_dir, &widgets, &mut all_swift_files)?;
+
     // Report results
     let total_size: usize = all_swift_files.iter().map(|(_, s)| s.len()).sum();
     let is_simulator = args.target.as_deref() == Some("ios-widget-simulator");
@@ -382,7 +385,61 @@ pub(super) fn compile_for_ios_widget(
         bundle_id: Some(app_bundle_id.to_string()),
         is_dylib: false,
         codegen_cache_stats: None,
+        link_cache_stats: None,
+        build_cache_stats: None,
     })
+}
+
+/// Emit the shared per-bundle widget runtime (`PerryWidgetRuntime.swift`) once,
+/// appending it to `all_swift_files` so swiftc picks it up (#5069).
+///
+/// Only needed when a widget calls a native provider or uses shared storage; a
+/// fully static bundle never touches the perry-runtime helpers. The `@_cdecl`
+/// shared-storage bridge exports a single fixed C symbol per bundle, so it can
+/// bind only one app group — the first widget that declares one wins. If other
+/// widgets declare a *different* app group we warn rather than silently routing
+/// them all through the first suite (validation is otherwise out of scope; the
+/// common case is a single bundle-wide app group).
+fn write_shared_widget_runtime(
+    output_dir: &Path,
+    widgets: &[&perry_hir::ir::WidgetDecl],
+    all_swift_files: &mut Vec<(String, String)>,
+) -> Result<()> {
+    if !widgets
+        .iter()
+        .any(|w| w.provider_func_name.is_some() || w.app_group.is_some())
+    {
+        return Ok(());
+    }
+
+    let app_group = widgets.iter().find_map(|w| w.app_group.as_deref());
+
+    // Warn regardless of output format: this goes to stderr (eprintln!), so it
+    // never corrupts the JSON written to stdout, and the misconfiguration is
+    // worth surfacing even when scripting against `--format json`.
+    if let Some(group) = app_group {
+        let mut conflicting: Vec<&str> = widgets
+            .iter()
+            .filter_map(|w| w.app_group.as_deref())
+            .filter(|g| *g != group)
+            .collect();
+        if !conflicting.is_empty() {
+            conflicting.sort_unstable();
+            conflicting.dedup();
+            eprintln!(
+                "Warning: widgets in this bundle declare differing app groups; \
+                 the shared-storage bridge will use \"{}\" (ignoring: {}).",
+                group,
+                conflicting.join(", ")
+            );
+        }
+    }
+
+    let runtime_source = perry_codegen_swiftui::emit_shared_runtime(app_group);
+    let runtime_path = output_dir.join("PerryWidgetRuntime.swift");
+    fs::write(&runtime_path, &runtime_source)?;
+    all_swift_files.push(("PerryWidgetRuntime.swift".to_string(), runtime_source));
+    Ok(())
 }
 
 /// Build a WidgetKit .appex extension by invoking `xcrun swiftc` on the
@@ -542,6 +599,9 @@ pub(super) fn compile_for_watchos_widget(
         bundle_info_plist = Some(bundle.info_plist.clone());
     }
 
+    // Emit the shared per-bundle runtime FFI block exactly once (#5069).
+    write_shared_widget_runtime(&output_dir, &widgets, &mut all_swift_files)?;
+
     let total_size: usize = all_swift_files.iter().map(|(_, s)| s.len()).sum();
     let is_simulator = args.target.as_deref() == Some("watchos-widget-simulator");
     let sdk = if is_simulator {
@@ -552,7 +612,9 @@ pub(super) fn compile_for_watchos_widget(
     let target_triple = if is_simulator {
         "arm64-apple-watchos10.0-simulator"
     } else {
-        "arm64_32-apple-watchos10.0"
+        // Device builds are arm64-only (S9+ / watchOS 26), matching the app
+        // target: Perry's NaN-boxed values need 64-bit pointers.
+        "arm64-apple-watchos26.0"
     };
     let mut frameworks = vec!["WidgetKit", "SwiftUI"];
     if uses_app_intents {
@@ -633,6 +695,8 @@ pub(super) fn compile_for_watchos_widget(
         bundle_id: Some(app_bundle_id.to_string()),
         is_dylib: false,
         codegen_cache_stats: None,
+        link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -966,6 +1030,8 @@ pub(super) fn compile_for_android_widget(
         bundle_id: Some(app_package.to_string()),
         is_dylib: false,
         codegen_cache_stats: None,
+        link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -1217,6 +1283,8 @@ pub(super) fn compile_for_wearos_tile(
         bundle_id: Some(app_package.to_string()),
         is_dylib: false,
         codegen_cache_stats: None,
+        link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -1375,6 +1443,8 @@ pub(super) fn compile_for_web(
         bundle_id: None,
         is_dylib: false,
         codegen_cache_stats: None,
+        link_cache_stats: None,
+        build_cache_stats: None,
     })
 }
 
@@ -1523,5 +1593,7 @@ pub(super) fn compile_for_wasm(
         bundle_id: None,
         is_dylib: false,
         codegen_cache_stats: None,
+        link_cache_stats: None,
+        build_cache_stats: None,
     })
 }

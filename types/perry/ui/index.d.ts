@@ -391,6 +391,9 @@ export function SecureField(placeholder: string, onChange: (value: string) => vo
 /** Boolean toggle switch. */
 export function Toggle(label: string, onChange: (value: boolean) => void): Widget;
 
+/** Programmatically set a Toggle's on/off state. Pass `1` for on, `0` for off. */
+export function toggleSetState(widget: Widget, on: number): void;
+
 /** Numeric slider. */
 export function Slider(min: number, max: number, onChange: (value: number) => void): Widget;
 
@@ -713,6 +716,25 @@ export function textSetNumberOfLines(widget: Widget, lines: number): void;
  */
 export function textSetTruncationMode(widget: Widget, mode: number): void;
 /**
+ * Set the horizontal text alignment of a Text widget (issue #3621),
+ * equivalent to CSS `text-align`. Removes the need to wrap a `Text` in an
+ * extra alignment container just to centre or right-align it.
+ *
+ * `alignment` values follow the macOS `NSTextAlignment` convention and are
+ * translated to each platform's native enum so a single value renders the
+ * same everywhere:
+ * - `0` = left
+ * - `1` = right
+ * - `2` = center
+ * - `3` = justified
+ * - `4` = natural (follows the locale's writing direction)
+ *
+ * Wired on all native backends (macOS, iOS, tvOS, visionOS, watchOS,
+ * Android, GTK4, Windows). `justified`/`natural` degrade gracefully to the
+ * nearest supported alignment where a platform lacks a native equivalent.
+ */
+export function textSetTextAlignment(widget: Widget, alignment: number): void;
+/**
  * Set text decoration on a Text widget (issue #185 Phase B).
  * `decoration`: 0 = none, 1 = underline, 2 = strikethrough.
  * Wired on every backend except Windows, which stores the value but
@@ -815,6 +837,28 @@ export function treeViewGetSelectedId(widget: Widget): string;
 export function Calendar(year: number, month: number, onChange: (isoDate: string) => void): Widget;
 export function calendarSetDate(widget: Widget, year: number, month: number, day: number): void;
 export function calendarGetSelectedDate(widget: Widget): string;
+
+// ---------------------------------------------------------------------------
+// DatePicker widget (issue #4772, v1) — compact field-style date picker, the
+// space-saving complement to the month-grid `Calendar`. Backends use each
+// platform's native compact date control:
+//   macOS    NSDatePicker, text-field-and-stepper style (year-month-day)
+//   iOS/visionOS  UIDatePicker, .compact style, .date mode
+//   Windows  SysDateTimePick32 (DateTimePicker dropdown)
+//   Android  android.widget.DatePicker
+//   GTK4     GtkCalendar (GTK has no native compact date field, so the
+//            month grid is reused; behavior is otherwise identical)
+//   tvOS/watchOS  stub the FFI (returns 0 on create, undefined on get-date)
+//
+// `year` and `month` are 1-based; pass <=0 / out-of-range to default to
+// 2026-01. `onChange` receives the selected date as an ISO `yyyy-MM-dd`
+// string (POSIX-locale formatter, stable across user locales) — matching
+// `Calendar`.
+// ---------------------------------------------------------------------------
+
+export function DatePicker(year: number, month: number, onChange: (isoDate: string) => void): Widget;
+export function datePickerSetDate(widget: Widget, year: number, month: number, day: number): void;
+export function datePickerGetSelectedDate(widget: Widget): string;
 
 // ---------------------------------------------------------------------------
 // Chart widget (issue #474, v1) — line / bar / pie via CoreGraphics on macOS.
@@ -1471,6 +1515,50 @@ export function toolbarAttach(toolbar: Widget, window: Widget): void;
 
 export function clipboardRead(): string;
 export function clipboardWrite(text: string): void;
+
+// ---------------------------------------------------------------------------
+// Drag & drop (issue #4773)
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload delivered to a {@link widgetOnDrop} handler. Each field is present
+ * only when the drag carried that representation:
+ *  - `text` — plain text (`public.utf8-plain-text`)
+ *  - `files` — absolute paths of dropped files (`public.file-url`)
+ *  - `urls` — web links (`public.url`)
+ */
+export interface DropData {
+  text?: string;
+  files?: string[];
+  urls?: string[];
+}
+
+/**
+ * Make `widget` a drop destination. `handler` fires when text, files, or URLs
+ * are dragged onto the widget, receiving a {@link DropData} describing the
+ * payload. The drop defaults to a "copy" operation.
+ */
+export function widgetOnDrop(widget: Widget, handler: (data: DropData) => void): void;
+
+/**
+ * Make `widget` a drag source that offers plain text. `provider` is called
+ * when a drag begins and returns the text to carry (`public.utf8-plain-text`).
+ * May be combined with {@link widgetSetDragFile} / {@link widgetSetDragUrl} to
+ * offer multiple representations of the same drag.
+ */
+export function widgetSetDragText(widget: Widget, provider: () => string): void;
+
+/**
+ * Make `widget` a drag source that offers a file. `provider` returns the
+ * absolute path of the file to carry (`public.file-url`).
+ */
+export function widgetSetDragFile(widget: Widget, provider: () => string): void;
+
+/**
+ * Make `widget` a drag source that offers a web link. `provider` returns the
+ * URL string to carry (`public.url`).
+ */
+export function widgetSetDragUrl(widget: Widget, provider: () => string): void;
 
 // ---------------------------------------------------------------------------
 // Dialogs

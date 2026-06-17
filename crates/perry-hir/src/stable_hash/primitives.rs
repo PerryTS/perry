@@ -31,6 +31,12 @@ impl SH for u32 {
     }
 }
 
+impl SH for u64 {
+    fn hash<H: StableHasher>(&self, h: &mut H) {
+        h.write(&self.to_le_bytes());
+    }
+}
+
 impl SH for usize {
     fn hash<H: StableHasher>(&self, h: &mut H) {
         h.write(&(*self as u64).to_le_bytes());

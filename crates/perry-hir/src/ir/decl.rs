@@ -116,6 +116,25 @@ pub struct Import {
     /// Always `false` on `is_dynamic` synthetic edges (those are already
     /// dynamic targets by virtue of `is_dynamic`).
     pub is_dynamic_target: bool,
+    /// Next.js lazy-require: this `import _req_N from 'S'` was synthesized by
+    /// the CJS→ESM wrap from a `require('S')` whose every call site is inside a
+    /// FUNCTION body (never module top-level). Node loads such a module lazily
+    /// — only when the enclosing function runs — so it must NOT pin the target
+    /// eager. Like `is_dynamic`, the target still enters the compile graph but
+    /// is left `Deferred` unless some other (top-level) edge reaches it; the
+    /// require shim triggers the target's `__init` on first `require()` call.
+    pub is_deferred_require: bool,
+    /// Issue #5257: this import was synthesized by the CJS→ESM wrap from a
+    /// `require('S')` — i.e. `import _req_N from 'S'` (or an adopted alias /
+    /// `_lazyreq_N`). Under CommonJS, `require('S')` returns the module's
+    /// *exports object* (its namespace), so a default-import shape here must
+    /// NOT be held to Node's static-ESM "does not provide an export named
+    /// 'default'" rule when the target is a named-only / CJS module: the
+    /// default-export gate skips these and codegen routes the local through
+    /// the namespace machinery (member reads resolve per-export, a whole-value
+    /// read materializes the exports object). Genuine user `import X from
+    /// 'pkg'` (this flag `false`) still errors like Node.
+    pub is_adopted_require: bool,
 }
 
 /// Import specifier
@@ -184,14 +203,35 @@ pub struct Class {
     pub constructor: Option<Function>,
     /// Instance methods
     pub methods: Vec<Function>,
-    /// Getter methods (property_name -> function that returns the value)
+    /// Instance getter methods (property_name -> function that returns the value)
     pub getters: Vec<(String, Function)>,
-    /// Setter methods (property_name -> function that takes the value)
+    /// Instance setter methods (property_name -> function that takes the value)
     pub setters: Vec<(String, Function)>,
+    /// Property names of accessors that are `static` (`static get x()` /
+    /// `static set x(v)`). The accessor functions themselves live in `getters`
+    /// / `setters` alongside instance accessors (so every IR pass — async
+    /// lowering, finally-inline, generator id-scan, inlining — processes their
+    /// bodies uniformly); codegen consults this set to register them on the
+    /// class constructor (`CLASS_STATIC_ACCESSORS`) rather than the instance
+    /// vtable, since a static accessor is an own property of `C`, not of
+    /// `C.prototype`/instances.
+    pub static_accessor_names: Vec<String>,
+    /// Function ids of the accessor entries in `getters` / `setters` that are
+    /// `static`. `static_accessor_names` alone cannot disambiguate a name that
+    /// is BOTH a static and an instance accessor (`static get 0(){} get 0(){}`)
+    /// — the by-name check classified the instance entry as static too, so both
+    /// emitted under the same `perry_static_…__get_0` symbol (LLVM "invalid
+    /// redefinition"). Keying the static/instance split on the accessor
+    /// function's unique id is unambiguous. Preserved across monomorphization
+    /// (specialize.rs copies `f.id` verbatim).
+    pub static_accessor_fn_ids: Vec<FuncId>,
     /// Static fields
     pub static_fields: Vec<ClassField>,
     /// Static methods
     pub static_methods: Vec<Function>,
+    /// Computed-key methods/accessors, preserved in source order so
+    /// declaration-time key side effects fire in the same order as JS.
+    pub computed_members: Vec<ClassComputedMember>,
     /// Legacy TypeScript decorators applied to the class.
     pub decorators: Vec<Decorator>,
     /// Whether this class is exported from the module
@@ -200,6 +240,21 @@ pub struct Class {
     /// `var X = class _X { ... new _X() ... }` records `_X` here so codegen
     /// can look it up as the same class. Refs #486.
     pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassComputedMemberKind {
+    Method,
+    Getter,
+    Setter,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassComputedMember {
+    pub key_expr: Expr,
+    pub function: Function,
+    pub is_static: bool,
+    pub kind: ClassComputedMemberKind,
 }
 
 /// A class field
@@ -282,6 +337,19 @@ pub struct Function {
 
 /// A function parameter
 #[derive(Debug, Clone)]
+pub struct ArgumentsObjectMeta {
+    /// Whether the containing function body is strict.
+    pub strict: bool,
+    /// Whether the containing function has a simple parameter list.
+    pub simple_parameters: bool,
+    /// Sloppy mapped arguments bind numeric indices to these parameter locals.
+    pub mapped_parameter_ids: Vec<(u32, LocalId)>,
+    /// Whether `arguments.callee` is the restricted throwing accessor.
+    pub restricted_callee: bool,
+}
+
+/// A function parameter
+#[derive(Debug, Clone)]
 pub struct Param {
     pub id: LocalId,
     pub name: String,
@@ -291,4 +359,7 @@ pub struct Param {
     pub decorators: Vec<Decorator>,
     /// True if this is a rest parameter (...args)
     pub is_rest: bool,
+    /// Metadata for the hidden raw-arguments binding used to materialize the
+    /// ECMAScript `arguments` object in the callee prologue.
+    pub arguments_object: Option<ArgumentsObjectMeta>,
 }

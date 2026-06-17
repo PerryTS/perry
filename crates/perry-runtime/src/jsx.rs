@@ -67,10 +67,20 @@ fn dispatch(type_arg: f64, props: f64) -> f64 {
             return make_jsx_node(&html);
         }
         let attrs = render_props_attrs(props);
-        let html = if is_void_element(&tag) {
+        // `dangerouslySetInnerHTML={{ __html }}` (React/hono semantics): the
+        // element's inner content is the raw, *unescaped* `__html` string, and
+        // the prop is never serialized as an attribute (handled in
+        // `render_props_attrs`). Its presence forces a normal (non-void)
+        // element so the raw HTML has somewhere to live — e.g. `<div .../>`
+        // with `__html` renders as `<div>...</div>`.
+        let raw_inner_html = dangerous_inner_html(props);
+        let html = if raw_inner_html.is_none() && is_void_element(&tag) {
             format!("<{tag}{attrs}/>")
         } else {
-            let children = render_children(get_field_by_name(props, "children"));
+            let children = match raw_inner_html {
+                Some(raw) => raw,
+                None => render_children(get_field_by_name(props, "children")),
+            };
             format!("<{tag}{attrs}>{children}</{tag}>")
         };
         return make_jsx_node(&html);
@@ -142,6 +152,26 @@ fn get_field_by_name(obj_value: f64, name: &str) -> f64 {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let v = crate::object::js_object_get_field_by_name(obj, key);
     f64::from_bits(v.bits())
+}
+
+/// React/hono `dangerouslySetInnerHTML={{ __html }}` support. If the props
+/// object carries a `dangerouslySetInnerHTML` prop whose value is an object
+/// with an `__html` field, return that field's raw string (to be spliced as
+/// the element's inner content *unescaped*). Returns `None` when the prop is
+/// absent or malformed (a non-object value, or no `__html`), in which case the
+/// element renders normally.
+fn dangerous_inner_html(props: f64) -> Option<String> {
+    let prop = get_field_by_name(props, "dangerouslySetInnerHTML");
+    let pjs = JSValue::from_bits(prop.to_bits());
+    if pjs.is_undefined() || pjs.is_null() || !pjs.is_pointer() {
+        return None;
+    }
+    let html_val = get_field_by_name(prop, "__html");
+    let hjs = JSValue::from_bits(html_val.to_bits());
+    if hjs.is_undefined() || hjs.is_null() {
+        return None;
+    }
+    Some(jsvalue_to_owned_string(html_val))
 }
 
 /// If `value` is a boxed JSX node, return its rendered HTML.
@@ -237,6 +267,12 @@ fn render_props_attrs(props: f64) -> String {
         if key == "children" || key == "key" || key == "ref" {
             continue;
         }
+        // `dangerouslySetInnerHTML` is consumed as raw inner content by the
+        // caller (`dangerous_inner_html`), never serialized as an attribute —
+        // otherwise it stringifies to `[object Object]` (#4827).
+        if key == "dangerouslySetInnerHTML" {
+            continue;
+        }
         let val = get_field_by_name(props, &key);
         let vjs = JSValue::from_bits(val.to_bits());
         if vjs.is_undefined() || vjs.is_null() {
@@ -273,4 +309,75 @@ fn is_valid_closure(ptr: *const ClosureHeader) -> bool {
     }
     let tag = unsafe { std::ptr::read_volatile((ptr as *const u8).add(12) as *const u32) };
     tag == CLOSURE_MAGIC
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Box a Rust string as a NaN-boxed JSValue string.
+    fn str_val(s: &str) -> f64 {
+        let p = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(p).bits())
+    }
+
+    /// Build a plain object (class id 0) with the given named string fields.
+    fn obj_with(fields: &[(&str, f64)]) -> f64 {
+        let obj = crate::object::js_object_alloc(0, 0);
+        for (k, v) in fields {
+            let key = crate::string::js_string_from_bytes(k.as_ptr(), k.len() as u32);
+            crate::object::js_object_set_field_by_name(obj, key, *v);
+        }
+        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    }
+
+    /// Render a JSX node value back to its HTML string.
+    fn node_html(node: f64) -> String {
+        jsx_node_html(node).expect("expected a boxed JSX node")
+    }
+
+    /// #4827: `dangerouslySetInnerHTML={{ __html }}` injects the raw,
+    /// unescaped HTML as the element's children, never as an attribute. A
+    /// self-closing source tag becomes a normal open/close pair.
+    #[test]
+    fn dangerously_set_inner_html_renders_raw_children() {
+        let inner = obj_with(&[("__html", str_val("<b>hi</b>"))]);
+        let props = obj_with(&[("dangerouslySetInnerHTML", inner)]);
+        let node = js_jsx(str_val("div"), props);
+        assert_eq!(node_html(node), "<div><b>hi</b></div>");
+    }
+
+    /// Real-world `<style dangerouslySetInnerHTML={{ __html: css }} />` case.
+    #[test]
+    fn dangerously_set_inner_html_style_keeps_css() {
+        let inner = obj_with(&[("__html", str_val("body { color: red; }"))]);
+        let props = obj_with(&[("dangerouslySetInnerHTML", inner)]);
+        let node = js_jsx(str_val("style"), props);
+        assert_eq!(node_html(node), "<style>body { color: red; }</style>");
+    }
+
+    /// The special prop must not leak into attribute serialization.
+    #[test]
+    fn dangerously_set_inner_html_not_emitted_as_attribute() {
+        let inner = obj_with(&[("__html", str_val("x"))]);
+        let props = obj_with(&[("dangerouslySetInnerHTML", inner)]);
+        let node = js_jsx(str_val("div"), props);
+        assert!(!node_html(node).contains("dangerouslySetInnerHTML"));
+        assert!(!node_html(node).contains("[object Object]"));
+    }
+
+    /// Ordinary elements (and attribute/text escaping) are unaffected.
+    #[test]
+    fn ordinary_element_unaffected() {
+        let props = obj_with(&[("className", str_val("x")), ("children", str_val("a<b"))]);
+        let node = js_jsx(str_val("div"), props);
+        assert_eq!(node_html(node), "<div class=\"x\">a&lt;b</div>");
+    }
+
+    /// A void element with no `dangerouslySetInnerHTML` stays self-closing.
+    #[test]
+    fn void_element_stays_self_closing() {
+        let node = js_jsx(str_val("br"), f64::from_bits(TAG_UNDEFINED));
+        assert_eq!(node_html(node), "<br/>");
+    }
 }

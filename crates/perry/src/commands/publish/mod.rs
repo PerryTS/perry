@@ -13,6 +13,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tokio_tungstenite::tungstenite::Message;
+use url::Url;
 use walkdir::WalkDir;
 
 use crate::{OutputFormat, Platform};
@@ -21,6 +22,7 @@ mod args;
 mod config_types;
 mod credentials;
 mod preflight;
+mod resolve;
 mod saved_config;
 mod server_api;
 mod tarball;
@@ -44,6 +46,7 @@ use credentials::{
     validate_credentials_for_distribute,
 };
 use preflight::{ios_preflight_validation, macos_preflight_validation, run_security_audit_step};
+use resolve::{resolve_bundle_id, resolve_entry};
 use server_api::{
     BuildManifest, BuildResponse, CredentialsPayload, RegisterResponse, ServerMessage,
 };
@@ -56,7 +59,7 @@ pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u
     let target_hint = match args.platform {
         Some(Platform::Ios) => Some("ios"),
         Some(Platform::Visionos) => Some("visionos"),
-        Some(Platform::Android) => Some("android"),
+        Some(Platform::Android) | Some(Platform::Wearos) => Some("android"),
         Some(Platform::Linux) => Some("linux"),
         Some(Platform::Windows) => Some("windows"),
         Some(Platform::Web) => Some("web"),
@@ -147,6 +150,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             Platform::Watchos => "watchos".to_string(),
             Platform::Tvos => "tvos".to_string(),
             Platform::Android => "android".to_string(),
+            // Wear OS ships through Google Play exactly like an Android app.
+            Platform::Wearos => "android".to_string(),
             Platform::Linux => "linux".to_string(),
             Platform::Windows => "windows".to_string(),
             Platform::Web => "web".to_string(),
@@ -157,13 +162,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     } else if interactive {
         prompt_target(saved.default_target.as_deref())
     } else {
-        bail!("No target specified. Use: perry publish <macos|ios|visionos|tvos|android|linux|windows|web>");
+        bail!("No target specified. Use: perry publish <macos|ios|visionos|tvos|watchos|android|linux|windows|web>");
     };
 
     let target_display = match target_name.as_str() {
         "ios" => "iOS",
         "visionos" => "visionOS",
         "tvos" => "tvOS",
+        "watchos" => "watchOS",
         "android" => "Android",
         "linux" => "Linux",
         "windows" => "Windows",
@@ -173,8 +179,31 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let is_ios = target_name == "ios";
     let is_visionos = target_name == "visionos";
     let is_tvos = target_name == "tvos";
+    let is_watchos = target_name == "watchos";
     let is_android = target_name == "android";
     let is_linux = target_name == "linux";
+
+    // --- Resolve Linux libc (#4826) ---
+    // `--libc` CLI flag wins over the `[linux] libc` perry.toml setting.
+    // Normalize + validate here so the worker only ever receives `glibc`
+    // (or absent) / `musl`. Non-Linux targets ignore it.
+    let linux_libc: Option<String> = if is_linux {
+        let raw = args
+            .libc
+            .clone()
+            .or_else(|| config.linux.as_ref().and_then(|l| l.libc.clone()));
+        match raw.as_deref().map(|s| s.trim().to_ascii_lowercase()) {
+            None => None,
+            Some(ref s) if s == "glibc" || s == "gnu" || s.is_empty() => Some("glibc".to_string()),
+            Some(ref s) if s == "musl" => Some("musl".to_string()),
+            Some(other) => bail!(
+                "Invalid [linux] libc / --libc value '{other}'. \
+                 Supported: glibc (default) or musl."
+            ),
+        }
+    } else {
+        None
+    };
 
     // --- Resolve server URL ---
     let server_url = args
@@ -185,46 +214,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         .unwrap_or_else(|| "https://hub.perryts.com".into());
 
     // --- Resolve entry point ---
-    let entry = if is_android {
-        config
-            .android
-            .as_ref()
-            .and_then(|a| a.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main.ts".into())
-    } else if is_ios {
-        config
-            .ios
-            .as_ref()
-            .and_then(|i| i.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main_ios.ts".into())
-    } else if is_visionos {
-        config
-            .visionos
-            .as_ref()
-            .and_then(|i| i.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main_visionos.ts".into())
-    } else if is_tvos {
-        config
-            .tvos
-            .as_ref()
-            .and_then(|t| t.entry.clone())
-            .or_else(|| config.app.as_ref().and_then(|a| a.entry.clone()))
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main_tvos.ts".into())
-    } else {
-        config
-            .app
-            .as_ref()
-            .and_then(|a| a.entry.clone())
-            .or_else(|| config.project.as_ref().and_then(|p| p.entry.clone()))
-            .unwrap_or_else(|| "src/main.ts".into())
-    };
+    let entry = resolve_entry(
+        &config,
+        is_ios,
+        is_visionos,
+        is_tvos,
+        is_watchos,
+        is_android,
+    );
 
     // --- Resolve version (allow override) ---
     let version = if interactive {
@@ -261,81 +258,52 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     // Auto-increment build_number for targets that need monotonic build numbers
     let is_windows = target_name == "windows";
     let is_web = target_name == "web";
-    let is_macos =
-        !is_ios && !is_visionos && !is_tvos && !is_android && !is_linux && !is_windows && !is_web;
+    let is_macos = !is_ios
+        && !is_visionos
+        && !is_tvos
+        && !is_watchos
+        && !is_android
+        && !is_linux
+        && !is_windows
+        && !is_web;
     let macos_needs_upload =
         is_macos && matches!(macos_distribute.as_deref(), Some("appstore") | Some("both"));
-    let build_number = if is_ios || is_visionos || is_tvos || is_android || macos_needs_upload {
-        let n = toml_build_number + 1;
-        if let Ok(content) = fs::read_to_string(&perry_toml_path) {
-            let updated = if content.contains("build_number =") {
-                content.replace(
-                    &format!("build_number = {}", toml_build_number),
-                    &format!("build_number = {}", n),
-                )
-            } else {
-                // Insert build_number after the version line
-                content.replace(
-                    &format!("version = \"{}\"", version),
-                    &format!("version = \"{}\"\nbuild_number = {}", version, n),
-                )
-            };
-            fs::write(&perry_toml_path, &updated).ok();
-        }
-        n
-    } else {
-        toml_build_number
-    };
+    let build_number =
+        if is_ios || is_visionos || is_tvos || is_watchos || is_android || macos_needs_upload {
+            let n = toml_build_number + 1;
+            if let Ok(content) = fs::read_to_string(&perry_toml_path) {
+                let updated = if content.contains("build_number =") {
+                    content.replace(
+                        &format!("build_number = {}", toml_build_number),
+                        &format!("build_number = {}", n),
+                    )
+                } else {
+                    // Insert build_number after the version line
+                    content.replace(
+                        &format!("version = \"{}\"", version),
+                        &format!("version = \"{}\"\nbuild_number = {}", version, n),
+                    )
+                };
+                fs::write(&perry_toml_path, &updated).ok();
+            }
+            n
+        } else {
+            toml_build_number
+        };
 
     let app_bundle_id = config.app.as_ref().and_then(|a| a.bundle_id.clone());
     let project_bundle_id = config.project.as_ref().and_then(|p| p.bundle_id.clone());
-    let bundle_id = if is_android {
-        config
-            .android
-            .as_ref()
-            .and_then(|a| a.package_name.clone())
-            .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
-            .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else if is_ios {
-        config
-            .ios
-            .as_ref()
-            .and_then(|i| i.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else if is_visionos {
-        config
-            .visionos
-            .as_ref()
-            .and_then(|i| i.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
-            .or_else(|| config.macos.as_ref().and_then(|m| m.bundle_id.clone()))
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else if is_tvos {
-        config
-            .tvos
-            .as_ref()
-            .and_then(|t| t.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .or_else(|| config.ios.as_ref().and_then(|i| i.bundle_id.clone()))
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    } else {
-        config
-            .macos
-            .as_ref()
-            .and_then(|m| m.bundle_id.clone())
-            .or_else(|| app_bundle_id.clone())
-            .or_else(|| project_bundle_id.clone())
-            .unwrap_or_else(|| format!("com.perry.{}", app_name.to_lowercase().replace(' ', "-")))
-    };
+    let bundle_id = resolve_bundle_id(
+        &config,
+        &app_name,
+        &app_bundle_id,
+        &project_bundle_id,
+        is_ios,
+        is_visionos,
+        is_tvos,
+        is_watchos,
+        is_android,
+    );
 
     let mut icon = config
         .project
@@ -449,11 +417,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let visionos_distribute = config.visionos.as_ref().and_then(|i| i.distribute.clone());
     let visionos_encryption_exempt = config.visionos.as_ref().and_then(|i| i.encryption_exempt);
     let visionos_info_plist = config.visionos.as_ref().and_then(|i| i.info_plist.clone());
+    let tvos_distribute = config.tvos.as_ref().and_then(|t| t.distribute.clone());
+    let watchos_distribute = config.watchos.as_ref().and_then(|w| w.distribute.clone());
     let macos_encryption_exempt = config.macos.as_ref().and_then(|m| m.encryption_exempt);
 
     // Android-specific config from perry.toml
     let android_min_sdk = config.android.as_ref().and_then(|a| a.min_sdk.clone());
     let android_target_sdk = config.android.as_ref().and_then(|a| a.target_sdk.clone());
+    let android_version_code = config.android.as_ref().and_then(|a| a.version_code);
     let android_permissions = config.android.as_ref().and_then(|a| a.permissions.clone());
     let android_distribute = config.android.as_ref().and_then(|a| a.distribute.clone());
 
@@ -1030,7 +1001,14 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
     // Pre-flight credential validation — fail fast before building the tarball
     {
-        let is_macos = !is_android && !is_ios && !is_linux && !is_windows && !is_web;
+        let is_macos = !is_android
+            && !is_ios
+            && !is_visionos
+            && !is_tvos
+            && !is_watchos
+            && !is_linux
+            && !is_windows
+            && !is_web;
         validate_credentials_for_distribute(
             is_android,
             android_distribute.as_deref(),
@@ -1042,7 +1020,34 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             p8_key_content.as_deref(),
             is_macos,
             macos_distribute.as_deref(),
+            is_tvos,
+            tvos_distribute.as_deref(),
+            is_watchos,
+            watchos_distribute.as_deref(),
         )?;
+    }
+
+    // A standalone watchOS app uploaded to App Store Connect must have its own
+    // unique bundle id, distinct from any companion iOS app. Require it explicitly
+    // rather than silently inheriting (and colliding with) the iOS bundle id.
+    if is_watchos
+        && matches!(
+            watchos_distribute.as_deref(),
+            Some("appstore") | Some("testflight")
+        )
+        && config
+            .watchos
+            .as_ref()
+            .and_then(|w| w.bundle_id.clone())
+            .is_none()
+    {
+        bail!(
+            "watchos.distribute = \"{}\" requires an explicit [watchos] bundle_id.\n\
+             A standalone watchOS app must have its own bundle id, distinct from your iOS app \
+             (App Store Connect rejects duplicate bundle ids).\n\
+             Run `perry setup watchos` or add `bundle_id = \"...\"` under [watchos] in perry.toml.",
+            watchos_distribute.as_deref().unwrap_or("appstore")
+        );
     }
 
     // Pre-flight validation for iOS App Store / TestFlight — detect common rejection reasons
@@ -1090,7 +1095,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             {
                 println!("  Signing:   Google Cloud KMS (EV code signing)");
             }
-        } else if is_ios || is_macos {
+        } else if is_ios || is_macos || is_tvos || is_watchos {
             if let Some(ref id) = apple_identity {
                 println!("  Signing:   {id}");
             }
@@ -1100,6 +1105,17 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else if is_ios
             && matches!(
                 ios_distribute.as_deref(),
+                Some("appstore") | Some("testflight")
+            )
+        {
+            println!("  Distribute: App Store Connect (TestFlight)");
+        } else if (is_tvos || is_watchos)
+            && matches!(
+                if is_tvos {
+                    tvos_distribute.as_deref()
+                } else {
+                    watchos_distribute.as_deref()
+                },
                 Some("appstore") | Some("testflight")
             )
         {
@@ -1185,8 +1201,24 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else {
             (version.clone(), None)
         };
+    // Home Screen display name (CFBundleDisplayName): prefer the target's own
+    // [platform].display_name, else [project].display_name. None → the build
+    // service omits the key and the icon label falls back to the app name.
+    let platform_display_name = if is_ios {
+        config.ios.as_ref().and_then(|c| c.display_name.clone())
+    } else if is_macos {
+        config.macos.as_ref().and_then(|c| c.display_name.clone())
+    } else if is_tvos {
+        config.tvos.as_ref().and_then(|c| c.display_name.clone())
+    } else {
+        None
+    };
+    let display_name = platform_display_name
+        .or_else(|| config.project.as_ref().and_then(|p| p.display_name.clone()));
+
     let manifest = BuildManifest {
         app_name: app_name.clone(),
+        display_name,
         bundle_id,
         version: manifest_version,
         short_version: manifest_short_version,
@@ -1247,6 +1279,26 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else {
             None
         },
+        tvos_distribute: if is_tvos { tvos_distribute } else { None },
+        watchos_deployment_target: if is_watchos {
+            config
+                .watchos
+                .as_ref()
+                .and_then(|w| w.deployment_target.clone())
+        } else {
+            None
+        },
+        watchos_encryption_exempt: if is_watchos {
+            config.watchos.as_ref().and_then(|w| w.encryption_exempt)
+        } else {
+            None
+        },
+        watchos_info_plist: if is_watchos {
+            config.watchos.as_ref().and_then(|w| w.info_plist.clone())
+        } else {
+            None
+        },
+        watchos_distribute: if is_watchos { watchos_distribute } else { None },
         android_min_sdk: if is_android { android_min_sdk } else { None },
         android_target_sdk: if is_android { android_target_sdk } else { None },
         android_permissions: if is_android {
@@ -1255,6 +1307,11 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             None
         },
         android_distribute: if is_android { android_distribute } else { None },
+        android_version_code: if is_android {
+            android_version_code
+        } else {
+            None
+        },
         linux_format: if is_linux {
             config.linux.as_ref().and_then(|l| l.format.clone())
         } else {
@@ -1274,6 +1331,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         } else {
             None
         },
+        linux_libc: linux_libc.clone(),
         release_notes: config.release_notes.clone(),
         features: config.project.as_ref().and_then(|p| p.features.clone()),
     };
@@ -1522,61 +1580,99 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let mut download_path: Option<String> = None;
     let mut artifact_name: Option<String> = None;
     let mut build_success = false;
+    // `done` = a terminal Complete/Error was received. Until then, a dropped or
+    // closed WebSocket (the hub drops connections while a job sits in the queue)
+    // must RECONNECT + re-subscribe rather than silently end the publish — else
+    // the command exits without ever downloading the artifact (#flaky-publish).
+    let mut done = false;
+    // `published` = the hub confirmed a server-side publish (TestFlight / App
+    // Store etc.), where no local artifact is downloaded.
+    let mut published = false;
+    // `downloaded` = a local artifact was actually written to the output dir.
+    let mut downloaded = false;
     let mut ws_retries = 0u32;
     let max_ws_retries = 60u32; // ~10 minutes with backoff
 
     use futures_util::StreamExt;
-    'ws_loop: loop {
-        while let Some(msg) = read.next().await {
-            let msg = match msg {
-                Ok(m) => m,
-                Err(e) => {
-                    // WebSocket dropped — try to reconnect and re-subscribe
-                    loop {
-                        ws_retries += 1;
-                        if ws_retries > max_ws_retries {
-                            if let Some(ref pb) = pb {
-                                pb.abandon_with_message(format!(
-                                    "WebSocket error after {max_ws_retries} retries: {e}"
-                                ));
-                            }
-                            bail!("WebSocket error after {max_ws_retries} retries: {e}");
-                        }
-                        let delay = std::cmp::min(ws_retries as u64 * 2, 30);
-                        if let OutputFormat::Text = format {
-                            if let Some(ref pb) = pb {
-                                pb.println(format!("    {} Connection lost, reconnecting in {delay}s ({ws_retries}/{max_ws_retries})...", style("!").yellow()));
-                            }
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                        match tokio_tungstenite::connect_async(&ws_url).await {
-                            Ok((new_ws, _)) => {
-                                let (mut new_write, new_read) = new_ws.split();
-                                let _ = new_write
-                                    .send(Message::Text(
-                                        format!(
-                                            r#"{{"type":"subscribe","job_id":"{}"}}"#,
-                                            build_resp.job_id
-                                        )
-                                        .into(),
-                                    ))
-                                    .await;
-                                read = new_read;
-                                ws_retries = 0; // reset on successful reconnect
-                                continue 'ws_loop;
-                            }
-                            Err(_re) => {
-                                // Keep retrying — don't bail on reconnect failure
-                                continue;
-                            }
-                        }
+
+    // Reconnect to the hub and re-subscribe to the job. Used whenever the stream
+    // errors, closes, or ends before a terminal message. Bails after exhausting
+    // retries so CI fails loudly instead of going green with no artifact.
+    macro_rules! reconnect_or_bail {
+        ($why:expr) => {{
+            loop {
+                ws_retries += 1;
+                if ws_retries > max_ws_retries {
+                    if let Some(ref pb) = pb {
+                        pb.abandon_with_message(format!(
+                            "WebSocket {} — lost after {max_ws_retries} retries",
+                            $why
+                        ));
                     }
+                    bail!(
+                        "WebSocket {} and could not be re-established after {max_ws_retries} retries (no build result received)",
+                        $why
+                    );
+                }
+                let delay = std::cmp::min(ws_retries as u64 * 2, 30);
+                if let OutputFormat::Text = format {
+                    if let Some(ref pb) = pb {
+                        pb.println(format!("    {} Connection lost ({}), reconnecting in {delay}s ({ws_retries}/{max_ws_retries})...", style("!").yellow(), $why));
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                match tokio_tungstenite::connect_async(&ws_url).await {
+                    Ok((new_ws, _)) => {
+                        let (mut new_write, new_read) = new_ws.split();
+                        let _ = new_write
+                            .send(Message::Text(
+                                format!(
+                                    r#"{{"type":"subscribe","job_id":"{}"}}"#,
+                                    build_resp.job_id
+                                )
+                                .into(),
+                            ))
+                            .await;
+                        read = new_read;
+                        ws_retries = 0; // reset on successful reconnect
+                        break;
+                    }
+                    // Keep retrying — don't bail on a single reconnect failure.
+                    Err(_re) => continue,
+                }
+            }
+        }};
+    }
+
+    'ws_loop: loop {
+        loop {
+            let msg = match read.next().await {
+                Some(Ok(m)) => m,
+                Some(Err(_e)) => {
+                    reconnect_or_bail!("errored");
+                    continue 'ws_loop;
+                }
+                None => {
+                    // Stream ended. If we already have a terminal result, proceed
+                    // to the download/finish step; otherwise the hub dropped us —
+                    // reconnect rather than exit empty-handed.
+                    if done {
+                        break;
+                    }
+                    reconnect_or_bail!("stream ended");
+                    continue 'ws_loop;
                 }
             };
 
             let text = match msg {
                 Message::Text(t) => t,
-                Message::Close(_) => break,
+                Message::Close(_) => {
+                    if done {
+                        break;
+                    }
+                    reconnect_or_bail!("closed by server");
+                    continue 'ws_loop;
+                }
                 _ => continue,
             };
 
@@ -1674,6 +1770,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     ..
                 } => {
                     build_success = success;
+                    done = true;
                     if let OutputFormat::Text = format {
                         println!();
                         if success {
@@ -1695,6 +1792,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                 ServerMessage::Published {
                     platform, message, ..
                 } => {
+                    published = true;
                     if let OutputFormat::Text = format {
                         println!(
                             "  {} Published to {} — {}",
@@ -1720,10 +1818,25 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                 }
 
                 fs::create_dir_all(&args.output)?;
-                let dest = args.output.join(&name);
+                // `name` is supplied verbatim by the build server over the
+                // WebSocket. Reduce it to a bare, traversal-free file name so a
+                // malicious hub cannot write outside the output directory
+                // (GHSA-x55v-q459-68ch).
+                let safe_name = sanitize_artifact_name(&name)?;
+                let dest = args.output.join(&safe_name);
 
                 if let Some(ref src_path) = download_path {
-                    // Local path available (self-hosted hub) - copy directly
+                    // `download_path` is also server-controlled. A filesystem
+                    // path is only meaningful when the hub shares this machine's
+                    // filesystem; honoring it for a remote hub would let a
+                    // malicious server copy out any file the user can read
+                    // (GHSA-x55v-q459-68ch, Path B). Fall back to HTTP otherwise.
+                    if !server_is_local(&server_url) {
+                        bail!(
+                            "Hub at {server_url} reported a local artifact path ({src_path}) but is not a local hub; refusing to read from an arbitrary local path"
+                        );
+                    }
+                    // Local path available (self-hosted hub on this machine) - copy directly
                     fs::copy(src_path, &dest)
                         .with_context(|| format!("Failed to copy artifact from {src_path}"))?;
                 } else {
@@ -1782,16 +1895,64 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     );
                     println!();
                 }
+
+                downloaded = true;
             }
         }
-        break; // Normal exit from while loop means stream ended
+        break; // terminal result handled above
     } // end 'ws_loop
 
     if !build_success {
         bail!("Build failed");
     }
 
+    // The build reported success but we neither downloaded an artifact nor got a
+    // server-side publish confirmation — almost always a hub connection that
+    // dropped between the artifact notice and completion. Fail loudly so CI does
+    // not go green with an empty release; re-running the publish recovers it.
+    if !args.no_download && !downloaded && !published {
+        bail!(
+            "Build reported success but no artifact was received from the hub (connection likely interrupted). Re-run `perry publish`."
+        );
+    }
+
     Ok(())
+}
+
+/// Reduce a server-supplied artifact name to a single, traversal-free file
+/// name. The build server controls this value over the WebSocket, so it must
+/// never be able to escape the chosen output directory: absolute paths, `..`,
+/// `.`, and embedded path separators are all rejected (GHSA-x55v-q459-68ch).
+fn sanitize_artifact_name(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    let is_unsafe = trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        // Anything whose final path component is not exactly the input (drive
+        // prefixes, embedded NULs, platform-specific separators, ...).
+        || Path::new(trimmed).file_name().and_then(|s| s.to_str()) != Some(trimmed);
+
+    if is_unsafe {
+        bail!("Server sent an unsafe artifact name {name:?}; refusing to write outside the output directory");
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Whether the resolved hub URL points at the local machine. Used to gate the
+/// `download_path` local-copy shortcut, which trusts a server-controlled local
+/// filesystem path (GHSA-x55v-q459-68ch, Path B).
+fn server_is_local(server_url: &str) -> bool {
+    match Url::parse(server_url) {
+        Ok(u) => match u.host() {
+            Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        },
+        Err(_) => false,
+    }
 }
 
 pub(crate) async fn auto_register_license(server_url: &str) -> Result<String> {

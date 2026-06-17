@@ -41,6 +41,9 @@ pub fn alloc_date_cell(ts: f64) -> f64 {
             crate::gc::GC_TYPE_DATE_CELL,
         ) as *mut DateCell;
         (*ptr).ts = ts;
+        // A previous (collected) Date at this address may have left expando
+        // properties in the side table; a fresh Date must start clean.
+        crate::object::exotic_expando::expando_clear_on_alloc(ptr as usize);
         f64::from_bits(crate::value::JSValue::pointer(ptr as *const u8).bits())
     }
 }
@@ -58,12 +61,31 @@ pub fn date_invalid() -> f64 {
 /// with no side-table registry to keep in sync.
 #[inline]
 pub fn is_date_cell_addr(addr: usize) -> bool {
-    if addr < 0x1000 + crate::gc::GC_HEADER_SIZE {
+    // #4004: small-handle registry ids (Web Fetch Request/Headers/Response,
+    // perry-ffi/node:http handles, timer ids, …) are NaN-boxed as POINTER_TAG
+    // values but are NOT real heap addresses — they live in the small-handle
+    // band (see `value::addr_class`). Real `DateCell`s are arena-allocated,
+    // always above the small-handle cutoff. Dereferencing
+    // `addr - GC_HEADER_SIZE` on a small handle reads unmapped memory: once
+    // #4018 moved fetch handles up to 0x40000 (past the old 0x1000 floor), any
+    // untyped `request.headers.get()` dispatch routed its receiver through
+    // `is_date_value` here and segfaulted. `try_read_gc_header` rejects the
+    // whole band before the deref, so this is an exact heap-pointer check.
+    // #5226: small typed arrays and `Buffer`s are raw-`alloc`'d off the GC
+    // heap with NO `GcHeader` prefix. `try_read_gc_header` only rejects the
+    // handle band and (on some platforms) low addresses, so on Windows these
+    // pass its magnitude check and the `addr - GC_HEADER_SIZE` back-read below
+    // faults when the block sits at the start of a freshly mapped region.
+    // Reject them via the side tables first — they are never `DateCell`s.
+    if crate::typedarray::is_offheap_sidetable_alloc(addr) {
         return false;
     }
     unsafe {
-        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_DATE_CELL {
+        let header = match crate::value::addr_class::try_read_gc_header(addr) {
+            Some(header) => header,
+            None => return false,
+        };
+        if header.obj_type != crate::gc::GC_TYPE_DATE_CELL {
             return false;
         }
         // #4003: `Buffer`s are raw-`alloc`'d with NO `GcHeader`, so the word at
@@ -182,7 +204,7 @@ fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i6
         let hour = tm.tm_hour as u32;
         let minute = tm.tm_min as u32;
         let second = tm.tm_sec as u32;
-        let tz_offset = tm.tm_gmtoff;
+        let tz_offset = tm.tm_gmtoff as i64;
         (year, month, day, hour, minute, second, tz_offset)
     }
 }
@@ -283,10 +305,16 @@ pub extern "C" fn js_date_new_from_value(value: f64) -> f64 {
         // otherwise read the pointer bits as a bogus timestamp).
         date_cell_timestamp(value)
     } else {
-        // Numeric timestamp
-        value
+        // Any other value → ToNumber timestamp. Booleans/null coerce
+        // numerically, objects run a single valueOf, and Symbol/BigInt throw
+        // (rather than silently producing an Invalid Date from raw pointer bits).
+        jsvalue_to_number(value)
     };
-    alloc_date_cell(result)
+    // `new Date(number)` applies TimeClip: `abs(t) > 8.64e15` → Invalid, and a
+    // fractional timestamp truncates toward zero (`new Date(123.9).getTime()`
+    // === 123). Copying another Date or parsing a string already yields an
+    // integral in-range value, so this is idempotent for those paths.
+    alloc_date_cell(time_clip(result))
 }
 
 /// Number of days from the civil date 1970-01-01 to `y-m-d` (m is 1-based,
@@ -320,331 +348,48 @@ fn make_utc_ms(year: i64, month0: i64, day: i64, hour: i64, min: i64, sec: i64, 
     (secs * 1000 + ms) as f64
 }
 
+/// ECMA-262 `TimeClip(time)`: a constructed/derived millisecond time value is
+/// `NaN` when it is non-finite or `abs(t) > 8.64e15`, otherwise it is truncated
+/// toward zero (`ToIntegerOrInfinity`) with `-0` normalized to `+0`. Every
+/// public Date construction/`UTC`/setter result path funnels its computed time
+/// through this so out-of-range dates become Invalid and fractional inputs
+/// (`new Date(123.9)`) drop their fraction, matching Node.
+#[inline]
+pub(crate) fn time_clip(t: f64) -> f64 {
+    if !t.is_finite() || t.abs() > 8.64e15 {
+        return f64::NAN;
+    }
+    let i = t.trunc();
+    // Normalize -0 to +0 (TimeClip step 3: `ToInteger(time) + (+0)`).
+    if i == 0.0 {
+        0.0
+    } else {
+        i
+    }
+}
+
 /// Apply the ECMA-262 `0..=99 => 1900 + y` rebasing for an integral year
 /// when (and only when) it falls in that range.
 #[inline]
 fn rebase_two_digit_year(year: f64) -> f64 {
-    if year.fract() == 0.0 && (0.0..100.0).contains(&year) {
-        year + 1900.0
+    // ECMAScript MakeFullYear: y = ToInteger(year) (truncate toward zero);
+    // if 0 ≤ y ≤ 99 then the full year is 1900 + y. The truncation happens
+    // BEFORE the range test, so `Date.UTC(-0.999999, 0)` rebases to 1900
+    // (ToInteger(-0.999999) = 0), not the literal year 0 (test262
+    // Date/UTC/year-offset). Non-finite years pass through unchanged.
+    if !year.is_finite() {
+        return year;
+    }
+    let yi = year.trunc();
+    if (0.0..=99.0).contains(&yi) {
+        1900.0 + yi
     } else {
-        year
+        yi
     }
 }
 
-/// Parse a date string into a millisecond timestamp (UTC). Returns NaN for
-/// unrecognized input. Implements the well-defined subset of the Date Time
-/// String grammar plus the common RFC-1123 / IETF / month-name forms Node
-/// accepts:
-///   - ISO 8601: "YYYY", "YYYY-MM", "YYYY-MM-DD", with optional
-///     "THH:MM[:SS[.sss]]" and an optional "Z" / "+HH:MM" / "-HH:MM" offset.
-///     Date-only forms are UTC; date-time forms without an offset are also
-///     treated as UTC (matching V8's ISO handling).
-///   - "YYYY-MM-DD HH:MM:SS" (space separator, MySQL form).
-///   - RFC-1123 / IETF: "Thu, 01 Jan 1970 00:00:00 GMT",
-///     "01 Jan 1970 00:00:00 GMT" (with optional weekday and optional
-///     trailing GMT/UTC/+offset).
-///   - Month-name forms: "March 7, 2020", "Jan 15 2024".
-fn parse_date_string(s: &str) -> f64 {
-    let s = s.trim();
-    if s.is_empty() {
-        return f64::NAN;
-    }
-
-    if let Some(ts) = parse_iso8601(s) {
-        return ts;
-    }
-    if let Some(ts) = parse_rfc_or_named(s) {
-        return ts;
-    }
-    f64::NAN
-}
-
-/// Parse an integer offset of the form `Z`, `+HH:MM`, `-HH:MM`, `+HHMM`, or
-/// `+HH`. Returns the offset in minutes east of UTC (`Z` => 0). `None` if the
-/// remainder is not a valid zone designator.
-fn parse_tz_offset(rest: &str) -> Option<i64> {
-    let rest = rest.trim();
-    if rest.is_empty() {
-        // No designator at all — caller decides the default.
-        return Some(i64::MAX); // sentinel "absent"
-    }
-    if rest == "Z" || rest.eq_ignore_ascii_case("z") {
-        return Some(0);
-    }
-    let bytes = rest.as_bytes();
-    let sign = match bytes[0] {
-        b'+' => 1,
-        b'-' => -1,
-        _ => return None,
-    };
-    let body = &rest[1..];
-    let (hh, mm) = if let Some((h, m)) = body.split_once(':') {
-        (h, m)
-    } else if body.len() == 4 {
-        (&body[0..2], &body[2..4])
-    } else if body.len() == 2 {
-        (body, "0")
-    } else {
-        return None;
-    };
-    let h: i64 = hh.parse().ok()?;
-    let m: i64 = mm.parse().ok()?;
-    Some(sign * (h * 60 + m))
-}
-
-/// ISO 8601 / MySQL branch. Returns `Some(ms)` on success.
-fn parse_iso8601(s: &str) -> Option<f64> {
-    let b = s.as_bytes();
-    // Year-only "YYYY" or "+YYYYYY" not handled here (rare); require a 4-digit
-    // year prefix.
-    if b.len() < 4 || !b[0..4].iter().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let year: i64 = s[0..4].parse().ok()?;
-    let mut month1: u32 = 1;
-    let mut day: i64 = 1;
-    let mut hour: i64 = 0;
-    let mut minute: i64 = 0;
-    let mut second: i64 = 0;
-    let mut millis: i64 = 0;
-    let mut idx = 4;
-
-    // "YYYY" only.
-    if s.len() == 4 {
-        return Some(make_utc_ms(
-            year,
-            month1 as i64 - 1,
-            day,
-            hour,
-            minute,
-            second,
-            millis,
-        ));
-    }
-    // Require a '-' for month.
-    if b.get(4) != Some(&b'-') {
-        return None;
-    }
-    if b.len() < 7 {
-        return None;
-    }
-    month1 = s[5..7].parse().ok()?;
-    if !(1..=12).contains(&month1) {
-        return None;
-    }
-    idx = 7;
-    let mut has_day = false;
-    if b.get(7) == Some(&b'-') {
-        if b.len() < 10 {
-            return None;
-        }
-        day = s[8..10].parse().ok()?;
-        if !(1..=31).contains(&day) {
-            return None;
-        }
-        idx = 10;
-        has_day = true;
-    }
-
-    // Time part (after 'T' or ' ').
-    let mut tz_minutes_east: Option<i64> = None; // None => "no offset present"
-    if idx < s.len() {
-        let sep = b[idx];
-        if sep != b'T' && sep != b' ' {
-            return None;
-        }
-        // Month-only "YYYY-MM" cannot carry a time component.
-        if !has_day {
-            return None;
-        }
-        let time_str = &s[idx + 1..];
-        // Split off a trailing zone designator. Scan for the first of
-        // 'Z', '+', '-' after the HH:MM[:SS[.sss]] body.
-        let zone_pos = time_str
-            .char_indices()
-            .find(|(i, c)| *i > 0 && (*c == 'Z' || *c == '+' || *c == '-'))
-            .map(|(i, _)| i);
-        let (clock, zone) = match zone_pos {
-            Some(p) => (&time_str[..p], &time_str[p..]),
-            None => (time_str, ""),
-        };
-        let cb = clock.as_bytes();
-        if clock.len() < 5 || cb[2] != b':' {
-            return None;
-        }
-        hour = clock[0..2].parse().ok()?;
-        minute = clock[3..5].parse().ok()?;
-        if clock.len() >= 8 && cb[5] == b':' {
-            second = clock[6..8].parse().ok()?;
-            if clock.len() > 9 && cb[8] == b'.' {
-                let frac = &clock[9..];
-                let frac_digits: String = frac.chars().take_while(|c| c.is_ascii_digit()).collect();
-                if !frac_digits.is_empty() {
-                    millis = normalize_millis(&frac_digits);
-                }
-            }
-        }
-        if !zone.is_empty() {
-            match parse_tz_offset(zone) {
-                Some(v) if v == i64::MAX => {}
-                Some(v) => tz_minutes_east = Some(v),
-                None => return None,
-            }
-        }
-    }
-    let base = make_utc_ms(year, month1 as i64 - 1, day, hour, minute, second, millis);
-    // Apply zone offset: a clock with offset +HH:MM is `offset` ahead of UTC,
-    // so UTC = clock - offset.
-    let adjusted = if let Some(off) = tz_minutes_east {
-        base - (off * 60_000) as f64
-    } else {
-        base
-    };
-    let _ = idx;
-    Some(adjusted)
-}
-
-/// Normalize a run of fractional-second digits to a 0..=999 millisecond value.
-fn normalize_millis(digits: &str) -> i64 {
-    // Take the first 3 digits, zero-pad on the right.
-    let mut ms = 0i64;
-    for (i, c) in digits.chars().take(3).enumerate() {
-        let d = c.to_digit(10).unwrap_or(0) as i64;
-        ms += d * 10i64.pow(2 - i as u32);
-    }
-    ms
-}
-
-const FULL_MONTHS: [&str; 12] = [
-    "january",
-    "february",
-    "march",
-    "april",
-    "may",
-    "june",
-    "july",
-    "august",
-    "september",
-    "october",
-    "november",
-    "december",
-];
-
-fn month_from_name(tok: &str) -> Option<u32> {
-    let t = tok.trim_end_matches(',').to_ascii_lowercase();
-    if t.len() < 3 {
-        return None;
-    }
-    let abbr = &t[..3];
-    FULL_MONTHS
-        .iter()
-        .position(|m| m.starts_with(abbr) && t.len() <= m.len() && m.starts_with(&t))
-        .map(|i| (i + 1) as u32)
-}
-
-/// RFC-1123 / IETF and month-name string forms. Token-based, timezone-aware.
-fn parse_rfc_or_named(s: &str) -> Option<f64> {
-    // Drop a leading weekday token like "Thu," or "Thursday,".
-    let raw = s.replace(',', " ");
-    let tokens: Vec<&str> = raw.split_whitespace().collect();
-    if tokens.is_empty() {
-        return None;
-    }
-
-    let mut year: Option<i64> = None;
-    let mut month: Option<u32> = None;
-    let mut day: Option<i64> = None;
-    let mut hour: i64 = 0;
-    let mut minute: i64 = 0;
-    let mut second: i64 = 0;
-    let mut tz_minutes_east: Option<i64> = None;
-
-    for tok in &tokens {
-        // Weekday name → skip.
-        let low = tok.to_ascii_lowercase();
-        if ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
-            .iter()
-            .any(|w| low.starts_with(w))
-            && month_from_name(tok).is_none()
-            && !tok.chars().next().unwrap_or(' ').is_ascii_digit()
-        {
-            continue;
-        }
-        // Month name.
-        if let Some(m) = month_from_name(tok) {
-            month = Some(m);
-            continue;
-        }
-        // Time "HH:MM[:SS]".
-        if tok.contains(':') {
-            let parts: Vec<&str> = tok.split(':').collect();
-            if parts.len() >= 2 {
-                hour = parts[0].parse().ok()?;
-                minute = parts[1].parse().ok()?;
-                if parts.len() >= 3 {
-                    second = parts[2].parse().unwrap_or(0);
-                }
-                continue;
-            }
-        }
-        // Timezone words / offsets.
-        if low == "gmt" || low == "utc" || low == "z" {
-            tz_minutes_east = Some(0);
-            continue;
-        }
-        if let Some(stripped) = tok.strip_prefix("GMT").or_else(|| tok.strip_prefix("UTC")) {
-            if let Some(off) = parse_tz_offset(stripped) {
-                if off != i64::MAX {
-                    tz_minutes_east = Some(off);
-                }
-            }
-            continue;
-        }
-        if (tok.starts_with('+') || tok.starts_with('-')) && tok.len() >= 3 {
-            if let Some(off) = parse_tz_offset(tok) {
-                if off != i64::MAX {
-                    tz_minutes_east = Some(off);
-                    continue;
-                }
-            }
-        }
-        // Pure number → day or year. A 4+-digit number is unambiguously the
-        // year; otherwise it's the day-of-month if one hasn't been seen yet
-        // and it is in range (RFC-1123 puts the day before the year, e.g.
-        // "01 Jan 1970"), else the year.
-        if let Ok(n) = tok.parse::<i64>() {
-            let is_four_digit = tok.trim_start_matches(['+', '-']).len() >= 4;
-            if is_four_digit && year.is_none() {
-                year = Some(n);
-            } else if day.is_none() && (1..=31).contains(&n) {
-                day = Some(n);
-            } else if year.is_none() {
-                year = Some(n);
-            }
-            continue;
-        }
-    }
-
-    let y = year?;
-    let m = month?;
-    let d = day.unwrap_or(1);
-    // RFC/IETF dates without an explicit zone are treated as local time by
-    // Node; but the common HTTP-date forms always carry GMT, and our test
-    // surface only uses GMT/offset forms. Default to UTC when a zone token
-    // was seen; otherwise treat the named-month form (e.g. "March 7, 2020")
-    // as local time to match Node.
-    let base = make_utc_ms(y, m as i64 - 1, d, hour, minute, second, 0);
-    match tz_minutes_east {
-        Some(off) => Some(base - (off * 60_000) as f64),
-        None => {
-            // Local-time interpretation: subtract local tz offset at that
-            // instant (mirrors js_date_new_local_components).
-            let secs = (base as i64).div_euclid(1000);
-            let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(secs);
-            Some(base - (tz_offset * 1000) as f64)
-        }
-    }
-}
+mod parse;
+use parse::parse_date_string;
 
 /// Convert date components (UTC) to Unix timestamp in seconds.
 /// Inverse of timestamp_to_components. Used only by the Windows tz-offset
@@ -679,6 +424,20 @@ fn components_to_timestamp(
     days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64
 }
 
+/// Format a calendar year for ISO 8601 (`toISOString` / `toJSON`): `0..=9999`
+/// is 4 zero-padded digits ("2024"), every other year uses the expanded sign +
+/// 6-digit form ("+275760" / "-271821" / "-000001"). Unlike [`format_year`],
+/// which omits the `+` for the human `toString`/`toUTCString` forms.
+fn iso_year(year: i64) -> String {
+    if (0..=9999).contains(&year) {
+        format!("{:04}", year)
+    } else if year < 0 {
+        format!("-{:06}", -year)
+    } else {
+        format!("+{:06}", year)
+    }
+}
+
 /// Get timestamp from Date (date.getTime())
 /// Since we store dates as timestamps, this is an identity function
 #[no_mangle]
@@ -696,17 +455,28 @@ pub extern "C" fn js_date_to_iso_string(timestamp: f64) -> *mut crate::StringHea
         return invalid_date_string();
     }
     let ts_ms = timestamp as i64;
-    let secs = ts_ms / 1000;
-    let millis = (ts_ms % 1000).unsigned_abs() as u32;
+    // Floor-divide so sub-epoch timestamps round toward -∞: `new Date(-1)` is
+    // `1969-12-31T23:59:59.999Z`, not `1970-01-01T00:00:00.001Z`. Truncating
+    // division (`/`, `%`) gave `secs = 0, millis = 1` for `-1`.
+    let secs = ts_ms.div_euclid(1000);
+    let millis = ts_ms.rem_euclid(1000) as u32;
 
     // Calculate date components from Unix timestamp
     // This is a simplified implementation - proper implementation would use chrono crate
     let (year, month, day, hour, minute, second) = timestamp_to_components(secs);
 
-    // Format as ISO 8601: YYYY-MM-DDTHH:mm:ss.sssZ
+    // ISO 8601 "YYYY-MM-DDTHH:mm:ss.sssZ"; years outside 0..=9999 use the
+    // expanded "±YYYYYY" form (see `iso_year`) — test262
+    // Date/parse/time-value-maximum-range.
     let iso_string = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        year, month, day, hour, minute, second, millis
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        iso_year(year as i64),
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        millis
     );
 
     crate::string::js_string_from_bytes(iso_string.as_ptr(), iso_string.len() as u32)
@@ -900,17 +670,21 @@ pub extern "C" fn js_date_utc(args_ptr: *const f64, argc: i32) -> f64 {
     let minute = get(4, 0.0);
     let second = get(5, 0.0);
     let ms = get(6, 0.0);
-    if year.is_nan()
-        || month.is_nan()
-        || day.is_nan()
-        || hour.is_nan()
-        || minute.is_nan()
-        || second.is_nan()
-        || ms.is_nan()
+    // MakeDay/MakeTime return NaN when any component is non-finite (`Infinity`,
+    // `-Infinity`, or `NaN`); a bare `is_nan` check would let `Infinity` through
+    // and saturate `as i64` to a bogus timestamp, so reject every non-finite
+    // component before assembling.
+    if !year.is_finite()
+        || !month.is_finite()
+        || !day.is_finite()
+        || !hour.is_finite()
+        || !minute.is_finite()
+        || !second.is_finite()
+        || !ms.is_finite()
     {
         return f64::NAN;
     }
-    make_utc_ms(
+    time_clip(make_utc_ms(
         year as i64,
         month as i64,
         day as i64,
@@ -918,7 +692,7 @@ pub extern "C" fn js_date_utc(args_ptr: *const f64, argc: i32) -> f64 {
         minute as i64,
         second as i64,
         ms as i64,
-    )
+    ))
 }
 
 /// Keepalive anchor for `js_date_utc` — codegen-only `#[no_mangle]` symbols
@@ -931,7 +705,20 @@ static KEEP_JS_DATE_UTC: extern "C" fn(*const f64, i32) -> f64 = js_date_utc;
 /// to the inputs Date setters/constructors actually receive). `undefined`
 /// becomes NaN; numbers pass through; numeric strings parse; everything else
 /// is NaN.
+/// ECMAScript `ToNumber` for Date arguments (constructor numeric arg, `Date.UTC`,
+/// `Date.prototype.set*` components). Throws `TypeError` on Symbol/BigInt (per
+/// spec), reads a Date's time value, and runs a *single* `valueOf`/`toString`
+/// (`OrdinaryToPrimitive` number hint) for ordinary objects and arrays before
+/// the primitive numeric coercion. Primitives use the ordinary string/boolean/
+/// nullish coercion.
 fn jsvalue_to_number(v: f64) -> f64 {
+    // Symbol and BigInt are not numerically convertible.
+    if unsafe { crate::symbol::js_is_symbol(v) } != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
+    }
+    if crate::value::JSValue::from_bits(v.to_bits()).is_bigint() {
+        crate::collection_iter::throw_type_error("Cannot convert a BigInt value to a number");
+    }
     let bits = v.to_bits();
     let tag = (bits >> 48) & 0xFFFF;
     match tag {
@@ -972,6 +759,22 @@ fn jsvalue_to_number(v: f64) -> f64 {
             // INT32
             ((bits & 0xFFFF_FFFF) as u32 as i32) as f64
         }
+        0x7FFD => {
+            // Pointer: a Date contributes its time value; any other object (and
+            // arrays) coerce via OrdinaryToPrimitive(number) → ToNumber.
+            if is_date_value(v) {
+                return date_cell_timestamp(v);
+            }
+            match unsafe { crate::value::ordinary_to_primitive_number_for_add(v) } {
+                crate::value::OrdinaryToPrimitiveOutcome::Primitive(p) => jsvalue_to_number(p),
+                crate::value::OrdinaryToPrimitiveOutcome::DefaultString => f64::NAN,
+                crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
+                    crate::collection_iter::throw_type_error(
+                        "Cannot convert object to primitive value",
+                    )
+                }
+            }
+        }
         _ => v, // plain f64 double
     }
 }
@@ -1010,51 +813,105 @@ pub extern "C" fn js_date_apply_setter(
     } else {
         unsafe { std::slice::from_raw_parts(args_ptr, argc) }
     };
-    // setTime: single value, replaces the whole time.
+    // Spec: every `Date.prototype.set*` reads `thisTimeValue` (the receiver's
+    // current `[[DateValue]]`) BEFORE coercing any argument via ToNumber. A
+    // user `valueOf` on an argument can re-enter and mutate this very cell
+    // (test262 `set*/date-value-read-before-tonumber-when-date-is-{valid,
+    // invalid}`); the timestamp captured here is the one the rebuild must use,
+    // not whatever the cell holds after the ToNumber side effects. The brand
+    // check (`this` must be a Date) happens earlier, in the reflective setter
+    // thunks (`object::date_proto_thunks`) and on the codegen instance path.
+    let captured = date_cell_timestamp(date);
+    // setTime: single value, replaces the whole time. The old value is unused
+    // (beyond the brand check above), so no read-before ordering applies.
     if field == 7 {
         let v = if argc == 0 {
             f64::NAN
         } else {
             jsvalue_to_number(args[0])
         };
-        return date_cell_store(date, v);
+        return date_cell_store(date, time_clip(v));
     }
-    // `req(0)` is the *leading*, required component: an omitted leading
-    // argument coerces to NaN (e.g. `setHours()` → Invalid Date). Trailing
-    // optional components use `opt(i)`: an omitted (or `undefined`) trailing
-    // argument is `None`, i.e. "keep the current field". A *present* arg
-    // coerces via ToNumber (NaN-propagating either way).
-    let opt = |i: usize| -> Option<f64> {
-        if i < argc && !jsvalue_is_undefined(args[i]) {
-            Some(jsvalue_to_number(args[i]))
+    // setYear (annexB): like setFullYear but rebases a truncated year in
+    // `0..=99` to `1900 + y`, operates in local time, and has no UTC variant.
+    if field == 8 {
+        let y_raw = if argc == 0 {
+            f64::NAN
         } else {
-            None
-        }
-    };
-    let req = |i: usize| -> Option<f64> {
-        if i < argc {
-            Some(jsvalue_to_number(args[i]))
+            jsvalue_to_number(args[0])
+        };
+        let yyyy = if y_raw.is_nan() {
+            f64::NAN
         } else {
-            Some(f64::NAN)
-        }
-    };
+            let yi = y_raw.trunc();
+            if (0.0..=99.0).contains(&yi) {
+                1900.0 + yi
+            } else {
+                y_raw
+            }
+        };
+        return rebuild_local_with(
+            date,
+            captured,
+            Some(yyyy),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+    }
+    // Spec / V8 / node v26 observable order for the date/time setters (fields
+    // 0..=6): `thisTimeValue` is read FIRST (the `captured` read above, before
+    // any ToNumber). THEN every PRESENT argument is ToNumber-coerced
+    // left-to-right — all of them, even when the time value is NaN (test262
+    // `set*/arg-coercion-order`). ONLY after all coercions does a NaN time
+    // value short-circuit to NaN. A `valueOf` on an argument that re-enters
+    // and mutates this very Date is therefore NOT visible to the rebuild — the
+    // `captured` timestamp is the one used (test262
+    // `date-value-read-before-tonumber-when-date-is-{valid,invalid}`).
+    let t = captured;
+    let is_full_year = field == 0;
+    // Coerce every present argument in source order, capturing all `valueOf`
+    // side effects, BEFORE the NaN short-circuit below. An ABSENT trailing
+    // argument stays `None` ("keep the current field"); a PRESENT argument —
+    // even explicit `undefined` — is coerced (so `setMinutes(0, 0, undefined)`
+    // yields NaN, not the retained millisecond; test262 set*/arg-*-to-number).
+    let coerced: Vec<f64> = args.iter().map(|&a| jsvalue_to_number(a)).collect();
+    // For every setter except setFullYear/setUTCFullYear, a NaN time value
+    // short-circuits to NaN: the cell is NOT written (so a `valueOf`-installed
+    // value persists). setFullYear substitutes +0 for a NaN time value.
+    if t.is_nan() && !is_full_year {
+        return f64::NAN;
+    }
+    // #4927: a NaN time value is passed through to the rebuild AS NaN — its
+    // NaN branch seeds the spec's `t = +0` substitution from the RAW +0
+    // components (1970-01-01 00:00:00), per Date.prototype.setFullYear step 2,
+    // which skips LocalTime(t). Substituting 0.0 here ran the epoch through
+    // timestamp_to_local_components, so a CET process revived
+    // `new Date(NaN).setFullYear(2020)` to local 01:00 instead of 00:00.
+    // The leading component is required: an omitted call (`setHours()`) coerces
+    // `undefined` → NaN, so the leading slot is always `Some`.
+    let lead = Some(coerced.first().copied().unwrap_or(f64::NAN));
+    let opt = |i: usize| -> Option<f64> { coerced.get(i).copied() };
     // Map (field, positional index) → the seven rebuild slots.
     // Slots: year, month0, day, hour, minute, second, ms. The first slot of
     // each setter is the required leading component.
     let (year, month0, day, hour, minute, second, ms) = match field {
-        0 => (req(0), opt(1), opt(2), None, None, None, None), // setFullYear(y, mo?, d?)
-        1 => (None, req(0), opt(1), None, None, None, None),   // setMonth(mo, d?)
-        2 => (None, None, req(0), None, None, None, None),     // setDate(d)
-        3 => (None, None, None, req(0), opt(1), opt(2), opt(3)), // setHours(h, mi?, s?, ms?)
-        4 => (None, None, None, None, req(0), opt(1), opt(2)), // setMinutes(mi, s?, ms?)
-        5 => (None, None, None, None, None, req(0), opt(1)),   // setSeconds(s, ms?)
-        6 => (None, None, None, None, None, None, req(0)),     // setMilliseconds(ms)
+        0 => (lead, opt(1), opt(2), None, None, None, None), // setFullYear(y, mo?, d?)
+        1 => (None, lead, opt(1), None, None, None, None),   // setMonth(mo, d?)
+        2 => (None, None, lead, None, None, None, None),     // setDate(d)
+        3 => (None, None, None, lead, opt(1), opt(2), opt(3)), // setHours(h, mi?, s?, ms?)
+        4 => (None, None, None, None, lead, opt(1), opt(2)), // setMinutes(mi, s?, ms?)
+        5 => (None, None, None, None, None, lead, opt(1)),   // setSeconds(s, ms?)
+        6 => (None, None, None, None, None, None, lead),     // setMilliseconds(ms)
         _ => return date_cell_store(date, f64::NAN),
     };
     if is_utc != 0 {
-        rebuild_with(date, year, month0, day, hour, minute, second, ms)
+        rebuild_with(date, t, year, month0, day, hour, minute, second, ms)
     } else {
-        rebuild_local_with(date, year, month0, day, hour, minute, second, ms)
+        rebuild_local_with(date, t, year, month0, day, hour, minute, second, ms)
     }
 }
 
@@ -1085,52 +942,28 @@ pub extern "C" fn js_date_new_local_components(
     second: f64,
     millisecond: f64,
 ) -> f64 {
-    fn coerce(v: f64, default: f64) -> f64 {
-        let bits = v.to_bits();
-        let tag = (bits >> 48) & 0xFFFF;
-        if tag == 0x7FFF {
-            // NaN-boxed string — parse via the same path Number(str) uses.
-            let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
-            if ptr.is_null() || (ptr as usize) < 0x1000 {
-                return f64::NAN;
-            }
-            unsafe {
-                let len = (*ptr).byte_len as usize;
-                let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let bytes = std::slice::from_raw_parts(data, len);
-                match std::str::from_utf8(bytes) {
-                    Ok(s) => {
-                        let s = s.trim();
-                        if s.is_empty() {
-                            default
-                        } else {
-                            s.parse::<f64>().unwrap_or(f64::NAN)
-                        }
-                    }
-                    Err(_) => f64::NAN,
-                }
-            }
-        } else if tag == 0x7FFC && (bits & 0xFF) == 0x01 {
-            // undefined — for required args this is NaN, for optional ones default
-            default
-        } else {
-            v
-        }
-    }
-    let y = coerce(year, f64::NAN);
-    let m = coerce(month, f64::NAN);
-    let d = coerce(day, 1.0);
-    let h = coerce(hour, 0.0);
-    let mi = coerce(minute, 0.0);
-    let s = coerce(second, 0.0);
-    let ms = coerce(millisecond, 0.0);
-    if y.is_nan()
-        || m.is_nan()
-        || d.is_nan()
-        || h.is_nan()
-        || mi.is_nan()
-        || s.is_nan()
-        || ms.is_nan()
+    // Every argument codegen forwards is a *present* component: omitted
+    // trailing parameters are padded with their ECMA-262 default literal
+    // (`day = 1`, time fields = 0) at the call site, so here we run a plain
+    // ToNumber on each — a *present* `undefined` (e.g. `new Date(1899, 11,
+    // undefined)` or `DateValue(1899, 11)` where the wrapper forwards all seven
+    // params) coerces to NaN and produces an Invalid Date, matching Node.
+    let y = jsvalue_to_number(year);
+    let m = jsvalue_to_number(month);
+    let d = jsvalue_to_number(day);
+    let h = jsvalue_to_number(hour);
+    let mi = jsvalue_to_number(minute);
+    let s = jsvalue_to_number(second);
+    let ms = jsvalue_to_number(millisecond);
+    // MakeDay/MakeTime yield NaN for any non-finite component (Infinity as well
+    // as NaN), so reject all non-finite values before assembling.
+    if !y.is_finite()
+        || !m.is_finite()
+        || !d.is_finite()
+        || !h.is_finite()
+        || !mi.is_finite()
+        || !s.is_finite()
+        || !ms.is_finite()
     {
         return alloc_date_cell(f64::NAN);
     }
@@ -1150,7 +983,7 @@ pub extern "C" fn js_date_new_local_components(
     );
     let local_secs = (local_ms as i64).div_euclid(1000);
     let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
-    alloc_date_cell(local_ms - (tz_offset * 1000) as f64)
+    alloc_date_cell(time_clip(local_ms - (tz_offset * 1000) as f64))
 }
 
 // --- UTC getters: same impl as the regular getters since we store UTC internally ---
@@ -1229,6 +1062,16 @@ pub extern "C" fn js_date_get_utc_milliseconds(timestamp: f64) -> f64 {
 /// date.valueOf() — same as getTime(), returns ms timestamp.
 #[no_mangle]
 pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
+    // A static `.valueOf()` call is lowered to `DateValueOf` even when the
+    // receiver is typed `any` and is actually a Temporal value (e.g. from
+    // `Temporal.PlainDate.from(...)`). Every `Temporal.*` type's `valueOf` is a
+    // hard `TypeError` (the spec bans implicit numeric coercion / ordering), so
+    // route a Temporal receiver to its brand dispatch, which throws — rather
+    // than returning the opaque cell as a pseudo-Date timestamp.
+    #[cfg(feature = "temporal")]
+    if crate::temporal::is_temporal_value(timestamp) {
+        return crate::temporal::dispatch::call_method(timestamp, "valueOf", &[]);
+    }
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(timestamp) {
         return payload;
     }
@@ -1269,6 +1112,7 @@ pub extern "C" fn js_date_get_timezone_offset(timestamp: f64) -> f64 {
 #[allow(clippy::too_many_arguments)]
 fn rebuild_with(
     date: f64,
+    timestamp: f64,
     year: Option<f64>,
     month0: Option<f64>,
     day: Option<f64>,
@@ -1277,12 +1121,15 @@ fn rebuild_with(
     second: Option<f64>,
     millisecond: Option<f64>,
 ) -> f64 {
-    let timestamp = date_cell_timestamp(date);
     let (cy, cm0, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
         // Setting the year revives an Invalid Date (ECMA MakeDate seeds from
-        // year/0/1); any other component setter on an Invalid Date is a no-op.
+        // year/0/1); any other component setter on an Invalid Date returns NaN
+        // WITHOUT writing `[[DateValue]]` (spec step "If t is NaN, return NaN"
+        // precedes SetDateValue), so a `valueOf` that mutated the cell during
+        // argument coercion keeps its effect (test262
+        // `date-value-read-before-tonumber-when-date-is-invalid`).
         if year.is_none() {
-            return date_cell_store(date, timestamp);
+            return f64::NAN;
         }
         (1970i64, 0i64, 1i64, 0i64, 0i64, 0i64, 0i64)
     } else {
@@ -1300,12 +1147,13 @@ fn rebuild_with(
             cur_ms,
         )
     };
-    // If any provided override is NaN, the Date becomes Invalid.
+    // If any provided override is non-finite (NaN or ±Infinity), the Date
+    // becomes Invalid.
     for o in [year, month0, day, hour, minute, second, millisecond]
         .into_iter()
         .flatten()
     {
-        if o.is_nan() {
+        if !o.is_finite() {
             return date_cell_store(date, f64::NAN);
         }
     }
@@ -1318,7 +1166,9 @@ fn rebuild_with(
         second.map(|v| v as i64).unwrap_or(cs),
         millisecond.map(|v| v as i64).unwrap_or(cur_ms),
     );
-    date_cell_store(date, ms)
+    // TimeClip the rebuilt value: a setter that overflows ±8.64e15 makes the
+    // Date Invalid (`new Date(8.64e15).setHours(24)` → NaN).
+    date_cell_store(date, time_clip(ms))
 }
 
 // --- Local-time setters (#1187 / #2851) ---
@@ -1336,6 +1186,7 @@ fn rebuild_with(
 #[allow(clippy::too_many_arguments)]
 fn rebuild_local_with(
     date: f64,
+    timestamp: f64,
     year: Option<f64>,
     month0: Option<f64>,
     day: Option<f64>,
@@ -1344,10 +1195,11 @@ fn rebuild_local_with(
     second: Option<f64>,
     millisecond: Option<f64>,
 ) -> f64 {
-    let timestamp = date_cell_timestamp(date);
     let (cy, cm0, cd, ch, cmi, cs, cur_ms) = if timestamp.is_nan() {
+        // See `rebuild_with`: a NaN time value with no year override returns NaN
+        // without touching `[[DateValue]]`.
         if year.is_none() {
-            return date_cell_store(date, timestamp);
+            return f64::NAN;
         }
         (1970i64, 0i64, 1i64, 0i64, 0i64, 0i64, 0i64)
     } else {
@@ -1369,7 +1221,7 @@ fn rebuild_local_with(
         .into_iter()
         .flatten()
     {
-        if o.is_nan() {
+        if !o.is_finite() {
             return date_cell_store(date, f64::NAN);
         }
     }
@@ -1384,7 +1236,9 @@ fn rebuild_local_with(
     );
     let local_secs = (local_ms as i64).div_euclid(1000);
     let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(local_secs);
-    date_cell_store(date, local_ms - (tz_offset * 1000) as f64)
+    // TimeClip after the local→UTC adjustment so an overflowing local setter
+    // (`new Date(8.64e15).setHours(24)`) makes the Date Invalid.
+    date_cell_store(date, time_clip(local_ms - (tz_offset * 1000) as f64))
 }
 
 // --- String-returning Date methods ---
@@ -1393,6 +1247,20 @@ const WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat
 const MONTH_NAMES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+
+/// Format a calendar year the way V8's date-to-string methods do: years in
+/// `0..=9999` are zero-padded to 4 digits ("0020"), negative years carry a
+/// leading `-` then the magnitude zero-padded to 4 digits ("-0001",
+/// "-123456"), and years `> 9999` print in full ("10000"). `{:04}` alone
+/// mis-pads negatives ("-001"), so the sign is handled explicitly. test262
+/// Date/prototype/{toString,toDateString,toUTCString}/negative-year.
+fn format_year(year: i32) -> String {
+    if year < 0 {
+        format!("-{:04}", -(year as i64))
+    } else {
+        format!("{:04}", year)
+    }
+}
 
 /// `date.toString()` / `String(date)` / `` `${date}` `` — the full local
 /// date+time string, e.g. "Mon Jan 15 2024 12:30:45 GMT+0100 (local)", or
@@ -1417,17 +1285,43 @@ pub extern "C" fn js_date_to_string(timestamp: f64) -> *mut crate::StringHeader 
     let off_h = abs_off / 3600;
     let off_m = (abs_off % 3600) / 60;
     let s = format!(
-        "{} {} {:02} {:04} {:02}:{:02}:{:02} GMT{}{:02}{:02} (local)",
+        "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02} (local)",
         WEEKDAY_NAMES[dow],
         MONTH_NAMES[(month - 1) as usize],
         day,
-        year,
+        format_year(year),
         hour,
         minute,
         second,
         sign,
         off_h,
         off_m
+    );
+    alloc_runtime_string(&s)
+}
+
+/// `date.toUTCString()` — e.g. "Sun, 23 Mar 2014 00:00:00 GMT" (UTC), or
+/// "Invalid Date". Stored timestamps are already UTC, so components decode
+/// directly without a tz offset. `toGMTString` is a legacy alias.
+#[no_mangle]
+pub extern "C" fn js_date_to_utc_string(timestamp: f64) -> *mut crate::StringHeader {
+    let timestamp = date_cell_timestamp(timestamp);
+    if timestamp.is_nan() {
+        return invalid_date_string();
+    }
+    let ts_ms = timestamp as i64;
+    let secs = ts_ms.div_euclid(1000);
+    let (year, month, day, hour, minute, second) = timestamp_to_components(secs);
+    let dow = weekday_from_timestamp(secs) as usize;
+    let s = format!(
+        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
+        WEEKDAY_NAMES[dow],
+        day,
+        MONTH_NAMES[(month - 1) as usize],
+        format_year(year),
+        hour,
+        minute,
+        second
     );
     alloc_runtime_string(&s)
 }
@@ -1444,11 +1338,11 @@ pub extern "C" fn js_date_to_date_string(timestamp: f64) -> *mut crate::StringHe
     let (year, month, day, _, _, _, tz_offset) = timestamp_to_local_components(secs);
     let dow = weekday_from_timestamp(secs + tz_offset) as usize;
     let s = format!(
-        "{} {} {:02} {:04}",
+        "{} {} {:02} {}",
         WEEKDAY_NAMES[dow],
         MONTH_NAMES[(month - 1) as usize],
         day,
-        year
+        format_year(year)
     );
     alloc_runtime_string(&s)
 }

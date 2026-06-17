@@ -41,6 +41,9 @@ pub(super) struct GoogleAuthConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct ProjectConfig {
     pub(super) name: Option<String>,
+    /// Home Screen / Finder display name (CFBundleDisplayName). Platform tables
+    /// ([ios]/[macos]/[tvos]) may override per-platform; falls back here.
+    pub(super) display_name: Option<String>,
     pub(super) version: Option<String>,
     pub(super) build_number: Option<u64>,
     pub(super) bundle_id: Option<String>,
@@ -73,6 +76,7 @@ pub(super) struct IconsConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct MacosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) display_name: Option<String>,
     pub(super) category: Option<String>,
     pub(super) minimum_os: Option<String>,
     pub(super) entitlements: Option<Vec<String>>,
@@ -99,6 +103,7 @@ pub(super) struct MacosConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct IosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) display_name: Option<String>,
     pub(super) deployment_target: Option<String>,
     /// Alias for deployment_target (perry.toml uses minimum_version)
     pub(super) minimum_version: Option<String>,
@@ -155,6 +160,12 @@ pub(super) struct AndroidConfig {
     pub(super) key_alias: Option<String>,
     pub(super) google_play_key: Option<String>,
     pub(super) entry: Option<String>,
+    /// Explicit Android `versionCode`. When set, it overrides the value derived
+    /// from `build_number` (`version_to_code`). Use this to keep `versionCode`
+    /// monotonic across CI/build-number changes, or to clear a higher code
+    /// already on Play, without touching the marketing version. Play requires it
+    /// to be strictly greater than any code previously uploaded (max 2100000000).
+    pub(super) version_code: Option<u32>,
 }
 
 // #854: deserialized [watchos] table; not every key is read.
@@ -162,11 +173,15 @@ pub(super) struct AndroidConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct WatchosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) entry: Option<String>,
     pub(super) deployment_target: Option<String>,
     pub(super) encryption_exempt: Option<bool>,
     pub(super) info_plist: Option<std::collections::HashMap<String, String>>,
     pub(super) team_id: Option<String>,
     pub(super) signing_identity: Option<String>,
+    /// `appstore` / `testflight` — upload the signed watchOS app to App Store
+    /// Connect. A standalone watchOS app uploads exactly like iOS.
+    pub(super) distribute: Option<String>,
 }
 
 // #854: deserialized [tvos] table; not every key is read.
@@ -174,12 +189,16 @@ pub(super) struct WatchosConfig {
 #[derive(Debug, Deserialize)]
 pub(super) struct TvosConfig {
     pub(super) bundle_id: Option<String>,
+    pub(super) display_name: Option<String>,
     pub(super) entry: Option<String>,
     pub(super) deployment_target: Option<String>,
     pub(super) encryption_exempt: Option<bool>,
     pub(super) info_plist: Option<std::collections::HashMap<String, String>>,
     pub(super) team_id: Option<String>,
     pub(super) signing_identity: Option<String>,
+    /// `appstore` / `testflight` — upload the signed tvOS app to App Store
+    /// Connect. tvOS signs/packages exactly like iOS.
+    pub(super) distribute: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +206,10 @@ pub(super) struct LinuxConfig {
     pub(super) format: Option<String>,
     pub(super) category: Option<String>,
     pub(super) description: Option<String>,
+    /// C library / linkage: `glibc` (default, dynamic) or `musl` (fully
+    /// static — runs on AWS Lambda provided.al2023, scratch/distroless,
+    /// Cloud Run, with no glibc loader dependency). #4826.
+    pub(super) libc: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

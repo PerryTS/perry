@@ -83,6 +83,7 @@ fn test_monomorphize_substitutes_pod_layout_type_vars() {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![],
         type_args: vec![packet_ty.clone()],
+        byte_offset: 0,
     }));
 
     monomorphize_module(&mut module);
@@ -134,6 +135,7 @@ fn test_monomorphize_substitutes_native_pod_view_type_vars() {
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         }],
         return_type: generic_view_ty.clone(),
         body: vec![Stmt::Return(Some(Expr::NativePodView {
@@ -158,6 +160,7 @@ fn test_monomorphize_substitutes_native_pod_view_type_vars() {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))],
         type_args: vec![packet_ty],
+        byte_offset: 0,
     }));
 
     monomorphize_module(&mut module);
@@ -194,6 +197,7 @@ fn test_monomorphize_generic_function() {
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         }],
         return_type: Type::TypeVar("T".to_string()),
         body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
@@ -216,6 +220,7 @@ fn test_monomorphize_generic_function() {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Number(42.0)],
         type_args: vec![Type::Number],
+        byte_offset: 0,
     }));
 
     // Run monomorphization
@@ -270,6 +275,7 @@ fn test_monomorphize_updates_call_sites() {
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         }],
         return_type: Type::TypeVar("T".to_string()),
         body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
@@ -291,6 +297,7 @@ fn test_monomorphize_updates_call_sites() {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::String("hello".to_string())],
         type_args: vec![Type::String],
+        byte_offset: 0,
     }));
 
     // Run monomorphization
@@ -333,11 +340,13 @@ fn test_monomorphize_updates_native_memory_copy_operand_generic_calls() {
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![],
             type_args: vec![packet_ty.clone()],
+            byte_offset: 0,
         }),
         src: Box::new(Expr::Call {
             callee: Box::new(Expr::FuncRef(2)),
             args: vec![],
             type_args: vec![packet_ty],
+            byte_offset: 0,
         }),
     }));
 
@@ -366,11 +375,13 @@ fn test_monomorphize_updates_native_memory_fill_u32_operand_generic_calls() {
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![],
             type_args: vec![packet_ty.clone()],
+            byte_offset: 0,
         }),
         value: Box::new(Expr::Call {
             callee: Box::new(Expr::FuncRef(2)),
             args: vec![],
             type_args: vec![packet_ty],
+            byte_offset: 0,
         }),
     }));
 
@@ -544,6 +555,7 @@ fn test_type_inference_from_arguments() {
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         }],
         return_type: Type::TypeVar("T".to_string()),
         body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
@@ -565,6 +577,7 @@ fn test_type_inference_from_arguments() {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Number(42.0)],
         type_args: vec![], // Empty - should be inferred!
+        byte_offset: 0,
     }));
 
     // Run monomorphization
@@ -640,6 +653,7 @@ fn test_type_inference_string() {
             default: None,
             decorators: Vec::new(),
             is_rest: false,
+            arguments_object: None,
         }],
         return_type: Type::TypeVar("T".to_string()),
         body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
@@ -661,6 +675,7 @@ fn test_type_inference_string() {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::String("hello".to_string())],
         type_args: vec![], // Empty - should be inferred!
+        byte_offset: 0,
     }));
 
     // Run monomorphization
@@ -706,6 +721,7 @@ fn test_type_inference_rest_type_var_binds_tuple() {
             default: None,
             decorators: Vec::new(),
             is_rest: true,
+            arguments_object: None,
         }],
         return_type: Type::TypeVar("Params".to_string()),
         body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
@@ -729,6 +745,7 @@ fn test_type_inference_rest_type_var_binds_tuple() {
             Expr::String("c".to_string()),
         ],
         type_args: vec![],
+        byte_offset: 0,
     }));
 
     monomorphize_module(&mut module);
@@ -763,6 +780,7 @@ fn test_type_inference_rest_array_binds_element_type() {
             default: None,
             decorators: Vec::new(),
             is_rest: true,
+            arguments_object: None,
         }],
         return_type: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
         body: vec![Stmt::Return(Some(Expr::LocalGet(0)))],
@@ -782,6 +800,7 @@ fn test_type_inference_rest_array_binds_element_type() {
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::String("a".to_string()), Expr::String("b".to_string())],
         type_args: vec![],
+        byte_offset: 0,
     }));
 
     monomorphize_module(&mut module);
@@ -885,6 +904,7 @@ fn generic_call(func_id: FuncId, ty: &Type) -> Expr {
         callee: Box::new(Expr::FuncRef(func_id)),
         args: vec![],
         type_args: vec![ty.clone()],
+        byte_offset: 0,
     }
 }
 

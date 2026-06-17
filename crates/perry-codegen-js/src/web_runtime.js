@@ -548,6 +548,15 @@ function perry_ui_state_bind_toggle(stateH, widgetH) {
     input.checked = !!stateGet(stateH);
 }
 
+// Issue #5076: programmatically set a Toggle's on/off state. `on` is
+// 0 for off, non-zero for on.
+function perry_ui_toggle_set_state(widgetH, on) {
+    const el = getHandle(widgetH);
+    if (!el) return;
+    const input = el._input || el.querySelector("input[type=checkbox]");
+    if (input) input.checked = !!on;
+}
+
 function perry_ui_state_bind_visibility(stateH, widgetH) {
     const el = getHandle(widgetH);
     if (!el) return;
@@ -784,7 +793,7 @@ function perry_system_audio_set_output_filename(filename) {
 function perry_system_audio_start_recording() {
     if (_perry_audio_recording) return;
     if (!_perry_audio_stream) return;
-    
+
     try {
         _perry_audio_recorded_chunks = [];
         _perry_audio_media_recorder = new MediaRecorder(_perry_audio_stream);
@@ -3549,6 +3558,7 @@ window.__perry = {
     perry_ui_textfield_create,
     perry_ui_securefield_create,
     perry_ui_toggle_create,
+    perry_ui_toggle_set_state,
     perry_ui_slider_create,
     perry_ui_scrollview_create,
     perry_ui_spacer_create,
@@ -3959,7 +3969,7 @@ App('Hello Hone', () => {\n\
     file("/documents/tsconfig.json",
 '{\n\
   "compilerOptions": {\n\
-    "target": "ES2022",\n\
+    "target": "ES2023",\n\
     "module": "ESNext",\n\
     "moduleResolution": "bundler",\n\
     "strict": true,\n\

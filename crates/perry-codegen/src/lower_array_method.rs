@@ -53,17 +53,40 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_string_inline(blk, &result_handle))
         }
         "some" | "every" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.{} expects 1 arg, got {}",
-                    property,
-                    args.len()
-                );
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = if property == "some" {
+                    "js_arraylike_some"
+                } else {
+                    "js_arraylike_every"
+                };
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+
+            // `arr.some()` / `arr.every()` with no callback must throw a
+            // runtime TypeError ("undefined is not a function"), not fail to
+            // compile — pad a missing callback with `undefined` and let
+            // `js_validate_array_callback` raise it. (A trailing `thisArg`
+            // is accepted but not yet applied.)
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let runtime_fn = if property == "some" {
                 "js_array_some"
             } else {
@@ -227,16 +250,16 @@ pub(crate) fn lower_array_method(
             }
         }
         "flatMap" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.flatMap expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let result = blk.call(
                 I64,
                 "js_array_flatMap",
@@ -248,16 +271,32 @@ pub(crate) fn lower_array_method(
         // as HIR variants but may reach here as generic MethodCall when
         // the HIR lowering doesn't recognize the pattern.
         "find" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.find expects 1 arg, got {}",
-                    args.len()
-                );
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_find";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find",
@@ -265,16 +304,32 @@ pub(crate) fn lower_array_method(
             ))
         }
         "findIndex" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.findIndex expects 1 arg, got {}",
-                    args.len()
-                );
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_findIndex";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_findIndex",
@@ -283,16 +338,16 @@ pub(crate) fn lower_array_method(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "findLast" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.findLast expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             Ok(blk.call(
                 DOUBLE,
                 "js_array_find_last",
@@ -300,16 +355,16 @@ pub(crate) fn lower_array_method(
             ))
         }
         "findLastIndex" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.findLastIndex expects 1 arg, got {}",
-                    args.len()
-                );
-            }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let i32_v = blk.call(
                 I32,
                 "js_array_find_last_index",
@@ -318,13 +373,19 @@ pub(crate) fn lower_array_method(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "reduce" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.reduce expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (callback validation on undefined),
+            // not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let (has_initial, initial_box) = if args.len() == 2 {
                 let init = lower_expr(ctx, &args[1])?;
                 (1i32, init)
@@ -333,7 +394,8 @@ pub(crate) fn lower_array_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let has_init_str = format!("{}", has_initial);
             Ok(blk.call(
                 DOUBLE,
@@ -347,13 +409,19 @@ pub(crate) fn lower_array_method(
             ))
         }
         "reduceRight" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.reduceRight expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → runtime TypeError (callback validation on undefined),
+            // not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let (has_initial, initial_box) = if args.len() == 2 {
                 let init = lower_expr(ctx, &args[1])?;
                 (1i32, init)
@@ -362,7 +430,8 @@ pub(crate) fn lower_array_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let has_init_str = format!("{}", has_initial);
             Ok(blk.call(
                 DOUBLE,
@@ -376,13 +445,38 @@ pub(crate) fn lower_array_method(
             ))
         }
         "map" => {
-            if args.len() != 1 {
-                bail!("perry-codegen: Array.map expects 1 arg, got {}", args.len());
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_map";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            // `map` uses a receiver-aware validator (TypedArray.map renders its
+            // non-callable message differently than Array.prototype.map).
+            let cb_handle = blk.call(
+                I64,
+                "js_validate_array_map_callback",
+                &[(I64, &recv_handle), (DOUBLE, &cb_box)],
+            );
             let result = blk.call(
                 I64,
                 "js_array_map",
@@ -391,16 +485,32 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "filter" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.filter expects 1 arg, got {}",
-                    args.len()
-                );
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_filter";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             let result = blk.call(
                 I64,
                 "js_array_filter",
@@ -409,16 +519,32 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "forEach" => {
-            if args.len() != 1 {
-                bail!(
-                    "perry-codegen: Array.forEach expects 1 arg, got {}",
-                    args.len()
-                );
+            // An explicit `thisArg` (2nd argument) must bind the callback's
+            // `this`; the dense helpers don't take one (they bind undefined),
+            // so route through the generic array-like engine, which does
+            // (real-array receivers keep a fast element path there).
+            if args.len() >= 2 {
+                let cb_box = lower_expr(ctx, &args[0])?;
+                let this_box = lower_expr(ctx, &args[1])?;
+                let blk = ctx.block();
+                let gen_fn = "js_arraylike_forEach";
+                return Ok(blk.call(
+                    DOUBLE,
+                    gen_fn,
+                    &[(DOUBLE, &recv_box), (DOUBLE, &cb_box), (DOUBLE, &this_box)],
+                ));
             }
-            let cb_box = lower_expr(ctx, &args[0])?;
+
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cb_handle = unbox_to_i64(blk, &cb_box);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
             blk.call_void(
                 "js_array_forEach",
                 &[(I64, &recv_handle), (I64, &cb_handle)],
@@ -427,13 +553,18 @@ pub(crate) fn lower_array_method(
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         "includes" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.includes expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let val_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → includes(undefined), not compile-fail.
+            let val_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
             // when present; otherwise has_from=0 with a placeholder DOUBLE.
             let (from_box, has_from) = if args.len() == 2 {
@@ -470,13 +601,18 @@ pub(crate) fn lower_array_method(
             Ok(blk.bitcast_i64_to_double(&tagged))
         }
         "indexOf" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.indexOf expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let val_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → search for `undefined` from index 0, not compile-fail.
+            let val_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             // #2804: optional fromIndex (2nd arg). has_from=1 + lowered index
             // when present; otherwise has_from=0 with a placeholder DOUBLE.
             let (from_box, has_from) = if args.len() == 2 {
@@ -505,13 +641,18 @@ pub(crate) fn lower_array_method(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "lastIndexOf" => {
-            if args.is_empty() || args.len() > 2 {
+            if args.len() > 2 {
                 bail!(
                     "perry-codegen: Array.lastIndexOf expects 1-2 args, got {}",
                     args.len()
                 );
             }
-            let val_box = lower_expr(ctx, &args[0])?;
+            // 0-arg → search for `undefined`, not compile-fail.
+            let val_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             // Optional fromIndex: with has_from=1 pass the lowered index;
             // when absent pass has_from=0 (runtime defaults to length-1) and
             // reuse `val_box` as an ignored placeholder DOUBLE operand.
@@ -535,10 +676,13 @@ pub(crate) fn lower_array_method(
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
         "at" => {
-            if args.len() != 1 {
-                bail!("perry-codegen: Array.at expects 1 arg, got {}", args.len());
-            }
-            let idx_box = lower_expr(ctx, &args[0])?;
+            // `arr.at()` with no index → `at(undefined)` → index 0, not a
+            // compile error.
+            let idx_box = if let Some(arg) = args.first() {
+                lower_expr(ctx, arg)?
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+            };
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
             Ok(blk.call(
@@ -596,8 +740,14 @@ pub(crate) fn lower_array_method(
             // `[start, end)`. The 1-arg form keeps the existing
             // whole-array fast path.
             match args.len() {
-                1 => {
-                    let val_box = lower_expr(ctx, &args[0])?;
+                // `arr.fill()` with no value fills the whole array with
+                // `undefined` (ECMA-262 step: value defaults to undefined).
+                0 | 1 => {
+                    let val_box = if let Some(arg) = args.first() {
+                        lower_expr(ctx, arg)?
+                    } else {
+                        crate::nanbox::double_literal(f64::from_bits(TAG_UNDEFINED))
+                    };
                     let blk = ctx.block();
                     let recv_handle = unbox_to_i64(blk, &recv_box);
                     let result = blk.call(
@@ -709,7 +859,12 @@ pub(crate) fn lower_array_method(
             let out_slot = blk.alloca(I64);
             blk.store(I64, "0", &out_slot);
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
+            // ToIntegerOrInfinity via the clamping helper: `fptosi` on
+            // ±Infinity/NaN is LLVM poison — `splice(Infinity, 3)` deleted
+            // from index 0 (test262 splice/S15.4.4.12_A2.1_T3). The helper
+            // clamps +Inf → i32::MAX (→ len downstream), -Inf → i32::MIN
+            // (→ 0 after relative-index resolution), NaN → 0.
+            let start_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &start_d)]);
             let count_i32 = blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
             let (items_ptr, items_count_str) = if item_vals.is_empty() {
                 ("null".to_string(), "0".to_string())
@@ -912,13 +1067,53 @@ pub(crate) fn lower_array_method(
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
-        // Best-effort fallback: lower args for side effects, return
-        // the receiver.
+        // Unknown method on an (statically-typed) array receiver. This is NOT
+        // a built-in array method, so it is a user-stored own property
+        // (`arr.getClass = Object.prototype.toString; arr.getClass()`,
+        // `arr.myFn = function(){…}; arr.myFn()`) or an inherited method. The
+        // old catch-all returned `recv_box` unchanged, so any such call
+        // silently evaluated to the array itself. Route through the runtime
+        // dispatch tower, which checks the ARRAY_NAMED_PROPS side table for a
+        // stored callable (invoking it with `this` = arr) before falling back.
         _ => {
+            let mut lowered_args = Vec::with_capacity(args.len());
             for a in args {
-                let _ = lower_expr(ctx, a)?;
+                lowered_args.push(lower_expr(ctx, a)?);
             }
-            Ok(recv_box)
+            let key_idx = ctx.strings.intern(property);
+            let entry = ctx.strings.entry(key_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len_str = entry.byte_len.to_string();
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, a_val) in lowered_args.iter().enumerate() {
+                    let slot = ctx
+                        .block()
+                        .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                    ctx.block().store(DOUBLE, a_val, &slot);
+                }
+                let ptr_reg = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr_reg, n, buf_reg
+                ));
+                (ptr_reg, n.to_string())
+            };
+            let result = ctx.block().call(
+                DOUBLE,
+                "js_native_call_method",
+                &[
+                    (DOUBLE, &recv_box),
+                    (PTR, &bytes_global),
+                    (I64, &name_len_str),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            );
+            Ok(result)
         }
     }
 }

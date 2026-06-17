@@ -24,8 +24,10 @@ mod identity_equality;
 mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
+mod util_format;
 
 pub use strip_vt::js_util_strip_vt_control_characters;
+pub use util_format::{js_util_format, js_util_format_with_options, js_util_inspect};
 
 /// Returns true if the f64 value is negative zero (-0.0).
 /// Uses bit pattern comparison so +0.0 and -0.0 are distinguished
@@ -378,6 +380,71 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
+/// #4101: sidecar registry mapping each user function's compiled address to
+/// its retained original source text. Populated by `js_register_function_source`
+/// (emitted from module init alongside `js_register_function_name`), so by the
+/// time user code runs the map is fully populated. Mirrors the function-name
+/// registry's single-writer, last-write-wins semantics.
+fn function_source_registry(
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>> {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
+    > = OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Codegen-facing entry point: register `func_ptr` as the compiled address of
+/// a JS function whose original source spans `src_ptr..src_ptr+src_len` (UTF-8,
+/// not NUL-terminated). Idempotent — last write wins.
+///
+/// # Safety
+///
+/// `src_ptr..src_ptr+src_len` must point at a valid UTF-8 byte slice that
+/// outlives the call (we copy it). `func_ptr` is used only as a map key.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_function_source(
+    func_ptr: *const u8,
+    src_ptr: *const u8,
+    src_len: u32,
+) {
+    if func_ptr.is_null() || src_ptr.is_null() || src_len == 0 {
+        return;
+    }
+    let bytes = std::slice::from_raw_parts(src_ptr, src_len as usize);
+    let Ok(src) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    if let Ok(mut map) = function_source_registry().lock() {
+        map.insert(func_ptr as usize, std::sync::Arc::from(src));
+    }
+}
+
+/// Look up the codegen-registered source text for a function pointer.
+pub fn function_source_for_ptr(func_ptr: usize) -> Option<String> {
+    if func_ptr == 0 {
+        return None;
+    }
+    function_source_registry()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&func_ptr).map(|s| s.to_string()))
+        .filter(|s| !s.is_empty())
+}
+
+/// #4101: build the `Function.prototype.toString` result for a closure whose
+/// `ClosureHeader.func_ptr` is `func_ptr`. Returns the retained source text
+/// when codegen registered it, otherwise a synthesized native form
+/// (`function <name>() { [native code] }`) matching Node's output for
+/// functions without recoverable source (built-ins / bound natives).
+pub fn function_source_for_func_ptr(func_ptr: usize) -> String {
+    if let Some(src) = function_source_for_ptr(func_ptr) {
+        return src;
+    }
+    let name = function_name_for_ptr(func_ptr).unwrap_or_default();
+    format!("function {name}() {{ [native code] }}")
+}
+
 /// Per-thread override for the `showHidden` inspect option. Defaults to
 /// `false` (Node default): `util.inspect` / `console.log` only show
 /// enumerable properties. `console.dir(value, { showHidden: true })`
@@ -461,6 +528,8 @@ thread_local! {
     static INSPECT_GETTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_SORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static INSPECT_COMPACT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 fn inspect_getters_enabled() -> bool {
@@ -473,6 +542,25 @@ fn inspect_sorted_enabled() -> bool {
 
 fn inspect_compact_enabled() -> bool {
     INSPECT_COMPACT.with(|c| c.get())
+}
+
+fn deep_equal_skip_prototype_format_enabled() -> bool {
+    DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT.with(|c| c.get())
+}
+
+struct DeepEqualSkipPrototypeFormatGuard(bool);
+
+impl DeepEqualSkipPrototypeFormatGuard {
+    fn new(enabled: bool) -> Self {
+        let prev = DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT.with(|c| c.replace(enabled));
+        Self(prev)
+    }
+}
+
+impl Drop for DeepEqualSkipPrototypeFormatGuard {
+    fn drop(&mut self) {
+        DEEP_EQUAL_SKIP_PROTOTYPE_FORMAT.with(|c| c.set(self.0));
+    }
 }
 
 pub(crate) struct InspectGettersGuard(bool);
@@ -637,6 +725,28 @@ unsafe fn date_inspect_string(value: f64) -> String {
         .to_string()
 }
 
+/// `util.inspect` arm for a Temporal cell: `Temporal.X <iso>` (or
+/// `[object Object]` if the cell can't be read). Returns `None` when `addr` is
+/// not a Temporal cell, so the caller's `else if let Some(..)` chain falls
+/// through. Cfg-paired: with the Temporal engine gated off no cell can exist, so
+/// the off twin is a constant `None` (and doesn't reference the gated module).
+#[cfg(feature = "temporal")]
+fn temporal_inspect_arm(addr: usize, value: f64) -> Option<String> {
+    if crate::temporal::is_temporal_cell_addr(addr) {
+        Some(
+            crate::temporal::temporal_inspect_string(value)
+                .unwrap_or_else(|| "[object Object]".to_string()),
+        )
+    } else {
+        None
+    }
+}
+
+#[cfg(not(feature = "temporal"))]
+fn temporal_inspect_arm(_addr: usize, _value: f64) -> Option<String> {
+    None
+}
+
 /// Print multiple values from an array (console.log with spread support)
 /// Takes a pointer to an ArrayHeader containing f64 values
 /// Helper function to format a JSValue as a string (for spread arrays)
@@ -731,7 +841,12 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // `Invalid Date`). Handle before the GC-header object dispatch
                 // below, which would deref the 8-byte cell as an ObjectHeader.
                 date_inspect_string(value)
-            } else if (ptr as usize) < 0x100000 {
+            } else if let Some(s) = temporal_inspect_arm(ptr as usize, value) {
+                // Temporal (#4686): `util.inspect` prints `Temporal.Duration
+                // <P1Y…>`. Handle before the GC-header object dispatch (the cell
+                // is smaller than an ObjectHeader).
+                s
+            } else if crate::value::addr_class::is_handle_band(ptr as usize) {
                 // Refs #421: Web Fetch (and other) handles are NaN-boxed
                 // POINTER_TAG values whose payload is a small registry id, NOT
                 // a heap pointer — reading the GC header at `ptr - 8` would
@@ -998,11 +1113,12 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
 fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
     let target = crate::proxy::js_proxy_target(value);
     if !inspect_show_proxy() {
-        return if json {
+        let target_str = if json {
             format_jsvalue_for_json(target, depth)
         } else {
             format_jsvalue(target, depth)
         };
+        return format!("Proxy({target_str})");
     }
 
     let handler = crate::proxy::js_proxy_handler(value);
@@ -1142,7 +1258,7 @@ unsafe fn format_object_as_json(
         // object's class chain when the instance lookup misses.
         let class_id = (*obj_ptr).class_id;
         if class_id != 0 {
-            if let Some((func_ptr, param_count)) =
+            if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
                 crate::object::lookup_class_method_in_chain(class_id, "__perry_inspect_custom__")
             {
                 let _guard = InspectCustomInspectGuard::new(false);
@@ -1157,6 +1273,8 @@ unsafe fn format_object_as_json(
                     args.as_ptr(),
                     args.len(),
                     param_count,
+                    has_synthetic_arguments,
+                    has_rest,
                 );
                 let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
                 if ret_jv.is_any_string() {
@@ -1168,6 +1286,10 @@ unsafe fn format_object_as_json(
     }
 
     let boxed_base = boxed_primitives::boxed_primitive_base_for_object(obj_ptr);
+    // A boxed `String` exposes its characters as integer-index own properties
+    // (`"0".."len-1"`). Node folds those into the `[String: '…']` base and never
+    // lists them in the `{ … }` body — only extra own keys appear. Skip them.
+    let boxed_string_char_count = boxed_primitives::boxed_string_char_index_count(obj_ptr);
     let class_name = {
         let class_id = (*obj_ptr).class_id;
         if class_id == 0 {
@@ -1176,12 +1298,37 @@ unsafe fn format_object_as_json(
             crate::object::class_name_for_id(class_id).filter(|name| !name.is_empty())
         }
     };
-    let class_name_ref = class_name.as_deref();
+    let has_class_name = class_name.is_some();
+    let class_name_ref = if deep_equal_skip_prototype_format_enabled() {
+        None
+    } else {
+        class_name.as_deref()
+    };
+    // Node prefixes a null-prototype object with `[Object: null prototype]`
+    // (e.g. `Object.create(null)`), since it has no constructor to name.
+    // The flag is set at allocation by `js_object_alloc_null_proto`.
+    let is_null_proto = {
+        let gc =
+            (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+    };
+    // The display prefix before the `{ … }` body: a real class/constructor
+    // name when present, otherwise `[Object: null prototype]` for a
+    // null-proto plain object, otherwise nothing. (Distinct from
+    // `class_name_ref`/`has_class_name`, which drive the private-field skip
+    // and must reflect only a genuine class.)
+    let name_prefix: Option<String> = match class_name_ref {
+        Some(name) => Some(name.to_string()),
+        None if boxed_base.is_none() && is_null_proto => {
+            Some("[Object: null prototype]".to_string())
+        }
+        None => None,
+    };
     let empty_object = || {
         if let Some(base) = boxed_base.as_deref() {
             return base.to_string();
         }
-        match class_name_ref {
+        match name_prefix.as_deref() {
             Some(name) => format!("{name} {{}}"),
             None => "{}".to_string(),
         }
@@ -1226,8 +1373,18 @@ unsafe fn format_object_as_json(
 
         // Perry stores private class fields in the regular key table, but
         // Node's util.inspect never exposes them, even with showHidden.
-        if class_name_ref.is_some() && key_str.starts_with('#') {
+        if has_class_name && key_str.starts_with('#') {
             continue;
+        }
+
+        // Hide a boxed String's character index properties (`"0".."len-1"`):
+        // they are rendered by the `[String: '…']` base, not the body.
+        if let Some(char_count) = boxed_string_char_count {
+            if let Ok(idx) = key_str.parse::<usize>() {
+                if idx < char_count {
+                    continue;
+                }
+            }
         }
 
         let is_enumerable = if descriptors_in_use {
@@ -1296,7 +1453,7 @@ unsafe fn format_object_as_json(
     if parts.is_empty() {
         return empty_object();
     }
-    let single_line = match (boxed_base.as_deref(), class_name_ref) {
+    let single_line = match (boxed_base.as_deref(), name_prefix.as_deref()) {
         (Some(base), _) => format!("{} {{ {} }}", base, parts.join(", ")),
         (None, Some(name)) => format!("{} {{ {} }}", name, parts.join(", ")),
         (None, None) => format!("{{ {} }}", parts.join(", ")),
@@ -1323,7 +1480,7 @@ unsafe fn format_object_as_json(
         .map(|p| format!("{}{}", indent, p.replace('\n', "\n  ")))
         .collect::<Vec<_>>()
         .join(",\n");
-    match (boxed_base.as_deref(), class_name_ref) {
+    match (boxed_base.as_deref(), name_prefix.as_deref()) {
         (Some(base), _) => format!("{} {{\n{}\n}}", base, body),
         (None, Some(name)) => format!("{} {{\n{}\n}}", name, body),
         (None, None) => format!("{{\n{}\n}}", body),
@@ -1424,7 +1581,10 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     // unquoted (or `Invalid Date`), not the 8-byte cell deref'd
                     // as an object.
                     date_inspect_string(value)
-                } else if (ptr as usize) < 0x100000 {
+                } else if let Some(s) = temporal_inspect_arm(ptr as usize, value) {
+                    // Temporal value inside an inspected object → `Temporal.X <iso>`.
+                    s
+                } else if crate::value::addr_class::is_handle_band(ptr as usize) {
                     "[object Object]".to_string()
                 } else if crate::symbol::is_registered_symbol(ptr as usize)
                     || crate::regex::is_registered_regex(ptr as usize)
@@ -1580,427 +1740,6 @@ fn escape_string(s: &str) -> String {
     }
     result
 }
-/// #1002: `util.format(fmt, ...args)` / `util.formatWithOptions(opts,
-/// fmt, ...args)` native implementation. Codegen bundles the call args
-/// into a heap-allocated array (same shape as `js_console_log_spread`)
-/// and calls in here; the first element is the format string and the
-/// rest are substitution values. Returns a NaN-boxed string.
-///
-/// Placeholder support mirrors Node's `util.format` for the substrings
-/// most callers care about: `%s` (string-coerce), `%d` (Number-coerce),
-/// `%i` (integer), `%f` (float), `%j` (JSON), `%o`/`%O` (object inspect),
-/// `%%` (literal percent). Anything else is left as-is. Trailing args without a
-/// matching placeholder are appended space-separated, again matching
-/// Node.
-///
-/// When the first array element isn't a string, Node falls back to
-/// space-joining every arg through `util.inspect` — same here, going
-/// through `format_jsvalue` for parity with `console.log`.
-// `%j` must turn circular `JSON.stringify` failures into a whole-placeholder
-// `[Circular]`. Perry's exceptions longjmp through generated try frames, so
-// preflight the JSON-visible graph instead of attempting to catch here.
-unsafe fn util_format_json_arg_has_cycle(value: f64) -> bool {
-    let mut stack = Vec::new();
-    util_format_json_value_has_cycle(value, &mut stack)
-}
-
-unsafe fn util_format_json_value_has_cycle(value: f64, stack: &mut Vec<usize>) -> bool {
-    let jv = JSValue::from_bits(value.to_bits());
-    if jv.is_pointer() {
-        let ptr = jv.as_pointer::<u8>();
-        return util_format_json_ptr_has_cycle(ptr, stack);
-    }
-    if looks_like_raw_heap_pointer(value) {
-        return util_format_json_ptr_has_cycle(value.to_bits() as *const u8, stack);
-    }
-    false
-}
-
-unsafe fn util_format_json_ptr_has_cycle(ptr: *const u8, stack: &mut Vec<usize>) -> bool {
-    let addr = ptr as usize;
-    if addr < 0x100000
-        || crate::buffer::is_registered_buffer(addr)
-        || crate::symbol::is_registered_symbol(addr)
-    {
-        return false;
-    }
-    let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    match (*gc_header).obj_type {
-        crate::gc::GC_TYPE_ARRAY => util_format_json_array_has_cycle(ptr, stack),
-        crate::gc::GC_TYPE_OBJECT => util_format_json_object_has_cycle(ptr, stack),
-        _ => false,
-    }
-}
-
-unsafe fn util_format_json_array_has_cycle(ptr: *const u8, stack: &mut Vec<usize>) -> bool {
-    let addr = ptr as usize;
-    if stack.contains(&addr) {
-        return true;
-    }
-    stack.push(addr);
-
-    let arr = ptr as *const crate::ArrayHeader;
-    let len = (*arr).length as usize;
-    let elements = ptr.add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-    let found = (0..len).any(|i| {
-        let value = *elements.add(i);
-        let bits = value.to_bits();
-        bits != crate::value::TAG_UNDEFINED
-            && !crate::json::is_closure_value(bits)
-            && util_format_json_value_has_cycle(value, stack)
-    });
-
-    stack.pop();
-    found
-}
-
-unsafe fn util_format_json_object_has_cycle(ptr: *const u8, stack: &mut Vec<usize>) -> bool {
-    let addr = ptr as usize;
-    if stack.contains(&addr) {
-        return true;
-    }
-    stack.push(addr);
-
-    let obj = ptr as *const crate::ObjectHeader;
-    let keys_arr = (*obj).keys_array;
-    let found = if keys_arr.is_null() {
-        false
-    } else {
-        let keys_len = (*keys_arr).length;
-        let num_fields = (*obj).field_count;
-        let fields_ptr = ptr.add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-        let alloc_limit = std::cmp::max(num_fields, 8);
-        (0..keys_len).any(|f| {
-            let bits = if f < alloc_limit {
-                (*fields_ptr.add(f as usize)).to_bits()
-            } else {
-                crate::object::js_object_get_field(obj, f).bits()
-            };
-            bits != crate::value::TAG_UNDEFINED
-                && !crate::json::is_closure_value(bits)
-                && util_format_json_value_has_cycle(f64::from_bits(bits), stack)
-        })
-    };
-
-    stack.pop();
-    found
-}
-
-#[no_mangle]
-pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f64 {
-    use crate::value::JSValue;
-    // Helper: produce a NaN-boxed string from a Rust `&str`.
-    fn boxed_string(s: &str) -> f64 {
-        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        f64::from_bits(JSValue::string_ptr(ptr).bits())
-    }
-    // Helper: turn any JS value into its `String(value)` coercion using
-    // Perry's existing helper (covers strings, numbers, null/undefined,
-    // objects via their .toString protocol).
-    unsafe fn jsvalue_as_owned_string(val: f64) -> String {
-        let s_ptr = crate::value::js_jsvalue_to_string(val);
-        if s_ptr.is_null() {
-            return String::new();
-        }
-        let len = (*s_ptr).byte_len as usize;
-        let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-        let bs = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8(bs).unwrap_or("").to_string()
-    }
-    if arr_ptr.is_null() {
-        return boxed_string("");
-    }
-    unsafe {
-        let length = (*arr_ptr).length as usize;
-        let data_ptr = (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *const f64;
-
-        // No format string → empty result. Node returns "" for
-        // `util.format()`.
-        if length == 0 {
-            return boxed_string("");
-        }
-
-        // If arg[0] isn't a string, fall back to space-joining every
-        // arg with `format_jsvalue` (matches Node's non-string-first
-        // util.format codepath).
-        let first = *data_ptr;
-        let first_jv = JSValue::from_bits(first.to_bits());
-        if !first_jv.is_any_string() {
-            let mut parts: Vec<String> = Vec::with_capacity(length);
-            for i in 0..length {
-                parts.push(format_jsvalue(*data_ptr.add(i), 0));
-            }
-            return boxed_string(&parts.join(" "));
-        }
-
-        // Materialize the format string. Short strings live inline in
-        // the NaN-box (top bits set), long strings live in a
-        // StringHeader. The unified helper handles both.
-        let fmt = jsvalue_as_owned_string(first);
-        if length == 1 {
-            return boxed_string(&fmt);
-        }
-
-        let mut out = String::with_capacity(fmt.len());
-        let mut arg_idx: usize = 1;
-        let bytes = fmt.as_bytes();
-        let mut i = 0;
-        // Issue #1275: emit literal-text segments as UTF-8 `&str` slices
-        // so multi-byte codepoints (e.g. "…", "é", "中") survive the format
-        // pass. The previous `out.push(byte as char)` cast each UTF-8 byte
-        // to a Latin-1 codepoint and produced mojibake on the terminal.
-        let mut seg_start = 0usize;
-        while i < bytes.len() {
-            let b = bytes[i];
-            if b != b'%' || i + 1 >= bytes.len() {
-                i += 1;
-                continue;
-            }
-            // Flush the literal text accumulated since the last % handled.
-            if seg_start < i {
-                out.push_str(&fmt[seg_start..i]);
-            }
-            // Advance the literal-segment cursor past the %spec; the
-            // various branches below all consume exactly 2 bytes via
-            // `i += 2`, so this stays in sync regardless of which arm runs.
-            seg_start = i + 2;
-            let spec = bytes[i + 1];
-            // `%%` → literal `%` (no arg consumed).
-            if spec == b'%' {
-                out.push('%');
-                i += 2;
-                continue;
-            }
-            // Out of args: leave the placeholder untouched (Node does
-            // the same — `util.format("%s %s", "x")` prints `"x %s"`).
-            if arg_idx >= length {
-                out.push('%');
-                out.push(spec as char);
-                i += 2;
-                continue;
-            }
-            let val = *data_ptr.add(arg_idx);
-            arg_idx += 1;
-            let jv = JSValue::from_bits(val.to_bits());
-            match spec {
-                b's' => {
-                    out.push_str(&jsvalue_as_owned_string(val));
-                }
-                b'd' => {
-                    // Node's `%d` uses Number(value), except BigInt keeps the
-                    // literal `n` suffix.
-                    if jv.is_bigint() {
-                        out.push_str(&format_bigint_literal(val));
-                    } else {
-                        let f = if jv.is_int32() {
-                            jv.as_int32() as f64
-                        } else {
-                            js_number_coerce(val)
-                        };
-                        out.push_str(&format_util_number(f));
-                    }
-                }
-                b'i' => {
-                    // Node preserves the BigInt `n` suffix for `%i`
-                    // (e.g. `util.format("%i", 5n)` → `"5n"`).
-                    if jv.is_bigint() {
-                        out.push_str(&format_bigint_literal(val));
-                    } else {
-                        let f = if jv.is_int32() {
-                            jv.as_int32() as f64
-                        } else if jv.is_any_string()
-                            && jsvalue_string_content(val)
-                                .map(|s| s.is_empty())
-                                .unwrap_or(false)
-                        {
-                            f64::NAN
-                        } else {
-                            js_number_coerce(val)
-                        };
-                        if f.is_nan() {
-                            out.push_str("NaN");
-                        } else {
-                            let t = f.trunc();
-                            if t == 0.0 && f.is_sign_negative() {
-                                out.push_str("-0");
-                            } else {
-                                // Integer-truncated, matching Node.
-                                out.push_str(&(t as i64).to_string());
-                            }
-                        }
-                    }
-                }
-                b'f' => {
-                    // Node coerces BigInt lossily to Number for `%f`
-                    // (`util.format("%f", 5n)` → `"5"`), dropping the `n`.
-                    if jv.is_bigint() {
-                        let ptr = jv.as_bigint_ptr();
-                        let f = if ptr.is_null() {
-                            f64::NAN
-                        } else {
-                            crate::bigint::js_bigint_to_f64(ptr)
-                        };
-                        if f.is_nan() {
-                            out.push_str("NaN");
-                        } else {
-                            out.push_str(&format_finite_number_js(f));
-                        }
-                    } else {
-                        let f = if jv.is_int32() {
-                            jv.as_int32() as f64
-                        } else if jv.is_any_string()
-                            && jsvalue_string_content(val)
-                                .map(|s| s.is_empty())
-                                .unwrap_or(false)
-                        {
-                            f64::NAN
-                        } else {
-                            js_number_coerce(val)
-                        };
-                        if f.is_nan() {
-                            out.push_str("NaN");
-                        } else {
-                            out.push_str(&format_finite_number_js(f));
-                        }
-                    }
-                }
-                b'j' => {
-                    unsafe {
-                        if util_format_json_arg_has_cycle(val) {
-                            out.push_str("[Circular]");
-                            i += 2;
-                            continue;
-                        }
-                        // Real JSON.stringify — string-replace post-processing
-                        // of inspect output mangles strings that contain
-                        // ", ", ": ", "{ ", or " }".
-                        let s_ptr = crate::json::js_json_stringify(val, 0);
-                        if s_ptr.is_null() {
-                            out.push_str("undefined");
-                        } else {
-                            let len = (*s_ptr).byte_len as usize;
-                            let data = (s_ptr as *const u8)
-                                .add(std::mem::size_of::<crate::string::StringHeader>());
-                            let bytes = std::slice::from_raw_parts(data, len);
-                            out.push_str(std::str::from_utf8(bytes).unwrap_or(""));
-                        }
-                    }
-                }
-                b'o' => {
-                    // Node's `%o` overlays util.inspect options with
-                    // showHidden/showProxy and depth: 4.
-                    let _depth_guard = InspectDepthLimitGuard::new(4);
-                    let _hidden_guard = InspectShowHiddenGuard::new(true);
-                    let _proxy_guard = InspectShowProxyGuard::new(true);
-                    out.push_str(&format_jsvalue(val, 0));
-                }
-                b'O' => {
-                    // `%O` keeps the default depth cap (2) — matching
-                    // Node's `util.inspect` default options.
-                    out.push_str(&format_jsvalue(val, 0));
-                }
-                b'c' => {
-                    // Browser/Node console style marker. Consume the CSS
-                    // argument but do not emit ANSI styling in the
-                    // NO_COLOR parity environment.
-                }
-                _ => {
-                    // Unknown specifier: leave verbatim, don't consume
-                    // the arg (Node 22+ behavior — older Node consumed
-                    // it; modern behavior is what libraries write
-                    // against).
-                    out.push('%');
-                    out.push(spec as char);
-                    arg_idx -= 1;
-                }
-            }
-            i += 2;
-        }
-        // Flush the trailing literal segment (everything after the last %spec
-        // or the entire string if no specifier was found).
-        if seg_start < bytes.len() {
-            out.push_str(&fmt[seg_start..]);
-        }
-
-        // Append any remaining args separated by spaces, again matching
-        // Node: `util.format("hi", "x", "y")` → `"hi x y"`.
-        while arg_idx < length {
-            out.push(' ');
-            out.push_str(&format_jsvalue(*data_ptr.add(arg_idx), 0));
-            arg_idx += 1;
-        }
-
-        boxed_string(&out)
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_util_format_with_options(
-    options: f64,
-    arr_ptr: *const crate::array::ArrayHeader,
-) -> f64 {
-    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }.unwrap_or(2);
-    let show_hidden =
-        unsafe { super::console::decode_dir_bool_option(options, "showHidden") }.unwrap_or(false);
-    let show_proxy =
-        unsafe { super::console::decode_dir_bool_option(options, "showProxy") }.unwrap_or(false);
-    let custom_inspect =
-        unsafe { super::console::decode_dir_bool_option(options, "customInspect") }.unwrap_or(true);
-    let getters =
-        unsafe { super::console::decode_dir_bool_option(options, "getters") }.unwrap_or(false);
-    let sorted =
-        unsafe { super::console::decode_dir_bool_option(options, "sorted") }.unwrap_or(false);
-    let compact =
-        unsafe { super::console::decode_dir_bool_option(options, "compact") }.unwrap_or(true);
-    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
-    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
-    let _proxy_guard = InspectShowProxyGuard::new(show_proxy);
-    let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
-    let _getters_guard = InspectGettersGuard::new(getters);
-    let _sorted_guard = InspectSortedGuard::new(sorted);
-    let _compact_guard = InspectCompactGuard::new(compact);
-    js_util_format(arr_ptr)
-}
-
-#[no_mangle]
-pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
-    let default_options = crate::object::util_inspect_default_options_value();
-    let max_depth = unsafe { super::console::decode_dir_depth_option(options) }
-        .or_else(|| unsafe { super::console::decode_dir_depth_option(default_options) })
-        .unwrap_or(2);
-    let show_hidden = inspect_bool_option(options, default_options, "showHidden").unwrap_or(false);
-    let show_proxy = inspect_bool_option(options, default_options, "showProxy").unwrap_or(false);
-    // `util.inspect` defaults to `customInspect: true`; an explicit
-    // `{ customInspect: false }` opts out and surfaces the hook as a
-    // symbol property. Refs #1201.
-    let custom_inspect =
-        inspect_bool_option(options, default_options, "customInspect").unwrap_or(true);
-    let getters = inspect_bool_option(options, default_options, "getters").unwrap_or(false);
-    let sorted = inspect_bool_option(options, default_options, "sorted").unwrap_or(false);
-    let compact = inspect_bool_option(options, default_options, "compact").unwrap_or(true);
-    let _depth_guard = InspectDepthLimitGuard::new(max_depth);
-    let _hidden_guard = InspectShowHiddenGuard::new(show_hidden);
-    let _proxy_guard = InspectShowProxyGuard::new(show_proxy);
-    let _custom_guard = InspectCustomInspectGuard::new(custom_inspect);
-    let _getters_guard = InspectGettersGuard::new(getters);
-    let _sorted_guard = InspectSortedGuard::new(sorted);
-    let _compact_guard = InspectCompactGuard::new(compact);
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    let out = if jv.is_any_string() {
-        let s = jsvalue_string_content(value).unwrap_or_default();
-        format!("'{}'", escape_string(&s))
-    } else {
-        format_jsvalue(value, 0)
-    };
-    let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
-    f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
-}
-
-fn inspect_bool_option(options: f64, default_options: f64, name: &str) -> Option<bool> {
-    unsafe { super::console::decode_dir_bool_option(options, name) }
-        .or_else(|| unsafe { super::console::decode_dir_bool_option(default_options, name) })
-}
 
 #[inline]
 fn looks_like_raw_heap_pointer(value: f64) -> bool {
@@ -2009,12 +1748,25 @@ fn looks_like_raw_heap_pointer(value: f64) -> bool {
         return false;
     }
     let addr = bits as usize;
-    (0x1000..0x8000_0000_0000usize).contains(&addr) && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
+    // Compare in u64 so the 2^47 upper bound stays in range on 32-bit targets
+    // (arm64_32 watchOS, wasm32), where it's a no-op — no addresses that high.
+    (0x1000..0x8000_0000_0000u64).contains(&(addr as u64))
+        && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
 }
 
-fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
+fn formatted_deep_equal(left: f64, right: f64, skip_prototype: bool) -> bool {
+    let _guard = DeepEqualSkipPrototypeFormatGuard::new(skip_prototype);
+    format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+}
+
+fn js_util_deep_strict_equal_bool(
+    left: f64,
+    right: f64,
+    depth: usize,
+    skip_prototype: bool,
+) -> bool {
     if depth > 64 {
-        return format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0);
+        return formatted_deep_equal(left, right, skip_prototype);
     }
     let left_value = crate::value::JSValue::from_bits(left.to_bits());
     let right_value = crate::value::JSValue::from_bits(right.to_bits());
@@ -2025,12 +1777,19 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
             (Some((left_class, left_payload)), Some((right_class, right_payload)))
                 if left_class == right_class =>
             {
-                js_util_deep_strict_equal_bool(left_payload, right_payload, depth + 1)
+                js_util_deep_strict_equal_bool(
+                    left_payload,
+                    right_payload,
+                    depth + 1,
+                    skip_prototype,
+                )
             }
             _ => false,
         };
     }
-    if let Some(equal) = collection_equality::deep_strict_collection_equal(left, right, depth) {
+    if let Some(equal) =
+        collection_equality::deep_strict_collection_equal(left, right, depth, skip_prototype)
+    {
         return equal;
     }
     if let Some(equal) = typed_array_equality::deep_strict_typed_array_equal(left, right) {
@@ -2050,19 +1809,24 @@ fn js_util_deep_strict_equal_bool(left: f64, right: f64, depth: usize) -> bool {
         // #2934: Node's default deepStrictEqual is prototype-sensitive — two
         // objects with the same own properties but different `[[Prototype]]`
         // are not equal. Gate before comparing the formatted body.
-        if prototype_equality::prototypes_differ(left, right) {
+        if !skip_prototype && prototype_equality::prototypes_differ(left, right) {
             return false;
         }
-        format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+        formatted_deep_equal(left, right, skip_prototype)
     } else {
         crate::value::js_jsvalue_equals(left, right) != 0
-            || format_jsvalue_for_json(left, 0) == format_jsvalue_for_json(right, 0)
+            || formatted_deep_equal(left, right, skip_prototype)
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_is_deep_strict_equal(left: f64, right: f64) -> f64 {
-    let equal = js_util_deep_strict_equal_bool(left, right, 0);
+    let equal = js_util_deep_strict_equal_bool(left, right, 0, false);
+    f64::from_bits(crate::value::JSValue::bool(equal).bits())
+}
+
+pub fn js_util_is_deep_strict_equal_skip_prototype(left: f64, right: f64) -> f64 {
+    let equal = js_util_deep_strict_equal_bool(left, right, 0, true);
     f64::from_bits(crate::value::JSValue::bool(equal).bits())
 }
 

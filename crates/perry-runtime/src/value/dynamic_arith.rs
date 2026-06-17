@@ -55,23 +55,18 @@ unsafe fn throw_add_type_error(message: &[u8]) -> ! {
 }
 
 #[inline]
-fn is_symbol_value(value: f64) -> bool {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_pointer() {
-        return false;
-    }
-    let ptr = jsval.as_pointer::<u8>() as usize;
-    ptr >= 0x1000 && crate::symbol::is_registered_symbol(ptr)
+unsafe fn is_symbol_value(value: f64) -> bool {
+    crate::symbol::js_is_symbol(value) != 0
 }
 
 #[inline]
-fn is_nonprimitive_object_value(value: f64) -> bool {
+unsafe fn is_nonprimitive_object_value(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     if !jsval.is_pointer() {
         return false;
     }
     let ptr = jsval.as_pointer::<u8>() as usize;
-    ptr >= 0x1000 && !crate::symbol::is_registered_symbol(ptr)
+    ptr >= 0x1000 && !is_symbol_value(value)
 }
 
 unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
@@ -82,6 +77,36 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     let ptr = jsval.as_pointer::<u8>() as usize;
     if ptr < 0x1000 {
         return value;
+    }
+
+    // A Proxy is a small registered id, not a heap object — the ToPrimitive
+    // machinery below dereferences the fake pointer and segfaults
+    // (`"" + new Proxy(fn, {})`). A trap-less default ToPrimitive forwards
+    // to the target; a callable target stringifies via
+    // Function.prototype.toString (the NativeFunction form).
+    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+        let s = crate::value::js_jsvalue_to_string(value);
+        return crate::value::js_nanbox_string(s as i64);
+    }
+
+    // Buffers / TypedArrays carry NO `ObjectHeader` (a `BufferHeader` /
+    // `TypedArrayHeader` has a different, smaller layout). The
+    // `js_url_href_if_url` / `try_read_as_search_params` /
+    // `ordinary_to_primitive_number_for_add` probes below all bit-cast `ptr`
+    // to an `ObjectHeader` and read its fields, so a Buffer/TypedArray operand
+    // would deref a fake header one word before the data and segfault
+    // (issue #5131 — `req.on('data', c => body += c)` on a `node:http` server,
+    // where the chunk is an un-typed Buffer and `body += c` lowers to the
+    // fully-dynamic add path). Detect via the registries (by-value lookups, no
+    // deref) and route to `js_jsvalue_to_string`, which yields the same string
+    // form as an explicit `.toString()` (Buffer→utf8, TypedArray→`join(",")`).
+    // This matches the guards `js_jsvalue_to_string` itself runs before its
+    // ordinary-object dispatch.
+    if crate::buffer::is_registered_buffer(ptr)
+        || crate::typedarray::lookup_typed_array_kind(ptr).is_some()
+    {
+        let s = crate::value::js_jsvalue_to_string(value);
+        return crate::value::js_nanbox_string(s as i64);
     }
 
     let primitive = crate::symbol::js_to_primitive(value, 0);
@@ -95,6 +120,29 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     if crate::date::is_date_cell_addr(ptr) {
         let s = crate::date::js_date_to_string(value);
         return crate::value::js_nanbox_string(s as i64);
+    }
+
+    // WHATWG `URL` / `URLSearchParams` have native `toString`s (`href` / the
+    // query string) that OrdinaryToPrimitive can't see — it would resolve the
+    // inherited `Object.prototype.toString` and yield "[object Object]". Like
+    // the Date special-case above, pre-empt with the real string so
+    // `"" + url` / `` `${url}` `` match explicit `url.toString()` (#URL coercion).
+    // Skip small-handle values (sockets / timers / widget handles): they are
+    // registry ids, not heap `ObjectHeader`s, so the shape probe would
+    // dereference unmapped memory.
+    if !crate::value::addr_class::is_handle_band(ptr) {
+        let boxed =
+            f64::from_bits(crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK));
+        let href = crate::url::url_class::js_url_href_if_url(boxed);
+        if href.to_bits() != crate::value::TAG_UNDEFINED {
+            let s = js_jsvalue_to_string(href);
+            return crate::value::js_nanbox_string(s as i64);
+        }
+        let obj = ptr as *mut crate::object::ObjectHeader;
+        if crate::url::try_read_as_search_params(obj).is_some() {
+            let s = crate::url::search_params::js_url_search_params_to_string(obj);
+            return crate::value::js_nanbox_string(s as i64);
+        }
     }
 
     match crate::value::ordinary_to_primitive_number_for_add(value) {
@@ -163,6 +211,46 @@ pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
         return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_add);
     }
     a + b
+}
+
+/// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt passes through
+/// unchanged, every other value is coerced via `ToNumber`. The codegen's
+/// update path uses this for the *operand read* so that the postfix return
+/// value and the stepping base keep their BigInt type instead of collapsing
+/// to a Number (`let i = 10n; i++` must stay a BigInt — otherwise a later
+/// `i + 87n` throws a mixed-type TypeError; test262
+/// BigInt/prototype/toString/a-z).
+#[no_mangle]
+pub unsafe extern "C" fn js_to_numeric(value: f64) -> f64 {
+    if JSValue::from_bits(value.to_bits()).is_bigint() {
+        value
+    } else {
+        crate::builtins::js_number_coerce(value)
+    }
+}
+
+/// Step a ToNumeric operand by `1` of its own numeric type for `++`/`--`.
+/// `numeric` is already the result of [`js_to_numeric`]: a BigInt steps by
+/// `1n` (staying a BigInt), any Number steps by `1.0`. `is_increment` is
+/// nonzero for `++`, zero for `--`.
+#[no_mangle]
+pub unsafe extern "C" fn js_numeric_step(numeric: f64, is_increment: i32) -> f64 {
+    if JSValue::from_bits(numeric.to_bits()).is_bigint() {
+        let one_ptr = crate::bigint::js_bigint_from_i64(1);
+        // `js_nanbox_bigint` is pure and `dynamic_bigint_binary_op` roots both
+        // operands before any further allocation, so `one_ptr` survives.
+        let one_val = js_nanbox_bigint(one_ptr as i64);
+        let op = if is_increment != 0 {
+            crate::bigint::js_bigint_add
+        } else {
+            crate::bigint::js_bigint_sub
+        };
+        dynamic_bigint_binary_op(numeric, one_val, op)
+    } else if is_increment != 0 {
+        numeric + 1.0
+    } else {
+        numeric - 1.0
+    }
 }
 
 /// Dynamic `a + b` for type-uncertain operands. Per JS spec, when either
@@ -299,6 +387,21 @@ pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
     -a
 }
 
+/// Dynamic bitwise NOT: `~BigInt` stays BigInt, otherwise use JS ToInt32.
+#[no_mangle]
+pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
+    let a_val = JSValue::from_bits(a.to_bits());
+    if a_val.is_bigint() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let a_handle = scope.root_bigint_ptr(a_val.as_bigint_ptr());
+        let result = crate::bigint::js_bigint_not(
+            a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
+        );
+        return js_nanbox_bigint(result as i64);
+    }
+    (!(a as i64 as i32)) as f64
+}
+
 /// Dynamic right shift: BigInt >> if either operand is BigInt, else i32 >> for numbers.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
@@ -389,3 +492,9 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
 static KEEP_DYNAMIC_POW: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_pow;
 #[used]
 static KEEP_DYNAMIC_USHR: unsafe extern "C" fn(f64, f64) -> f64 = js_dynamic_ushr;
+#[used]
+static KEEP_DYNAMIC_BITNOT: unsafe extern "C" fn(f64) -> f64 = js_dynamic_bitnot;
+#[used]
+static KEEP_TO_NUMERIC: unsafe extern "C" fn(f64) -> f64 = js_to_numeric;
+#[used]
+static KEEP_NUMERIC_STEP: unsafe extern "C" fn(f64, i32) -> f64 = js_numeric_step;

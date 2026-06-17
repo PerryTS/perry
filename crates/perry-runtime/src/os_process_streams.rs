@@ -208,12 +208,13 @@ fn build_stream_object_with_write(
             (0, keys, 14, Some(6))
         };
     let obj = if class_id == 0 {
-        js_object_alloc_with_shape(
-            0x7FFF_FF22,
-            field_count,
-            packed.as_ptr(),
-            packed.len() as u32,
-        )
+        // Shape ids must stay clear of NAVIGATOR_CLASS_ID (0x7FFF_FF22) — the
+        // per-shape key registry is first-registration-wins, so sharing an id
+        // with navigator made `process.stdout.write` resolve to undefined
+        // whenever navigator was built first. stdin gets its own id because
+        // its key layout diverges from stdout/stderr past field 5.
+        let shape_id = if is_stdin { 0x7FFF_FF29 } else { 0x7FFF_FF23 };
+        js_object_alloc_with_shape(shape_id, field_count, packed.as_ptr(), packed.len() as u32)
     } else {
         crate::object::js_object_alloc_class_with_keys(
             class_id,

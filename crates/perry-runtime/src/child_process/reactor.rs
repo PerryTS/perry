@@ -28,9 +28,10 @@ use std::collections::HashMap;
 #[cfg(unix)]
 use std::io::BufRead;
 use std::io::{Read, Write};
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, ChildStdin};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 // Brings in the `cp_*` helpers, `CpFn`, `CP_SHAPE_ID`, the `TAG_*` consts, and
 // (since this is a descendant module) `mod.rs`'s `use` bindings such as
@@ -76,6 +77,11 @@ enum CpEvent {
     /// #1933: the IPC channel closed (child disconnected or exited) — flip
     /// `connected`/`channel` and emit `'disconnect'`.
     IpcClosed { handle: u64 },
+    /// Timeout expired; terminate the live child with this signal on the main
+    /// thread so JS-visible `killed` is updated with the same event ordering.
+    Timeout { handle: u64, signal: i32 },
+    /// `AbortSignal` attached through `options.signal` fired.
+    Abort { handle: u64 },
 }
 
 static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
@@ -104,6 +110,41 @@ struct LiveChild {
     /// #2130: whether the IPC channel uses V8 structured-clone framing
     /// (`serialization: 'advanced'`) rather than newline-delimited JSON.
     ipc_advanced: bool,
+    /// NaN-boxed AbortSignal value for listener cleanup/GC rooting.
+    abort_signal_bits: u64,
+    /// NaN-boxed abort-listener closure value for listener cleanup/GC rooting.
+    abort_listener_bits: u64,
+    /// Signal number used when `options.signal` aborts this child.
+    abort_kill_signal: i32,
+    /// #4912: present for children launched by the async `exec`/`execFile`
+    /// callback form. When set, the pump buffers stdout/stderr instead of
+    /// emitting stream events and fires this single `(err, stdout, stderr)`
+    /// callback on `close` — Node's "run off-thread, call back on a later
+    /// tick" model. `None` for `spawn`/`fork`.
+    exec: Option<Box<CpExecPending>>,
+}
+
+/// Buffered state for an async `exec`/`execFile` child (#4912). Output is
+/// accumulated off the main thread and replayed into the same `CpRun`-shaped
+/// callback the synchronous path used, so the deferred callback is
+/// byte-identical to the former immediate one.
+pub(super) struct CpExecPending {
+    /// NaN-boxed callback closure — a GC root until the callback fires.
+    cb_bits: u64,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    /// `maxBuffer` / `timeout` / `killSignal` limits + the error shape source.
+    run_options: CpRunOptions,
+    /// utf8/buffer encoding for the boxed stdout/stderr.
+    mode: CpOutput,
+    /// Human-readable command, for the error `.cmd` field.
+    cmd: String,
+    /// Program actually launched, for the spawn-failure `syscall`/`path`.
+    file: String,
+    /// Set once accumulated output passed `maxBuffer` (the child is then killed).
+    exceeded: bool,
+    /// Set when the `timeout` fired and the child was killed.
+    timed_out: bool,
 }
 
 static CP_LIVE: Mutex<Option<HashMap<u64, LiveChild>>> = Mutex::new(None);
@@ -129,6 +170,18 @@ fn cp_queue_lock() -> std::sync::MutexGuard<'static, Vec<CpEvent>> {
 fn cp_push_event(ev: CpEvent) {
     cp_queue_lock().push(ev);
     crate::event_pump::js_notify_main_thread();
+}
+
+#[inline]
+fn libc_sigterm() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::SIGTERM
+    }
+    #[cfg(not(unix))]
+    {
+        15
+    }
 }
 
 /// Spawn a reader thread that streams `pipe` to the event queue until EOF.
@@ -174,6 +227,13 @@ fn cp_spawn_waiter(handle: u64, mut child: Child) {
             code,
             signal,
         });
+    });
+}
+
+fn cp_spawn_timeout(handle: u64, timeout: Duration, signal: i32) {
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        cp_push_event(CpEvent::Timeout { handle, signal });
     });
 }
 
@@ -256,6 +316,8 @@ pub(super) fn cp_register_live_child(
     mut child: Child,
     ipc: Option<IpcStream>,
     ipc_advanced: bool,
+    timeout: Option<Duration>,
+    kill_signal: i32,
 ) -> u64 {
     let pid = child.id();
     cp_set_field(cp, b"pid", pid as f64);
@@ -299,6 +361,10 @@ pub(super) fn cp_register_live_child(
                 closed: false,
                 ipc_send,
                 ipc_advanced,
+                abort_signal_bits: 0,
+                abort_listener_bits: 0,
+                abort_kill_signal: libc_sigterm(),
+                exec: None,
             },
         );
     }
@@ -311,6 +377,9 @@ pub(super) fn cp_register_live_child(
         cp_spawn_reader(handle, e, true);
     }
     cp_spawn_waiter(handle, child);
+    if let Some(timeout) = timeout {
+        cp_spawn_timeout(handle, timeout, kill_signal);
+    }
     #[cfg(unix)]
     {
         if let Some(sock) = ipc {
@@ -320,6 +389,92 @@ pub(super) fn cp_register_live_child(
     // Wake the loop so 'spawn' fires on the next tick.
     crate::event_pump::js_notify_main_thread();
     handle
+}
+
+extern "C" fn cp_abort_listener(closure: *const ClosureHeader) -> f64 {
+    let handle = js_closure_get_capture_ptr(closure, 0) as u64;
+    cp_push_event(CpEvent::Abort { handle });
+    cp_undefined()
+}
+
+pub(super) fn cp_install_abort_signal(handle: u64, signal: Option<f64>, opts_val: f64) {
+    let Some(signal) = signal else {
+        return;
+    };
+    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+        return;
+    };
+
+    let listener = js_closure_alloc(cp_abort_listener as *const u8, 1);
+    js_closure_set_capture_ptr(listener, 0, handle as i64);
+    let listener_val = cp_box_ptr(listener as *const u8);
+    let kill_signal = cp_read_abort_kill_signal(opts_val);
+
+    if let Some(map) = cp_live_lock().as_mut() {
+        if let Some(lc) = map.get_mut(&handle) {
+            lc.abort_signal_bits = signal.to_bits();
+            lc.abort_listener_bits = listener_val.to_bits();
+            lc.abort_kill_signal = kill_signal;
+        }
+    }
+
+    if crate::url::js_abort_signal_is_aborted(signal_ptr) != 0 {
+        cp_push_event(CpEvent::Abort { handle });
+    } else {
+        crate::url::js_abort_signal_add_listener(signal_ptr, cp_box_string("abort"), listener_val);
+    }
+}
+
+fn cp_read_abort_kill_signal(opts_val: f64) -> i32 {
+    if cp_object_ptr(opts_val).is_none() {
+        return libc_sigterm();
+    }
+    let signal = cp_get_field(opts_val, b"killSignal");
+    if JSValue::from_bits(signal.to_bits()).is_undefined() {
+        return libc_sigterm();
+    }
+    cp_signal_number_from_value(signal)
+}
+
+fn cp_signal_number_from_value(signal: f64) -> i32 {
+    #[cfg(unix)]
+    {
+        cp_parse_signal(signal)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = signal;
+        libc_sigterm()
+    }
+}
+
+fn cp_take_abort_fields(handle: u64) -> Option<(u64, i32, u64, u64)> {
+    let mut guard = cp_live_lock();
+    let lc = guard.as_mut()?.get_mut(&handle)?;
+    let fields = (
+        lc.cp_bits,
+        lc.abort_kill_signal,
+        lc.abort_signal_bits,
+        lc.abort_listener_bits,
+    );
+    lc.abort_signal_bits = 0;
+    lc.abort_listener_bits = 0;
+    Some(fields)
+}
+
+fn cp_cleanup_abort_listener(signal_bits: u64, listener_bits: u64) {
+    if signal_bits == 0 || listener_bits == 0 {
+        return;
+    }
+    let signal = f64::from_bits(signal_bits);
+    let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) else {
+        return;
+    };
+    crate::url::js_abort_signal_remove_listener(
+        signal_ptr,
+        cp_box_string("abort"),
+        f64::from_bits(listener_bits),
+    );
 }
 
 /// `child.send(message)` — serialize `message` to JSON (main thread) and write
@@ -378,6 +533,53 @@ pub(super) fn cp_ipc_send(handle: u64, message: f64) -> bool {
     }
 }
 
+/// Write an already-serialized JSON line on a child's IPC channel (newline
+/// appended). Used by the cluster primary's `queryServerReply` (#4962); shares
+/// the live-child lock so it never interleaves with `cp_ipc_send`.
+pub fn cp_ipc_send_raw_json(handle: u64, json: &str) -> bool {
+    #[cfg(not(unix))]
+    {
+        let _ = (handle, json);
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        let mut frame = Vec::with_capacity(json.len() + 1);
+        frame.extend_from_slice(json.as_bytes());
+        frame.push(b'\n');
+        let mut guard = cp_live_lock();
+        if let Some(map) = guard.as_mut() {
+            if let Some(lc) = map.get_mut(&handle) {
+                if let Some(sock) = lc.ipc_send.as_mut() {
+                    return sock.write_all(&frame).is_ok();
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Pass a connection fd to a child over its IPC socketpair via `SCM_RIGHTS`
+/// (#4962 SCHED_RR). Holds the live-child lock so the framed send is atomic
+/// against `cp_ipc_send`. Returns false (caller closes the fd) when the child
+/// is gone.
+#[cfg(unix)]
+pub fn cp_ipc_send_fd(handle: u64, key_id: u32, payload_fd: std::os::unix::io::RawFd) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let guard = cp_live_lock();
+    let Some(map) = guard.as_ref() else {
+        return false;
+    };
+    let Some(lc) = map.get(&handle) else {
+        return false;
+    };
+    let Some(sock) = lc.ipc_send.as_ref() else {
+        return false;
+    };
+    crate::cluster_sched::send_fd_over(sock.as_raw_fd(), key_id, payload_fd)
+}
+
 /// `child.disconnect()` — shut the IPC socket down (the reader thread then sees
 /// EOF and exits). Returns whether a channel was present. #1933.
 pub(super) fn cp_ipc_disconnect(handle: u64) -> bool {
@@ -432,15 +634,20 @@ pub extern "C" fn js_child_process_spawn_streams(
     } else {
         cp_undefined()
     };
+    let abort_signal = cp_read_abort_signal(opts_val);
 
     // stdout/stderr Readable + stdin Writable sub-objects.
     let stdout_obj = cp_build_readable();
     let stderr_obj = cp_build_readable();
     let stdin_obj = cp_build_writable();
+    let stdio_kinds = cp_read_stdio(opts_val, 3);
+    let timeout = cp_read_timeout(opts_val);
+    let kill_signal = cp_read_kill_signal(opts_val);
 
-    // spawnargs = [command, ...args]
+    // spawnargs = [argv0 ?? command, ...args]
     let mut spawnargs = crate::array::js_array_alloc((arg_strs.len() + 1) as u32);
-    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&cmd_str));
+    let argv0 = cp_spawnargs_argv0(&cmd_str, opts_val);
+    spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(&argv0));
     for a in &arg_strs {
         spawnargs = crate::array::js_array_push_f64(spawnargs, cp_box_string(a));
     }
@@ -463,15 +670,16 @@ pub extern "C" fn js_child_process_spawn_streams(
     ];
     let cp_obj = cp_build_object(&cp_methods, CP_SHAPE_ID + cp_methods.len() as u32);
     let cp = cp_box_ptr(cp_obj as *const u8);
+    cp_install_dispose(cp);
 
-    cp_set_field(cp, b"stdout", stdout_obj);
-    cp_set_field(cp, b"stderr", stderr_obj);
-    cp_set_field(cp, b"stdin", stdin_obj);
+    cp_set_field(cp, b"stdout", cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+    cp_set_field(cp, b"stderr", cp_stdio_js_value(stdio_kinds[2], stderr_obj));
+    cp_set_field(cp, b"stdin", cp_stdio_js_value(stdio_kinds[0], stdin_obj));
 
     let mut stdio = crate::array::js_array_alloc(3);
-    stdio = crate::array::js_array_push_f64(stdio, stdin_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stdout_obj);
-    stdio = crate::array::js_array_push_f64(stdio, stderr_obj);
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[0], stdin_obj));
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[1], stdout_obj));
+    stdio = crate::array::js_array_push_f64(stdio, cp_stdio_js_value(stdio_kinds[2], stderr_obj));
     cp_set_field(cp, b"stdio", cp_box_ptr(stdio as *const u8));
 
     cp_set_field(cp, b"exitCode", TAG_NULL_F64);
@@ -483,27 +691,50 @@ pub extern "C" fn js_child_process_spawn_streams(
 
     // Build + launch the child (honoring `shell`/`cwd`/`env`), non-blocking.
     let mut command = cp_build_command(&cmd_str, &arg_strs, opts_val);
-    command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    cp_apply_live_stdio(&mut command, &stdio_kinds);
 
     match command.spawn() {
         Ok(child) => {
-            cp_register_live_child(cp, stdout_obj, stderr_obj, stdin_obj, child, None, false);
+            let handle = cp_register_live_child(
+                cp,
+                stdout_obj,
+                stderr_obj,
+                stdin_obj,
+                child,
+                None,
+                false,
+                timeout,
+                kill_signal,
+            );
+            cp_install_abort_signal(handle, abort_signal, opts_val);
         }
         Err(e) => {
             // Spawn failure (e.g. ENOENT): Node emits a single `error` event and
             // never `spawn`/`exit`. Defer it so a synchronously-registered
-            // handler is present.
+            // handler is present. The error carries Node's errno shape:
+            // `code`/`errno`/`syscall`/`path`/`spawnargs`, message
+            // `spawn <cmd> <CODE>`.
             cp_set_field(cp, b"pid", cp_undefined());
-            let msg = e.to_string();
-            let mp = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_error_new_with_message(mp);
-            cp_set_field(
-                cp,
-                b"__cpError",
-                crate::value::js_nanbox_pointer(err as i64),
+            let code = super::cp_io_error_code(&e);
+            let syscall = format!("spawn {cmd_str}");
+            let message = format!("{syscall} {code}");
+            // Node's error `spawnargs` excludes argv0 (internally `slice(1)`
+            // of the handle's spawnargs), unlike `child.spawnargs`.
+            let mut err_args = crate::array::js_array_alloc(arg_strs.len() as u32);
+            for a in &arg_strs {
+                err_args = crate::array::js_array_push_f64(err_args, cp_box_string(a));
+            }
+            let err = super::cp_make_error(
+                &message,
+                &[
+                    ("errno", super::cp_errno_number(code)),
+                    ("code", cp_box_string(code)),
+                    ("syscall", cp_box_string(&syscall)),
+                    ("path", cp_box_string(&cmd_str)),
+                    ("spawnargs", cp_box_ptr(err_args as *const u8)),
+                ],
             );
+            cp_set_field(cp, b"__cpError", err);
             let emit_closure =
                 crate::closure::js_closure_alloc(cp_emit_spawn_error as *const u8, 1);
             crate::closure::js_closure_set_capture_ptr(emit_closure, 0, cp.to_bits() as i64);
@@ -527,6 +758,211 @@ pub(super) extern "C" fn cp_emit_spawn_error(closure: *const ClosureHeader) -> f
 
 pub(super) fn cp_register_reactor_arities() {
     crate::closure::js_register_closure_arity(cp_emit_spawn_error as *const u8, 0);
+    crate::closure::js_register_closure_arity(cp_abort_listener as *const u8, 0);
+    crate::closure::js_register_closure_arity(cp_exec_cb_thunk as *const u8, 0);
+}
+
+// ============================================================================
+// Async `exec` / `execFile` — run off the main thread, call back on a later
+// tick (#4912).
+// ============================================================================
+
+/// Launch `command` (already shaped as `sh -c <cmd>` for `exec` or `file
+/// args…` for `execFile`, with `cwd`/`env` applied) without blocking the main
+/// thread, capturing stdout/stderr on background reader threads. When the child
+/// exits, the pump fires `cb_val(err, stdout, stderr)` on a later event-loop
+/// tick. A spawn failure (e.g. `ENOENT`) is reported the same way, deferred to
+/// the next tick. Always returns `undefined` (the callback form's return).
+pub(super) fn cp_exec_async(
+    mut command: Command,
+    cmd_str: String,
+    cb_val: f64,
+    run_options: CpRunOptions,
+    mode: CpOutput,
+) -> f64 {
+    cp_register_arities();
+    cp_register_reactor_arities();
+
+    // The program actually launched (`sh` for exec, the file for execFile) —
+    // Node's spawn-failure error keys `syscall`/`path`/message off this, not
+    // off the display command string.
+    let file = command.get_program().to_string_lossy().into_owned();
+
+    // exec/execFile capture stdout+stderr and never feed stdin.
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    let timeout = run_options.timeout();
+    let kill_signal = run_options.kill_signal();
+
+    match command.spawn() {
+        Ok(mut child) => {
+            let pid = child.id();
+            let stdout_pipe = child.stdout.take();
+            let stderr_pipe = child.stderr.take();
+            let stdout_open = stdout_pipe.is_some();
+            let stderr_open = stderr_pipe.is_some();
+            let handle = CP_NEXT_LIVE_ID.fetch_add(1, Ordering::SeqCst);
+
+            let exec = Box::new(CpExecPending {
+                cb_bits: cb_val.to_bits(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                run_options,
+                mode,
+                cmd: cmd_str,
+                file,
+                exceeded: false,
+                timed_out: false,
+            });
+
+            {
+                let mut guard = cp_live_lock();
+                let map = guard.get_or_insert_with(HashMap::new);
+                map.insert(
+                    handle,
+                    LiveChild {
+                        // No JS ChildProcess object for the exec callback form.
+                        cp_bits: TAG_UNDEFINED_BITS,
+                        pid: pid as i32,
+                        stdin: None,
+                        stdout_open,
+                        stderr_open,
+                        spawned: false,
+                        exited: None,
+                        closed: false,
+                        ipc_send: None,
+                        ipc_advanced: false,
+                        abort_signal_bits: 0,
+                        abort_listener_bits: 0,
+                        abort_kill_signal: libc_sigterm(),
+                        exec: Some(exec),
+                    },
+                );
+            }
+            CP_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+
+            if let Some(o) = stdout_pipe {
+                cp_spawn_reader(handle, o, false);
+            }
+            if let Some(e) = stderr_pipe {
+                cp_spawn_reader(handle, e, true);
+            }
+            cp_spawn_waiter(handle, child);
+            if let Some(timeout) = timeout {
+                cp_spawn_timeout(handle, timeout, kill_signal);
+            }
+            crate::event_pump::js_notify_main_thread();
+        }
+        Err(e) => {
+            // Could not spawn at all (ENOENT, EACCES…). Build the same callback
+            // error the sync path produced and fire it on a later tick.
+            let run = CpRun {
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                stdout_piped: true,
+                stderr_piped: true,
+                code: None,
+                signal: None,
+                pid: None,
+                spawn_error: Some((super::cp_io_error_code(&e), e.to_string())),
+                run_error: None,
+            };
+            let (err, out, errout) =
+                super::cp_exec_callback_args(&run, &run_options, &cmd_str, &file, &mode);
+            cp_defer_exec_callback(cb_val, err, out, errout);
+        }
+    }
+
+    cp_undefined()
+}
+
+/// Append a chunk to an exec child's captured stdout/stderr. Returns
+/// `Some(kill_signal)` the first time the buffer overruns `maxBuffer`, so the
+/// caller terminates the child (Node kills on a `maxBuffer` breach). Once
+/// overrun, further chunks are dropped to bound memory — the one chunk that
+/// crossed the limit keeps `len > maxBuffer`, which the output/error shapers
+/// use to truncate and to name the offending stream.
+fn cp_exec_accumulate(exec: &mut CpExecPending, stderr: bool, bytes: &[u8]) -> Option<i32> {
+    if exec.exceeded {
+        return None;
+    }
+    let max = exec.run_options.max_buffer;
+    let buf = if stderr {
+        &mut exec.stderr
+    } else {
+        &mut exec.stdout
+    };
+    buf.extend_from_slice(bytes);
+    if buf.len() > max {
+        exec.exceeded = true;
+        return Some(exec.run_options.kill_signal());
+    }
+    None
+}
+
+/// Build the `CpRun` for a finished exec child and fire its callback.
+fn cp_exec_fire_close(exec: Box<CpExecPending>, code: Option<i32>, signal: Option<i32>, pid: i32) {
+    let exec = *exec;
+    let run_error = if exec.exceeded {
+        Some(CpRunError::MaxBuffer)
+    } else if exec.timed_out {
+        Some(CpRunError::Timeout)
+    } else {
+        None
+    };
+    // A timeout maps to Node's `(code: null, signal: killSignal)` shape.
+    let (code, signal) = if exec.timed_out {
+        (None, Some(exec.run_options.kill_signal()))
+    } else {
+        (code, signal)
+    };
+    let run = CpRun {
+        stdout: exec.stdout,
+        stderr: exec.stderr,
+        stdout_piped: true,
+        stderr_piped: true,
+        code,
+        signal,
+        pid: Some(pid as u32),
+        spawn_error: None,
+        run_error,
+    };
+    let (err, out, errout) =
+        super::cp_exec_callback_args(&run, &exec.run_options, &exec.cmd, &exec.file, &exec.mode);
+    let cb = crate::fs::extract_closure_ptr(f64::from_bits(exec.cb_bits));
+    if !cb.is_null() {
+        crate::closure::js_closure_call3(cb, err, out, errout);
+    }
+}
+
+/// Schedule a deferred `cb(err, stdout, stderr)` on the next `setImmediate`
+/// macrotask — used for the empty-command, already-aborted, and spawn-failure
+/// exec paths, which have no live child to ride the reactor close. The boxed
+/// values are kept reachable by the immediate closure's captures.
+pub(super) fn cp_defer_exec_callback(cb_val: f64, err: f64, stdout: f64, stderr: f64) {
+    cp_register_reactor_arities();
+    let deferred = js_closure_alloc(cp_exec_cb_thunk as *const u8, 4);
+    js_closure_set_capture_ptr(deferred, 0, cb_val.to_bits() as i64);
+    js_closure_set_capture_ptr(deferred, 1, err.to_bits() as i64);
+    js_closure_set_capture_ptr(deferred, 2, stdout.to_bits() as i64);
+    js_closure_set_capture_ptr(deferred, 3, stderr.to_bits() as i64);
+    crate::timer::js_set_immediate_callback(deferred as i64);
+}
+
+/// The deferred-callback thunk: slots 0..4 capture `cb`, `err`, `stdout`,
+/// `stderr`. Takes no JS args.
+extern "C" fn cp_exec_cb_thunk(closure: *const ClosureHeader) -> f64 {
+    let cb = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let err = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
+    let out = f64::from_bits(js_closure_get_capture_ptr(closure, 2) as u64);
+    let errout = f64::from_bits(js_closure_get_capture_ptr(closure, 3) as u64);
+    let cbptr = crate::fs::extract_closure_ptr(cb);
+    if !cbptr.is_null() {
+        crate::closure::js_closure_call3(cbptr, err, out, errout);
+    }
+    cp_undefined()
 }
 
 // ============================================================================
@@ -552,19 +988,23 @@ fn cp_reactor_pump_inner() {
     // callbacks which allocate / can trigger GC; the GC root scanner also locks
     // CP_LIVE, so holding it across an allocation would deadlock the same
     // thread).
-    let to_spawn: Vec<(u64, u64)> = {
+    // exec/execFile children (#4912) have no JS ChildProcess, so they get no
+    // `spawn` event — just mark them spawned so Phase B can close them.
+    let to_spawn: Vec<(u64, u64, bool)> = {
         let guard = cp_live_lock();
         match guard.as_ref() {
             Some(map) => map
                 .iter()
                 .filter(|(_, lc)| !lc.spawned)
-                .map(|(h, lc)| (*h, lc.cp_bits))
+                .map(|(h, lc)| (*h, lc.cp_bits, lc.exec.is_some()))
                 .collect(),
             None => Vec::new(),
         }
     };
-    for (handle, cp_bits) in to_spawn {
-        cp_emit(f64::from_bits(cp_bits), "spawn", &[]);
+    for (handle, cp_bits, is_exec) in to_spawn {
+        if !is_exec {
+            cp_emit(f64::from_bits(cp_bits), "spawn", &[]);
+        }
         if let Some(map) = cp_live_lock().as_mut() {
             if let Some(lc) = map.get_mut(&handle) {
                 lc.spawned = true;
@@ -581,7 +1021,24 @@ fn cp_reactor_pump_inner() {
                 stderr,
                 bytes,
             } => {
-                if let Some(cp_bits) = cp_lookup_cp_bits(handle) {
+                // exec/execFile (#4912): buffer the bytes (off-JS, under the
+                // lock) instead of emitting a stream `data` event. A `maxBuffer`
+                // breach kills the child.
+                let mut emit_cp_bits = None;
+                let mut kill_sig = None;
+                {
+                    let mut guard = cp_live_lock();
+                    if let Some(lc) = guard.as_mut().and_then(|m| m.get_mut(&handle)) {
+                        match lc.exec.as_mut() {
+                            Some(exec) => kill_sig = cp_exec_accumulate(exec, stderr, &bytes),
+                            None => emit_cp_bits = Some(lc.cp_bits),
+                        }
+                    }
+                }
+                if let Some(sig) = kill_sig {
+                    cp_live_kill_signal(handle, sig);
+                }
+                if let Some(cp_bits) = emit_cp_bits {
                     let cp = f64::from_bits(cp_bits);
                     let stream = cp_get_field(cp, cp_stream_field(stderr));
                     if super::cp_object_ptr(stream).is_some() {
@@ -655,12 +1112,46 @@ fn cp_reactor_pump_inner() {
                     }
                 }
             }
+            CpEvent::Timeout { handle, signal } => {
+                // Mark an exec child as timed-out so its callback carries the
+                // timeout error shape (#4912); a `spawn` child flips `killed`.
+                let mut is_exec = false;
+                {
+                    let mut guard = cp_live_lock();
+                    if let Some(lc) = guard.as_mut().and_then(|m| m.get_mut(&handle)) {
+                        if let Some(exec) = lc.exec.as_mut() {
+                            exec.timed_out = true;
+                            is_exec = true;
+                        }
+                    }
+                }
+                if let Some(cp_bits) = cp_live_kill_signum(handle, signal) {
+                    if !is_exec {
+                        cp_set_field(f64::from_bits(cp_bits), b"killed", TAG_TRUE_F64);
+                    }
+                }
+            }
+            CpEvent::Abort { handle } => {
+                let Some((cp_bits, kill_signal, signal_bits, listener_bits)) =
+                    cp_take_abort_fields(handle)
+                else {
+                    continue;
+                };
+                cp_cleanup_abort_listener(signal_bits, listener_bits);
+                if cp_live_kill_signal(handle, kill_signal) {
+                    let cp = f64::from_bits(cp_bits);
+                    cp_set_field(cp, b"killed", TAG_TRUE_F64);
+                    cp_emit(cp, "error", &[cp_abort_error(None)]);
+                }
+            }
         }
     }
 
     // --- Phase B: emit `exit`+`close` once a child has exited AND both
-    // streams have hit EOF, so all `data`/`end` have already fired. ---
-    let to_close: Vec<(u64, u64, Option<i32>, Option<i32>)> = {
+    // streams have hit EOF, so all `data`/`end` have already fired. For an
+    // exec/execFile child (#4912) the terminal step is its buffered callback
+    // instead of `exit`/`close` events. ---
+    let to_close: Vec<CpCloseItem> = {
         let mut guard = cp_live_lock();
         let mut out = Vec::new();
         if let Some(map) = guard.as_mut() {
@@ -671,29 +1162,59 @@ fn cp_reactor_pump_inner() {
                 if let Some((code, signal)) = lc.exited {
                     if !lc.stdout_open && !lc.stderr_open {
                         lc.closed = true;
-                        out.push((*h, lc.cp_bits, code, signal));
+                        out.push(CpCloseItem {
+                            handle: *h,
+                            cp_bits: lc.cp_bits,
+                            code,
+                            signal,
+                            pid: lc.pid,
+                            abort_signal_bits: lc.abort_signal_bits,
+                            abort_listener_bits: lc.abort_listener_bits,
+                            exec: lc.exec.take(),
+                        });
+                        lc.abort_signal_bits = 0;
+                        lc.abort_listener_bits = 0;
                     }
                 }
             }
         }
         out
     };
-    for (handle, cp_bits, code, signal) in to_close {
-        let cp = f64::from_bits(cp_bits);
-        let code_f = code.map(|c| c as f64).unwrap_or(TAG_NULL_F64);
-        let signal_f = signal
-            .map(|s| cp_box_string(cp_signal_name(s)))
-            .unwrap_or(TAG_NULL_F64);
-        // Node populates exitCode/signalCode before emitting `exit`, then `close`.
-        cp_set_field(cp, b"exitCode", code_f);
-        cp_set_field(cp, b"signalCode", signal_f);
-        cp_emit(cp, "exit", &[code_f, signal_f]);
-        cp_emit(cp, "close", &[code_f, signal_f]);
+    for item in to_close {
+        cp_cleanup_abort_listener(item.abort_signal_bits, item.abort_listener_bits);
+        if let Some(exec) = item.exec {
+            cp_exec_fire_close(exec, item.code, item.signal, item.pid);
+        } else {
+            let cp = f64::from_bits(item.cp_bits);
+            let code_f = item.code.map(|c| c as f64).unwrap_or(TAG_NULL_F64);
+            let signal_f = item
+                .signal
+                .map(|s| cp_box_string(cp_signal_name(s)))
+                .unwrap_or(TAG_NULL_F64);
+            // Node populates exitCode/signalCode before emitting `exit`, then `close`.
+            cp_set_field(cp, b"exitCode", code_f);
+            cp_set_field(cp, b"signalCode", signal_f);
+            cp_emit(cp, "exit", &[code_f, signal_f]);
+            cp_emit(cp, "close", &[code_f, signal_f]);
+        }
         if let Some(map) = cp_live_lock().as_mut() {
-            map.remove(&handle);
+            map.remove(&item.handle);
         }
         CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// A child ready to enter its terminal step in Phase B — either `exit`/`close`
+/// events (`exec` is `None`) or an exec/execFile callback (`exec` is `Some`).
+struct CpCloseItem {
+    handle: u64,
+    cp_bits: u64,
+    code: Option<i32>,
+    signal: Option<i32>,
+    pid: i32,
+    abort_signal_bits: u64,
+    abort_listener_bits: u64,
+    exec: Option<Box<CpExecPending>>,
 }
 
 #[inline]
@@ -738,11 +1259,39 @@ pub(super) fn cp_live_stdin_close(handle: u64) {
     }
 }
 
+fn cp_live_kill_signum(handle: u64, signum: i32) -> Option<u64> {
+    let (pid, cp_bits) = {
+        let guard = cp_live_lock();
+        match guard.as_ref().and_then(|map| map.get(&handle)) {
+            // Skip if already reaped — the pid may have been recycled by the OS.
+            Some(lc) if lc.exited.is_none() => (lc.pid, lc.cp_bits),
+            _ => return None,
+        }
+    };
+    #[cfg(unix)]
+    {
+        if unsafe { libc::kill(pid, signum) == 0 } {
+            Some(cp_bits)
+        } else {
+            None
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signum, cp_bits);
+        None
+    }
+}
+
 /// Signal a live child. `signal` is the JS `kill([signal])` argument (a signal
 /// name string, a number, or — for the no-arg / default case — undefined or the
 /// `0.0` arg-padding, both treated as `SIGTERM`). Returns whether the signal
 /// was delivered.
 pub(super) fn cp_live_kill(handle: u64, signal: f64) -> bool {
+    cp_live_kill_signum(handle, cp_signal_from_value(signal)).is_some()
+}
+
+fn cp_live_kill_signal(handle: u64, signum: i32) -> bool {
     let pid = {
         let guard = cp_live_lock();
         match guard.as_ref().and_then(|map| map.get(&handle)) {
@@ -753,12 +1302,11 @@ pub(super) fn cp_live_kill(handle: u64, signal: f64) -> bool {
     };
     #[cfg(unix)]
     {
-        let signum = cp_parse_signal(signal);
         unsafe { libc::kill(pid, signum) == 0 }
     }
     #[cfg(not(unix))]
     {
-        let _ = pid;
+        let _ = (pid, signum);
         false
     }
 }
@@ -771,13 +1319,21 @@ fn cp_parse_signal(signal: f64) -> i32 {
     if JSValue::from_bits(signal.to_bits()).is_undefined() {
         return SIGTERM;
     }
-    if let Some(name) = cp_value_to_string(signal) {
-        return cp_signal_number(&name).unwrap_or(SIGTERM);
+    // Numeric forms BEFORE the string lookup: the unified string accessor
+    // coerces numbers to "9"-style strings, which are not signal names; an
+    // int32 can also arrive NaN-boxed, which `is_finite()` alone misses.
+    let js = JSValue::from_bits(signal.to_bits());
+    if js.is_int32() {
+        let n = js.as_int32();
+        return if n == 0 { SIGTERM } else { n };
     }
     if signal.is_finite() {
         let n = signal as i32;
         // 0 is the "no-arg" padding sentinel — treat as the default SIGTERM.
         return if n == 0 { SIGTERM } else { n };
+    }
+    if let Some(name) = cp_value_to_string(signal) {
+        return cp_signal_number(&name).unwrap_or(SIGTERM);
     }
     SIGTERM
 }
@@ -820,6 +1376,17 @@ pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
     if let Some(map) = cp_live_lock().as_mut() {
         for lc in map.values_mut() {
             visitor.visit_nanbox_u64_slot(&mut lc.cp_bits);
+            if lc.abort_signal_bits != 0 {
+                visitor.visit_nanbox_u64_slot(&mut lc.abort_signal_bits);
+            }
+            if lc.abort_listener_bits != 0 {
+                visitor.visit_nanbox_u64_slot(&mut lc.abort_listener_bits);
+            }
+            // #4912: keep the async exec/execFile callback closure alive until
+            // it fires on `close`.
+            if let Some(exec) = lc.exec.as_mut() {
+                visitor.visit_nanbox_u64_slot(&mut exec.cb_bits);
+            }
         }
     }
 }

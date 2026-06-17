@@ -26,30 +26,69 @@
 #    values that legitimately differ between runs (process.pid,
 #    Date.now standalone, fs.watch event timing) so byte-for-byte
 #    parity comparison is not the right test shape.
+#
+# NOTE on skiplist vs API manifest (#3700): a skiplisted module/API can
+# still appear in `--print-api-manifest`, and that is NOT a conflict.
+# The two sources measure different axes: the manifest records whether an
+# API *exists and is callable* in Perry; this skiplist records whether the
+# API is a *byte-for-byte parity target*. A module is correctly skiplisted
+# (one of the three categories above) even while the manifest claims it —
+# e.g. `v8` is implemented and callable, but its surface is not
+# byte-matchable against Node (see its reason below). Triage rule: a
+# failure on a skiplisted-but-manifest-claimed API is bucketed as `Skip`,
+# not as a manifest/runtime gap.
 
 [skip-modules]
-# Architectural — require a JS interpreter at runtime.
-"vm" = "Compiles JS source at runtime; needs a JS interpreter (V8 fallback only)."
-
 # Out-of-scope — interactive / V8-specific / deprecated.
 "repl" = "Interactive REPL; not meaningful for AOT-compiled binaries."
 "inspector" = "V8 inspector protocol; Perry is not V8."
 "inspector/promises" = "V8 inspector protocol; Perry is not V8."
 "trace_events" = "V8 trace events; not applicable to native binaries."
-"v8" = "V8-specific introspection (heap snapshots, cached data, serialization). Inapplicable."
-"domain" = "Deprecated since Node 4; not implementing legacy error-routing system."
+
+# Out-of-scope — Node implementation internals, not public userland modules.
+"_http_agent" = "Internal Node implementation module; not public userland API."
+"_http_client" = "Internal Node implementation module; not public userland API."
+"_http_common" = "Internal Node implementation module; not public userland API."
+"_http_incoming" = "Internal Node implementation module; not public userland API."
+"_http_outgoing" = "Internal Node implementation module; not public userland API."
+"_http_server" = "Internal Node implementation module; not public userland API."
+"_stream_duplex" = "Internal Node implementation module; not public userland API."
+"_stream_passthrough" = "Internal Node implementation module; not public userland API."
+"_stream_readable" = "Internal Node implementation module; not public userland API."
+"_stream_transform" = "Internal Node implementation module; not public userland API."
+"_stream_wrap" = "Internal Node implementation module; not public userland API."
+"_stream_writable" = "Internal Node implementation module; not public userland API."
+"_tls_common" = "Internal Node implementation module; not public userland API."
+"_tls_wrap" = "Internal Node implementation module; not public userland API."
+
+# Implemented and manifest-claimed, but not byte-parity-testable: serialize/
+# deserialize use the JSC wire format (Perry isn't V8, so the bytes differ from
+# Node's V8 format), and getHeapStatistics/getHeapSpaceStatistics/
+# getHeapCodeStatistics/cachedDataVersionTag return runtime-specific values
+# (categories 2 + 3). Roundtrips and shapes work; byte-for-byte diffing does not.
+"v8" = "V8-specific introspection + JSC-format serialization; callable but not byte-parity-testable (see #3700)."
 
 # Out-of-scope test surface.
 "test/mock" = "Test-runner mocking; covered transitively by node:test if pursued."
 
 [skip-apis]
 # Architectural — need a JS interpreter.
-"vm.runInThisContext(code[, options])" = "Runtime eval — needs JS interpreter."
-"vm.runInContext(code, contextifiedObject[, options])" = "Runtime eval — needs JS interpreter."
-"vm.runInNewContext(code[, contextObject][, options])" = "Runtime eval — needs JS interpreter."
-"vm.compileFunction(code[, params][, options])" = "Runtime function construction — needs JS interpreter."
-"vm.createContext([contextObject][, options])" = "Runtime context — needs JS interpreter."
-"vm.measureMemory([options])" = "V8 heap measurement; inapplicable."
+"module.error" = "Experimental VM module state remains gated/open (#3132)."
+"module.identifier" = "Experimental VM module state remains gated/open (#3132)."
+"module.namespace" = "Experimental VM module namespace remains gated/open (#3132)."
+"module.status" = "Experimental VM module state remains gated/open (#3132)."
+"module.evaluate([options])" = "Experimental VM module evaluation remains gated/open (#3132)."
+"module.link(linker)" = "Experimental VM module linking remains gated/open (#3132)."
+"new vm.SourceTextModule(code[, options])" = "Experimental VM module constructor remains gated/open (#3132)."
+"dependencySpecifiers" = "SourceTextModule dependency metadata remains gated/open (#3322)."
+"moduleRequests" = "SourceTextModule module request helpers remain gated/open (#3322)."
+"hasAsyncGraph()" = "SourceTextModule graph helper remains gated/open (#3132)."
+"hasTopLevelAwait()" = "SourceTextModule graph helper remains gated/open (#3132)."
+"instantiate()" = "SourceTextModule instantiation remains gated/open (#3132)."
+"linkRequests(modules)" = "SourceTextModule request linking remains gated/open (#3132/#3322)."
+"new vm.SyntheticModule(exportNames, evaluateCallback[, options])" = "Experimental SyntheticModule constructor remains gated/open (#3133)."
+"setExport(name, value)" = "SyntheticModule export mutation remains gated/open (#3133)."
+"vm.measureMemory([options])" = "V8 heap measurement remains open/inapplicable (#3284)."
 "util.compileFunction(...)" = "Same as vm.compileFunction — needs JS interpreter."
 
 # Out-of-scope — native addons / V8 internals.

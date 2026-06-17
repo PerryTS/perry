@@ -16,31 +16,39 @@ use crate::value::JSValue;
 /// Node emits. A missing (`undefined`) argument is allowed: Node defaults the
 /// delay and treats absent options as the empty object. `NaN` is a number, so
 /// it passes here (the warn/coerce path is tracked by #2966).
-fn validate_delay(delay: f64) {
+fn invalid_arg_type_error(message: &str) -> f64 {
+    crate::fs::validate::build_type_error_with_code_value(message, "ERR_INVALID_ARG_TYPE")
+}
+
+fn rejected_promise_value(reason: f64) -> f64 {
+    crate::value::js_nanbox_pointer(crate::promise::js_promise_rejected(reason) as i64)
+}
+
+fn validate_delay(delay: f64) -> Result<(), f64> {
     let jv = JSValue::from_bits(delay.to_bits());
     if jv.is_undefined() || crate::fs::validate::is_numeric(jv) {
-        return;
+        return Ok(());
     }
     let message = format!(
         "The \"delay\" argument must be of type number. Received {}",
         crate::fs::validate::describe_received(delay)
     );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    Err(invalid_arg_type_error(&message))
 }
 
 /// Accept `undefined` (no options) or a non-null, non-array object; anything
 /// else throws like Node's `validateObject`. Mirrors the `Array`/`null`
 /// detection used by `describe_received`.
-fn validate_options(options: f64) {
+fn validate_options(options: f64) -> Result<(), f64> {
     let jv = JSValue::from_bits(options.to_bits());
     if jv.is_undefined() || is_plain_object(options) {
-        return;
+        return Ok(());
     }
     let message = format!(
         "The \"options\" argument must be of type object. Received {}",
         crate::fs::validate::describe_received(options)
     );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    Err(invalid_arg_type_error(&message))
 }
 
 /// True when `value` is a heap object that is not an array — the shape Node's
@@ -58,19 +66,19 @@ fn is_plain_object(value: f64) -> bool {
     gc_header.obj_type != crate::gc::GC_TYPE_ARRAY
 }
 
-fn options_ref(options: f64) -> bool {
+fn options_ref(options: f64) -> Result<bool, f64> {
     let Some(value) = super::stream_promises::get_object_property(options, b"ref") else {
-        return true;
+        return Ok(true);
     };
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_bool() {
-        return jv.as_bool();
+        return Ok(jv.as_bool());
     }
     let message = format!(
         "The \"options.ref\" property must be of type boolean. Received {}",
         crate::fs::validate::describe_received(value)
     );
-    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    Err(invalid_arg_type_error(&message))
 }
 
 fn promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut crate::promise::Promise {
@@ -88,16 +96,21 @@ pub(crate) extern "C" fn timers_promises_set_timeout(
     value: f64,
     options: f64,
 ) -> f64 {
-    validate_delay(delay_ms);
-    validate_options(options);
+    if let Err(err) = validate_delay(delay_ms) {
+        return rejected_promise_value(err);
+    }
+    if let Err(err) = validate_options(options) {
+        return rejected_promise_value(err);
+    }
     let signal = super::stream_promises::options_signal(options);
-    let has_ref = options_ref(options);
+    let has_ref = match options_ref(options) {
+        Ok(has_ref) => has_ref,
+        Err(err) => return rejected_promise_value(err),
+    };
     if let Some(signal) = signal {
         if super::stream_promises::signal_aborted(signal) {
             let reason = super::stream_promises::signal_reason(signal);
-            return crate::value::js_nanbox_pointer(
-                crate::promise::js_promise_rejected(reason) as i64
-            );
+            return rejected_promise_value(reason);
         }
     }
     let promise = promise_timer(delay_ms, value, has_ref);
@@ -116,15 +129,18 @@ pub(crate) extern "C" fn timers_promises_set_immediate(
     value: f64,
     options: f64,
 ) -> f64 {
-    validate_options(options);
+    if let Err(err) = validate_options(options) {
+        return rejected_promise_value(err);
+    }
     let signal = super::stream_promises::options_signal(options);
-    let has_ref = options_ref(options);
+    let has_ref = match options_ref(options) {
+        Ok(has_ref) => has_ref,
+        Err(err) => return rejected_promise_value(err),
+    };
     if let Some(signal) = signal {
         if super::stream_promises::signal_aborted(signal) {
             let reason = super::stream_promises::signal_reason(signal);
-            return crate::value::js_nanbox_pointer(
-                crate::promise::js_promise_rejected(reason) as i64
-            );
+            return rejected_promise_value(reason);
         }
     }
     let promise = promise_timer(0.0, value, has_ref);
@@ -181,11 +197,21 @@ extern "C" fn timers_promises_interval_next(closure: *const ClosureHeader) -> f6
     let delay_ms = js_closure_get_capture_f64(closure, 2);
     let closed = js_closure_get_capture_f64(closure, 3);
     let has_ref = js_closure_get_capture_f64(closure, 4) != 0.0;
+    let validation_error = js_closure_get_capture_f64(closure, 5);
     if closed != 0.0 {
         return boxed_ptr(crate::promise::js_promise_resolved(iter_result(
             f64::from_bits(TAG_UNDEFINED),
             true,
         )) as *const u8);
+    }
+    if !JSValue::from_bits(validation_error.to_bits()).is_undefined() {
+        js_closure_set_capture_f64(closure as *mut ClosureHeader, 3, 1.0);
+        js_closure_set_capture_f64(
+            closure as *mut ClosureHeader,
+            5,
+            f64::from_bits(TAG_UNDEFINED),
+        );
+        return boxed_ptr(crate::promise::js_promise_rejected(validation_error) as *const u8);
     }
     if !JSValue::from_bits(signal.to_bits()).is_undefined()
         && super::stream_promises::signal_aborted(signal)
@@ -225,20 +251,39 @@ pub(crate) extern "C" fn timers_promises_set_interval(
     value: f64,
     options: f64,
 ) -> f64 {
-    validate_delay(delay_ms);
-    validate_options(options);
-    let signal = super::stream_promises::options_signal(options)
-        .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
-    let has_ref = options_ref(options);
+    let mut validation_error = f64::from_bits(TAG_UNDEFINED);
+    if let Err(err) = validate_delay(delay_ms) {
+        validation_error = err;
+    } else if let Err(err) = validate_options(options) {
+        validation_error = err;
+    }
+    let signal = if JSValue::from_bits(validation_error.to_bits()).is_undefined() {
+        super::stream_promises::options_signal(options)
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+    } else {
+        f64::from_bits(TAG_UNDEFINED)
+    };
+    let has_ref = if JSValue::from_bits(validation_error.to_bits()).is_undefined() {
+        match options_ref(options) {
+            Ok(has_ref) => has_ref,
+            Err(err) => {
+                validation_error = err;
+                true
+            }
+        }
+    } else {
+        true
+    };
     let obj = js_object_alloc(0, 4);
     let obj_value = boxed_ptr(obj as *const u8);
 
-    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 5);
+    let next = js_closure_alloc(timers_promises_interval_next as *const u8, 6);
     js_closure_set_capture_f64(next, 0, value);
     js_closure_set_capture_f64(next, 1, signal);
     js_closure_set_capture_f64(next, 2, delay_ms);
     js_closure_set_capture_f64(next, 3, 0.0);
     js_closure_set_capture_f64(next, 4, has_ref as i32 as f64);
+    js_closure_set_capture_f64(next, 5, validation_error);
     js_object_set_field_by_name(obj, string_key(b"next"), boxed_ptr(next as *const u8));
 
     let ret = js_closure_alloc(timers_promises_interval_return as *const u8, 1);

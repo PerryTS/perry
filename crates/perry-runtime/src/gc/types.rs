@@ -45,7 +45,16 @@ pub const GC_TYPE_NATIVE_POD_VIEW: u8 = 16;
 /// setter mutations propagate through aliasing / function / closure
 /// boundaries (#2089).
 pub const GC_TYPE_DATE_CELL: u8 = 17;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_DATE_CELL;
+/// A `Temporal.*` cell (`TemporalCell { kind, value }`) wrapping a `temporal_rs`
+/// value (Duration / Instant / PlainDate / …). One shared tag with an internal
+/// `TemporalKind` discriminator rather than 9 separate tags (#4687).
+/// Arena-allocated, non-movable (a NaN-boxed pointer held in a plain f64/DOUBLE
+/// local stays valid across GC), and `pointer_free` from the GC's view — the
+/// embedded `temporal_rs` value holds plain integers/`'static` calendar data,
+/// never a JSValue. Heap-owning variants (a `ZonedDateTime`'s IANA timezone
+/// string) are released by the `TemporalCleanup` finalize hook on sweep.
+pub const GC_TYPE_TEMPORAL: u8 = 18;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_TEMPORAL;
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
 pub(super) const MALLOC_KIND_BUCKET_COUNT: usize = GC_TYPE_MAX as usize + 1;
@@ -115,6 +124,10 @@ pub(crate) enum GcMoveHookKind {
     ClosureDynamicProps,
     MapSideTables,
     SetSideTables,
+    /// Rekey a movable exotic cell's address-keyed expando side table after a
+    /// move. Used by `GC_TYPE_PROMISE`, whose `status`/`value` expandos
+    /// (#5142) live in `object::exotic_expando` keyed by the promise address.
+    ExoticExpandoOwner,
 }
 
 #[allow(dead_code)]
@@ -135,6 +148,10 @@ pub(crate) enum GcFinalizeHookKind {
     NativeTypedView,
     NativeHandle,
     NativePodView,
+    /// Drop the embedded `temporal_rs` value in a `GC_TYPE_TEMPORAL` cell so a
+    /// heap-owning variant (e.g. a `ZonedDateTime` IANA timezone string) is
+    /// released when the cell is swept. POD variants drop to a no-op.
+    TemporalCleanup,
 }
 
 #[allow(dead_code)]
@@ -260,7 +277,10 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::MallocTracked,
         false,
-        GcMoveHookKind::None,
+        // #5142: a promise is movable, but user-attached expando properties
+        // (`p.status = …`) live in `object::exotic_expando` keyed by the
+        // promise address — rekey that entry when the promise relocates.
+        GcMoveHookKind::ExoticExpandoOwner,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::PromiseCleanup,
     )),
@@ -449,6 +469,28 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_TEMPORAL,
+        "temporal",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        // Non-movable: like Date, a Temporal value is referenced by a NaN-boxed
+        // pointer kept in a plain f64/DOUBLE local that codegen does NOT
+        // shadow-root. The conservative stack scan keeps it alive; a stable
+        // address means that un-rooted pointer never goes stale across a GC.
+        false,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        // pointer_free: the embedded `temporal_rs` value is plain integers +
+        // `'static` calendar data, never a JSValue. Any Rust-heap it owns is
+        // released by the TemporalCleanup finalize hook, not GC tracing.
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::TemporalCleanup,
+    )),
 ];
 
 #[inline]
@@ -531,6 +573,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         GcMoveHookKind::SetSideTables => {
             crate::set::set_header_moved_for_gc(old_user, new_user);
         }
+        GcMoveHookKind::ExoticExpandoOwner => {
+            crate::object::exotic_expando::exotic_expando_owner_moved(old_user, new_user);
+        }
     }
 }
 
@@ -542,7 +587,8 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
         GcMoveHookKind::None
         | GcMoveHookKind::ClosureDynamicProps
         | GcMoveHookKind::MapSideTables
-        | GcMoveHookKind::SetSideTables => {}
+        | GcMoveHookKind::SetSideTables
+        | GcMoveHookKind::ExoticExpandoOwner => {}
     }
 }
 
@@ -580,9 +626,15 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
                 user_ptr as *mut crate::native_arena::NativePodViewHeader,
             );
         }
+        GcFinalizeHookKind::TemporalCleanup => {
+            crate::temporal::finalize_temporal_cell_for_gc(
+                user_ptr as *mut crate::temporal::TemporalCell,
+            );
+        }
     }
 }
 
+#[cfg(feature = "diagnostics")]
 #[inline]
 pub(super) fn gc_type_name(obj_type: u8) -> &'static str {
     gc_type_info(obj_type).map_or("unknown", |info| info.name)
@@ -764,6 +816,20 @@ pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+// Array carries per-index property descriptors (accessors or custom attrs
+// installed via `Object.defineProperty`, or a non-writable `length`). The
+// raw-f64 numeric fast paths must decline and route through the
+// descriptor-aware element get/set. Bit 10 — bits 7/8/9 are taken by
+// `GC_ARRAY_RAW_F64_LAYOUT` (0x80), `OBJ_FLAG_TYPED_ARRAY_PROTO` (0x100),
+// and `GC_ARRAY_ARGUMENTS_OBJECT` (0x200). Only meaningful for
+// `GC_TYPE_ARRAY`.
+pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
+// #5054: a property/accessor descriptor (or builtin attrs) has been installed
+// on this specific object — the dynamic-write fast path must take the full
+// descriptor-aware OrdinarySet walk. Bit 11; only meaningful for
+// `GC_TYPE_OBJECT`. Set-only (clearing a descriptor leaves it set; the slow
+// path is always correct).
+pub const OBJ_FLAG_HAS_DESCRIPTORS: u16 = 0x800;
 // #2145: this object is a per-kind `<TypedArrayCtor>.prototype` whose
 // `[[Prototype]]` is the shared `%TypedArray%.prototype` intrinsic.
 // `Object.getPrototypeOf(Int8Array.prototype)` returns the cached

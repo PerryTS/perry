@@ -16,12 +16,14 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
 mod arrays;
 mod objects;
 mod stdlib_ffi;
+mod stdlib_ffi_part2;
 mod strings;
 mod strings_part2;
 
 pub use arrays::declare_phase_b_arrays;
 pub use objects::declare_phase_b_objects;
 pub use stdlib_ffi::declare_stdlib_ffi;
+pub(crate) use stdlib_ffi_part2::declare_stdlib_ffi_part2;
 pub use strings::declare_phase_b_strings;
 pub(crate) use strings_part2::declare_phase_b_strings_part2;
 
@@ -48,10 +50,19 @@ pub fn declare_phase1(module: &mut LlModule) {
     // the runtime always provides the symbol; main only emits the call
     // when `app_metadata.app_group` is `Some`.
     module.declare_function("perry_app_group_init", VOID, &[PTR, I32]);
+    // macOS asset-CWD fix: a macOS `.app` launched from Finder starts with
+    // CWD=`/`, but the worker bundles assets into `Contents/Resources/`. The
+    // `main` prelude calls this unconditionally; the runtime symbol no-ops on
+    // non-macOS targets and on binaries that aren't inside an `.app` bundle.
+    module.declare_function("perry_macos_bundle_chdir", VOID, &[]);
     // Function-name registry — populated by `main()` once per top-level
     // named function so `console.log(named)` prints `[Function: named]`
     // instead of `[Function (anonymous)]`. See #1202.
     module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
+    // #4101: register a user function's original source text (keyed by the
+    // same wrapper/closure address as the name) so `fn.toString()` and
+    // `Function.prototype.toString.call(fn)` reconstruct the source.
+    module.declare_function("js_register_function_source", VOID, &[PTR, PTR, I32]);
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);
@@ -66,6 +77,9 @@ pub fn declare_phase1(module: &mut LlModule) {
     module.declare_function("js_console_warn_number", VOID, &[DOUBLE]);
     // console.dir(value, options) — honors options.depth (#1199).
     module.declare_function("js_console_dir_with_options", VOID, &[DOUBLE, DOUBLE]);
+    // console[dynamicKey] — resolve a console method by runtime key string to
+    // the bound native closure (the `console[m](...)` computed-member form).
+    module.declare_function("js_console_method_by_value", DOUBLE, &[DOUBLE]);
 
     // NaN-boxing wrappers (bridge between raw handles and NaN-boxed doubles).
     module.declare_function("js_nanbox_string", DOUBLE, &[I64]);

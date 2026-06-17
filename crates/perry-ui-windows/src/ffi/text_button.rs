@@ -55,6 +55,13 @@ pub extern "C" fn perry_ui_text_set_truncation_mode(handle: i64, mode: i64) {
     widgets::text::set_truncation_mode(handle, mode);
 }
 
+/// Issue #3621 — horizontal text alignment (STATIC SS_LEFT/CENTER/RIGHT).
+/// `alignment`: 0=left, 1=right, 2=center, 3=justified, 4=natural.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) {
+    widgets::text::set_text_alignment(handle, alignment);
+}
+
 /// Set the font family.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {

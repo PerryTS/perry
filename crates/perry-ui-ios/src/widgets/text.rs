@@ -322,6 +322,33 @@ pub fn set_truncation_mode(handle: i64, mode: i64) {
     }
 }
 
+/// Set horizontal text alignment on a Text widget (issue #3621).
+/// The public `alignment` is the canonical Perry/macOS NSTextAlignment
+/// scheme (0=left, 1=right, 2=center, 3=justified, 4=natural). UIKit
+/// swaps the center/right values relative to AppKit, so translate before
+/// calling `setTextAlignment:`.
+pub fn set_text_alignment(handle: i64, alignment: i64) {
+    if let Some(view) = super::get_widget(handle) {
+        unsafe {
+            if let Some(lbl_cls) = AnyClass::get(c"UILabel") {
+                let is_lbl: bool = msg_send![&*view, isKindOfClass: lbl_cls];
+                if !is_lbl {
+                    return;
+                }
+            }
+            // Perry canonical (AppKit values) → UIKit NSTextAlignment.
+            let native: i64 = match alignment {
+                1 => 2, // right
+                2 => 1, // center
+                3 => 3, // justified
+                4 => 4, // natural
+                _ => 0, // left
+            };
+            let _: () = msg_send![&*view, setTextAlignment: native];
+        }
+    }
+}
+
 /// Set text decoration on a UILabel via `NSAttributedString` (issue #185
 /// Phase B). `decoration`: 0=none, 1=underline, 2=strikethrough.
 pub fn set_decoration(handle: i64, decoration: i64) {

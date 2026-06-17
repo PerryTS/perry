@@ -48,6 +48,7 @@ flate2.workspace = true
 tar.workspace = true
 base64.workspace = true
 zip.workspace = true
+zstd.workspace = true
 jsonwebtoken.workspace = true
 semver = "1.0"
 dotenvy = "0.15"
@@ -82,3 +83,4 @@ chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+swc_common.workspace = true

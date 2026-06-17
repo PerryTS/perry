@@ -90,8 +90,10 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 return Ok(Some(handle));
             }
             "static_redirect" => {
-                let url_ptr = if !args.is_empty() {
-                    get_raw_string_ptr(ctx, &args[0])?
+                let url_ptr = if let Some(url_expr) = args.first() {
+                    let url_value = lower_expr(ctx, url_expr)?;
+                    ctx.block()
+                        .call(I64, "js_jsvalue_to_string", &[(DOUBLE, &url_value)])
                 } else {
                     "0".to_string()
                 };
@@ -163,6 +165,21 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
             }
             _ => {}
         }
+    }
+
+    // Web Streams static factories.
+    if module == "readable_stream" && object.is_none() && method == "from" {
+        let iterable = if !args.is_empty() {
+            lower_expr(ctx, &args[0])?
+        } else {
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        };
+        let handle = ctx.block().call(
+            DOUBLE,
+            "js_readable_stream_from_iterable",
+            &[(DOUBLE, &iterable)],
+        );
+        return Ok(Some(handle));
     }
 
     // Everything below needs a receiver.
@@ -947,6 +964,17 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 );
                 return Ok(Some(v));
             }
+            // #4915: byte-stream controller's BYOB request — `{ view,
+            // respond, respondWithNewView }` while a BYOB read is parked,
+            // null otherwise.
+            "byobRequest" => {
+                let v = ctx.block().call(
+                    DOUBLE,
+                    "js_readable_stream_controller_byob_request",
+                    &[(DOUBLE, &recv_handle)],
+                );
+                return Ok(Some(v));
+            }
             _ => return Ok(None),
         }
     }
@@ -954,6 +982,18 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
     if module == "readable_stream_reader" {
         let recv_handle = lower_expr(ctx, recv)?;
         match method {
+            // #4915: `read(view)` is the BYOB form — the runtime fills the
+            // caller-supplied view (default readers ignore the argument).
+            "read" if !args.is_empty() => {
+                let view = lower_expr(ctx, &args[0])?;
+                let blk = ctx.block();
+                let promise = blk.call(
+                    I64,
+                    "js_reader_read_with_view",
+                    &[(DOUBLE, &recv_handle), (DOUBLE, &view)],
+                );
+                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
+            }
             "read" => {
                 let blk = ctx.block();
                 let promise = blk.call(I64, "js_reader_read", &[(DOUBLE, &recv_handle)]);

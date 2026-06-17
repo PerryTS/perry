@@ -457,16 +457,17 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
         eprintln!("Downloaded {} bytes", bytes.len());
     }
 
-    // Extract
-    let decoder = flate2::read::GzDecoder::new(&bytes[..]);
-    let mut archive = tar::Archive::new(decoder);
-    archive
-        .unpack(&tmp_dir)
-        .context("Failed to extract archive")?;
+    // Extract. Windows ships a .zip; every other platform a .tar.gz.
+    extract_archive(&bytes, artifact_name, &tmp_dir).context("Failed to extract archive")?;
 
-    // Find the perry binary in extracted files
+    // Find the perry binary in extracted files. The Windows zip ships `perry.exe`,
+    // so an unsuffixed "perry" lookup would miss it (#4715).
+    #[cfg(target_os = "windows")]
+    let binary_name = "perry.exe";
+    #[cfg(not(target_os = "windows"))]
+    let binary_name = "perry";
     let new_binary =
-        find_binary_in_dir(&tmp_dir, "perry").context("Perry binary not found in archive")?;
+        find_binary_in_dir(&tmp_dir, binary_name).context("Perry binary not found in archive")?;
 
     // Atomic swap
     let backup_path = current_exe.with_extension("old");
@@ -529,6 +530,23 @@ pub fn perform_self_update(verbose: bool) -> Result<()> {
 
     println!("Updated perry: v{} -> v{}", current, cache.latest_version);
 
+    Ok(())
+}
+
+/// Unpack a downloaded release archive into `dest`, dispatching on the artifact
+/// extension. Windows ships a `.zip`; every other platform a `.tar.gz`. Feeding a
+/// zip to the gzip/tar decoder fails with "invalid gzip header" (#4715), so the
+/// extension — not the host OS — decides the decoder.
+fn extract_archive(bytes: &[u8], artifact_name: &str, dest: &std::path::Path) -> Result<()> {
+    if artifact_name.ends_with(".zip") {
+        let reader = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(reader).context("Failed to open zip archive")?;
+        archive.extract(dest).context("Failed to extract zip")?;
+    } else {
+        let decoder = flate2::read::GzDecoder::new(bytes);
+        let mut archive = tar::Archive::new(decoder);
+        archive.unpack(dest).context("Failed to extract tarball")?;
+    }
     Ok(())
 }
 
@@ -615,5 +633,67 @@ mod tests {
         let now = now_rfc3339();
         assert!(now.ends_with('Z'));
         assert!(chrono_parse_rfc3339(&now).is_some());
+    }
+
+    // #4715: the Windows artifact is a .zip, but extraction always ran the
+    // gzip/tar decoder ("invalid gzip header"). Verify a .zip is extracted by
+    // the zip path and a .tar.gz by the tar path.
+    #[test]
+    fn test_extract_zip_artifact() {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zw.start_file::<_, ()>("perry.exe", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zw.write_all(b"binary-bytes").unwrap();
+            zw.finish().unwrap();
+        }
+
+        let tmp = std::env::temp_dir().join(format!("perry-zip-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        extract_archive(&buf, "perry-windows-x86_64.zip", &tmp).expect("zip should extract");
+        let extracted = tmp.join("perry.exe");
+        assert!(extracted.exists(), "perry.exe should be extracted");
+        assert_eq!(fs::read(&extracted).unwrap(), b"binary-bytes");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_extract_targz_artifact() {
+        use std::io::Write;
+        let mut tar_buf = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_buf);
+            let data = b"binary-bytes";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "perry", &data[..])
+                .unwrap();
+            builder.finish().unwrap();
+        }
+        let mut gz_buf = Vec::new();
+        {
+            let mut enc =
+                flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::default());
+            enc.write_all(&tar_buf).unwrap();
+            enc.finish().unwrap();
+        }
+
+        let tmp = std::env::temp_dir().join(format!("perry-tgz-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        extract_archive(&gz_buf, "perry-linux-x86_64.tar.gz", &tmp)
+            .expect("tarball should extract");
+        assert!(tmp.join("perry").exists(), "perry should be extracted");
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

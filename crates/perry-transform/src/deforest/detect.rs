@@ -65,6 +65,29 @@ pub fn detect_producers(module: &Module) -> HashMap<FuncId, ProducerInfo> {
         }
     }
     candidates.retain(|id, _| !unsupported_call.contains(id));
+    if candidates.is_empty() {
+        return candidates;
+    }
+    // Fourth pass: bail on any candidate referenced inside a closure
+    // body. Neither the detection scans above nor the phase-3 call-site
+    // rewriter descend into closure bodies, so a producer called from
+    // inside a closure would have its signature rewritten while the
+    // in-closure call site kept the original arity — a mismatch that
+    // miscompiles to a SIGSEGV. Refs #5136.
+    let mut in_closure: HashSet<FuncId> = HashSet::new();
+    for func in &module.functions {
+        scan_producers_used_in_closures(&func.body, &candidates, &mut in_closure);
+    }
+    scan_producers_used_in_closures(&module.init, &candidates, &mut in_closure);
+    for class in &module.classes {
+        for m in &class.methods {
+            scan_producers_used_in_closures(&m.body, &candidates, &mut in_closure);
+        }
+        if let Some(ctor) = &class.constructor {
+            scan_producers_used_in_closures(&ctor.body, &candidates, &mut in_closure);
+        }
+    }
+    candidates.retain(|id, _| !in_closure.contains(id));
     candidates
 }
 

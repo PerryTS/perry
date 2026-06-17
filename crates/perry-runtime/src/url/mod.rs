@@ -12,6 +12,7 @@ pub mod node_compat;
 pub mod parse;
 pub mod search_params;
 pub mod url_class;
+pub mod url_pattern;
 
 // Explicit named re-exports for all public FFI symbols + helpers used by the
 // rest of the runtime / codegen layer. Globs are intentionally avoided so
@@ -49,6 +50,9 @@ pub use self::url_class::{
     js_url_new_with_base, js_url_parse, js_url_parse_with_base, js_url_set_hash,
     js_url_set_hostname, js_url_set_href, js_url_set_password, js_url_set_pathname,
     js_url_set_port, js_url_set_protocol, js_url_set_search, js_url_set_username,
+};
+pub use self::url_pattern::{
+    js_url_pattern_constructor_call, js_url_pattern_exec, js_url_pattern_new, js_url_pattern_test,
 };
 
 // ---------------------------------------------------------------------------
@@ -177,9 +181,16 @@ pub(crate) fn string_header_to_string(value: *mut crate::StringHeader) -> String
 /// means for them (the hostname setter leaves the host unchanged; the
 /// `domainTo*` helpers return `""`), matching Node.
 pub(crate) fn whatwg_canonicalize_host(host: &str) -> Option<String> {
-    url::Url::parse(&format!("http://{host}/"))
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
+    #[cfg(feature = "url-engine")]
+    {
+        url::Url::parse(&format!("http://{host}/"))
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+    }
+    // URL engine gated off: no WHATWG host parser, so pass the host through
+    // unchanged (the hand-rolled URL paths handle the common cases).
+    #[cfg(not(feature = "url-engine"))]
+    Some(host.to_string())
 }
 
 /// True when `host` is a canonical dotted-quad IPv4 literal. Used by

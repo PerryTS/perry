@@ -1,6 +1,106 @@
 //! Generator-function state-machine lowering and async step-driver construction.
 
 use super::*;
+use perry_hir::walker::walk_expr_children;
+
+/// For async generators, `yield E` evaluates as `AsyncGeneratorYield(?
+/// Await(E))` — the operand is awaited (one microtask tick) before being
+/// delivered to the consumer. So `yield Promise.reject(x)` awaits the rejection
+/// and throws `x` into the generator, and `yield Promise.resolve(v)` yields `v`,
+/// not the promise. Perry yielded the raw operand. This pass rewrites every
+/// statement-level non-delegate `yield E` (the only positions left after
+/// `hoist_yields`) into `let __ayield = await E; yield __ayield`. The `await`
+/// lowers to its own suspension state via the existing await machinery; the temp
+/// is a cross-state local that `collect_hoisted_vars` boxes. `yield*` delegation
+/// is left untouched — it awaits each delegated step through `delegate_await`.
+fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_id: &mut LocalId) {
+    let mut out: Vec<Stmt> = Vec::with_capacity(stmts.len());
+    for mut stmt in std::mem::take(stmts) {
+        // Recurse into nested control-flow bodies first (mirrors
+        // `collect_vars_recursive`). Nested closures are not descended — their
+        // yields belong to inner generators.
+        match &mut stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                await_async_generator_yield_operands(then_branch, next_id);
+                if let Some(eb) = else_branch {
+                    await_async_generator_yield_operands(eb, next_id);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                await_async_generator_yield_operands(body, next_id);
+            }
+            Stmt::For { body, .. } => await_async_generator_yield_operands(body, next_id),
+            Stmt::Labeled { body, .. } => {
+                let mut wrapped = vec![std::mem::replace(body.as_mut(), Stmt::Break)];
+                await_async_generator_yield_operands(&mut wrapped, next_id);
+                // A labeled statement wraps a single loop/block (never a bare
+                // yield), so the rewrite only touches its inner body and the
+                // wrapper stays a single statement.
+                if let Some(inner) = wrapped.pop() {
+                    *body.as_mut() = inner;
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                await_async_generator_yield_operands(body, next_id);
+                if let Some(c) = catch {
+                    await_async_generator_yield_operands(&mut c.body, next_id);
+                }
+                if let Some(f) = finally {
+                    await_async_generator_yield_operands(f, next_id);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    await_async_generator_yield_operands(&mut case.body, next_id);
+                }
+            }
+            _ => {}
+        }
+
+        // Pull the non-delegate yield operand into a preceding `await`.
+        let yield_value: Option<&mut Option<Box<Expr>>> = match &mut stmt {
+            Stmt::Expr(Expr::Yield {
+                value,
+                delegate: false,
+            }) => Some(value),
+            Stmt::Let {
+                init:
+                    Some(Expr::Yield {
+                        value,
+                        delegate: false,
+                    }),
+                ..
+            } => Some(value),
+            Stmt::Return(Some(Expr::Yield {
+                value,
+                delegate: false,
+            })) => Some(value),
+            _ => None,
+        };
+        if let Some(value) = yield_value {
+            let operand = value.take().map(|b| *b).unwrap_or(Expr::Undefined);
+            let tmp = alloc_local(next_id);
+            *value = Some(Box::new(Expr::LocalGet(tmp)));
+            out.push(Stmt::Let {
+                id: tmp,
+                name: format!("__ayield_{}", tmp),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Await(Box::new(operand))),
+            });
+        }
+        out.push(stmt);
+    }
+    *stmts = out;
+}
 
 /// Transform a single generator function into a state machine.
 pub fn transform_generator_function(
@@ -14,6 +114,7 @@ pub fn transform_generator_function(
         next_func_id,
         &[],
         &[],
+        false,
         false,
         None,
     );
@@ -37,8 +138,13 @@ pub fn transform_generator_function_with_extra_captures(
     extra_captures: &[LocalId],
     extra_mutable_captures: &[LocalId],
     captures_this: bool,
+    captures_new_target: bool,
     enclosing_class: Option<String>,
 ) {
+    // Generator bodies run later inside synthesized step closures, so direct
+    // `this` reads need the receiver from the original generator call.
+    let captures_this = captures_this || generator_body_uses_call_this(&func.body);
+
     // Remember whether this was an async generator (`async function*`).
     // Async generators are still lowered via the same state-machine
     // transform, but:
@@ -60,6 +166,27 @@ pub fn transform_generator_function_with_extra_captures(
     let is_async_generator = func.is_async;
     func.is_async = false;
 
+    // Spec: generator/async-generator parameter binding
+    // (FunctionDeclarationInstantiation) runs *synchronously* when the function
+    // is called — before the generator object is created — so an
+    // iterator/RequireObjectCoercible/TDZ error during destructuring or default
+    // evaluation throws at call time, not on the first `.next()`. Lowering
+    // prepends the param prologue (default guards + destructuring binding) to
+    // the body; here we lift those leading statements out so they run in the
+    // outer wrapper (run-at-call) rather than state 0 of the state machine.
+    // `gen_prologue_len` returns 0 for generators with no destructuring/default
+    // params, leaving this fully inert for the common case.
+    let prologue_len = super::gen_prologue_len(func.id);
+    let param_prologue: Vec<Stmt> = if prologue_len > 0 && prologue_len <= func.body.len() {
+        func.body.drain(..prologue_len).collect()
+    } else {
+        Vec::new()
+    };
+    // Locals the prologue binds (destructured targets + scaffolding temps). They
+    // are written in the outer wrapper but read by the state machine, so they
+    // must be boxed captures like any other cross-state local.
+    let prologue_hoist = collect_hoisted_vars(&param_prologue);
+
     // #321: hoist `yield` / `yield*` that live inside a larger expression
     // (`return (yield 1) + (yield 2)`, call args, array/object literals, etc.)
     // into ordered `let __ygen_N = yield E;` temps so the linearizer below only
@@ -73,9 +200,25 @@ pub fn transform_generator_function_with_extra_captures(
     // in `extra_local_ids`.
     hoist_yields_in_stmts(&mut func.body, next_local_id);
 
+    // Async generators await each `yield` operand before delivering it (spec
+    // `AsyncGeneratorYield(? Await(value))`). Run after `hoist_yields` so every
+    // remaining yield is at a statement-level position this pass recognises.
+    if is_async_generator {
+        await_async_generator_yield_operands(&mut func.body, next_local_id);
+    }
+
     let state_id = alloc_local(next_local_id);
     let done_id = alloc_local(next_local_id);
     let sent_id = alloc_local(next_local_id); // value passed by caller via next(val)
+    let executing_id = alloc_local(next_local_id);
+    // #4438 B2-finally: pending abrupt-completion record for routing through a
+    // YIELDING finally. `pending_type`: 0 = none, 1 = throw, 2 = return.
+    // `pending_value`: the thrown error / returned value. Set when abrupt
+    // completion routes into a finally; re-raised at the finally's completion
+    // check. (Sync generators only — async never sets these, so the appended
+    // completion checks are inert on the async path.)
+    let pending_type_id = alloc_local(next_local_id);
+    let pending_value_id = alloc_local(next_local_id);
 
     // Collect all states from the generator body
     let mut states: Vec<State> = Vec::new();
@@ -89,6 +232,15 @@ pub fn transform_generator_function_with_extra_captures(
     // The .throw() closure uses that interval to route a rejected await to
     // the matching catch handler instead of always using the first catch.
     let mut catches: Vec<CatchRoute> = Vec::new();
+    // #4374: finally blocks collected during linearization, so the
+    // .return()/.throw() closures can run pending finallys on abrupt
+    // completion. Innermost finallys are pushed first (the recursion into a
+    // try body collects nested finallys before the enclosing one).
+    let mut finallys: Vec<FinallyRoute> = Vec::new();
+    // Tell the linearizer whether `yield*` should delegate through the
+    // async-iterator protocol (await each delegated `next()`); see the `yield*`
+    // arms in `linearize.rs`.
+    super::linearize::set_linearize_async_generator(is_async_generator);
     linearize_body(
         &func.body,
         &mut states,
@@ -98,6 +250,7 @@ pub fn transform_generator_function_with_extra_captures(
         next_local_id,
         sent_id,
         &mut catches,
+        &mut finallys,
     );
     let extra_local_ids: Vec<LocalId> = (local_id_before..*next_local_id).collect();
 
@@ -108,11 +261,37 @@ pub fn transform_generator_function_with_extra_captures(
         exit: StateExit::Done,
     });
 
+    // #4438 B2-finally: whether any yielding finally needs the pending-completion
+    // record + routing machinery (kept off for generators without one).
+    let has_yielding_finally = finallys.iter().any(|f| f.finally_entry_state.is_some());
+
+    // #4438 B2-finally: append the completion-resume check to each yielding
+    // finally's completion-check state. After the finally body runs (on either
+    // the happy path or an abrupt completion routed into it), re-raise a pending
+    // throw/return; on the normal path (pending_type == 0) it's inert and the
+    // state falls through to post-finally. Sync only in practice — async never
+    // sets `pending_type`, so the checks are dead on the async path.
+    if !is_async_generator {
+        let resume = build_completion_resume_stmts(pending_type_id, pending_value_id, done_id);
+        for route in &finallys {
+            if let Some(cc) = route.completion_check_state {
+                if let Some(state) = states.iter_mut().find(|s| s.num == cc) {
+                    state.body.extend(resume.iter().cloned());
+                }
+            }
+        }
+    }
+
     // Collect hoisted var IDs first so we know which Lets to rewrite
-    let hoisted_ids: std::collections::HashSet<LocalId> = collect_hoisted_vars(&func.body)
-        .iter()
-        .map(|(id, _, _)| *id)
-        .collect();
+    let hoisted_for_rewrite = collect_hoisted_vars(&func.body);
+    let mut hoisted_ids: std::collections::HashSet<LocalId> =
+        hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
+    // The lifted param prologue defines locals (destructured targets + temps)
+    // that the state machine reads; treat them as hoisted so their `Let`s route
+    // through the prealloc box (`js_box_set`) instead of shadowing the capture.
+    for (id, _, _) in &prologue_hoist {
+        hoisted_ids.insert(*id);
+    }
 
     // Rewrite `Let { id, init: Some(expr) }` → `Expr(LocalSet(id, expr))` for hoisted
     // variables inside state bodies. Without this, the Let creates a fresh local that
@@ -131,9 +310,10 @@ pub fn transform_generator_function_with_extra_captures(
 
     // Build the if-chain inside while(true)
     let mut while_body: Vec<Stmt> = Vec::new();
-    for state in &states {
-        let mut case_body = state.body.clone();
-        match &state.exit {
+    for state in states {
+        let State { num, body, exit } = state;
+        let mut case_body = body;
+        match exit {
             StateExit::Yield { value, next_state } => {
                 // #1047: a user `return X` inside this state body — at
                 // any depth — must terminate the whole async function,
@@ -153,9 +333,9 @@ pub fn transform_generator_function_with_extra_captures(
                 }
                 case_body.push(Stmt::Expr(Expr::LocalSet(
                     state_id,
-                    Box::new(Expr::Number(*next_state as f64)),
+                    Box::new(Expr::Number(next_state as f64)),
                 )));
-                case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
+                case_body.push(Stmt::Return(Some(make_iter_result(value, false))));
             }
             StateExit::Goto(next_state) => {
                 // #1196: a user `return X` inside this state body — at any
@@ -178,7 +358,7 @@ pub fn transform_generator_function_with_extra_captures(
                 }
                 case_body.push(Stmt::Expr(Expr::LocalSet(
                     state_id,
-                    Box::new(Expr::Number(*next_state as f64)),
+                    Box::new(Expr::Number(next_state as f64)),
                 )));
                 case_body.push(Stmt::Continue);
             }
@@ -228,7 +408,7 @@ pub fn transform_generator_function_with_extra_captures(
             condition: Expr::Compare {
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(state_id)),
-                right: Box::new(Expr::Number(state.num as f64)),
+                right: Box::new(Expr::Number(num as f64)),
             },
             then_branch: case_body,
             else_branch: None,
@@ -245,8 +425,77 @@ pub fn transform_generator_function_with_extra_captures(
     // The next() closure parameter — receives the value from next(val) calls
     let next_param_id = alloc_local(next_local_id);
 
+    // #4374: clone the state-dispatch loop so the .throw() closure can
+    // *continue* the state machine after running a catch handler — running
+    // the inlined finally and proceeding to the next yield / completion,
+    // instead of returning {value: undefined, done: false} and deferring to
+    // the next .next(). Only the sync-generator .throw() path uses this.
+    let while_body_for_throw = while_body.clone();
+    // #4438 B2-finally: the `.return()` closure needs the same continuation loop
+    // when it routes into a yielding finally (so the finally's `yield`s suspend).
+    let while_body_for_return = while_body.clone();
+
+    // #4438: for sync generators, wrap each state-dispatch loop body in a real
+    // try/catch so a `throw` *executing inside a try block during dispatch* is
+    // caught and routed to the matching catch/finally (or runs pending finally +
+    // completes the generator when unhandled). This applies to the `.next()`
+    // loop AND the `.throw()`/`.return()` continuation loops — e.g. a `catch`
+    // that rethrows must still run a non-yielding `finally` on the way out.
+    let has_state_based_catch = catches.iter().any(|r| r.catch_entry_state.is_some());
+    let has_inlineable_finally = finallys.iter().any(|r| !r.has_yields);
+    let wrap_dispatch = !is_async_generator
+        && (has_state_based_catch || has_inlineable_finally || has_yielding_finally);
+    let dispatch_body = if wrap_dispatch {
+        let disp_err_id = alloc_local(next_local_id);
+        wrap_dispatch_loop(
+            while_body,
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            pending_type_id,
+            pending_value_id,
+            disp_err_id,
+            &hoisted_ids,
+        )
+    } else {
+        while_body
+    };
+    let while_body_for_throw = if wrap_dispatch {
+        let disp_err_id = alloc_local(next_local_id);
+        wrap_dispatch_loop(
+            while_body_for_throw,
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            pending_type_id,
+            pending_value_id,
+            disp_err_id,
+            &hoisted_ids,
+        )
+    } else {
+        while_body_for_throw
+    };
+    let while_body_for_return = if wrap_dispatch {
+        let disp_err_id = alloc_local(next_local_id);
+        wrap_dispatch_loop(
+            while_body_for_return,
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            pending_type_id,
+            pending_value_id,
+            disp_err_id,
+            &hoisted_ids,
+        )
+    } else {
+        while_body_for_return
+    };
+
     // Build next() method body
-    let mut next_body = vec![
+    let mut next_resume_body = vec![
         // __sent = <param from next(val)>
         Stmt::Expr(Expr::LocalSet(
             sent_id,
@@ -261,19 +510,33 @@ pub fn transform_generator_function_with_extra_captures(
         // while (true) { if-chain }
         Stmt::While {
             condition: Expr::Bool(true),
-            body: while_body,
+            body: dispatch_body,
         },
     ];
-    if is_async_generator {
-        wrap_returns_in_promise(&mut next_body);
-    }
 
     // Build the new function body
     let mut new_body: Vec<Stmt> = Vec::new();
 
     // Hoist variable declarations from the original body — collected
     // here (before the prealloc emit) so the prealloc set is complete.
-    let hoisted = collect_hoisted_vars(&func.body);
+    let mut hoisted = hoisted_for_rewrite;
+    // Box + capture the lifted prologue's locals so the state machine can read
+    // the destructured param values it bound in the outer wrapper.
+    for v in &prologue_hoist {
+        if !hoisted.iter().any(|(id, _, _)| *id == v.0) {
+            hoisted.push(v.clone());
+        }
+    }
+    for route in &catches {
+        if let (Some(param_id), Some(param_name)) = (route.param_id, route.param_name.as_ref()) {
+            if !hoisted.iter().any(|(id, _, _)| *id == param_id) {
+                // Lifted catch routes run in the async throw arm, outside
+                // codegen's normal Stmt::Try catch binding path, so their
+                // params need cross-state boxes.
+                hoisted.push((param_id, param_name.clone(), Type::Any));
+            }
+        }
+    }
 
     // Issue #1029: the state-machine internals (`state`, `done`, `sent`)
     // plus hoisted user-vars and the transform-allocated `extra_local_ids`
@@ -306,7 +569,14 @@ pub fn transform_generator_function_with_extra_captures(
     // box. Net effect per call: one js_box_alloc + one js_box_set per id,
     // versus the pre-fix path which did one js_box_alloc inside the Let
     // (same cost, but the cache then hit on stale captures).
-    let mut prealloc_ids: Vec<LocalId> = vec![state_id, done_id, sent_id];
+    // #4438 B2-finally: only allocate/box the pending-completion record when a
+    // yielding finally exists (otherwise it's unused — keep other generators'
+    // box set unchanged).
+    let mut prealloc_ids: Vec<LocalId> = vec![state_id, done_id, sent_id, executing_id];
+    if has_yielding_finally {
+        prealloc_ids.push(pending_type_id);
+        prealloc_ids.push(pending_value_id);
+    }
     for (var_id, _, _) in &hoisted {
         prealloc_ids.push(*var_id);
     }
@@ -334,6 +604,32 @@ pub fn transform_generator_function_with_extra_captures(
         mutable: true,
         init: Some(Expr::Bool(false)),
     });
+
+    new_body.push(Stmt::Let {
+        id: executing_id,
+        name: "__gen_executing".to_string(),
+        ty: Type::Boolean,
+        mutable: true,
+        init: Some(Expr::Bool(false)),
+    });
+
+    // #4438 B2-finally: let __pending_type = 0; let __pending_value = undefined
+    if has_yielding_finally {
+        new_body.push(Stmt::Let {
+            id: pending_type_id,
+            name: "__gen_pending_type".to_string(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Number(0.0)),
+        });
+        new_body.push(Stmt::Let {
+            id: pending_value_id,
+            name: "__gen_pending_value".to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        });
+    }
 
     // Re-emit hoisted Let stubs (prealloc already covered the boxes;
     // these Lets now route through the prealloc-boxes path and just
@@ -367,9 +663,30 @@ pub fn transform_generator_function_with_extra_captures(
         init: Some(Expr::Undefined),
     });
 
+    // Run the lifted parameter prologue in the outer wrapper, after the box
+    // stubs are in place (so its destructured-target `Let`s route to
+    // `js_box_set` on the prealloc'd boxes the state machine captures) and
+    // before the generator object is built/returned. Any iterator /
+    // RequireObjectCoercible / TDZ error here propagates synchronously out of
+    // the call, matching spec FunctionDeclarationInstantiation order.
+    if !param_prologue.is_empty() {
+        let mut prologue = param_prologue;
+        rewrite_hoisted_lets_in_stmts(&mut prologue, &hoisted_ids);
+        new_body.extend(prologue);
+    }
+
     // Build captures: state, done, sent, params, hoisted vars, extra locals
-    let mut captures = vec![state_id, done_id, sent_id];
-    let mut mutable_captures = vec![state_id, done_id, sent_id];
+    let mut captures = vec![state_id, done_id, sent_id, executing_id];
+    let mut mutable_captures = vec![state_id, done_id, sent_id, executing_id];
+    // #4438 B2-finally: the pending-completion record is read/written across the
+    // next/throw/return closures, so capture it by reference like the other
+    // state-machine internals (only when a yielding finally uses it).
+    if has_yielding_finally {
+        captures.push(pending_type_id);
+        captures.push(pending_value_id);
+        mutable_captures.push(pending_type_id);
+        mutable_captures.push(pending_value_id);
+    }
     for param in &func.params {
         captures.push(param.id);
     }
@@ -406,78 +723,7 @@ pub fn transform_generator_function_with_extra_captures(
     // separate `next_closure`. Defer building `next_closure` so we can
     // hand the raw `next_body` to `build_async_step_driver_direct`.
 
-    // Build .return(value) closure — immediately marks done and returns {value, done: true}
-    let return_param_id = alloc_local(next_local_id);
-    let return_func_id_val = {
-        let id = *next_func_id;
-        *next_func_id += 1;
-        id
-    };
-    let mut return_body: Vec<Stmt> = vec![
-        Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-        Stmt::Return(Some(make_iter_result(
-            Expr::LocalGet(return_param_id),
-            true,
-        ))),
-    ];
-    if is_async_generator {
-        wrap_returns_in_promise(&mut return_body);
-    }
-    let return_closure = Expr::Closure {
-        func_id: return_func_id_val,
-        params: vec![perry_hir::Param {
-            id: return_param_id,
-            name: "__ret_val".to_string(),
-            ty: Type::Any,
-            is_rest: false,
-            default: None,
-            decorators: Vec::new(),
-        }],
-        return_type: Type::Any,
-        body: return_body,
-        captures: captures.clone(),
-        mutable_captures: mutable_captures.clone(),
-        captures_this,
-        enclosing_class: enclosing_class.clone(),
-        is_strict: func.is_strict,
-        is_async: false,
-        is_generator: false,
-    };
-
-    // Build .throw(error) closure. Each catch route owns the state interval
-    // for the try body it protects, so multiple independent try/catch regions
-    // in the same async function resume at the correct post-catch state.
     let throw_param_id = alloc_local(next_local_id);
-    let throw_func_id_val = {
-        let id = *next_func_id;
-        *next_func_id += 1;
-        id
-    };
-    let mut throw_body = build_async_throw_body(&catches, state_id, throw_param_id, &hoisted_ids);
-    if is_async_generator {
-        wrap_returns_in_promise(&mut throw_body);
-    }
-    let throw_closure = Expr::Closure {
-        func_id: throw_func_id_val,
-        params: vec![perry_hir::Param {
-            id: throw_param_id,
-            name: "__throw_val".to_string(),
-            ty: Type::Any,
-            is_rest: false,
-            default: None,
-            decorators: Vec::new(),
-        }],
-        return_type: Type::Any,
-        body: throw_body.clone(),
-        captures: captures.clone(),
-        mutable_captures: mutable_captures.clone(),
-        captures_this,
-        enclosing_class: enclosing_class.clone(),
-        is_strict: func.is_strict,
-        is_async: false,
-        is_generator: false,
-    };
-
     if func.was_plain_async {
         // Issue #256: this function was originally a plain async function;
         // the async_to_generator pre-pass rewrote await→yield. Wrap the
@@ -508,9 +754,9 @@ pub fn transform_generator_function_with_extra_captures(
         let throw_routes_for_step = if catches.is_empty() {
             None
         } else {
-            Some((catches.clone(), state_id, hoisted_ids.clone()))
+            Some((catches, state_id, hoisted_ids.clone()))
         };
-        let mut next_body_for_step = next_body;
+        let mut next_body_for_step = next_resume_body;
         rewrite_iter_results_in_stmts(&mut next_body_for_step);
         let wrapper_stmts = build_async_step_driver_direct(
             next_body_for_step,
@@ -523,6 +769,7 @@ pub fn transform_generator_function_with_extra_captures(
             next_local_id,
             next_func_id,
             captures_this,
+            captures_new_target,
             enclosing_class.clone(),
             func.is_strict,
         );
@@ -535,7 +782,187 @@ pub fn transform_generator_function_with_extra_captures(
         // The flag is safe to keep set — the generator transform only
         // checks it here, and codegen only reads it.
     } else {
+        // Build .return(value) closure — immediately marks done and returns {value, done: true}
+        let return_param_id = alloc_local(next_local_id);
+        let return_func_id_val = {
+            let id = *next_func_id;
+            *next_func_id += 1;
+            id
+        };
+        // #4374: `.return(v)` on a generator suspended inside a `try` must run
+        // the pending `finally` blocks (innermost first) before completing.
+        let mut return_resume_body: Vec<Stmt> = Vec::new();
+        // Already-done generators just complete with {value: v, done: true} —
+        // no finally re-run (the finally already ran on normal completion).
+        return_resume_body.push(Stmt::If {
+            condition: Expr::LocalGet(done_id),
+            then_branch: vec![Stmt::Return(Some(make_iter_result(
+                Expr::LocalGet(return_param_id),
+                true,
+            )))],
+            else_branch: None,
+        });
+        // #4445: mark the generator "executing" while the resume runs (the
+        // executing guard rejects a re-entrant resume).
+        return_resume_body.push(Stmt::Expr(Expr::LocalSet(
+            executing_id,
+            Box::new(Expr::Bool(true)),
+        )));
+        // Unhandled path: mark done, run pending non-yielding finallys, return
+        // {v, true}. A finally that itself `return`s supersedes `v` (rewritten to
+        // an iter-result return inside build_finally_run_stmts); a finally that
+        // throws propagates out of this closure.
+        let mut return_fallback = vec![Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        ))];
+        return_fallback.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_fallback.push(Stmt::Return(Some(make_iter_result(
+            Expr::LocalGet(return_param_id),
+            true,
+        ))));
+        if !is_async_generator && has_yielding_finally {
+            // #4438 B2-finally: route `.return(v)` into the innermost enclosing
+            // yielding finally (record the pending return + jump in), then fall
+            // through to the continuation loop so the finally's `yield`s suspend;
+            // its completion check re-raises the return. Catches don't catch a
+            // return completion, so only finally routes apply.
+            return_resume_body.extend(build_abrupt_routing(
+                &catches,
+                &finallys,
+                state_id,
+                pending_type_id,
+                pending_value_id,
+                &Expr::LocalGet(return_param_id),
+                false,
+                2.0,
+                false,
+                false,
+                return_fallback,
+            ));
+            return_resume_body.push(Stmt::While {
+                condition: Expr::Bool(true),
+                body: while_body_for_return,
+            });
+        } else {
+            return_resume_body.extend(return_fallback);
+        }
+        // #4445: wrap with the executing guard + a catch that clears `executing`
+        // and marks `done` on any escaping throw (also wraps returns in a Promise
+        // for async generators).
+        let return_catch_id = alloc_local(next_local_id);
+        let return_body = wrap_generator_resume_body(
+            return_resume_body,
+            executing_id,
+            done_id,
+            return_catch_id,
+            is_async_generator,
+        );
+        let return_closure = Expr::Closure {
+            func_id: return_func_id_val,
+            params: vec![perry_hir::Param {
+                id: return_param_id,
+                name: "__ret_val".to_string(),
+                ty: Type::Any,
+                is_rest: false,
+                default: None,
+                decorators: Vec::new(),
+                arguments_object: None,
+            }],
+            return_type: Type::Any,
+            body: return_body,
+            captures: captures.clone(),
+            mutable_captures: mutable_captures.clone(),
+            captures_this,
+            captures_new_target: false,
+            enclosing_class: enclosing_class.clone(),
+            is_arrow: false,
+            is_strict: func.is_strict,
+            is_async: false,
+            is_generator: false,
+        };
+
+        // Build .throw(error) closure. Each catch route owns the state interval
+        // for the try body it protects, so multiple independent try/catch regions
+        // in the same async function resume at the correct post-catch state.
+        let throw_func_id_val = {
+            let id = *next_func_id;
+            *next_func_id += 1;
+            id
+        };
+        // #4374: sync generators continue the state machine after a catch
+        // (running the inlined finally + reaching the next yield/completion);
+        // async generators keep the existing deferred-resume behavior to stay
+        // byte-identical on the async path.
+        let throw_continuation = if is_async_generator {
+            None
+        } else {
+            Some(while_body_for_throw)
+        };
+        // #4374: fresh binding for the inner catch that re-runs a try's finally
+        // when its catch handler itself throws (catch-rethrow-with-finally).
+        let inner_catch_id = alloc_local(next_local_id);
+        let mut throw_resume_body = vec![Stmt::Expr(Expr::LocalSet(
+            executing_id,
+            Box::new(Expr::Bool(true)),
+        ))];
+        throw_resume_body.extend(build_async_throw_body(
+            &catches,
+            &finallys,
+            state_id,
+            done_id,
+            throw_param_id,
+            inner_catch_id,
+            pending_type_id,
+            pending_value_id,
+            &hoisted_ids,
+            throw_continuation,
+        ));
+        let throw_catch_id = alloc_local(next_local_id);
+        let throw_body = wrap_generator_resume_body(
+            throw_resume_body,
+            executing_id,
+            done_id,
+            throw_catch_id,
+            is_async_generator,
+        );
+        let throw_closure = Expr::Closure {
+            func_id: throw_func_id_val,
+            params: vec![perry_hir::Param {
+                id: throw_param_id,
+                name: "__throw_val".to_string(),
+                ty: Type::Any,
+                is_rest: false,
+                default: None,
+                decorators: Vec::new(),
+                arguments_object: None,
+            }],
+            return_type: Type::Any,
+            body: throw_body,
+            captures: captures.clone(),
+            mutable_captures: mutable_captures.clone(),
+            captures_this,
+            captures_new_target: false,
+            enclosing_class: enclosing_class.clone(),
+            is_arrow: false,
+            is_strict: func.is_strict,
+            is_async: false,
+            is_generator: false,
+        };
+
         // Plain generator: build the iterator object and return it directly.
+        let next_catch_id = alloc_local(next_local_id);
+        next_resume_body.insert(
+            2,
+            Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(true)))),
+        );
+        let next_body = wrap_generator_resume_body(
+            next_resume_body,
+            executing_id,
+            done_id,
+            next_catch_id,
+            is_async_generator,
+        );
         let next_closure = Expr::Closure {
             func_id: next_func_id_val,
             params: vec![perry_hir::Param {
@@ -545,13 +972,16 @@ pub fn transform_generator_function_with_extra_captures(
                 is_rest: false,
                 default: None,
                 decorators: Vec::new(),
+                arguments_object: None,
             }],
             return_type: Type::Any,
             body: next_body,
             captures: captures.clone(),
             mutable_captures: mutable_captures.clone(),
             captures_this,
+            captures_new_target: false,
             enclosing_class: enclosing_class.clone(),
+            is_arrow: false,
             is_strict: func.is_strict,
             is_async: false,
             is_generator: false,
@@ -561,11 +991,241 @@ pub fn transform_generator_function_with_extra_captures(
             ("return".to_string(), return_closure),
             ("throw".to_string(), throw_closure),
         ]);
-        new_body.push(Stmt::Return(Some(iter_obj)));
+        // #4141: wire the instance's `[[Prototype]]` chain
+        // (`gen() → g.prototype → %Generator.prototype%`) so reflective
+        // access via the instance (`Object.getPrototypeOf(Object.getPrototypeOf(
+        // gen()))`) reaches the brand-checked prototype methods. The object
+        // literal is hidden inside the wrapper in return position; escape
+        // analysis leaves the unanalyzed allocation on the heap (correct — a
+        // generator object always escapes via the return).
+        let linked = Expr::LinkGeneratorPrototype {
+            obj: Box::new(iter_obj),
+            is_async: is_async_generator,
+        };
+        new_body.push(Stmt::Return(Some(linked)));
     }
 
     func.body = new_body;
     func.is_generator = false;
+}
+
+fn generator_body_uses_call_this(body: &[Stmt]) -> bool {
+    body.iter().any(generator_stmt_uses_call_this)
+}
+
+fn wrap_generator_resume_body(
+    mut body: Vec<Stmt>,
+    executing_id: LocalId,
+    done_id: LocalId,
+    catch_id: LocalId,
+    is_async_generator: bool,
+) -> Vec<Stmt> {
+    prepend_executing_clear_before_returns(&mut body, executing_id);
+    if is_async_generator {
+        wrap_returns_in_promise(&mut body);
+    }
+
+    vec![
+        generator_executing_guard(executing_id, is_async_generator),
+        Stmt::Try {
+            body,
+            catch: Some(CatchClause {
+                param: Some((catch_id, "__gen_exec_e".to_string())),
+                body: vec![
+                    Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                    Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
+                    generator_resume_rethrow(Expr::LocalGet(catch_id), is_async_generator),
+                ],
+            }),
+            finally: None,
+        },
+    ]
+}
+
+fn generator_executing_guard(executing_id: LocalId, is_async_generator: bool) -> Stmt {
+    Stmt::If {
+        condition: Expr::LocalGet(executing_id),
+        then_branch: vec![generator_resume_rethrow(
+            generator_executing_type_error(),
+            is_async_generator,
+        )],
+        else_branch: None,
+    }
+}
+
+fn generator_resume_rethrow(value: Expr, is_async_generator: bool) -> Stmt {
+    if is_async_generator {
+        Stmt::Return(Some(promise_reject(value)))
+    } else {
+        Stmt::Throw(value)
+    }
+}
+
+fn generator_executing_type_error() -> Expr {
+    Expr::TypeErrorNew(Box::new(Expr::String(
+        "Generator is already executing".to_string(),
+    )))
+}
+
+fn promise_reject(value: Expr) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::GlobalGet(0)),
+            property: "reject".to_string(),
+        }),
+        args: vec![value],
+        type_args: vec![],
+        byte_offset: 0,
+    }
+}
+
+fn prepend_executing_clear_before_returns(stmts: &mut Vec<Stmt>, executing_id: LocalId) {
+    let mut new_body: Vec<Stmt> = Vec::with_capacity(stmts.len());
+    for mut stmt in stmts.drain(..) {
+        match &mut stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                prepend_executing_clear_before_returns(then_branch, executing_id);
+                if let Some(else_branch) = else_branch {
+                    prepend_executing_clear_before_returns(else_branch, executing_id);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                prepend_executing_clear_before_returns(body, executing_id);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                prepend_executing_clear_before_returns(body, executing_id);
+                if let Some(catch) = catch {
+                    prepend_executing_clear_before_returns(&mut catch.body, executing_id);
+                }
+                if let Some(finally) = finally {
+                    prepend_executing_clear_before_returns(finally, executing_id);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    prepend_executing_clear_before_returns(&mut case.body, executing_id);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                let mut wrapped = vec![std::mem::replace(body.as_mut(), Stmt::Break)];
+                prepend_executing_clear_before_returns(&mut wrapped, executing_id);
+                **body = wrapped.into_iter().next().unwrap();
+            }
+            _ => {}
+        }
+        if matches!(stmt, Stmt::Return(_)) {
+            new_body.push(Stmt::Expr(Expr::LocalSet(
+                executing_id,
+                Box::new(Expr::Bool(false)),
+            )));
+        }
+        new_body.push(stmt);
+    }
+    *stmts = new_body;
+}
+
+fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Let {
+            init: Some(expr), ..
+        } => generator_expr_uses_call_this(expr),
+        Stmt::Let { init: None, .. } => false,
+        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            generator_expr_uses_call_this(expr)
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            generator_expr_uses_call_this(condition)
+                || then_branch.iter().any(generator_stmt_uses_call_this)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(generator_stmt_uses_call_this))
+        }
+        Stmt::While { condition, body } => {
+            generator_expr_uses_call_this(condition)
+                || body.iter().any(generator_stmt_uses_call_this)
+        }
+        Stmt::DoWhile { body, condition } => {
+            body.iter().any(generator_stmt_uses_call_this)
+                || generator_expr_uses_call_this(condition)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .is_some_and(|stmt| generator_stmt_uses_call_this(stmt))
+                || condition
+                    .as_ref()
+                    .is_some_and(generator_expr_uses_call_this)
+                || update.as_ref().is_some_and(generator_expr_uses_call_this)
+                || body.iter().any(generator_stmt_uses_call_this)
+        }
+        Stmt::Labeled { body, .. } => generator_stmt_uses_call_this(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().any(generator_stmt_uses_call_this)
+                || catch
+                    .as_ref()
+                    .is_some_and(|catch| catch.body.iter().any(generator_stmt_uses_call_this))
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(generator_stmt_uses_call_this))
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            generator_expr_uses_call_this(discriminant)
+                || cases.iter().any(|case| {
+                    case.test
+                        .as_ref()
+                        .is_some_and(generator_expr_uses_call_this)
+                        || case.body.iter().any(generator_stmt_uses_call_this)
+                })
+        }
+    }
+}
+
+fn generator_expr_uses_call_this(expr: &Expr) -> bool {
+    match expr {
+        Expr::This
+        | Expr::SuperCall(_)
+        | Expr::SuperMethodCall { .. }
+        | Expr::SuperPropertyGet { .. } => true,
+        Expr::Closure { captures_this, .. } => *captures_this,
+        _ => {
+            let mut found = false;
+            walk_expr_children(expr, &mut |child| {
+                if !found && generator_expr_uses_call_this(child) {
+                    found = true;
+                }
+            });
+            found
+        }
+    }
 }
 
 /// Build the async-step driver (issue #256). Returns the statements that
@@ -592,34 +1252,562 @@ pub fn transform_generator_function_with_extra_captures(
 /// ```
 ///
 /// The two-step `let __step; __step = ...;` pattern is required because
+#[allow(clippy::too_many_arguments)]
 fn build_async_throw_body(
     catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
     state_id: LocalId,
+    done_id: LocalId,
     throw_param_id: LocalId,
+    inner_catch_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
+    // #4374: for sync generators, the cloned state-dispatch loop. When present,
+    // a matched catch route sets the resume state and *falls through* to this
+    // loop, so the inlined finally runs and the generator continues to the next
+    // yield / completion within the `.throw()` call. When `None` (async
+    // generators) the catch route returns {undefined, false} as before.
+    continuation: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
-    let mut fallback = vec![Stmt::Throw(Expr::LocalGet(throw_param_id))];
+    let fall_through = continuation.is_some();
+    // #4374: when no catch handles the throw, run any pending non-yielding
+    // `finally` before propagating the error. A `finally` that `return`s
+    // supersedes the thrown value (rewritten to an iter-result return inside
+    // build_finally_run_stmts). For a try WITH a catch, a route below matches
+    // first, so this only fires for unhandled throws.
+    let mut fallback = Vec::new();
+    // An unhandled throw completes the generator (subsequent .next() must
+    // return {done: true}). Sync generators only — async generators keep the
+    // existing deferred behavior to stay byte-identical.
+    if fall_through {
+        fallback.push(Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        )));
+    }
+    fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
+    fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
 
-    // Build nested `if` dispatch in source order. We iterate from the back so
-    // the first collected route is tested first; nested try/catch routes are
-    // collected before their containing route and should win on overlap.
-    for route in catches.iter().rev() {
-        let then_branch =
-            build_async_catch_route_body(route, state_id, throw_param_id, hoisted_ids);
-        fallback = vec![Stmt::If {
-            condition: catch_route_condition(route, state_id),
-            then_branch,
-            else_branch: Some(fallback),
-        }];
+    let mut body = if fall_through {
+        // #4438: sync generators route the thrown error to the innermost
+        // enclosing catch (jump to its linearized states) or yielding finally
+        // (record the pending throw + jump in), then fall through to the
+        // appended continuation loop which dispatches it — so a `yield` inside
+        // the catch/finally suspends.
+        build_abrupt_routing(
+            catches,
+            finallys,
+            state_id,
+            pending_type_id,
+            pending_value_id,
+            &Expr::LocalGet(throw_param_id),
+            true,
+            1.0,
+            false,
+            false,
+            fallback,
+        )
+    } else {
+        // Async generators: legacy inline-the-catch-body behavior.
+        for route in catches.iter().rev() {
+            let then_branch = build_async_catch_route_body(
+                route,
+                finallys,
+                state_id,
+                done_id,
+                throw_param_id,
+                inner_catch_id,
+                hoisted_ids,
+                fall_through,
+            );
+            fallback = vec![Stmt::If {
+                condition: catch_route_condition(route, state_id, false, false),
+                then_branch,
+                else_branch: Some(fallback),
+            }];
+        }
+        fallback
+    };
+
+    // #4374: append the continuation loop. Only a fallen-through catch/finally
+    // route reaches it (the unhandled branch throws; matched routes set the
+    // resume state and fall through).
+    if let Some(cont) = continuation {
+        body.push(Stmt::While {
+            condition: Expr::Bool(true),
+            body: cont,
+        });
     }
 
-    fallback
+    body
 }
 
-fn catch_route_condition(route: &CatchRoute, state_id: LocalId) -> Expr {
+fn catch_route_condition(
+    route: &CatchRoute,
+    state_id: LocalId,
+    state_based: bool,
+    inclusive_lower: bool,
+) -> Expr {
     // Awaited rejection re-enters after the yield state has advanced to its
     // resume/post state, so lifted catch ownership is open on the start state
     // and closed on the post-catch state.
+    //
+    // #4438: for sync state-based routing the upper bound is
+    // `protected_end_state` (the post-last-yield-in-try happy landing state),
+    // which EXCLUDES the catch's own states — a throw inside the catch must
+    // escape to an enclosing handler, not re-enter this one. The legacy inline
+    // (async) path keeps `post_catch_state` as before.
+    //
+    // `inclusive_lower` selects `>=` vs `>` on the start state. The runtime
+    // dispatch wrapper (a `throw` *executing* inside a try) uses `>=`: a throw
+    // in the try's first state runs at exactly `protected_start_state`. The
+    // `.throw()`-injection path uses `>`: it only fires while *suspended* at a
+    // yield, whose resume state is already `> protected_start_state`, and a
+    // yield sitting just before the try (state == protected_start) is outside
+    // the try and must not be caught.
+    let upper = if state_based {
+        route.protected_end_state
+    } else {
+        route.post_catch_state
+    };
+    let lower_op = if inclusive_lower {
+        CompareOp::Ge
+    } else {
+        CompareOp::Gt
+    };
+    Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(Expr::Compare {
+            op: lower_op,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.protected_start_state as f64)),
+        }),
+        right: Box::new(Expr::Compare {
+            op: CompareOp::Le,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(upper as f64)),
+        }),
+    }
+}
+
+/// #4438 B2-finally: interval condition for routing an abrupt completion into a
+/// yielding finally — `state` in (or `>=` for runtime throws) the protected try
+/// interval, up to `protected_end_state` (which excludes the finally's own
+/// states so a completion while suspended INSIDE the finally supersedes it).
+fn finally_abrupt_condition(
+    route: &FinallyRoute,
+    state_id: LocalId,
+    inclusive_lower: bool,
+) -> Expr {
+    let lower_op = if inclusive_lower {
+        CompareOp::Ge
+    } else {
+        CompareOp::Gt
+    };
+    Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(Expr::Compare {
+            op: lower_op,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.protected_start_state as f64)),
+        }),
+        right: Box::new(Expr::Compare {
+            op: CompareOp::Le,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(route.protected_end_state as f64)),
+        }),
+    }
+}
+
+/// #4438 B2-finally: the re-raise appended to a yielding finally's
+/// completion-check state. After the finally runs, a pending throw is re-thrown
+/// (and re-routed by the dispatch wrapper to an enclosing handler, or propagated
+/// when unhandled) and a pending return completes the generator with its value.
+/// On the normal path (`pending_type == 0`) both checks are skipped.
+fn build_completion_resume_stmts(
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    done_id: LocalId,
+) -> Vec<Stmt> {
+    vec![
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(pending_type_id)),
+                right: Box::new(Expr::Number(1.0)),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(pending_type_id, Box::new(Expr::Number(0.0)))),
+                Stmt::Throw(Expr::LocalGet(pending_value_id)),
+            ],
+            else_branch: None,
+        },
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(pending_type_id)),
+                right: Box::new(Expr::Number(2.0)),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(pending_type_id, Box::new(Expr::Number(0.0)))),
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Return(Some(make_iter_result(
+                    Expr::LocalGet(pending_value_id),
+                    true,
+                ))),
+            ],
+            else_branch: None,
+        },
+    ]
+}
+
+/// #4438: build the merged abrupt-completion routing if-chain for sync
+/// generators. A thrown error / returned value routes to the innermost
+/// enclosing handler: a `catch` (jump to its linearized states) or a yielding
+/// `finally` (record the pending completion + jump into the finally). Routes are
+/// ordered innermost-first (protected-start descending; a `catch` beats a
+/// `finally` at the same try). `value_src` is the error/return value;
+/// `pending_kind` is 1 (throw) or 2 (return) for finally routes. `with_continue`
+/// appends `continue` (dispatch wrapper) vs falling through (the throw/return
+/// closures, which append their own continuation loop). When nothing matches the
+/// current state, `fallback` runs.
+#[allow(clippy::too_many_arguments)]
+fn build_abrupt_routing(
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    value_src: &Expr,
+    include_catch: bool,
+    pending_kind: f64,
+    with_continue: bool,
+    inclusive_lower: bool,
+    fallback: Vec<Stmt>,
+) -> Vec<Stmt> {
+    // (protected_start, kind, index): kind 0 = catch, 1 = finally.
+    let mut routes: Vec<(u32, u8, usize)> = Vec::new();
+    if include_catch {
+        for (i, r) in catches.iter().enumerate() {
+            if r.catch_entry_state.is_some() {
+                routes.push((r.protected_start_state, 0, i));
+            }
+        }
+    }
+    for (i, r) in finallys.iter().enumerate() {
+        if r.finally_entry_state.is_some() {
+            routes.push((r.protected_start_state, 1, i));
+        }
+    }
+    // Innermost first: start descending, catch before finally on a tie.
+    routes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+
+    let mut chain = fallback;
+    for (_, kind, idx) in routes.iter().rev() {
+        let (condition, mut then_branch) = if *kind == 0 {
+            let route = &catches[*idx];
+            let mut a = Vec::new();
+            if let Some(cp_id) = route.param_id {
+                a.push(Stmt::Expr(Expr::LocalSet(
+                    cp_id,
+                    Box::new(value_src.clone()),
+                )));
+            }
+            a.push(Stmt::Expr(Expr::LocalSet(
+                state_id,
+                Box::new(Expr::Number(route.catch_entry_state.unwrap() as f64)),
+            )));
+            (
+                catch_route_condition(route, state_id, true, inclusive_lower),
+                a,
+            )
+        } else {
+            let route = &finallys[*idx];
+            let a = vec![
+                Stmt::Expr(Expr::LocalSet(
+                    pending_type_id,
+                    Box::new(Expr::Number(pending_kind)),
+                )),
+                Stmt::Expr(Expr::LocalSet(
+                    pending_value_id,
+                    Box::new(value_src.clone()),
+                )),
+                Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(route.finally_entry_state.unwrap() as f64)),
+                )),
+            ];
+            (
+                finally_abrupt_condition(route, state_id, inclusive_lower),
+                a,
+            )
+        };
+        if with_continue {
+            then_branch.push(Stmt::Continue);
+        }
+        chain = vec![Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(chain),
+        }];
+    }
+    chain
+}
+
+/// #4438: wrap a state-dispatch loop body in a real `try/catch` whose handler
+/// routes a throw executing during dispatch to the matching catch/finally
+/// (`continue`) or runs pending non-yielding finallys + completes + rethrows
+/// when unhandled. Used for the `.next()` loop and the `.throw()`/`.return()`
+/// continuation loops alike.
+#[allow(clippy::too_many_arguments)]
+fn wrap_dispatch_loop(
+    loop_body: Vec<Stmt>,
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    done_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    err_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let handler = build_dispatch_catch_handler(
+        catches,
+        finallys,
+        state_id,
+        done_id,
+        pending_type_id,
+        pending_value_id,
+        err_id,
+        hoisted_ids,
+    );
+    vec![Stmt::Try {
+        body: loop_body,
+        catch: Some(CatchClause {
+            param: Some((err_id, "__gen_disp_err".to_string())),
+            body: handler,
+        }),
+        finally: None,
+    }]
+}
+
+/// #4438: the catch handler for the sync-generator dispatch loop. Routes a throw
+/// executing inside a try (during a normal `.next()`) to the matching catch's
+/// or yielding finally's states (and `continue`s the loop), or runs pending
+/// non-yielding finallys + completes + rethrows when unhandled.
+#[allow(clippy::too_many_arguments)]
+fn build_dispatch_catch_handler(
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    done_id: LocalId,
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    err_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let mut fallback = vec![Stmt::Expr(Expr::LocalSet(
+        done_id,
+        Box::new(Expr::Bool(true)),
+    ))];
+    fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
+    fallback.push(Stmt::Throw(Expr::LocalGet(err_id)));
+    build_abrupt_routing(
+        catches,
+        finallys,
+        state_id,
+        pending_type_id,
+        pending_value_id,
+        &Expr::LocalGet(err_id),
+        true,
+        1.0,
+        true,
+        true,
+        fallback,
+    )
+}
+
+/// Replace the synthesized dispatch re-entry `Stmt::Continue` (emitted by
+/// `rewrite_break_continue_in_stmts` for a user `break`/`continue`) with a
+/// suspend-return. Used when inlining a catch-route body into the async
+/// `.throw()` closure, which has no dispatch `while(true)` loop. Mirrors the
+/// recursion in `rewrite_break_continue_in_stmt`: descends into `if`/`try`
+/// (where the dispatch continue can sit) but stops at nested loops / switch /
+/// labeled / closures, whose own `continue`/`break` belong to them.
+fn rewrite_dispatch_continue_to_suspend(stmts: &mut Vec<Stmt>) {
+    for stmt in stmts.iter_mut() {
+        match stmt {
+            Stmt::Continue | Stmt::Break => {
+                *stmt = Stmt::Return(Some(make_iter_result(Expr::Undefined, false)));
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                rewrite_dispatch_continue_to_suspend(then_branch);
+                if let Some(eb) = else_branch.as_mut() {
+                    rewrite_dispatch_continue_to_suspend(eb);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_dispatch_continue_to_suspend(body);
+                if let Some(c) = catch.as_mut() {
+                    rewrite_dispatch_continue_to_suspend(&mut c.body);
+                }
+                if let Some(f) = finally.as_mut() {
+                    rewrite_dispatch_continue_to_suspend(f);
+                }
+            }
+            // Nested loops / switch / labeled / closures own their own
+            // break/continue — leave them untouched.
+            _ => {}
+        }
+    }
+}
+
+fn build_async_catch_route_body(
+    route: &CatchRoute,
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    done_id: LocalId,
+    throw_param_id: LocalId,
+    inner_catch_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+    // #4374: when true (sync generators), run the catch body, set the resume
+    // state, and fall through to the caller's continuation loop instead of
+    // returning {undefined, false}. A user `return`/finally-return inside the
+    // catch still exits (it's rewritten to an iter-result return below).
+    fall_through: bool,
+) -> Vec<Stmt> {
+    let mut body = Vec::new();
+    if let Some(cp_id) = route.param_id {
+        body.push(Stmt::Expr(Expr::LocalSet(
+            cp_id,
+            Box::new(Expr::LocalGet(throw_param_id)),
+        )));
+    }
+
+    // Legacy async path: a `.throw()` resumed into this catch closes the
+    // generator if the catch handler `return`s (the rewrite below turns
+    // `return X` into `return {value: X, done: true}`, which exits the closure
+    // *before* the post-catch state/`done` bookkeeping runs). Mark `done = true`
+    // up front so a subsequent `.next()` sees a completed generator; if the
+    // catch instead completes normally and falls through, the reset below
+    // restores `done = false` so the post-catch suspension stays live.
+    if !fall_through {
+        body.push(Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        )));
+    }
+
+    let mut rewritten = route.body.clone();
+    rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
+    rewrite_yield_to_await_in_stmts(&mut rewritten);
+    rewrite_catch_returns_to_iter_result(&mut rewritten);
+    // A user `break`/`continue` inside this catch was rewritten by
+    // `rewrite_break_continue_in_stmts` into `[LocalSet(state, TARGET),
+    // Stmt::Continue]` — the trailing `Stmt::Continue` re-enters the dispatch
+    // `while(true)` loop. The async `.throw()` closure has NO dispatch loop
+    // (it runs the handler, then suspends), so that dangling dispatch-continue
+    // would be a `continue` with no enclosing loop. The preceding `LocalSet`
+    // already moved the state to the loop's resume target (cond/update/after-
+    // loop, fixed up by `fix_break_continue_sentinels_in_catches`), so the
+    // correct async behavior is to suspend right there: convert the dispatch
+    // re-entry into a `return { value: undefined, done: false }`.
+    if !fall_through {
+        rewrite_dispatch_continue_to_suspend(&mut rewritten);
+    }
+
+    // #4374: if this try also has a (sync) finally, a `throw` inside the catch
+    // handler must still run that finally before propagating. The normal
+    // (catch completes) path runs the finally via the inlined post-catch state
+    // in the continuation loop, so we only need to cover the throwing path:
+    // wrap the catch body in `try { <catch> } catch (e) { <finally>; throw e }`.
+    // On normal completion the inner catch never fires (no double finally run).
+    let matching_finally = if fall_through {
+        finallys.iter().find(|f| {
+            !f.has_yields
+                && f.protected_start_state == route.protected_start_state
+                && f.post_finally_state == route.post_catch_state
+        })
+    } else {
+        None
+    };
+    if let Some(fin) = matching_finally {
+        let mut fin_body = fin.body.clone();
+        rewrite_hoisted_lets_in_stmts(&mut fin_body, hoisted_ids);
+        rewrite_catch_returns_to_iter_result(&mut fin_body);
+        let mut handler = vec![Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(true)),
+        ))];
+        handler.extend(fin_body);
+        handler.push(Stmt::Throw(Expr::LocalGet(inner_catch_id)));
+        body.push(Stmt::Try {
+            body: rewritten,
+            catch: Some(CatchClause {
+                param: Some((inner_catch_id, "__gen_fin_e".to_string())),
+                body: handler,
+            }),
+            finally: None,
+        });
+    } else {
+        body.extend(rewritten);
+    }
+
+    if !fall_through {
+        // Catch completed normally (no `return`): the generator is not done —
+        // undo the up-front `done = true` and suspend at the post-catch state.
+        body.push(Stmt::Expr(Expr::LocalSet(
+            done_id,
+            Box::new(Expr::Bool(false)),
+        )));
+    }
+    body.push(Stmt::Expr(Expr::LocalSet(
+        state_id,
+        Box::new(Expr::Number(route.post_catch_state as f64)),
+    )));
+    if !fall_through {
+        body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, false))));
+    }
+    body
+}
+
+/// #4374: build the statements that run pending `finally` blocks on abrupt
+/// completion (`.return()`/`.throw()`), innermost first. Each finally runs
+/// only when the generator is suspended inside its protected state interval
+/// (`state > protected_start && state <= post_finally`). A `return X` inside
+/// a finally is rewritten to `return {value: X, done: true}` so it supersedes
+/// the abrupt completion value; a `throw` inside a finally is left intact and
+/// propagates out of the closure. Finallys that themselves yield/await
+/// (`has_yields`) can't be inlined synchronously and are skipped.
+fn build_finally_run_stmts(
+    finallys: &[FinallyRoute],
+    state_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    for route in finallys.iter().filter(|r| !r.has_yields) {
+        let mut body = route.body.clone();
+        rewrite_hoisted_lets_in_stmts(&mut body, hoisted_ids);
+        rewrite_catch_returns_to_iter_result(&mut body);
+        out.push(Stmt::If {
+            condition: finally_route_condition(route, state_id),
+            then_branch: body,
+            else_branch: None,
+        });
+    }
+    out
+}
+
+fn finally_route_condition(route: &FinallyRoute, state_id: LocalId) -> Expr {
     Expr::Logical {
         op: LogicalOp::And,
         left: Box::new(Expr::Compare {
@@ -630,41 +1818,13 @@ fn catch_route_condition(route: &CatchRoute, state_id: LocalId) -> Expr {
         right: Box::new(Expr::Compare {
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
-            right: Box::new(Expr::Number(route.post_catch_state as f64)),
+            right: Box::new(Expr::Number(route.post_finally_state as f64)),
         }),
     }
 }
 
-fn build_async_catch_route_body(
-    route: &CatchRoute,
-    state_id: LocalId,
-    throw_param_id: LocalId,
-    hoisted_ids: &std::collections::HashSet<LocalId>,
-) -> Vec<Stmt> {
-    let mut body = Vec::new();
-    if let Some(cp_id) = route.param_id {
-        body.push(Stmt::Expr(Expr::LocalSet(
-            cp_id,
-            Box::new(Expr::LocalGet(throw_param_id)),
-        )));
-    }
-
-    let mut rewritten = route.body.clone();
-    rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
-    rewrite_yield_to_await_in_stmts(&mut rewritten);
-    rewrite_catch_returns_to_iter_result(&mut rewritten);
-    body.extend(rewritten);
-
-    body.push(Stmt::Expr(Expr::LocalSet(
-        state_id,
-        Box::new(Expr::Number(route.post_catch_state as f64)),
-    )));
-    body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, false))));
-    body
-}
-
 fn build_async_throw_body_direct(
-    catches: &[CatchRoute],
+    catches: Vec<CatchRoute>,
     state_id: LocalId,
     throw_param_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
@@ -672,7 +1832,8 @@ fn build_async_throw_body_direct(
 ) -> Vec<Stmt> {
     let mut fallback = vec![Stmt::Throw(Expr::LocalGet(throw_param_id))];
 
-    for route in catches.iter().rev() {
+    for route in catches.into_iter().rev() {
+        let condition = catch_route_condition(&route, state_id, false, false);
         let then_branch = build_async_catch_route_body_direct(
             route,
             state_id,
@@ -681,7 +1842,7 @@ fn build_async_throw_body_direct(
             step_done_label,
         );
         fallback = vec![Stmt::If {
-            condition: catch_route_condition(route, state_id),
+            condition,
             then_branch,
             else_branch: Some(fallback),
         }];
@@ -691,7 +1852,7 @@ fn build_async_throw_body_direct(
 }
 
 fn build_async_catch_route_body_direct(
-    route: &CatchRoute,
+    route: CatchRoute,
     state_id: LocalId,
     throw_param_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
@@ -705,7 +1866,7 @@ fn build_async_catch_route_body_direct(
         )));
     }
 
-    let mut rewritten = route.body.clone();
+    let mut rewritten = route.body;
     rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
     rewrite_yield_to_await_in_stmts(&mut rewritten);
     rewrite_catch_returns_to_iter_result(&mut rewritten);
@@ -741,6 +1902,7 @@ pub fn build_async_step_driver_direct(
     next_local_id: &mut u32,
     next_func_id: &mut u32,
     captures_this: bool,
+    captures_new_target: bool,
     enclosing_class: Option<String>,
     is_strict: bool,
 ) -> Vec<Stmt> {
@@ -784,6 +1946,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
+        byte_offset: 0,
     };
     let promise_reject = |arg: Expr| Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -792,6 +1955,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     // Rewrite every Return inside next_body to LabeledBreak(__step_done)
@@ -813,9 +1977,6 @@ pub fn build_async_step_driver_direct(
         mutable: false,
         init: Some(Expr::LocalGet(value_param_id)),
     };
-    let mut else_branch: Vec<Stmt> = vec![next_value_let.clone()];
-    else_branch.extend(next_body.clone());
-
     // step body
     //   try {
     //     "__step_done": do {
@@ -842,7 +2003,7 @@ pub fn build_async_step_driver_direct(
                 init: Some(Expr::LocalGet(value_param_id)),
             }];
             let direct_body = build_async_throw_body_direct(
-                &catches,
+                catches,
                 route_state_id,
                 throw_param_id,
                 &route_hoisted_ids,
@@ -855,6 +2016,7 @@ pub fn build_async_step_driver_direct(
                 callee: Box::new(Expr::LocalGet(tid)),
                 args: vec![Expr::LocalGet(value_param_id)],
                 type_args: vec![],
+                byte_offset: 0,
             })]
         } else {
             // No __async_throw closure was constructed (callee passed None).
@@ -864,11 +2026,6 @@ pub fn build_async_step_driver_direct(
             // arm returns Promise.reject (the `if (isError)` short-circuit).
             vec![Stmt::Throw(Expr::LocalGet(value_param_id))]
         };
-    let dispatch_inner = Stmt::If {
-        condition: Expr::LocalGet(is_error_param_id),
-        then_branch: throw_arm,
-        else_branch: Some(else_branch),
-    };
     let labeled_body = if direct_routes_enabled {
         let mut normal_tail = next_body;
         let normal_sent = if normal_tail.is_empty() {
@@ -878,16 +2035,20 @@ pub fn build_async_step_driver_direct(
         };
         let direct_dispatch = Stmt::If {
             condition: Expr::LocalGet(is_error_param_id),
-            then_branch: match dispatch_inner {
-                Stmt::If { then_branch, .. } => then_branch,
-                _ => unreachable!("dispatch_inner is always an if"),
-            },
+            then_branch: throw_arm,
             else_branch: normal_sent.map(|stmt| vec![stmt]),
         };
         let mut body = vec![next_value_let, direct_dispatch];
         body.extend(normal_tail);
         body
     } else {
+        let mut else_branch: Vec<Stmt> = vec![next_value_let];
+        else_branch.extend(next_body);
+        let dispatch_inner = Stmt::If {
+            condition: Expr::LocalGet(is_error_param_id),
+            then_branch: throw_arm,
+            else_branch: Some(else_branch),
+        };
         vec![dispatch_inner]
     };
 
@@ -932,6 +2093,7 @@ pub fn build_async_step_driver_direct(
                         callee: Box::new(Expr::LocalGet(step_self_id)),
                         args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
                         type_args: vec![],
+                        byte_offset: 0,
                     })),
                 ],
             }),
@@ -978,6 +2140,7 @@ pub fn build_async_step_driver_direct(
                 is_rest: false,
                 default: None,
                 decorators: Vec::new(),
+                arguments_object: None,
             },
             perry_hir::Param {
                 id: is_error_param_id,
@@ -986,6 +2149,7 @@ pub fn build_async_step_driver_direct(
                 is_rest: false,
                 default: None,
                 decorators: Vec::new(),
+                arguments_object: None,
             },
         ],
         return_type: any_ty.clone(),
@@ -993,7 +2157,9 @@ pub fn build_async_step_driver_direct(
         captures: step_captures,
         mutable_captures: step_mut_captures,
         captures_this,
+        captures_new_target,
         enclosing_class: enclosing_class.clone(),
+        is_arrow: false,
         is_strict,
         is_async: false,
         is_generator: false,

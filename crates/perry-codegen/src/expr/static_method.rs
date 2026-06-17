@@ -87,8 +87,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let signal_handle = blk.call(I64, "js_abort_signal_any", &[(I64, &arr_handle)]);
                 return Ok(nanbox_pointer_inline(blk, &signal_handle));
             }
-            let key = (class_name.clone(), method_name.clone());
+            let key = (
+                class_name.clone(),
+                crate::codegen::static_method_registry_key(method_name),
+            );
             if let Some(fn_name) = ctx.methods.get(&key).cloned() {
+                // Inherited static (`D.f()` resolving to a parent's body): arm
+                // the one-shot static-`this` override with the DISPATCH base
+                // class-ref so the body's `js_static_this_resolve` prologue
+                // sees `this === D` (spec OrdinaryCallBindThis), not the
+                // lexical defining class. Own methods skip the arm — the
+                // prologue's lexical fallback is already the right receiver.
+                let owns_method = ctx
+                    .classes
+                    .get(class_name)
+                    .map(|c| c.static_methods.iter().any(|m| m.name == *method_name))
+                    .unwrap_or(true);
+                if !owns_method {
+                    if let Some(&cid) = ctx.class_ids.get(class_name) {
+                        let cid_str = cid.to_string();
+                        ctx.block()
+                            .call_void("js_static_this_arm_classref", &[(I32, &cid_str)]);
+                    }
+                }
                 let mut lowered: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);
@@ -133,6 +154,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let idx = lowered.len().saturating_sub(1);
                             lowered.insert(idx, undef);
                         }
+                    }
+                } else {
+                    // Issue #235: a static method called with fewer args than
+                    // declared (`C.f()` for `static f(a = 1)`, or
+                    // `C.m([x] = [])`) must hand the callee `undefined` for the
+                    // missing slots — otherwise the LLVM function reads an
+                    // uninitialized parameter register (0.0), so its
+                    // default-param prologue (`if (p === undefined) p = …`) and
+                    // destructuring (`GetIterator(p)`) never fire.
+                    let declared_count = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
+                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    while lowered.len() < declared_count {
+                        lowered.push(undef.clone());
                     }
                 }
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
@@ -283,6 +317,73 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &member,
                     method_name,
                     &lowered,
+                ));
+            }
+            // #4831 (Stripe-style `StripeResource.extend(...)`): the receiver
+            // is an imported *function* (or class-ref) that carries the called
+            // method as a DYNAMIC own property — e.g. `function StripeResource()
+            // {}; StripeResource.extend = protoExtend;` in one module, then
+            // `StripeResource.extend({...})` in another. The HIR's "uppercase
+            // imported Ident looks like a class" rule lifts this to a
+            // `StaticMethodCall`, but there is no compile-time class static to
+            // resolve (`ctx.methods` miss above), it isn't a namespace import,
+            // and it isn't a V8-fallback specifier — so the pre-fix code fell
+            // here and returned the literal `0`. That made every Stripe resource
+            // method (`stripe.products.create`, etc.) `undefined`/non-callable.
+            //
+            // When the receiver name resolves to a materializable imported value
+            // (a native `import_function_prefixes` symbol or a `class_ids`
+            // class-ref), route the call through the runtime method dispatcher:
+            // materialize the receiver, read the named method off its dynamic
+            // props, and invoke it with `this` bound to the receiver. This is
+            // the same dispatch the same-module `Base.extend()` path already
+            // uses, and it is strictly better than the `0` stub for every other
+            // case that reached here. Related: #4656 (general prototype-chain
+            // `[[Get]]` inheritance); this fix is scoped to the cross-module
+            // dynamic-method-on-imported-function call shape.
+            if ctx.import_function_prefixes.contains_key(class_name)
+                || ctx.class_ids.contains_key(class_name)
+            {
+                let recv_box = lower_expr(
+                    ctx,
+                    &Expr::ExternFuncRef {
+                        name: class_name.clone(),
+                        param_types: vec![],
+                        return_type: HirType::Any,
+                    },
+                )?;
+                let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered_args.push(lower_expr(ctx, a)?);
+                }
+                let (args_ptr, args_len) = if lowered_args.is_empty() {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let n = lowered_args.len();
+                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                    {
+                        let blk = ctx.block();
+                        for (i, value) in lowered_args.iter().enumerate() {
+                            let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                            blk.store(DOUBLE, value, &slot);
+                        }
+                    }
+                    (buf, n.to_string())
+                };
+                let method_idx = ctx.strings.intern(method_name);
+                let entry = ctx.strings.entry(method_idx);
+                let bytes_global = format!("@{}", entry.bytes_global);
+                let name_len = entry.byte_len.to_string();
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method",
+                    &[
+                        (DOUBLE, &recv_box),
+                        (PTR, &bytes_global),
+                        (I64, &name_len),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
                 ));
             }
             for a in args {

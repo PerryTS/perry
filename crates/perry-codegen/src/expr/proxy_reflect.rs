@@ -95,6 +95,294 @@ pub(crate) fn try_lower_proxy_fn_call_apply(
     )))
 }
 
+/// `proxy.method(args)` for a method name other than `call`/`apply` — the
+/// *fused* member-call form whose callee the HIR lowered to
+/// `ProxyGet(p, "method")` (#5196). Reading `.method` off the proxy and then
+/// invoking it must bind `this` to the proxy itself, so `Array.prototype.map`
+/// & friends iterate the proxy through its `get` trap. The plain closure-call
+/// fallthrough loses that receiver (the method runs with `this = undefined`,
+/// throwing `Cannot convert undefined or null to object`). Route the call
+/// through `js_native_call_method`, whose Proxy arm performs the spec
+/// `Get(proxy, "method")` then `Call(method, proxy, args)`. Returns `None`
+/// when the callee isn't a proxy member-call so normal dispatch proceeds.
+pub(crate) fn try_lower_proxy_method_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    let Expr::ProxyGet { proxy, key } = callee else {
+        return Ok(None);
+    };
+    let Expr::String(method_name) = key.as_ref() else {
+        return Ok(None);
+    };
+    // `.call`/`.apply` route through the proxy's [[Call]] (apply trap) and are
+    // handled by `try_lower_proxy_fn_call_apply`, which runs first.
+    if method_name == "call" || method_name == "apply" {
+        return Ok(None);
+    }
+    let recv_box = lower_expr(ctx, proxy)?;
+    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    for a in args {
+        lowered_args.push(lower_expr(ctx, a)?);
+    }
+    let (args_ptr, args_len) = if lowered_args.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let n = lowered_args.len();
+        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+        {
+            let blk = ctx.block();
+            for (i, value) in lowered_args.iter().enumerate() {
+                let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                blk.store(DOUBLE, value, &slot);
+            }
+        }
+        (buf, n.to_string())
+    };
+    let method_idx = ctx.strings.intern(method_name);
+    let entry = ctx.strings.entry(method_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let name_len = entry.byte_len.to_string();
+    Ok(Some(ctx.block().call(
+        DOUBLE,
+        "js_native_call_method",
+        &[
+            (DOUBLE, &recv_box),
+            (PTR, &bytes_global),
+            (I64, &name_len),
+            (PTR, &args_ptr),
+            (I64, &args_len),
+        ],
+    )))
+}
+
+fn put_value_static_property_fast_path(
+    ctx: &FnCtx<'_>,
+    target: &Expr,
+    key: &Expr,
+    receiver: &Expr,
+) -> Option<String> {
+    let Expr::String(property) = key else {
+        return None;
+    };
+    match (target, receiver) {
+        (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) if id == receiver_id => {
+            let pod_field = ctx.pod_records.get(id).is_some_and(|local| {
+                local
+                    .layout
+                    .fields
+                    .iter()
+                    .any(|field| field.name == *property)
+            });
+            let scalar_field = ctx
+                .scalar_replaced
+                .get(id)
+                .is_some_and(|fields| fields.contains_key(property));
+            if pod_field || scalar_field {
+                return Some(property.clone());
+            }
+            receiver_class_name(ctx, target)
+                .and_then(|class_name| {
+                    crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                })
+                .map(|_| property.clone())
+        }
+        (Expr::This, Expr::This) => {
+            if ctx
+                .scalar_ctor_target
+                .last()
+                .and_then(|tid| ctx.scalar_replaced.get(tid))
+                .is_some_and(|fields| fields.contains_key(property))
+            {
+                return Some(property.clone());
+            }
+            receiver_class_name(ctx, target)
+                .and_then(|class_name| {
+                    crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                })
+                .map(|_| property.clone())
+        }
+        _ if same_side_effect_free_receiver(target, receiver) => {
+            let class_name = receiver_class_name(ctx, target)?;
+            crate::type_analysis::class_field_global_index(ctx, &class_name, property)
+                .map(|_| property.clone())
+        }
+        _ => None,
+    }
+}
+
+fn same_side_effect_free_receiver(target: &Expr, receiver: &Expr) -> bool {
+    match (target, receiver) {
+        (Expr::LocalGet(id), Expr::LocalGet(receiver_id)) => id == receiver_id,
+        (Expr::This, Expr::This) => true,
+        (
+            Expr::PropertyGet { object, property },
+            Expr::PropertyGet {
+                object: receiver_object,
+                property: receiver_property,
+            },
+        ) => {
+            property == receiver_property
+                && same_side_effect_free_receiver(object.as_ref(), receiver_object.as_ref())
+        }
+        _ => false,
+    }
+}
+
+fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
+    match (target, receiver) {
+        (Expr::Undefined, Expr::Undefined)
+        | (Expr::Null, Expr::Null)
+        | (Expr::This, Expr::This) => true,
+        (Expr::Bool(a), Expr::Bool(b)) => a == b,
+        (Expr::Number(a), Expr::Number(b)) => a.to_bits() == b.to_bits(),
+        (Expr::Integer(a), Expr::Integer(b)) => a == b,
+        (Expr::BigInt(a), Expr::BigInt(b))
+        | (Expr::String(a), Expr::String(b))
+        | (Expr::NativeModuleRef(a), Expr::NativeModuleRef(b)) => a == b,
+        (Expr::LocalGet(a), Expr::LocalGet(b)) => a == b,
+        (Expr::GlobalGet(a), Expr::GlobalGet(b)) => a == b,
+        (Expr::FuncRef(a), Expr::FuncRef(b)) => a == b,
+        (
+            Expr::ExternFuncRef {
+                name: a_name,
+                param_types: a_params,
+                return_type: a_return,
+            },
+            Expr::ExternFuncRef {
+                name: b_name,
+                param_types: b_params,
+                return_type: b_return,
+            },
+        ) => a_name == b_name && a_params == b_params && a_return == b_return,
+        (
+            Expr::Call {
+                callee: a_callee,
+                args: a_args,
+                type_args: a_type_args,
+                ..
+            },
+            Expr::Call {
+                callee: b_callee,
+                args: b_args,
+                type_args: b_type_args,
+                ..
+            },
+        ) => {
+            a_type_args == b_type_args
+                && same_put_value_receiver_expr(a_callee, b_callee)
+                && a_args.len() == b_args.len()
+                && a_args
+                    .iter()
+                    .zip(b_args.iter())
+                    .all(|(a, b)| same_put_value_receiver_expr(a, b))
+        }
+        (
+            Expr::NativeMethodCall {
+                module: a_module,
+                class_name: a_class,
+                object: a_object,
+                method: a_method,
+                args: a_args,
+            },
+            Expr::NativeMethodCall {
+                module: b_module,
+                class_name: b_class,
+                object: b_object,
+                method: b_method,
+                args: b_args,
+            },
+        ) => {
+            a_module == b_module
+                && a_class == b_class
+                && a_method == b_method
+                && match (a_object, b_object) {
+                    (Some(a), Some(b)) => same_put_value_receiver_expr(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+                && a_args.len() == b_args.len()
+                && a_args
+                    .iter()
+                    .zip(b_args.iter())
+                    .all(|(a, b)| same_put_value_receiver_expr(a, b))
+        }
+        (
+            Expr::PropertyGet {
+                object: a_object,
+                property: a_property,
+            },
+            Expr::PropertyGet {
+                object: b_object,
+                property: b_property,
+            },
+        ) => a_property == b_property && same_put_value_receiver_expr(a_object, b_object),
+        (
+            Expr::IndexGet {
+                object: a_object,
+                index: a_index,
+            },
+            Expr::IndexGet {
+                object: b_object,
+                index: b_index,
+            },
+        ) => {
+            same_put_value_receiver_expr(a_object, b_object)
+                && same_put_value_receiver_expr(a_index, b_index)
+        }
+        _ => false,
+    }
+}
+
+fn is_numeric_string_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.chars().all(|c| c.is_ascii_digit())
+        && !(key.len() > 1 && key.starts_with('0'))
+}
+
+fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receiver: &Expr) -> bool {
+    if !same_side_effect_free_receiver(target, receiver) || !is_array_expr(ctx, target) {
+        return false;
+    }
+    match key {
+        Expr::String(key) => is_numeric_string_key(key),
+        _ => true,
+    }
+}
+
+fn try_lower_process_env_put_value_set(
+    ctx: &mut FnCtx<'_>,
+    target: &Expr,
+    key: &Expr,
+    value: &Expr,
+    receiver: &Expr,
+) -> Result<Option<String>> {
+    if !matches!(target, Expr::ProcessEnv) || !matches!(receiver, Expr::ProcessEnv) {
+        return Ok(None);
+    }
+
+    let key_handle = match key {
+        Expr::String(property) => {
+            let key_idx = ctx.strings.intern(property);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let blk = ctx.block();
+            let key_box = blk.load(DOUBLE, &key_handle_global);
+            unbox_to_i64(blk, &key_box)
+        }
+        _ => {
+            let key_box = lower_expr(ctx, key)?;
+            let blk = ctx.block();
+            let property_key = blk.call(DOUBLE, "js_to_property_key", &[(DOUBLE, &key_box)]);
+            unbox_str_handle(blk, &property_key)
+        }
+    };
+    let val_double = lower_expr(ctx, value)?;
+    ctx.block()
+        .call_void("js_setenv", &[(I64, &key_handle), (DOUBLE, &val_double)]);
+    Ok(Some(val_double))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::ProxyNew { target, handler } => {
@@ -192,14 +480,92 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &r)],
             ))
         }
-        Expr::ReflectSet { target, key, value } => {
+        Expr::ReflectSet {
+            target,
+            key,
+            value,
+            receiver,
+        } => {
+            // Pass the optional receiver through; the runtime defaults an
+            // `undefined` receiver to the target. A receiver distinct from an
+            // Integer-Indexed target redirects the write to the receiver per
+            // OrdinarySet (test262 internals/Set/key-is-valid-index-reflect-set).
             let t = lower_expr(ctx, target)?;
             let k = lower_expr(ctx, key)?;
             let v = lower_expr(ctx, value)?;
+            let r = lower_expr(ctx, receiver)?;
             Ok(ctx.block().call(
                 DOUBLE,
                 "js_reflect_set",
-                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &v)],
+                &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &v), (DOUBLE, &r)],
+            ))
+        }
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            strict,
+        } => {
+            if let Some(value) =
+                try_lower_process_env_put_value_set(ctx, target, key, value, receiver)?
+            {
+                return Ok(value);
+            }
+            if let Expr::String(property) = key.as_ref() {
+                if matches!(property.as_str(), "caller" | "arguments")
+                    && same_side_effect_free_receiver(target, receiver)
+                {
+                    return super::property_set::lower(
+                        ctx,
+                        &Expr::PropertySet {
+                            object: target.clone(),
+                            property: property.clone(),
+                            value: value.clone(),
+                        },
+                    );
+                }
+            }
+            if let Some(property) = put_value_static_property_fast_path(ctx, target, key, receiver)
+            {
+                return super::property_set::lower(
+                    ctx,
+                    &Expr::PropertySet {
+                        object: target.clone(),
+                        property,
+                        value: value.clone(),
+                    },
+                );
+            }
+            if put_value_index_fast_path(ctx, target, key, receiver) {
+                return super::index_set::lower(
+                    ctx,
+                    &Expr::IndexSet {
+                        object: target.clone(),
+                        index: key.clone(),
+                        value: value.clone(),
+                    },
+                );
+            }
+            let t = lower_expr(ctx, target)?;
+            let k = lower_expr(ctx, key)?;
+            let v = lower_expr(ctx, value)?;
+            let r = if same_put_value_receiver_expr(target, receiver) {
+                t.clone()
+            } else {
+                lower_expr(ctx, receiver)?
+            };
+            let strict_i32 = if *strict { "1" } else { "0" };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_put_value_set",
+                &[
+                    (DOUBLE, &t),
+                    (DOUBLE, &k),
+                    (DOUBLE, &v),
+                    (DOUBLE, &r),
+                    (I32, strict_i32),
+                ],
             ))
         }
         Expr::ReflectHas { target, key } => {
@@ -246,7 +612,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let nt = lower_expr(ctx, new_target)?;
             Ok(ctx.block().call(
                 DOUBLE,
-                "js_proxy_construct",
+                "js_reflect_construct",
                 &[(DOUBLE, &t), (DOUBLE, &a), (DOUBLE, &nt)],
             ))
         }
@@ -262,6 +628,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 DOUBLE,
                 "js_reflect_define_property",
                 &[(DOUBLE, &t), (DOUBLE, &k), (DOUBLE, &d)],
+            ))
+        }
+        Expr::ReflectGetOwnPropertyDescriptor { target, key } => {
+            let t = lower_expr(ctx, target)?;
+            let k = lower_expr(ctx, key)?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_reflect_get_own_property_descriptor",
+                &[(DOUBLE, &t), (DOUBLE, &k)],
             ))
         }
         Expr::ReflectSetPrototypeOf { target, proto } => {

@@ -195,6 +195,7 @@ fn widen_mutable_captures_expr(
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         widen_mutable_captures_expr(x, scope_mutable)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -245,7 +246,7 @@ fn widen_mutable_captures_expr(
                 widen_mutable_captures_expr(arg, scope_mutable);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             widen_mutable_captures_expr(callee, scope_mutable);
             for arg in args {
                 widen_mutable_captures_expr(arg, scope_mutable);
@@ -298,7 +299,7 @@ fn widen_mutable_captures_expr(
                 widen_mutable_captures_expr(init, scope_mutable);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             widen_mutable_captures_expr(array, scope_mutable);
         }
         Expr::ArrayToSorted { array, comparator } => {
@@ -332,6 +333,19 @@ fn widen_mutable_captures_expr(
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            widen_mutable_captures_expr(target, scope_mutable);
+            widen_mutable_captures_expr(start, scope_mutable);
+            if let Some(e) = end {
+                widen_mutable_captures_expr(e, scope_mutable);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            widen_mutable_captures_expr(receiver, scope_mutable);
             widen_mutable_captures_expr(target, scope_mutable);
             widen_mutable_captures_expr(start, scope_mutable);
             if let Some(e) = end {
@@ -489,6 +503,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         collect_closure_assigned_expr(x, out)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -539,7 +554,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_assigned_expr(arg, out);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             collect_closure_assigned_expr(callee, out);
             for arg in args {
                 collect_closure_assigned_expr(arg, out);
@@ -592,7 +607,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_assigned_expr(init, out);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             collect_closure_assigned_expr(array, out);
         }
         Expr::ArrayToSorted { array, comparator } => {
@@ -626,6 +641,19 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            collect_closure_assigned_expr(target, out);
+            collect_closure_assigned_expr(start, out);
+            if let Some(e) = end {
+                collect_closure_assigned_expr(e, out);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_closure_assigned_expr(receiver, out);
             collect_closure_assigned_expr(target, out);
             collect_closure_assigned_expr(start, out);
             if let Some(e) = end {
@@ -778,6 +806,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         collect_closure_captures_expr(x, out)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -860,7 +889,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
                 collect_closure_captures_expr(init, out);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             collect_closure_captures_expr(array, out);
         }
         Expr::ArrayToSorted { array, comparator } => {
@@ -894,6 +923,19 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            collect_closure_captures_expr(target, out);
+            collect_closure_captures_expr(start, out);
+            if let Some(e) = end {
+                collect_closure_captures_expr(e, out);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_closure_captures_expr(receiver, out);
             collect_closure_captures_expr(target, out);
             collect_closure_captures_expr(start, out);
             if let Some(e) = end {
@@ -1188,6 +1230,7 @@ fn collect_closure_assigned_in_body_expr(
                     ArrayElement::Expr(x) | ArrayElement::Spread(x) => {
                         collect_closure_assigned_in_body_expr(x, out)
                     }
+                    ArrayElement::Hole => {}
                 }
             }
         }
@@ -1238,7 +1281,7 @@ fn collect_closure_assigned_in_body_expr(
                 collect_closure_assigned_in_body_expr(arg, out);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             collect_closure_assigned_in_body_expr(callee, out);
             for arg in args {
                 collect_closure_assigned_in_body_expr(arg, out);
@@ -1289,7 +1332,7 @@ fn collect_closure_assigned_in_body_expr(
                 collect_closure_assigned_in_body_expr(init, out);
             }
         }
-        Expr::ArrayToReversed { array } => {
+        Expr::ArrayToReversed { array } | Expr::ArrayReverseValue { receiver: array } => {
             collect_closure_assigned_in_body_expr(array, out);
         }
         Expr::ArrayToSorted { array, comparator } => {
@@ -1323,6 +1366,19 @@ fn collect_closure_assigned_in_body_expr(
         Expr::ArrayCopyWithin {
             target, start, end, ..
         } => {
+            collect_closure_assigned_in_body_expr(target, out);
+            collect_closure_assigned_in_body_expr(start, out);
+            if let Some(e) = end {
+                collect_closure_assigned_in_body_expr(e, out);
+            }
+        }
+        Expr::ArrayCopyWithinValue {
+            receiver,
+            target,
+            start,
+            end,
+        } => {
+            collect_closure_assigned_in_body_expr(receiver, out);
             collect_closure_assigned_in_body_expr(target, out);
             collect_closure_assigned_in_body_expr(start, out);
             if let Some(e) = end {

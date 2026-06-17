@@ -15,29 +15,15 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
-    let ast::Stmt::Expr(expr_stmt) = stmt else {
-        return None;
-    };
-    let mut expr = expr_stmt.expr.as_ref();
-    while let ast::Expr::Paren(paren) = expr {
-        expr = paren.expr.as_ref();
-    }
-    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
-        return None;
-    };
-    s.value.as_str()
-}
-
 fn module_has_strict_mode(ast_module: &ast::Module) -> bool {
     for item in &ast_module.body {
         match item {
             ast::ModuleItem::ModuleDecl(_) => return true,
             ast::ModuleItem::Stmt(stmt) => {
-                let Some(directive) = stmt_is_string_directive(stmt) else {
+                let Some(directive) = string_directive_stmt_lit(stmt) else {
                     break;
                 };
-                if directive == "use strict" {
+                if is_raw_use_strict_directive(directive) {
                     return true;
                 }
             }
@@ -126,6 +112,13 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
                 }
             }
             ast::Stmt::Throw(throw_stmt) => collect_from_expr(&throw_stmt.arg, out),
+            ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
+                for decl in &var_decl.decls {
+                    if let Some(init) = &decl.init {
+                        collect_from_expr(init, out);
+                    }
+                }
+            }
             ast::Stmt::Decl(_)
             | ast::Stmt::Break(_)
             | ast::Stmt::Continue(_)
@@ -141,7 +134,15 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
                 if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) =
                     &assign.left
                 {
-                    out.insert(ident.id.sym.to_string());
+                    let name = ident.id.sym.as_ref();
+                    let is_self_read = assign.op == ast::AssignOp::Assign
+                        && matches!(
+                            assign.right.as_ref(),
+                            ast::Expr::Ident(rhs) if rhs.sym.as_ref() == name
+                        );
+                    if !is_self_read {
+                        out.insert(name.to_string());
+                    }
                 }
                 collect_from_expr(&assign.right, out);
             }
@@ -201,6 +202,15 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
     for item in &ast_module.body {
         match item {
             ast::ModuleItem::Stmt(stmt) => collect_from_stmt(stmt, &mut out),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
+                if let ast::Decl::Var(var_decl) = &export_decl.decl {
+                    for decl in &var_decl.decls {
+                        if let Some(init) = &decl.init {
+                            collect_from_expr(init, &mut out);
+                        }
+                    }
+                }
+            }
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(default_expr)) => {
                 collect_from_expr(&default_expr.expr, &mut out);
             }
@@ -259,6 +269,7 @@ pub fn lower_module_with_class_id_types_and_seed(
         start_class_id,
         resolved_types,
         imported_class_fields,
+        None,
         false,
     )
 }
@@ -274,6 +285,7 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
 ) -> Result<(Module, ClassId)> {
     lower_module_full(
@@ -283,9 +295,35 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
         start_class_id,
         resolved_types,
         imported_class_fields,
+        imported_class_accessors,
         is_entry_module,
         false,
     )
+}
+
+/// #4461: true when a `var/let/const X = class { ... }` declarator binds an
+/// identifier to a class *expression* (unwrapping `paren`/`as`/`!`/type-
+/// assertion layers that esbuild/rollup dist bundles emit). Such bindings are
+/// lowered to a class named after the binding in `stmt.rs`, so they must not be
+/// pre-registered as module-level locals (which would shadow the class ref).
+fn decl_init_is_class_expr(decl: &ast::VarDeclarator) -> bool {
+    if !matches!(decl.name, ast::Pat::Ident(_)) {
+        return false;
+    }
+    let mut e = match &decl.init {
+        Some(init) => init.as_ref(),
+        None => return false,
+    };
+    loop {
+        match e {
+            ast::Expr::Paren(p) => e = &p.expr,
+            ast::Expr::TsAs(a) => e = &a.expr,
+            ast::Expr::TsNonNull(n) => e = &n.expr,
+            ast::Expr::TsTypeAssertion(a) => e = &a.expr,
+            ast::Expr::Class(_) => return true,
+            _ => return false,
+        }
+    }
 }
 
 /// Issue #668: superset of the `_seed_and_entry` wrapper that also accepts
@@ -300,6 +338,7 @@ pub fn lower_module_full(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
     is_external_module: bool,
 ) -> Result<(Module, ClassId)> {
@@ -307,11 +346,20 @@ pub fn lower_module_full(
     ctx.resolved_types = resolved_types;
     ctx.is_entry_module = is_entry_module;
     ctx.is_external_module = is_external_module;
-    ctx.current_strict = module_has_strict_mode(ast_module);
+    ctx.module_strict = module_has_strict_mode(ast_module);
+    ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
     }
+    if let Some(seed) = imported_class_accessors {
+        ctx.seed_imported_class_accessors(seed);
+    }
     let mut module = Module::new(name);
+
+    // Pre-scan for `new Function` / `Function(...)` constant-argument
+    // resolution: single-assignment module vars, `toString`-bearing object
+    // literals, and counter vars (see `fn_ctor_env`).
+    ctx.fn_ctor_env = super::fn_ctor_env::build_fn_ctor_env(ast_module);
 
     // Pre-scan for WeakRef/FinalizationRegistry variable declarations so subsequent
     // method-call lowering (`x.deref()`, `x.register(...)`, `x.unregister(...)`) can
@@ -322,6 +370,11 @@ pub fn lower_module_full(
     // `return class extends <param> { ... };`. Lets `const Mixed = MixinFn(SomeClass)`
     // synthesize a real concrete class extending `SomeClass`.
     pre_scan_mixin_functions(ast_module, &mut ctx);
+
+    // #4510: register module-level enums up front so a function body (or any
+    // statement) that references an enum declared later in the file resolves
+    // the member instead of silently lowering to 0.
+    pre_register_module_enums(ast_module, &mut ctx);
 
     // JSX expressions lower directly to the built-in `jsx`/`jsxs` externs in
     // `jsx.rs`. Do not synthesize a `react/jsx-runtime` import here: codegen
@@ -434,6 +487,33 @@ pub fn lower_module_full(
         }
     }
 
+    // #5134: a *named* `export default function foo() {}` also introduces a
+    // hoisted `foo` binding in module scope — usable for self-recursion and
+    // same-module references, exactly like a plain `function foo`. The earlier
+    // loop only handles `Stmt::Decl(Fn)` / `export function`, so without this
+    // the name went unregistered and references to it (e.g. ramda's
+    // `_curryN` calling itself inside its returned closure) lowered to an
+    // unresolved global → `ReferenceError: _curryN is not defined`. The
+    // dedicated lowering in `module_decl.rs` reuses this pre-registered id
+    // (`lower_fn_decl`: `lookup_func(name).unwrap_or_else(fresh_func)`).
+    for item in &ast_module.body {
+        if let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultDecl(export_default)) =
+            item
+        {
+            if let ast::DefaultDecl::Fn(fn_expr) = &export_default.decl {
+                if let Some(ident) = &fn_expr.ident {
+                    if fn_expr.function.body.is_some() {
+                        let func_name = ident.sym.to_string();
+                        if ctx.lookup_func(&func_name).is_none() {
+                            let func_id = ctx.fresh_func();
+                            ctx.register_func(func_name, func_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Pre-register module-level variable declarations so function bodies
     // declared before the variable can still reference them via lookup_local
     for item in &ast_module.body {
@@ -450,6 +530,18 @@ pub fn lower_module_full(
         };
         if let Some(var_decl) = var_decl {
             for decl in &var_decl.decls {
+                // #4461: `var X = class { ... }` is lowered as a class
+                // expression bound to the name `X` (see stmt.rs) — the class
+                // itself takes the role of the value referenced by name, and
+                // no `Stmt::Let` is ever emitted for `X`. Pre-registering `X`
+                // as a module-level local here would shadow that class with a
+                // never-assigned local, so a value read of `X` (`typeof X`,
+                // `X.staticMethod`, passing `X` around) resolved to the
+                // undefined local instead of the class ref. Skip the local so
+                // `Ident("X")` lowers to `Expr::ClassRef("X")`.
+                if decl_init_is_class_expr(decl) {
+                    continue;
+                }
                 if let ast::Pat::Ident(ident) = &decl.name {
                     let name = ident.id.sym.to_string();
                     if ctx.lookup_local(&name).is_none() {
@@ -460,8 +552,58 @@ pub fn lower_module_full(
                             .unwrap_or(Type::Any);
                         ctx.define_local(name.clone(), ty);
                         ctx.pre_registered_module_vars.insert(name);
+                        if var_decl.kind == ast::VarDeclKind::Var {
+                            ctx.pre_registered_module_var_decls
+                                .insert(ident.id.sym.to_string());
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    // Pre-register `var` bindings nested inside module-level blocks, loops,
+    // try/catch, switch and with statements. `var` is function/module-scoped,
+    // so `__x = __x` before `try { var __x; }`, or a read of `foo` after
+    // `try { ... } catch (e) { var foo = 1; }`, must resolve to one hoisted
+    // module binding (initialised to undefined) rather than an implicit-global
+    // lookup that throws ReferenceError at runtime. The ids go into
+    // `var_hoisted_ids` so the nested `Stmt::Let` reuses them (see the
+    // `is_var_decl` reuse path in destructuring/var_decl.rs) and block-scope
+    // pops preserve them.
+    for item in &ast_module.body {
+        let stmt = match item {
+            ast::ModuleItem::Stmt(stmt) => stmt,
+            _ => continue,
+        };
+        // Direct top-level var decls are handled by the pass above; only
+        // walk into compound statements for nested `var`s here.
+        if matches!(stmt, ast::Stmt::Decl(_)) {
+            continue;
+        }
+        let mut names = Vec::new();
+        crate::lower_decl::collect_var_binding_names_from_stmt(stmt, &mut names);
+        names.sort();
+        names.dedup();
+        for name in names {
+            if ctx.lookup_local(&name).is_none() {
+                let id = ctx.define_local(name.clone(), Type::Any);
+                ctx.var_hoisted_ids.insert(id);
+                // Emit an explicit undefined-initialised slot at the top of
+                // module init. Codegen creates local storage at the first
+                // `Stmt::Let` it sees for an id; without this, a read
+                // compiled before the nested decl (e.g. `if (c) break;`
+                // ahead of `var c = ...` inside the same loop body) bakes
+                // in an `undefined` constant and never observes the write.
+                // The nested `Stmt::Let` later reuses this slot via the
+                // redeclaration → LocalSet path in codegen's lower_let.
+                module.init.push(Stmt::Let {
+                    id,
+                    name,
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Undefined),
+                });
             }
         }
     }
@@ -472,18 +614,31 @@ pub fn lower_module_full(
     // fails if FullMath is declared after SqrtPriceMath.
     for item in &ast_module.body {
         let class_decl = match item {
-            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(cd))) => Some(cd),
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(cd))) => {
+                Some((cd.ident.sym.to_string(), &cd.class))
+            }
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
                 if let ast::Decl::Class(cd) = &export_decl.decl {
-                    Some(cd)
+                    Some((cd.ident.sym.to_string(), &cd.class))
                 } else {
                     None
                 }
             }
+            // #4976: named inline `export default class Name { … }` is a
+            // real class declaration too — pre-register it so same-file
+            // static cross-references resolve regardless of order.
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultDecl(
+                ast::ExportDefaultDecl {
+                    decl: ast::DefaultDecl::Class(class_expr),
+                    ..
+                },
+            )) => class_expr
+                .ident
+                .as_ref()
+                .map(|ident| (ident.sym.to_string(), &class_expr.class)),
             _ => None,
         };
-        if let Some(cd) = class_decl {
-            let name = cd.ident.sym.to_string();
+        if let Some((name, cd)) = class_decl {
             if ctx.lookup_class(&name).is_none() {
                 let id = ctx.fresh_class();
                 ctx.register_class(name.clone(), id);
@@ -491,17 +646,29 @@ pub fn lower_module_full(
             // Collect static field/method names
             let mut static_field_names = Vec::new();
             let mut static_method_names = Vec::new();
-            for member in &cd.class.body {
+            for member in &cd.body {
                 match member {
-                    ast::ClassMember::Method(method) if method.is_static => {
+                    // Only true static *methods* register as callable statics.
+                    // Static accessors (`static get foo()`) are NOT methods —
+                    // `C.foo(...)` must read the accessor (invoking the getter)
+                    // and call its result, not dispatch a static method named
+                    // `foo`. Registering them here makes `has_static_method`
+                    // hijack the call into a StaticMethodCall whose target
+                    // doesn't exist, silently dropping the call. Refs test262
+                    // language/arguments-object cls-*-static-* getter calls.
+                    ast::ClassMember::Method(method)
+                        if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+                    {
                         if let ast::PropName::Ident(ident) = &method.key {
                             static_method_names.push(ident.sym.to_string());
                         }
                     }
-                    ast::ClassMember::PrivateMethod(method) if method.is_static => {
+                    ast::ClassMember::PrivateMethod(method)
+                        if method.is_static && matches!(method.kind, ast::MethodKind::Method) =>
+                    {
                         static_method_names.push(format!("#{}", method.key.name));
                     }
-                    ast::ClassMember::ClassProp(prop) if prop.is_static => {
+                    ast::ClassMember::ClassProp(prop) if prop.is_static && !prop.declare => {
                         if let ast::PropName::Ident(ident) = &prop.key {
                             static_field_names.push(ident.sym.to_string());
                         }
@@ -541,11 +708,35 @@ pub fn lower_module_full(
         for (id, name) in ctx.closure_display_names.drain() {
             module.closure_display_names.insert(id, name);
         }
+        // Flush generator param-prologue lengths (run param binding at call time).
+        for (id, len) in ctx.gen_param_prologue_len.drain() {
+            module.gen_param_prologue_len.insert(id, len);
+        }
+        // #4101: flush captured function source text for `fn.toString()`.
+        for (id, src) in ctx.closure_source_text.drain() {
+            module.closure_source_text.insert(id, src);
+        }
         // Flush any pending classes created during expression lowering
         // (e.g., class expressions in `new (class extends Command { ... })()`)
         for class in ctx.pending_classes.drain(..) {
             push_class_dedup(&mut module, class);
         }
+    }
+
+    if !ctx.sloppy_implicit_globals.is_empty() {
+        let mut implicit_globals: Vec<Stmt> = ctx
+            .sloppy_implicit_globals
+            .iter()
+            .map(|(name, id)| Stmt::Let {
+                id: *id,
+                name: name.clone(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            })
+            .collect();
+        implicit_globals.append(&mut module.init);
+        module.init = implicit_globals;
     }
 
     // Populate exported_native_instances by matching native_instances with exports
@@ -622,6 +813,57 @@ pub fn lower_module_full(
         }
         if let Some(ref mut ctor) = class.constructor {
             widen_mutable_captures_stmts(&mut ctor.body);
+        }
+    }
+
+    // Post-pass: widen declared types lied about by later assignments
+    // (`var x = 2; … set foo(v){ x = this; }` must not leave `x: Number`,
+    // or codegen float-compares NaN-boxed pointers — #3576 family). Collect
+    // over EVERY body first (LocalIds are module-unique; the assignment and
+    // the `Stmt::Let` can live in different bodies), then rewrite.
+    {
+        let mut widening = crate::lower::type_widening::TypeWidening::new();
+        widening.collect(&module.init);
+        for func in &module.functions {
+            widening.collect(&func.body);
+        }
+        for class in &module.classes {
+            for method in &class.methods {
+                widening.collect(&method.body);
+            }
+            for (_, getter) in &class.getters {
+                widening.collect(&getter.body);
+            }
+            for (_, setter) in &class.setters {
+                widening.collect(&setter.body);
+            }
+            for static_method in &class.static_methods {
+                widening.collect(&static_method.body);
+            }
+            if let Some(ref ctor) = class.constructor {
+                widening.collect(&ctor.body);
+            }
+        }
+        widening.apply(&mut module.init);
+        for func in &mut module.functions {
+            widening.apply(&mut func.body);
+        }
+        for class in &mut module.classes {
+            for method in &mut class.methods {
+                widening.apply(&mut method.body);
+            }
+            for (_, getter) in &mut class.getters {
+                widening.apply(&mut getter.body);
+            }
+            for (_, setter) in &mut class.setters {
+                widening.apply(&mut setter.body);
+            }
+            for static_method in &mut class.static_methods {
+                widening.apply(&mut static_method.body);
+            }
+            if let Some(ref mut ctor) = class.constructor {
+                widening.apply(&mut ctor.body);
+            }
         }
     }
 

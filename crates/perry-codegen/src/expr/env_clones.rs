@@ -58,6 +58,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // this same singleton for `globalThis.process.env` etc.
             Ok(ctx.block().call(DOUBLE, "js_get_global_this", &[]))
         }
+        Expr::ModuleTopThis => {
+            // CJS-style module top-level `this`: a lazily-allocated plain
+            // object (the module's `exports` stand-in), NOT `globalThis`.
+            Ok(ctx.block().call(DOUBLE, "js_module_top_this", &[]))
+        }
         Expr::DateToISOString(d) => {
             let v = lower_expr(ctx, d)?;
             let blk = ctx.block();
@@ -90,15 +95,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_expr(ctx, d)?;
             let inferred = crate::type_analysis::refine_type_from_init(ctx, d)
                 .or_else(|| crate::type_analysis::static_type_of(ctx, d));
-            let rt_fn = match inferred {
+            match inferred {
                 Some(perry_types::Type::Number) | Some(perry_types::Type::Int32) => {
-                    "js_number_to_locale_string"
+                    let blk = ctx.block();
+                    let handle = blk.call(I64, "js_number_to_locale_string", &[(DOUBLE, &v)]);
+                    Ok(nanbox_string_inline(blk, &handle))
                 }
-                _ => "js_date_to_locale_string",
-            };
-            let blk = ctx.block();
-            let handle = blk.call(I64, rt_fn, &[(DOUBLE, &v)]);
-            Ok(nanbox_string_inline(blk, &handle))
+                // #4546: a plain object / string / boolean receiver was
+                // mis-routed to `js_date_to_locale_string`, printing a
+                // 1970-epoch "Invalid Date" instead of `[object Object]`
+                // (or a custom `toLocaleString`). Dispatch on the value's
+                // runtime tag instead; the helper returns an already
+                // NaN-boxed value, so do NOT re-box it.
+                _ => {
+                    let blk = ctx.block();
+                    Ok(blk.call(DOUBLE, "js_value_to_locale_string", &[(DOUBLE, &v)]))
+                }
+            }
         }
         // #600: `fetchWithAuth(url, "Bearer ...")` — perry's recognized
         // built-in for authenticated GET. Dispatches to perry-stdlib's

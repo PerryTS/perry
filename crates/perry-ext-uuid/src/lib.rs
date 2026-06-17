@@ -29,6 +29,53 @@ pub extern "C" fn js_uuid_v7() -> *mut StringHeader {
     alloc_string(&uuid.to_string()).as_raw()
 }
 
+/// Parse a NaN-boxed namespace argument into a `Uuid`. The shim only
+/// supports the string-UUID namespace form (`v5(name, '6ba7…')`), which
+/// covers the `uuid.v5.DNS`/`uuid.v5.URL` constants and the overwhelming
+/// majority of real usage. A non-string / unparseable namespace falls
+/// back to the nil UUID rather than crashing — the array-namespace form
+/// is only reachable via `perry.compilePackages` (real source).
+unsafe fn parse_namespace(ns_ptr: *const StringHeader) -> Uuid {
+    let handle = JsString::from_raw(ns_ptr as *mut StringHeader);
+    read_string(handle)
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_else(Uuid::nil)
+}
+
+/// `uuid.v5(name, namespace)` — SHA-1 name-based UUID.
+///
+/// # Safety
+///
+/// `name_ptr` / `ns_ptr` must be null or Perry-runtime `StringHeader`
+/// pointers.
+#[no_mangle]
+pub unsafe extern "C" fn js_uuid_v5(
+    name_ptr: *const StringHeader,
+    ns_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let name = read_string(JsString::from_raw(name_ptr as *mut StringHeader)).unwrap_or("");
+    let namespace = parse_namespace(ns_ptr);
+    let uuid = Uuid::new_v5(&namespace, name.as_bytes());
+    alloc_string(&uuid.to_string()).as_raw()
+}
+
+/// `uuid.v3(name, namespace)` — MD5 name-based UUID.
+///
+/// # Safety
+///
+/// `name_ptr` / `ns_ptr` must be null or Perry-runtime `StringHeader`
+/// pointers.
+#[no_mangle]
+pub unsafe extern "C" fn js_uuid_v3(
+    name_ptr: *const StringHeader,
+    ns_ptr: *const StringHeader,
+) -> *mut StringHeader {
+    let name = read_string(JsString::from_raw(name_ptr as *mut StringHeader)).unwrap_or("");
+    let namespace = parse_namespace(ns_ptr);
+    let uuid = Uuid::new_v3(&namespace, name.as_bytes());
+    alloc_string(&uuid.to_string()).as_raw()
+}
+
 /// `uuid.validate(str) -> boolean` — encoded as `1.0` / `0.0`
 /// because the Perry FFI ABI carries booleans as f64.
 ///
@@ -124,5 +171,36 @@ mod tests {
     fn nil_is_all_zeros_with_dashes() {
         let s = read_handle(js_uuid_nil());
         assert_eq!(s, "00000000-0000-0000-0000-000000000000");
+    }
+
+    #[test]
+    fn v5_matches_the_reference_vector() {
+        // `v5('perry', '6ba7b810-9dad-11d1-80b4-00c04fd430c8')` — the
+        // exact value Node's `uuid` produces (issue #5197).
+        let name = alloc_string("perry");
+        let ns = alloc_string("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+        let id =
+            read_handle(unsafe { js_uuid_v5(name.as_raw() as *const _, ns.as_raw() as *const _) });
+        assert_eq!(id, "6cb3836f-339d-52d8-acc6-8751229b61cf");
+        let id_handle = alloc_string(&id);
+        assert_eq!(
+            unsafe { js_uuid_version(id_handle.as_raw() as *const _) },
+            5.0
+        );
+    }
+
+    #[test]
+    fn v3_matches_the_reference_vector() {
+        // `v3('perry', '6ba7b810-9dad-11d1-80b4-00c04fd430c8')`.
+        let name = alloc_string("perry");
+        let ns = alloc_string("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+        let id =
+            read_handle(unsafe { js_uuid_v3(name.as_raw() as *const _, ns.as_raw() as *const _) });
+        assert_eq!(id, "3533df6e-72b1-3859-a772-7410b3d2f9c2");
+        let id_handle = alloc_string(&id);
+        assert_eq!(
+            unsafe { js_uuid_version(id_handle.as_raw() as *const _) },
+            3.0
+        );
     }
 }

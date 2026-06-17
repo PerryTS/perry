@@ -467,8 +467,15 @@ fn readable_unshift_prepends_chunk_and_returns_hwm_signal() {
     );
     assert_eq!(js_node_stream_method_readable_length(handle), 11.0);
 
-    let joined = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
-    assert_eq!(stream_test_buffer_bytes(joined), b"hello world");
+    // Node v26 `read()` with no size and no decoder returns the head chunk only
+    // — one buffer at a time — not the whole concatenated buffer. The unshifted
+    // chunk becomes the new head, so the first read yields "hello " and "world"
+    // remains for the next read. (internal/streams/readable, howMuchToRead(NaN))
+    let head = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(head), b"hello ");
+    assert_eq!(js_node_stream_method_readable_length(handle), 5.0);
+    let tail = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(tail), b"world");
     assert_eq!(js_node_stream_method_readable_length(handle), 0.0);
 
     let opts = crate::object::js_object_alloc(0, 1);
@@ -493,8 +500,13 @@ fn readable_unshift_after_eof_before_end_prepends_chunk() {
         TAG_TRUE
     );
 
-    let joined = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
-    assert_eq!(stream_test_buffer_bytes(joined), b"hello world");
+    // Chunk-at-a-time (no decoder): `read()` returns the unshifted head
+    // ("hello ") and leaves "world" for the next read, even though EOF was
+    // already signalled via push(null). Matches node v26.
+    let head = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(head), b"hello ");
+    let tail = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    assert_eq!(stream_test_buffer_bytes(tail), b"world");
 }
 
 fn stream_test_buffer_bytes(value: f64) -> Vec<u8> {
@@ -961,6 +973,60 @@ fn writable_lifecycle_flags_reflect_end_and_finish() {
     );
     WRITABLE_FINISH_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
     WRITABLE_CLOSE_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+}
+
+#[test]
+fn readable_emit_close_false_suppresses_destroy_close_event() {
+    WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"emitClose"), f64::from_bits(TAG_FALSE));
+    let stream = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
+    let _ = js_node_stream_method_on(handle, string_value("close"), close);
+
+    let _ = js_node_stream_method_destroy(handle, f64::from_bits(TAG_UNDEFINED));
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    assert_eq!(js_node_stream_method_destroyed(handle).to_bits(), TAG_TRUE);
+    assert_eq!(js_node_stream_method_closed(handle).to_bits(), TAG_TRUE);
+    WRITABLE_CLOSE_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
+}
+
+#[test]
+fn readable_auto_destroy_false_does_not_close_after_end() {
+    WRITABLE_CLOSE_COUNT.with(|count| *count.borrow_mut() = 0);
+    READABLE_END_COUNT.with(|count| *count.borrow_mut() = 0);
+    READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
+
+    let opts = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(opts, hidden_key(b"autoDestroy"), f64::from_bits(TAG_FALSE));
+    let stream = js_node_stream_readable_new(box_pointer(opts as *const u8));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let close = box_pointer(js_closure_alloc(capture_close_listener as *const u8, 0) as *const u8);
+    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
+    let data = box_pointer(data_closure as *const u8);
+    let end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(end_closure, 0, stream);
+    let end = box_pointer(end_closure as *const u8);
+
+    let _ = js_node_stream_method_on(handle, string_value("close"), close);
+    let _ = js_node_stream_method_on(handle, string_value("data"), data);
+    let _ = js_node_stream_method_on(handle, string_value("end"), end);
+    let _ = js_node_stream_method_push(handle, string_value("a"));
+    let _ = js_node_stream_method_push(handle, f64::from_bits(TAG_NULL));
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    READABLE_DATA_CAPTURED
+        .with(|captured| assert_eq!(captured.borrow().as_slice(), &[b"a".to_vec()]));
+    READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    assert_eq!(js_node_stream_method_destroyed(handle).to_bits(), TAG_FALSE);
+    assert_eq!(js_node_stream_method_closed(handle).to_bits(), TAG_FALSE);
+    WRITABLE_CLOSE_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
 }
 
 #[test]

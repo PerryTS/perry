@@ -14,14 +14,27 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
-fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
+pub(crate) fn string_directive_stmt_lit(stmt: &ast::Stmt) -> Option<&ast::Str> {
     let ast::Stmt::Expr(expr_stmt) = stmt else {
         return None;
     };
     let ast::Expr::Lit(ast::Lit::Str(str_lit)) = expr_stmt.expr.as_ref() else {
         return None;
     };
-    Some(str_lit.value.as_str() == Some("use strict"))
+    Some(str_lit)
+}
+
+pub(crate) fn is_raw_use_strict_directive(str_lit: &ast::Str) -> bool {
+    // Directive recognition is based on the raw token text. The cooked string
+    // value would incorrectly treat escapes like "use\x20strict" as strict.
+    matches!(
+        str_lit.raw.as_ref().map(|raw| raw.as_ref()),
+        Some("\"use strict\"") | Some("'use strict'")
+    )
+}
+
+fn is_use_strict_directive_stmt(stmt: &ast::Stmt) -> Option<bool> {
+    string_directive_stmt_lit(stmt).map(is_raw_use_strict_directive)
 }
 
 pub(crate) fn stmt_list_starts_with_use_strict_directive(stmts: &[ast::Stmt]) -> bool {
@@ -244,8 +257,66 @@ pub(crate) fn prop_name_to_string(name: &ast::PropName) -> String {
     match name {
         ast::PropName::Ident(ident) => ident.sym.to_string(),
         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-        ast::PropName::Num(n) => format!("{}", n.value),
+        ast::PropName::Num(n) => number_to_js_key(n.value),
         _ => String::new(),
+    }
+}
+
+/// ECMA-262 `Number::toString(m)` (base 10) — the canonical property-key
+/// spelling of a numeric literal member/key. Rust's `f64::to_string` never uses
+/// exponential notation, so `0.0000001` would stringify to `"0.0000001"` while
+/// JS (and Perry's runtime key coercion, `js_jsvalue_to_string`) produces
+/// `"1e-7"`. A numeric-keyed member registered under the Rust spelling would
+/// then be unreachable via `obj[0.0000001]`. This matches the runtime so the
+/// two agree (Test262 .../accessor-name-*/literal-numeric-non-canonical etc.).
+pub(crate) fn number_to_js_key(m: f64) -> String {
+    if m.is_nan() {
+        return "NaN".to_string();
+    }
+    if m == 0.0 {
+        return "0".to_string(); // both +0 and -0 → "0"
+    }
+    if m < 0.0 {
+        return format!("-{}", number_to_js_key(-m));
+    }
+    if m.is_infinite() {
+        return "Infinity".to_string();
+    }
+    // Rust's `{:e}` yields the shortest round-tripping mantissa with a base-10
+    // exponent: `d[.ddd]e<exp>` (exp has no leading '+'). Reconstruct ECMA's
+    // (digits k, point position n) from it.
+    let sci = format!("{:e}", m);
+    let (mant, exp_str) = match sci.split_once('e') {
+        Some(parts) => parts,
+        None => return sci,
+    };
+    let big_e: i32 = exp_str.parse().unwrap_or(0);
+    let digits: String = mant.chars().filter(|c| *c != '.').collect();
+    let k = digits.len() as i32;
+    let n = big_e + 1;
+    if k <= n && n <= 21 {
+        let mut s = digits;
+        for _ in 0..(n - k) {
+            s.push('0');
+        }
+        s
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        let mut s = String::from("0.");
+        for _ in 0..(-n) {
+            s.push('0');
+        }
+        s.push_str(&digits);
+        s
+    } else {
+        let exp = n - 1;
+        let sign = if exp >= 0 { "+" } else { "-" };
+        if k == 1 {
+            format!("{}e{}{}", digits, sign, exp.abs())
+        } else {
+            format!("{}.{}e{}{}", &digits[..1], &digits[1..], sign, exp.abs())
+        }
     }
 }
 
@@ -346,73 +417,4 @@ pub(crate) fn is_ast_string_expr(ctx: &LoweringContext, expr: &ast::Expr) -> boo
         }
         _ => false,
     }
-}
-
-/// Detect whether a var initializer is `regex.exec(str)` (after stripping
-/// non-null assertion `!`). Used to mark locals so subsequent `.index`/`.groups`
-/// accesses can route to the bare RegExpExecIndex/Groups HIR variants.
-pub(crate) fn is_regex_exec_init(ctx: &LoweringContext, init: &ast::Expr) -> bool {
-    let expr = match init {
-        ast::Expr::TsNonNull(nn) => nn.expr.as_ref(),
-        other => other,
-    };
-    if let ast::Expr::Call(call) = expr {
-        if let ast::Callee::Expr(callee) = &call.callee {
-            if let ast::Expr::Member(member) = callee.as_ref() {
-                if let ast::MemberProp::Ident(method) = &member.prop {
-                    let name = method.sym.as_ref();
-                    // `regex.exec(str)` — receiver is RegExp.
-                    if name == "exec" {
-                        return match member.obj.as_ref() {
-                            ast::Expr::Lit(ast::Lit::Regex(_)) => true,
-                            ast::Expr::Ident(ident) => ctx
-                                .lookup_local_type(ident.sym.as_ref())
-                                .map(|ty| matches!(ty, Type::Named(n) if n == "RegExp"))
-                                .unwrap_or(false),
-                            _ => false,
-                        };
-                    }
-                    // `str.match(regex)` — receiver is String (or
-                    // untyped/Any). The match result has the same
-                    // .index / .groups shape as exec() when the regex
-                    // isn't global, so reuse the same thread-local
-                    // pickup (LAST_EXEC_GROUPS). The match runtime
-                    // stores groups there alongside exec.
-                    if name == "match" {
-                        let recv_ok = match member.obj.as_ref() {
-                            ast::Expr::Lit(ast::Lit::Str(_)) | ast::Expr::Tpl(_) => true,
-                            ast::Expr::Ident(ident) => {
-                                // Accept String OR Any/unknown — false
-                                // positives are limited to user-defined
-                                // `.match()` on Any-typed receivers and
-                                // their `.groups` reads naturally fall
-                                // through to undefined when no string-
-                                // match preceded them.
-                                let ty = ctx.lookup_local_type(ident.sym.as_ref());
-                                matches!(ty, Some(Type::String) | Some(Type::Any) | None)
-                            }
-                            _ => false,
-                        };
-                        // Skip global regex matches — match() with /g
-                        // returns a flat array of full matches with no
-                        // group metadata. Detect via a regex-literal
-                        // arg with `g` flag; an Ident arg (regex stored
-                        // in a variable) is optimistically treated as
-                        // non-global since the common shape is `str.match(/.../)`.
-                        if recv_ok {
-                            let first_arg_is_global_regex =
-                                call.args.first().and_then(|arg| match arg.expr.as_ref() {
-                                    ast::Expr::Lit(ast::Lit::Regex(rx)) => {
-                                        Some(rx.flags.as_ref().contains('g'))
-                                    }
-                                    _ => None,
-                                });
-                            return !matches!(first_arg_is_global_regex, Some(true));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    false
 }

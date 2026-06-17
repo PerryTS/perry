@@ -16,13 +16,15 @@ const nextMatching = async (iterator, predicate) => {
 
 const iterator = watch(ROOT);
 
+const firstPending = nextMatching(iterator, (event) => event.filename === "promise.txt");
 await new Promise((resolve) => setTimeout(resolve, 80));
 fs.writeFileSync(ROOT + "/promise.txt", "a");
-const firstResult = await nextMatching(iterator, (event) => event.filename === "promise.txt");
+const firstResult = await firstPending;
 
+const secondPending = nextMatching(iterator, (event) => event.filename === "promise.txt");
 await new Promise((resolve) => setTimeout(resolve, 80));
 fs.appendFileSync(ROOT + "/promise.txt", "b");
-const secondResult = await nextMatching(iterator, (event) => event.filename === "promise.txt");
+const secondResult = await secondPending;
 
 const returned = await iterator.return();
 const afterReturn = await iterator.next();

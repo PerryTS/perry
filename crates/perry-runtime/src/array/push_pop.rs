@@ -3,6 +3,45 @@ use super::*;
 use crate::arena::arena_alloc_gc;
 use std::ptr;
 
+/// `pop`/`shift`/`push`/`unshift` on a frozen array perform a `Set`/`Delete`
+/// with `Throw = true` internally (ECMA-262 §23.1.3.*), so a non-writable
+/// `length` / non-extensible receiver makes them throw a **TypeError** — they
+/// must not silently no-op. Used by the frozen guards below.
+#[cold]
+fn throw_frozen_array_mutation() -> ! {
+    crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
+}
+
+/// `push`/`pop`/`shift`/`unshift` always perform `Set(O, "length", …, true)`
+/// (ECMA-262 §23.1.3.*), so an array whose `length` was made non-writable via
+/// `Object.defineProperty(arr, "length", { writable: false })` makes them throw
+/// a **TypeError** — even when the call would otherwise be a no-op (empty array,
+/// zero-arg). A *frozen* array is caught by `array_is_frozen` first (same throw);
+/// this covers the non-writable-`length`-only case. (test262
+/// Array.prototype.{push,pop,shift,unshift}/set-length-*-non-writable.)
+#[inline]
+pub(crate) fn array_length_is_non_writable(arr: *const ArrayHeader) -> bool {
+    let flags = array_object_flags(arr);
+    flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        && crate::object::get_property_attrs(arr as usize, "length")
+            .map(|a| !a.writable())
+            .unwrap_or(false)
+}
+
+#[cold]
+fn throw_non_writable_length() -> ! {
+    crate::collection_iter::throw_type_error(
+        "Cannot assign to read only property 'length' of object '[object Array]'",
+    );
+}
+
+#[inline]
+pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
+    if array_length_is_non_writable(arr) {
+        throw_non_writable_length();
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mut ArrayHeader {
     if arr.is_null() || (arr as usize) < 0x1000 {
@@ -13,6 +52,9 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(min_capacity);
+    }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+        return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
@@ -95,12 +137,57 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
 }
 
 /// Push an element to the end of an array, growing if needed
+/// #5135: read `Get(proxy, "length")` and ToLength-coerce it. Used by the
+/// proxy-array push path so immer drafts (Proxies typed as arrays) mutate
+/// through their traps instead of a native ArrayHeader deref.
+unsafe fn proxy_array_length(proxy: f64) -> u64 {
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    let n = crate::builtins::js_number_coerce(crate::proxy::js_proxy_get(proxy, key_f64));
+    if n.is_finite() && n >= 0.0 {
+        n as u64
+    } else {
+        0
+    }
+}
+
+/// #5135: `Set(proxy, <string key>, value)` through the proxy's `set` trap. The
+/// key string is allocated fresh per call so an intervening GC can't leave a
+/// stale interior pointer.
+unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = crate::value::js_nanbox_string(key as i64);
+    crate::proxy::js_proxy_set(proxy, key_f64, value);
+}
+
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    // #5135: a Proxy whose static type is an array (immer drafts) reaches here
+    // with the masked proxy id. Perform the spec `Array.prototype.push` for a
+    // single element directly through the proxy's `get`/`set` traps:
+    //   len = ToLength(Get(P, "length")); Set(P, len, value); Set(P, "length", len+1)
+    // Routing through the native push (`js_native_call_method`) would recurse
+    // back here with the same proxy. Return `arr` unchanged so the codegen's
+    // realloc write-back is a no-op (the proxy mutates its target in place).
+    if let Some(proxy) = array_ptr_as_proxy(arr) {
+        let len = unsafe { proxy_array_length(proxy) };
+        unsafe {
+            proxy_set_str_key(proxy, len.to_string().as_bytes(), value);
+            proxy_set_str_key(proxy, b"length", (len as f64) + 1.0);
+        }
+        return arr;
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(0);
+    }
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    guard_writable_length(arr);
+    if array_is_sealed_or_no_extend(arr) {
+        return arr;
     }
     unsafe {
         let length = (*arr).length;
@@ -122,6 +209,11 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
 }
 
 #[no_mangle]
+pub extern "C" fn js_array_push_hole(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    js_array_push_f64(arr, f64::from_bits(crate::value::TAG_HOLE))
+}
+
+#[no_mangle]
 pub extern "C" fn js_array_numeric_push_f64_unboxed(
     arr: *mut ArrayHeader,
     value: f64,
@@ -130,6 +222,10 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+        return arr;
+    }
+    guard_writable_length(arr);
     unsafe {
         if array_numeric_raw_f64_push_inbounds(arr, value) {
             return arr;
@@ -213,10 +309,20 @@ pub extern "C" fn js_array_push_spread_f64(
 #[no_mangle]
 pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+    // Borrowed array-like receiver (`obj.pop = Array.prototype.pop; obj.pop()`):
+    // the thunk hands this dense helper the plain object pointer. Run the
+    // spec-generic engine instead of reading the object as an `ArrayHeader`.
+    if let Some(recv) = crate::array::plain_object_value(arr) {
+        return crate::array::generic_object_pop(recv);
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    guard_writable_length(arr);
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -233,8 +339,8 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 
 /// Set the length of an array, JS-spec style.
 ///
-/// Closes #304: `arr.length = N` must truncate when N < length and pad with
-/// `undefined` when N > length. Pre-fix Perry routed this through the generic
+/// Closes #304: `arr.length = N` must truncate when N < length and create holes
+/// when N > length. Pre-fix Perry routed this through the generic
 /// `js_object_set_field_by_name(obj, "length", N)` path which silently set a
 /// new "length" property on the array's hidden object dispatch but never
 /// touched the `ArrayHeader.length` field — so `arr.length` still read back
@@ -250,45 +356,54 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     if arr.is_null() {
         return;
     }
+    let n = array_length_from_property_value_or_throw(new_length);
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
-    let n = array_length_from_property_value_or_throw(new_length);
     unsafe {
         let cur = (*arr).length;
+        let flags = array_object_flags(arr);
+        if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            return;
+        }
+        if flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0 && n != cur {
+            return;
+        }
+        // `defineProperty(arr, "length", {writable:false})` records the flag
+        // in the attrs side table; an ordinary `arr.length = n` write must
+        // then no-op (strict-mode throw is handled by the caller's PutValue).
+        if n != cur
+            && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            && crate::object::get_property_attrs(arr as usize, "length")
+                .map(|a| !a.writable())
+                .unwrap_or(false)
+        {
+            return;
+        }
         if n < cur {
-            // Truncate: clear elements at indices [n..cur) to TAG_UNDEFINED so
+            // Truncate: clear elements at indices [n..cur) to TAG_HOLE so
             // any code that resurrects the slot via `arr[i]` reads `undefined`,
             // not stale data. The capacity stays unchanged — JS doesn't
             // require Perry to release the underlying buffer here, and growing
             // back via `push` would just re-overwrite these slots anyway.
-            const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
-            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             for i in n..cur {
-                // GC_STORE_AUDIT(BARRIERED): length truncation sentinel is immediately recorded via note_array_slot.
-                std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
-                note_array_slot(arr, i as usize, TAG_UNDEFINED_F64.to_bits());
+                note_array_slot(arr, i as usize, crate::value::TAG_HOLE);
             }
             (*arr).length = n;
             refresh_array_numeric_layout(arr);
         } else if n > cur {
-            // Extend: pad with TAG_UNDEFINED. Past-capacity extensions go
+            // Extend: pad with TAG_HOLE. Past-capacity extensions go
             // through `js_array_grow` which installs a forwarding pointer at
             // the OLD location (issue #233 mechanism), so the caller's stale
             // pointer transparently follows the chain to the resized buffer
             // on the next access — no callsite-side writeback needed.
-            const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
             let target = if n > (*arr).capacity {
                 js_array_grow(arr, n)
             } else {
                 arr
             };
             if !target.is_null() {
-                let elements_ptr =
-                    (target as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
                 for i in cur..n {
-                    // GC_STORE_AUDIT(BARRIERED): length extension sentinel is immediately recorded via note_array_slot.
-                    std::ptr::write(elements_ptr.add(i as usize), TAG_UNDEFINED_F64);
-                    note_array_slot(target, i as usize, TAG_UNDEFINED_F64.to_bits());
+                    note_array_slot(target, i as usize, crate::value::TAG_HOLE);
                 }
                 (*target).length = n;
             }
@@ -298,11 +413,17 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
 }
 
 /// Delete an element from an array by index, creating a "hole".
-/// Sets the element to undefined without changing the array length.
+/// Clears the element without changing the array length.
 /// Matches JavaScript `delete arr[index]` semantics.
 /// Returns 1 (true) on success, 0 (false) on failure.
 #[no_mangle]
 pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
+    let obj = arr as *mut crate::object::ObjectHeader;
+    if crate::object::is_arguments_object(obj) {
+        let name = index.to_string();
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        return crate::object::js_object_delete_field(obj, key);
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return 1;
@@ -312,11 +433,15 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
         if index >= length {
             return 1; // delete on out-of-bounds always returns true in JS
         }
-        const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        // GC_STORE_AUDIT(BARRIERED): delete sentinel is immediately recorded via note_array_slot.
-        std::ptr::write(elements_ptr.add(index as usize), TAG_UNDEFINED_F64);
-        note_array_slot(arr, index as usize, TAG_UNDEFINED_F64.to_bits());
+        let key = index.to_string();
+        if let Some(attrs) = crate::object::get_property_attrs(arr as usize, &key) {
+            if !attrs.configurable() {
+                return 0;
+            }
+        }
+        note_array_slot(arr, index as usize, crate::value::TAG_HOLE);
+        crate::object::clear_property_attrs(arr as usize, &key);
+        crate::object::clear_accessor_descriptor(arr as usize, &key);
         1
     }
 }
@@ -330,10 +455,18 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+    // Borrowed array-like receiver — see `js_array_pop_f64`.
+    if let Some(recv) = crate::array::plain_object_value(arr) {
+        return crate::array::generic_object_shift(recv);
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    guard_writable_length(arr);
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -359,6 +492,13 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(0);
+    }
+    if array_is_frozen(arr) {
+        throw_frozen_array_mutation();
+    }
+    guard_writable_length(arr);
+    if array_is_sealed_or_no_extend(arr) {
+        return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
@@ -409,7 +549,13 @@ pub extern "C" fn js_array_unshift_variadic(
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so a
+    // non-writable `length` throws before the no-op early return.
+    guard_writable_length(arr);
     if count == 0 {
+        return arr;
+    }
+    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
     let scope = crate::gc::RuntimeHandleScope::new();

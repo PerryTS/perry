@@ -413,12 +413,23 @@ pub extern "C" fn js_string_normalize(
         }
     };
 
-    use unicode_normalization::UnicodeNormalization;
+    #[cfg(feature = "string-normalize")]
+    let normalized: String = {
+        use unicode_normalization::UnicodeNormalization;
+        match form_owned.as_str() {
+            "NFC" => str_data.nfc().collect(),
+            "NFD" => str_data.nfd().collect(),
+            "NFKC" => str_data.nfkc().collect(),
+            "NFKD" => str_data.nfkd().collect(),
+            _ => throw_invalid_normalize_form(),
+        }
+    };
+    // Normalize engine gated off: still validate the form (so a bad form throws
+    // the spec RangeError), but pass the string through unchanged for the four
+    // valid forms (no Unicode decomposition tables linked).
+    #[cfg(not(feature = "string-normalize"))]
     let normalized: String = match form_owned.as_str() {
-        "NFC" => str_data.nfc().collect(),
-        "NFD" => str_data.nfd().collect(),
-        "NFKC" => str_data.nfkc().collect(),
-        "NFKD" => str_data.nfkd().collect(),
+        "NFC" | "NFD" | "NFKC" | "NFKD" => str_data.to_string(),
         _ => throw_invalid_normalize_form(),
     };
     let bytes = normalized.as_bytes();

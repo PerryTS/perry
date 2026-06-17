@@ -6,36 +6,23 @@ use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+    capture_function_source, collect_for_of_pattern_leaves, emit_for_of_pattern_binding,
+    lower_expr, LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
 use super::*;
 
-fn stmt_is_string_directive(stmt: &ast::Stmt) -> Option<&str> {
-    let ast::Stmt::Expr(expr_stmt) = stmt else {
-        return None;
-    };
-    let mut expr = expr_stmt.expr.as_ref();
-    while let ast::Expr::Paren(paren) = expr {
-        expr = paren.expr.as_ref();
-    }
-    let ast::Expr::Lit(ast::Lit::Str(s)) = expr else {
-        return None;
-    };
-    s.value.as_str()
-}
-
 fn function_has_use_strict(func: &ast::Function) -> bool {
     let Some(block) = func.body.as_ref() else {
         return false;
     };
     for stmt in &block.stmts {
-        let Some(directive) = stmt_is_string_directive(stmt) else {
+        let Some(directive) = crate::lower::string_directive_stmt_lit(stmt) else {
             break;
         };
-        if directive == "use strict" {
+        if crate::lower::is_raw_use_strict_directive(directive) {
             return true;
         }
     }
@@ -45,6 +32,19 @@ fn function_has_use_strict(func: &ast::Function) -> bool {
 pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result<Function> {
     let name = fn_decl.ident.sym.to_string();
     let func_id = ctx.lookup_func(&name).unwrap_or_else(|| ctx.fresh_func());
+
+    // #4101: retain the original source text so `fn.toString()` reconstructs
+    // it. Slice the module source against the function's AST span; prepend the
+    // `async` keyword when the span starts at `function` (SWC's `Function.span`
+    // excludes the leading `async` modifier).
+    if fn_decl.function.body.is_some() {
+        capture_function_source(
+            ctx,
+            func_id,
+            &fn_decl.function.span,
+            fn_decl.function.is_async,
+        );
+    }
 
     // Extract type parameters from generic function declaration (e.g., function foo<T, U>(...))
     let type_params = fn_decl
@@ -60,29 +60,31 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     let scope_mark = ctx.enter_scope();
 
     // Pre-scan body for `arguments` references. If the function references
-    // `arguments`, we synthesize a trailing rest parameter named "arguments"
-    // so callers automatically bundle their args into an array — and
+    // `arguments`, we synthesize a hidden raw-arguments parameter so
     // `Expr::Ident("arguments")` resolves to a LocalGet at lowering time.
-    // Skipped if the user already declared a parameter named `arguments` or
-    // already has a rest param (which would conflict with the synthetic one).
+    // Skipped only if the user already declared a parameter named `arguments`;
+    // user rest/default params still get a real ECMAScript arguments object.
     let user_has_arguments_param = fn_decl
         .function
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let user_has_rest = fn_decl
+    let strict = fn_decl
         .function
-        .params
-        .iter()
-        .any(|p| is_rest_param(&p.pat));
+        .body
+        .as_ref()
+        .map(|b| ctx.current_strict_mode() || body_has_use_strict(&b.stmts))
+        .unwrap_or(false);
+    ctx.enter_strict_mode(strict);
+    let simple_parameters = params_are_simple_arguments_list(&fn_decl.function.params);
     let needs_arguments_synth = !user_has_arguments_param
-        && !user_has_rest
-        && fn_decl
+        && (fn_decl
             .function
             .body
             .as_ref()
             .map(|b| body_uses_arguments(&b.stmts))
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || params_use_arguments(&fn_decl.function.params));
 
     // Lower parameters with type extraction (using context for type param resolution)
     //
@@ -93,6 +95,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // prefix=undefined` — which breaks `Function.prototype.{call,apply}` on
     // FnDecls that use TS `this:` annotations.
     let mut params = Vec::new();
+    let mut default_param_pats: Vec<ast::Pat> = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in fn_decl.function.params.iter() {
         let param_name = get_pat_name(&param.pat)?;
@@ -100,17 +103,18 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             continue;
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
-        let param_default = get_param_default(ctx, &param.pat)?;
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         let is_rest = is_rest_param(&param.pat);
         params.push(Param {
             id: param_id,
             name: param_name,
             ty: param_type,
-            default: param_default,
+            default: None,
             decorators: lower_decorators(ctx, &param.decorators),
             is_rest,
+            arguments_object: None,
         });
+        default_param_pats.push(param.pat.clone());
         // Track destructuring patterns (or an Assign wrapping one) for extraction stmts
         let inner_pat = if let ast::Pat::Assign(assign) = &param.pat {
             assign.left.as_ref()
@@ -121,13 +125,28 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
-
-    // If the body references `arguments`, append a synthetic trailing
-    // rest parameter named "arguments". The call site already bundles
-    // trailing args into an array for any rest param, and `Expr::Ident("arguments")`
-    // resolves to a LocalGet of this param.
+    // If the body (or a parameter default) references `arguments`, append the
+    // hidden raw-arguments input — BEFORE the defaults are lowered below so
+    // `arguments` inside a default expression resolves to the synthetic local.
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params);
+        let mapped = !strict && simple_parameters;
+        let mapped_parameter_ids = if mapped {
+            mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            strict,
+            simple_parameters,
+            !mapped,
+            mapped_parameter_ids,
+        );
+    }
+
+    for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
+        param.default = get_param_default(ctx, pat)?;
     }
 
     // Register parameters with known native types as native instances
@@ -208,7 +227,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             let module_alias = &type_name[..dot_pos];
             let class_name = &type_name[dot_pos + 1..];
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
-                ctx.func_return_native_instances.push((
+                ctx.push_func_return_native_instance((
                     name.clone(),
                     module_name.to_string(),
                     class_name.to_string(),
@@ -226,7 +245,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
                 _ => None,
             };
             if let Some((module, class)) = module_info {
-                ctx.func_return_native_instances.push((
+                ctx.push_func_return_native_instance((
                     name.clone(),
                     module.to_string(),
                     class.to_string(),
@@ -241,6 +260,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         let stmts = generate_param_destructuring_stmts(ctx, pat, *param_id)?;
         destructuring_stmts.extend(stmts);
     }
+    let destructuring_prologue_len = destructuring_stmts.len();
 
     let outer_strict = ctx.current_strict;
     let is_strict = outer_strict || function_has_use_strict(&fn_decl.function);
@@ -269,6 +289,17 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // rationale). Without this, cross-module callers that pad missing args
     // with TAG_UNDEFINED read the param as `undefined` instead of its default.
     let default_stmts = build_default_param_stmts(&params);
+    // Record the param-prologue length for generators so the generator
+    // transform can run param binding synchronously at call time (spec
+    // FunctionDeclarationInstantiation order). Prologue = default guards +
+    // destructuring stmts, both prepended below. Only generators need this;
+    // for plain functions / async functions the prologue stays in the body.
+    if fn_decl.function.is_generator {
+        let prologue_len = default_stmts.len() + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.append(&mut body);
@@ -305,6 +336,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         }
     }
 
+    ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
 
     // Exit type parameter scope

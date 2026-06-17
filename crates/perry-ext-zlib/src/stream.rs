@@ -18,16 +18,15 @@
 //! registered after `.write()` still fire and `.pipe()` can forward chunks.
 
 use perry_ffi::{
-    alloc_buffer, alloc_bytes, alloc_string, gc_register_mutable_root_scanner_named,
-    notify_main_thread, BufferHeader, GcRootVisitor, JsClosure, JsValue, RawClosureHeader,
-    StringHeader,
+    alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
+    BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Mutex;
 
 use flate2::read::{
-    DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder,
+    DeflateDecoder, DeflateEncoder, GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
 };
 use flate2::Compression;
 
@@ -40,6 +39,8 @@ const TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
 // perry-runtime `#[no_mangle]` symbols, resolved at final link (perry-runtime
 // is always linked). Mirrors perry-ext-net's extern usage.
 extern "C" {
+    fn js_register_aux_has_active(f: extern "C" fn() -> i32);
+    fn js_register_aux_pump(f: extern "C" fn() -> i32);
     fn js_buffer_is_buffer(ptr: i64) -> i32;
     fn js_get_string_pointer_unified(value: f64) -> i64;
     // #2935: resolve + validate a `{ level }` option to a flate2 level
@@ -52,12 +53,37 @@ extern "C" {
     // non-numeric arg and `RangeError [ERR_OUT_OF_RANGE]` for an out-of-range
     // level/strategy, matching Node — the throwing path lives in perry-runtime.
     pub(crate) fn js_zlib_validate_params(level: f64, strategy: f64) -> i32;
+    // #3662: validate the full options object (windowBits/level/memLevel/
+    // strategy/chunkSize/flush) the way Node's Zlib constructor does, throwing
+    // the spec `TypeError`/`RangeError` before any compression runs.
+    // `min_window_bits` is 9 for gzip compression, 8 for every other codec.
+    pub(crate) fn js_zlib_validate_options(opts: f64, min_window_bits: i32);
+    // #3662: reject a non-string/non-Buffer/TypedArray/DataView/ArrayBuffer
+    // `buffer` argument with `TypeError [ERR_INVALID_ARG_TYPE]` before reading
+    // any bytes. The in-tree codecs validate inline; this shared helper gives
+    // the ext crate the same rejection without the runtime's value typing.
+    pub(crate) fn js_zlib_validate_buffer_arg(data_bits: i64);
+    // Async one-shot zlib helpers require a callable callback and throw
+    // synchronously before queuing codec work.
+    pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
     fn js_native_call_method_str_key(
         object: f64,
         name_handle: i64,
         args_ptr: *const f64,
         args_len: usize,
     ) -> f64;
+}
+
+extern "C" fn process_pending_aux() -> i32 {
+    unsafe { js_ext_zlib_process_pending() }
+}
+
+fn ensure_aux_pump_registered() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| unsafe {
+        js_register_aux_pump(process_pending_aux);
+        js_register_aux_has_active(js_ext_zlib_has_active_handles);
+    });
 }
 
 // ── Brotli one-shots (#1843 cluster 2) ───────────────────────────────────────
@@ -73,6 +99,14 @@ fn brotli_decompress_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     brotli::Decompressor::new(data, 4096).read_to_end(&mut out)?;
     Ok(out)
+}
+
+fn throw_brotli_decode_error() -> ! {
+    perry_ffi::throw_with_code(
+        "Decompression failed",
+        "ERR__ERROR_FORMAT_PADDING_2",
+        ErrorKind::Error,
+    )
 }
 
 /// Read the bytes of a one-shot input argument. Node's `gzipSync` / `gunzipSync`
@@ -127,13 +161,12 @@ pub(crate) unsafe fn compression_from_opts(opts: f64) -> Compression {
 /// `zlib.brotliCompressSync(data)` -> Buffer.
 ///
 /// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress_sync(
-    data_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    match read_input_bytes(data_ptr) {
-        Some(d) => alloc_bytes(&brotli_compress_bytes(&d)).as_raw(),
+pub unsafe extern "C" fn js_zlib_brotli_compress_sync(data_bits: i64) -> *mut BufferHeader {
+    js_zlib_validate_buffer_arg(data_bits);
+    match read_input_from_bits(data_bits) {
+        Some(d) => alloc_buffer(&brotli_compress_bytes(&d)),
         None => std::ptr::null_mut(),
     }
 }
@@ -141,58 +174,37 @@ pub unsafe extern "C" fn js_zlib_brotli_compress_sync(
 /// `zlib.brotliDecompressSync(data)` -> Buffer.
 ///
 /// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_bits` must be the raw NaN-box bit pattern of the data argument.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(
-    data_ptr: *const StringHeader,
-) -> *mut StringHeader {
-    match read_input_bytes(data_ptr).map(|d| brotli_decompress_bytes(&d)) {
-        Some(Ok(out)) => alloc_bytes(&out).as_raw(),
+pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64) -> *mut BufferHeader {
+    js_zlib_validate_buffer_arg(data_bits);
+    match read_input_from_bits(data_bits).map(|d| brotli_decompress_bytes(&d)) {
+        Some(Ok(out)) => alloc_buffer(&out),
+        Some(Err(_)) => throw_brotli_decode_error(),
         _ => std::ptr::null_mut(),
     }
 }
 
-/// `zlib.brotliCompress(data)` -> Promise<Buffer>.
+/// `zlib.brotliCompress(data, callback)` -> undefined.
 ///
 /// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_compress(
-    data_ptr: *const StringHeader,
-) -> *mut perry_ffi::Promise {
-    brotli_async(data_ptr, "BrotliCompress", |b| Ok(brotli_compress_bytes(b)))
-}
-
-/// `zlib.brotliDecompress(data)` -> Promise<Buffer>.
-///
-/// # Safety
-/// `data_ptr` must be null or a Perry-runtime `StringHeader`.
-#[no_mangle]
-pub unsafe extern "C" fn js_zlib_brotli_decompress(
-    data_ptr: *const StringHeader,
-) -> *mut perry_ffi::Promise {
-    brotli_async(data_ptr, "BrotliDecompress", |b| brotli_decompress_bytes(b))
-}
-
-unsafe fn brotli_async<F>(
-    data_ptr: *const StringHeader,
-    label: &'static str,
-    op: F,
-) -> *mut perry_ffi::Promise
-where
-    F: FnOnce(&[u8]) -> std::io::Result<Vec<u8>> + Send + 'static,
-{
-    let promise = perry_ffi::JsPromise::new();
-    let raw = promise.as_raw();
-    let Some(data) = read_input_bytes(data_ptr) else {
-        promise.reject_string("Invalid input data");
-        return raw;
-    };
-    perry_ffi::spawn_blocking(move || match op(&data) {
-        Ok(out) => promise.resolve(JsValue::from_object_ptr(alloc_bytes(&out).as_raw())),
-        Err(e) => promise.reject_string(&format!("{} error: {}", label, e)),
+pub unsafe extern "C" fn js_zlib_brotli_compress(data_value: f64, callback_value: f64) {
+    queue_one_shot_callback(data_value, callback_value, "BrotliCompress", |b| {
+        Ok(brotli_compress_bytes(b))
     });
-    raw
+}
+
+/// `zlib.brotliDecompress(data, callback)` -> undefined.
+///
+/// # Safety
+/// `data_value` and `callback_value` are raw NaN-boxed JS values.
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_brotli_decompress(data_value: f64, callback_value: f64) {
+    queue_one_shot_callback(data_value, callback_value, "BrotliDecompress", |b| {
+        brotli_decompress_bytes(b)
+    });
 }
 
 // ── stream codec ─────────────────────────────────────────────────────────────
@@ -217,7 +229,7 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
             GzEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
         }
         Codec::Gunzip => {
-            GzDecoder::new(input).read_to_end(&mut out)?;
+            MultiGzDecoder::new(input).read_to_end(&mut out)?;
         }
         Codec::Deflate => {
             ZlibEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
@@ -234,7 +246,7 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
         Codec::Unzip => {
             // Node's `createUnzip` auto-detects gzip vs zlib by header.
             if input.len() >= 2 && input[0] == 0x1f && input[1] == 0x8b {
-                GzDecoder::new(input).read_to_end(&mut out)?;
+                MultiGzDecoder::new(input).read_to_end(&mut out)?;
             } else {
                 ZlibDecoder::new(input).read_to_end(&mut out)?;
             }
@@ -355,6 +367,7 @@ fn make_codec_state_with_level(codec: Codec, level: Compression) -> Option<Codec
 
 struct ZlibStreamState {
     codec: Codec,
+    level: Compression,
     /// Streaming codec, fed incrementally. `None` for `createUnzip` (uses
     /// `input` + `run_codec` on `.end()`) or once finalized.
     codec_state: Option<CodecState>,
@@ -365,6 +378,8 @@ struct ZlibStreamState {
     /// encoder at a new level (flate2 has no mid-stream `deflateParams`) before
     /// this flips; after data is written it validates + flushes only (#3285).
     wrote_data: bool,
+    bytes_written: usize,
+    pending_bytes_written: usize,
     /// `.pipe(dest)` destinations as NaN-boxed bits; 'data'/'end' forward here.
     pipes: Vec<u64>,
 }
@@ -376,6 +391,8 @@ enum ZlibEvent {
     /// `.flush(cb)` completion callback — invoked (0 args) after its flushed
     /// 'data' is delivered.
     Callback(i64),
+    /// `zlib.gzip(data, cb)` style one-shot completion callback.
+    OneShotCallback(i64, Result<Vec<u8>, String>),
 }
 
 struct Statics {
@@ -417,11 +434,14 @@ fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
                 }
             }
         }
-        // `.flush(cb)` callbacks queued but not yet drained are referenced only
-        // here — root them too, same hazard as listeners.
+        // Queued callbacks are referenced only here — root them too, same
+        // hazard as listeners.
         for ev in s.pending.iter_mut() {
-            if let ZlibEvent::Callback(cb) = ev {
-                visitor.visit_i64_slot(cb);
+            match ev {
+                ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _) => {
+                    visitor.visit_i64_slot(cb);
+                }
+                _ => {}
             }
         }
     }
@@ -436,10 +456,13 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
         id,
         ZlibStreamState {
             codec,
+            level,
             codec_state: make_codec_state_with_level(codec, level),
             input: Vec::new(),
             ended: false,
             wrote_data: false,
+            bytes_written: 0,
+            pending_bytes_written: 0,
             pipes: Vec::new(),
         },
     );
@@ -449,27 +472,34 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
 // ── factories ────────────────────────────────────────────────────────────────
 
 macro_rules! factory {
-    ($name:ident, $codec:expr) => {
+    // `$min_wb` is the lower `windowBits` bound for option validation (#3662):
+    // 9 for gzip compression, 8 for every other deflate-family codec, and 0 to
+    // skip zlib option validation entirely (brotli has its own option shape).
+    ($name:ident, $codec:expr, $min_wb:expr) => {
         /// # Safety
-        /// FFI entry; `opts` is the NaN-boxed options object. Its `{ level }`
-        /// (if present) sets the initial compression level for deflate-family
-        /// encoders; an out-of-range `level` throws via `js_zlib_resolve_level`.
+        /// FFI entry; `opts` is the NaN-boxed options object. It is validated
+        /// the way Node's constructor does (#3662), then its `{ level }` (if
+        /// present) sets the initial compression level for deflate-family
+        /// encoders.
         #[no_mangle]
         pub unsafe extern "C" fn $name(opts: f64) -> i64 {
+            if $min_wb != 0 {
+                js_zlib_validate_options(opts, $min_wb);
+            }
             let level = Compression::new(js_zlib_resolve_level(opts) as u32);
             create_stream($codec, level)
         }
     };
 }
-factory!(js_zlib_create_gzip, Codec::Gzip);
-factory!(js_zlib_create_gunzip, Codec::Gunzip);
-factory!(js_zlib_create_deflate, Codec::Deflate);
-factory!(js_zlib_create_inflate, Codec::Inflate);
-factory!(js_zlib_create_deflate_raw, Codec::DeflateRaw);
-factory!(js_zlib_create_inflate_raw, Codec::InflateRaw);
-factory!(js_zlib_create_unzip, Codec::Unzip);
-factory!(js_zlib_create_brotli_compress, Codec::BrotliCompress);
-factory!(js_zlib_create_brotli_decompress, Codec::BrotliDecompress);
+factory!(js_zlib_create_gzip, Codec::Gzip, 9);
+factory!(js_zlib_create_gunzip, Codec::Gunzip, 8);
+factory!(js_zlib_create_deflate, Codec::Deflate, 8);
+factory!(js_zlib_create_inflate, Codec::Inflate, 8);
+factory!(js_zlib_create_deflate_raw, Codec::DeflateRaw, 8);
+factory!(js_zlib_create_inflate_raw, Codec::InflateRaw, 8);
+factory!(js_zlib_create_unzip, Codec::Unzip, 8);
+factory!(js_zlib_create_brotli_compress, Codec::BrotliCompress, 0);
+factory!(js_zlib_create_brotli_decompress, Codec::BrotliDecompress, 0);
 
 // ── chunk / buffer helpers ─────────────────────────────────────────────────────
 
@@ -510,6 +540,50 @@ unsafe fn make_buffer_f64(bytes: &[u8]) -> Option<f64> {
     Some(f64::from_bits(POINTER_TAG | (buf as u64 & POINTER_MASK)))
 }
 
+unsafe fn call_one_shot_callback(callback: i64, result: Result<Vec<u8>, String>) {
+    if callback == 0 {
+        return;
+    }
+    match result {
+        Ok(bytes) => {
+            let err = f64::from_bits(JsValue::NULL.bits());
+            let out = make_buffer_f64(&bytes)
+                .unwrap_or_else(|| f64::from_bits(JsValue::UNDEFINED.bits()));
+            let _ = JsClosure::from_raw(callback as *const RawClosureHeader).call2(err, out);
+        }
+        Err(msg) => {
+            let err = build_error_object(&msg);
+            let _ = JsClosure::from_raw(callback as *const RawClosureHeader)
+                .call2(err, f64::from_bits(JsValue::UNDEFINED.bits()));
+        }
+    }
+}
+
+pub(crate) unsafe fn queue_one_shot_callback<F>(
+    data_value: f64,
+    callback_value: f64,
+    label: &'static str,
+    op: F,
+) where
+    F: FnOnce(&[u8]) -> std::io::Result<Vec<u8>>,
+{
+    let callback = js_zlib_validate_callback(callback_value);
+    let data_bits = data_value.to_bits() as i64;
+    js_zlib_validate_buffer_arg(data_bits);
+    let result = match read_input_from_bits(data_bits) {
+        Some(data) => op(&data).map_err(|e| format!("{} error: {}", label, e)),
+        None => Err("Invalid input data".to_string()),
+    };
+    ensure_aux_pump_registered();
+    ensure_gc_scanner_registered();
+    statics()
+        .lock()
+        .unwrap()
+        .pending
+        .push(ZlibEvent::OneShotCallback(callback, result));
+    notify_main_thread();
+}
+
 unsafe fn event_name(value: f64) -> Option<String> {
     let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
     if ptr.is_null() {
@@ -532,6 +606,7 @@ fn stream_write(handle: i64, bytes: &[u8]) {
     let event = match g.streams.get_mut(&handle) {
         Some(s) if !s.ended => {
             s.wrote_data = true;
+            s.pending_bytes_written = s.pending_bytes_written.saturating_add(bytes.len());
             match s.codec_state.as_mut() {
                 Some(cs) => match cs.write_chunk(bytes) {
                     Ok(()) => {
@@ -597,7 +672,9 @@ unsafe fn stream_params(handle: i64, level: f64, strategy: f64, cb: i64) {
     let mut g = statics().lock().unwrap();
     if let Some(s) = g.streams.get_mut(&handle) {
         if !s.ended && !s.wrote_data {
-            s.codec_state = make_codec_state_with_level(s.codec, Compression::new(clamped as u32));
+            let level = Compression::new(clamped as u32);
+            s.level = level;
+            s.codec_state = make_codec_state_with_level(s.codec, level);
         } else if !s.ended {
             if let Some(cs) = s.codec_state.as_mut() {
                 let _ = cs.flush_codec();
@@ -613,6 +690,34 @@ unsafe fn stream_params(handle: i64, level: f64, strategy: f64, cb: i64) {
     }
     drop(g);
     notify_main_thread();
+}
+
+fn stream_reset(handle: i64) {
+    let mut g = statics().lock().unwrap();
+    if let Some(s) = g.streams.get_mut(&handle) {
+        s.codec_state = make_codec_state_with_level(s.codec, s.level);
+        s.input.clear();
+        s.ended = false;
+        s.wrote_data = false;
+        s.bytes_written = 0;
+        s.pending_bytes_written = 0;
+    }
+}
+
+fn stream_bytes_written(handle: i64) -> f64 {
+    statics()
+        .lock()
+        .unwrap()
+        .streams
+        .get(&handle)
+        .map(|s| s.bytes_written as f64)
+        .unwrap_or(0.0)
+}
+
+fn publish_bytes_written(handle: i64) {
+    if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
+        s.bytes_written = s.pending_bytes_written;
+    }
 }
 
 /// Finalize the stream and queue the remaining output + 'end' (or 'error').
@@ -760,8 +865,17 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
             stream_params(handle, level, strategy, cb);
             self_ref
         }
+        "reset" => {
+            stream_reset(handle);
+            f64::from_bits(UNDEFINED)
+        }
         _ => f64::from_bits(UNDEFINED),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_ext_zlib_stream_bytes_written(handle: i64) -> f64 {
+    stream_bytes_written(handle)
 }
 
 // ── pump (drained on the main thread from perry-stdlib) ─────────────────────────
@@ -831,6 +945,7 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
     for ev in events {
         match ev {
             ZlibEvent::Data(id, bytes) => {
+                publish_bytes_written(id);
                 let cbs = listeners_for(id, "data");
                 if !cbs.is_empty() {
                     if let Some(buf_f64) = make_buffer_f64(&bytes) {
@@ -847,6 +962,7 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 }
             }
             ZlibEvent::End(id) => {
+                publish_bytes_written(id);
                 for cb in listeners_for(id, "end") {
                     if cb != 0 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
@@ -873,6 +989,9 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 if cb != 0 {
                     let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                 }
+            }
+            ZlibEvent::OneShotCallback(cb, result) => {
+                call_one_shot_callback(cb, result);
             }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_error_object(&msg);
@@ -932,6 +1051,21 @@ mod stream_tests {
     }
 
     #[test]
+    fn gunzip_run_codec_reads_all_members() {
+        let a = stream_compress(Codec::Gzip, &[b"first "]);
+        let b = stream_compress(Codec::Gzip, &[b"second "]);
+        let c = stream_compress(Codec::Gzip, &[b"third"]);
+        let mut concatenated = Vec::new();
+        concatenated.extend_from_slice(&a);
+        concatenated.extend_from_slice(&b);
+        concatenated.extend_from_slice(&c);
+        assert_eq!(
+            run_codec(Codec::Gunzip, &concatenated).unwrap(),
+            b"first second third"
+        );
+    }
+
+    #[test]
     fn deflate_stream_is_zlib_format_and_roundtrips() {
         let c = stream_compress(Codec::Deflate, &[b"AAAA", b"BBBB"]);
         assert_eq!(c[0], 0x78); // zlib header (NOT raw deflate)
@@ -951,5 +1085,10 @@ mod stream_tests {
             run_codec(Codec::BrotliDecompress, &c).unwrap(),
             b"brotli stream test"
         );
+    }
+
+    #[test]
+    fn brotli_decompress_rejects_invalid_data() {
+        assert!(brotli_decompress_bytes(b"not a brotli stream").is_err());
     }
 }

@@ -2,6 +2,9 @@ use super::*;
 
 pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
     // ========== uuid ==========
+    // All generators return `*mut StringHeader`, so they must box as
+    // NR_STR (STRING_TAG) — NR_PTR boxed them as a generic native handle
+    // and `v4()` read back as `[object Object]` (#5197).
     NativeModSig {
         module: "uuid",
         has_receiver: false,
@@ -9,7 +12,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_uuid_v4",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_STR,
     },
     NativeModSig {
         module: "uuid",
@@ -18,7 +21,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_uuid_v1",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_STR,
     },
     NativeModSig {
         module: "uuid",
@@ -27,7 +30,28 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_uuid_v7",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_STR,
+    },
+    // v5 (SHA-1) / v3 (MD5) name-based: `vN(name, namespace)`. The shim
+    // supports the string-UUID namespace form; the array-namespace form
+    // is only reachable via `perry.compilePackages`.
+    NativeModSig {
+        module: "uuid",
+        has_receiver: false,
+        method: "v5",
+        class_filter: None,
+        runtime: "js_uuid_v5",
+        args: &[NA_STR, NA_STR],
+        ret: NR_STR,
+    },
+    NativeModSig {
+        module: "uuid",
+        has_receiver: false,
+        method: "v3",
+        class_filter: None,
+        runtime: "js_uuid_v3",
+        args: &[NA_STR, NA_STR],
+        ret: NR_STR,
     },
     NativeModSig {
         module: "uuid",
@@ -35,7 +59,20 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         method: "validate",
         class_filter: None,
         runtime: "js_uuid_validate",
-        args: &[NA_F64],
+        // Runtime sig is `*const StringHeader` → coerce the arg to a
+        // string pointer (NA_F64 passed raw NaN-box bits, so validate
+        // always read 0 — #5197). NR_BOOL boxes the 1.0/0.0 result as a
+        // real JS boolean so it prints `true`/`false`, not `1`/`0`.
+        args: &[NA_STR],
+        ret: NR_BOOL,
+    },
+    NativeModSig {
+        module: "uuid",
+        has_receiver: false,
+        method: "version",
+        class_filter: None,
+        runtime: "js_uuid_version",
+        args: &[NA_STR],
         ret: NR_F64,
     },
     // ========== jsonwebtoken ==========

@@ -2,6 +2,201 @@
 
 use super::*;
 
+thread_local! {
+    /// Whether the generator currently being linearized is an `async function*`.
+    /// Set by `transform_generator_function_with_extra_captures` right before it
+    /// calls `linearize_body` (linearization is fully synchronous, so a
+    /// thread-local avoids threading a bool through ~14 recursive call sites).
+    /// Read by the `yield*` arms to pick the async vs sync delegation protocol.
+    static LINEARIZE_IS_ASYNC_GEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn set_linearize_async_generator(v: bool) {
+    LINEARIZE_IS_ASYNC_GEN.with(|c| c.set(v));
+}
+
+fn linearize_async_generator() -> bool {
+    LINEARIZE_IS_ASYNC_GEN.with(|c| c.get())
+}
+
+/// Resolve a `yield*` operand into its iterator. An async generator delegates
+/// through the async-iterator protocol (`GetAsyncIterator`, which honours
+/// `[Symbol.asyncIterator]` and wraps a sync iterable via
+/// CreateAsyncFromSyncIterator); a sync generator uses `GetIterator`.
+fn delegate_get_iterator(inner: Expr) -> Expr {
+    if linearize_async_generator() {
+        Expr::GetAsyncIterator(Box::new(inner))
+    } else {
+        Expr::GetIterator(Box::new(inner))
+    }
+}
+
+/// Wrap a delegated-iterator `next()`/`return()`/`throw()` call. In an async
+/// generator the delegated iterator's methods return a promise of the
+/// iter-result, which must be awaited before `.value`/`.done` are read (`await`
+/// is a synchronous promise-drain in codegen). Sync generators read the
+/// iter-result directly.
+fn delegate_await(call: Expr) -> Expr {
+    if linearize_async_generator() {
+        Expr::Await(Box::new(call))
+    } else {
+        call
+    }
+}
+
+/// Invoke the captured delegated `[[NextMethod]]` (`del_next_id`) with `this` =
+/// the delegated iterator (`del_iter_id`). Spec `yield *` reads `next` exactly
+/// once at iterator-record creation (GetIterator) and re-uses the captured
+/// method for every pull, so the desugar must NOT re-read `del_iter.next` on
+/// each loop iteration (that re-ran the iterator's `get next` accessor and an
+/// extra property read, diverging from Node's operation order — test262
+/// yield-star-{async,sync}-next, yield-star-next-*).
+///
+/// Generated shape:
+///   typeof __del_next === "function"
+///     ? __del_next.call(__del_iter, arg)   // observable case: captured method
+///     : __del_iter.next(arg)               // fallback: method dispatch
+///
+/// The captured-method path calls through `.call` (reads Function.prototype,
+/// not the iterator's getters, and binds `this` for builtin/inherited `next`
+/// thunks — e.g. the array-iterator prototype's `next`). The fallback covers
+/// builtin iterators that expose no *readable* `next` property (string and
+/// typed-array iterators dispatch `.next()` through the class-id method tower);
+/// for those, re-reading is harmless because there is no observable getter.
+fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> Expr {
+    // Spec passes `received.[[Value]]` to every inner `next()` — including the
+    // first pull, where `received` is `NormalCompletion(undefined)`. So the
+    // delegated `next` is ALWAYS called with exactly one argument (the first
+    // pull with an explicit `undefined`, not argless — test262
+    // yield-star-{sync,async}-next assert `next args.length === 1`).
+    let call_args = vec![Expr::LocalGet(del_iter_id), arg.clone()];
+    let method_args = vec![arg];
+    Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
+            right: Box::new(Expr::String("function".to_string())),
+        }),
+        then_expr: Box::new(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_next_id)),
+                property: "call".to_string(),
+            }),
+            args: call_args,
+            type_args: vec![],
+            byte_offset: 0,
+        }),
+        else_expr: Box::new(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_iter_id)),
+                property: "next".to_string(),
+            }),
+            args: method_args,
+            type_args: vec![],
+            byte_offset: 0,
+        }),
+    }
+}
+
+/// Emit the common `yield *` delegation prelude + driving loop into `current`
+/// and linearize it. Shared by all three desugar positions (statement-level
+/// `yield* e`, `return yield* e`, `let x = yield* e`). Returns the local id
+/// holding the delegated iterator's most-recent result object (`{value, done}`),
+/// whose `.value` the caller uses for the completion value.
+#[allow(clippy::too_many_arguments)]
+fn emit_yield_star_loop(
+    inner: &Expr,
+    states: &mut Vec<State>,
+    current: &mut Vec<Stmt>,
+    state_num: &mut u32,
+    state_id: LocalId,
+    next_local_id: &mut u32,
+    sent_id: LocalId,
+    catches: &mut Vec<CatchRoute>,
+    finallys: &mut Vec<FinallyRoute>,
+) -> LocalId {
+    let del_iter_id = alloc_local(next_local_id);
+    let del_next_id = alloc_local(next_local_id);
+    let del_result_id = alloc_local(next_local_id);
+
+    // #1831: resolve the iterator (a generator *call* already is its iterator;
+    // an arbitrary iterable resolves via `[Symbol.iterator]` /
+    // `[Symbol.asyncIterator]`).
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_iter_id,
+        Box::new(delegate_get_iterator(inner.clone())),
+    )));
+    // Capture `[[NextMethod]]` once (see `delegate_next_call`).
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_next_id,
+        Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(del_iter_id)),
+            property: "next".to_string(),
+        }),
+    )));
+    // Initial pull: `received` starts as `NormalCompletion(undefined)`, so the
+    // first inner `next()` gets an explicit `undefined` argument.
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_result_id,
+        Box::new(delegate_await(delegate_next_call(
+            del_next_id,
+            del_iter_id,
+            Expr::Undefined,
+        ))),
+    )));
+
+    // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
+    // `sent_id`) into the delegated iterator's `next(v)`.
+    let while_body = vec![
+        // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
+        // Unlike a plain `yield x` (which is `AsyncGeneratorYield(? Await(x))` and
+        // is handled by the #4777 await pass), the DELEGATED value is NOT awaited:
+        // current `AsyncGeneratorYield` does not await its operand, so a delegated
+        // promise value flows through un-unwrapped (test262
+        // yield-star-promise-not-unwrapped). Only the `next()` RESULT is awaited
+        // (via `delegate_await` on the pull below).
+        Stmt::Expr(Expr::Yield {
+            value: Some(Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_result_id)),
+                property: "value".to_string(),
+            })),
+            delegate: false,
+        }),
+        Stmt::Expr(Expr::LocalSet(
+            del_result_id,
+            Box::new(delegate_await(delegate_next_call(
+                del_next_id,
+                del_iter_id,
+                Expr::LocalGet(sent_id),
+            ))),
+        )),
+    ];
+    let while_stmt = Stmt::While {
+        condition: Expr::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(del_result_id)),
+                property: "done".to_string(),
+            }),
+        },
+        body: while_body,
+    };
+
+    linearize_body(
+        &[while_stmt],
+        states,
+        current,
+        state_num,
+        state_id,
+        next_local_id,
+        sent_id,
+        catches,
+        finallys,
+    );
+
+    del_result_id
+}
+
 pub struct State {
     pub num: u32,
     pub body: Vec<Stmt>,
@@ -20,9 +215,57 @@ pub enum StateExit {
 #[derive(Clone)]
 pub struct CatchRoute {
     pub param_id: Option<LocalId>,
+    pub param_name: Option<String>,
     pub body: Vec<Stmt>,
     pub protected_start_state: u32,
     pub post_catch_state: u32,
+    /// #4438: upper bound of the protected suspended-state interval for routing
+    /// a thrown error into this catch. Covers the try-body states (and the
+    /// post-last-yield happy landing state) but EXCLUDES the catch's own states,
+    /// so a `throw` executing inside the catch propagates to an enclosing
+    /// handler instead of re-entering this one. For sync generators the catch
+    /// body is linearized into the state machine (`catch_entry_state`); async
+    /// generators still inline `body` into the `.throw()` closure and ignore
+    /// these two fields.
+    pub protected_end_state: u32,
+    /// #4438: first state of the linearized catch body. `Some` for sync
+    /// generators (runtime throws + `.throw()` route here); `None` when the
+    /// catch was not linearized into states.
+    pub catch_entry_state: Option<u32>,
+}
+
+/// A `finally` block that protects a state interval. On abrupt completion
+/// (`.return()`/`.throw()`) while the generator is suspended inside the
+/// protected interval, the finally body must run before the generator
+/// completes — innermost finally first (#4374).
+///
+/// `protected_start_state`/`post_finally_state` use the same suspended-state
+/// convention as [`CatchRoute`]: a finally applies when
+/// `state > protected_start_state && state <= post_finally_state`.
+#[derive(Clone)]
+pub struct FinallyRoute {
+    pub body: Vec<Stmt>,
+    pub protected_start_state: u32,
+    pub post_finally_state: u32,
+    /// `true` if the finally body itself contains yields/awaits (await-using
+    /// path). Such finallys are linearized into states and can't be inlined
+    /// into the `.return()`/`.throw()` closures synchronously.
+    pub has_yields: bool,
+    /// #4438 B2-finally: for a YIELDING finally, the first state of its
+    /// linearized body. Abrupt completion (`.throw()`/`.return()`/runtime
+    /// throw) while suspended in the protected try interval routes here so the
+    /// finally's own `yield`s suspend; on completion the pending throw/return
+    /// is re-raised. `None` for non-yielding finallys (inlined as before).
+    pub finally_entry_state: Option<u32>,
+    /// #4438 B2-finally: upper bound of the protected suspended-state interval
+    /// for routing into a yielding finally. Covers the try body but EXCLUDES
+    /// the finally's own states, so an abrupt completion while suspended INSIDE
+    /// the finally supersedes the pending one instead of re-entering it.
+    pub protected_end_state: u32,
+    /// #4438 B2-finally: the state whose body, after the finally completes,
+    /// re-raises a pending throw/return completion (the completion check is
+    /// appended in `transform_generator_function`).
+    pub completion_check_state: Option<u32>,
 }
 
 /// Linearize the generator body into a sequence of states.
@@ -36,6 +279,7 @@ pub fn linearize_body(
     #[allow(unused_variables)] next_local_id: &mut u32,
     sent_id: LocalId,
     catches: &mut Vec<CatchRoute>,
+    finallys: &mut Vec<FinallyRoute>,
 ) {
     for stmt in stmts {
         match stmt {
@@ -44,82 +288,17 @@ pub fn linearize_body(
                 value: Some(inner),
                 delegate: true,
             }) => {
-                // Desugar yield* into:
-                //   let __del_iter = inner_expr;  (inner is a generator call)
-                //   let __del_result = __del_iter.next();
+                // Desugar `yield* inner` into a drive loop:
+                //   let __del_iter = GetIterator(inner);
+                //   let __del_next = __del_iter.next;          // captured ONCE
+                //   let __del_result = __del_next.call(__del_iter);
                 //   while (!__del_result.done) {
                 //     yield __del_result.value;
-                //     __del_result = __del_iter.next();
+                //     __del_result = __del_next.call(__del_iter, __sent);
                 //   }
-                // We don't actually need real vars — we can inline this as states.
-                // But the simplest approach: expand into statements and re-linearize.
-                let del_iter_id = alloc_local(next_local_id);
-                let del_result_id = alloc_local(next_local_id);
-
-                // Initial pull: `__del_iter.next()` with no argument (the value
-                // passed to the *first* `next()` of a generator is discarded per
-                // spec).
-                let next_call = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![],
-                    type_args: vec![],
-                };
-                // #1832: in-loop pull must forward the value the *outer* generator
-                // was resumed with (`outer.next(v)` → stored in `sent_id`) into the
-                // delegated iterator's `next(v)`, so `yield*`-delegated two-way
-                // communication matches spec. Argless here silently dropped it.
-                let next_call_resumed = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![Expr::LocalGet(sent_id)],
-                    type_args: vec![],
-                };
-
-                // Add hoisted var declarations to current (they'll be emitted in the state body)
-                // #1831: resolve the iterator. For a generator *call* the result
-                // already is its iterator; for an arbitrary iterable (effect,
-                // custom `[Symbol.iterator]`) `js_get_iterator` invokes the
-                // well-known-symbol method to obtain one.
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_iter_id,
-                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
-                )));
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_result_id,
-                    Box::new(next_call),
-                )));
-
-                // Build the while loop with yield
-                let while_body = vec![
-                    Stmt::Expr(Expr::Yield {
-                        value: Some(Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "value".to_string(),
-                        })),
-                        delegate: false,
-                    }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
-                ];
-
-                let while_stmt = Stmt::While {
-                    condition: Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "done".to_string(),
-                        }),
-                    },
-                    body: while_body,
-                };
-
-                // Now linearize the expanded while (it contains a yield, so the while handler picks it up)
-                linearize_body(
-                    &[while_stmt],
+                // (see `emit_yield_star_loop` for the shared implementation).
+                emit_yield_star_loop(
+                    inner,
                     states,
                     current,
                     state_num,
@@ -127,6 +306,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
             }
 
@@ -168,65 +348,8 @@ pub fn linearize_body(
                 value: Some(inner),
                 delegate: true,
             })) => {
-                let del_iter_id = alloc_local(next_local_id);
-                let del_result_id = alloc_local(next_local_id);
-
-                // Initial pull: argless (the first `next()` value is discarded
-                // per spec).
-                let next_call = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![],
-                    type_args: vec![],
-                };
-                // #1832: in-loop pull forwards the outer resume value (`sent_id`).
-                let next_call_resumed = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![Expr::LocalGet(sent_id)],
-                    type_args: vec![],
-                };
-
-                // #1831: resolve the iterator (effect / custom `[Symbol.iterator]`
-                // operands need `js_get_iterator` to invoke the well-known-symbol
-                // method; a generator call already is its iterator).
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_iter_id,
-                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
-                )));
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_result_id,
-                    Box::new(next_call),
-                )));
-
-                let while_body = vec![
-                    Stmt::Expr(Expr::Yield {
-                        value: Some(Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "value".to_string(),
-                        })),
-                        delegate: false,
-                    }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
-                ];
-
-                let while_stmt = Stmt::While {
-                    condition: Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "done".to_string(),
-                        }),
-                    },
-                    body: while_body,
-                };
-
-                linearize_body(
-                    &[while_stmt],
+                let del_result_id = emit_yield_star_loop(
+                    inner,
                     states,
                     current,
                     state_num,
@@ -234,6 +357,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
 
                 // After the loop, the iterator's final `value` (from
@@ -389,6 +513,7 @@ pub fn linearize_body(
                 // skipping the body tail without going through the update.
                 let body_states_before = states.len();
                 let body_current_before = current.len();
+                let body_catches_before = catches.len();
                 let mut body_rewritten = body.clone();
                 rewrite_break_continue_in_stmts(&mut body_rewritten, state_id);
 
@@ -402,6 +527,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
 
                 // Body-tail state: contains the user body's residual stmts
@@ -465,6 +591,15 @@ pub fn linearize_body(
                     after_loop_state,
                     update_state,
                 );
+                // Async-generator `.throw()` closures inline catch-route bodies
+                // verbatim; fix any break/continue sentinels they captured from
+                // this loop body (a user `continue`/`break` inside a `catch`).
+                fix_break_continue_sentinels_in_catches(
+                    &mut catches[body_catches_before..],
+                    state_id,
+                    after_loop_state,
+                    update_state,
+                );
             }
 
             // While-loop containing yield(s) - similar to for-loop
@@ -514,6 +649,7 @@ pub fn linearize_body(
                 // state (no separate update); `break` jumps to after_loop.
                 let while_states_before = states.len();
                 let while_current_before = current.len();
+                let while_catches_before = catches.len();
                 let mut while_body_rewritten = while_body.clone();
                 rewrite_break_continue_in_stmts(&mut while_body_rewritten, state_id);
 
@@ -527,6 +663,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
 
                 // After body, goto condition
@@ -560,20 +697,49 @@ pub fn linearize_body(
                     after_loop,
                     cond_state,
                 );
+                // Async-generator `.throw()` closures inline catch-route bodies
+                // verbatim; fix any break/continue sentinels they captured from
+                // this loop body (a user `continue`/`break` inside a `catch`).
+                fix_break_continue_sentinels_in_catches(
+                    &mut catches[while_catches_before..],
+                    state_id,
+                    after_loop,
+                    cond_state,
+                );
             }
 
-            // Try-catch containing yield(s) — linearize the try body directly and
-            // stash the catch body so the .throw() closure can inline it.
-            // Limitations: no per-state exception handler tracking, so only the
-            // first catch encountered will run on .throw(). Catches themselves
-            // must not yield — they run to completion inside the throw closure.
+            // Try-catch/finally containing yield(s) — linearize the try body and
+            // the catch body into states (#4438) so a `throw` during dispatch is
+            // routed to the catch and a `yield` inside the catch suspends.
+            //
+            // #4438: the guard must also fire when the yield lives ONLY in the
+            // catch body (e.g. `try { throw } catch (e) { yield }`). Pre-fix that
+            // fell into the catch-all, which emitted the whole `Stmt::Try`
+            // literally and the catch's `yield` hit the codegen
+            // `Expr::Yield => double_literal(0.0)` arm and was swallowed.
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } if body_contains_yield(body)
-                || finally.as_ref().is_some_and(|f| body_contains_yield(f)) =>
+                || finally.as_ref().is_some_and(|f| body_contains_yield(f))
+                || catch.as_ref().is_some_and(|c| body_contains_yield(&c.body)) =>
             {
+                // #4438: flush any pending pre-try code (e.g. a `throw` or
+                // assignment sitting between a preceding `yield` and this `try`)
+                // as its own state, so the try's protected interval starts
+                // cleanly at the try body. Without this the pre-try code lands in
+                // the try's first state and a throw there is wrongly routed to
+                // THIS try's handler instead of an enclosing one.
+                if !current.is_empty() {
+                    let pre_state = *state_num;
+                    *state_num += 1;
+                    states.push(State {
+                        num: pre_state,
+                        body: std::mem::take(current),
+                        exit: StateExit::Goto(*state_num),
+                    });
+                }
                 let protected_start_state = *state_num;
 
                 // Issue #256: widen the guard to also fire when yields live ONLY
@@ -595,6 +761,7 @@ pub fn linearize_body(
                         next_local_id,
                         sent_id,
                         catches,
+                        finallys,
                     );
                 } else {
                     // Body has no yields: push as-is to current state.
@@ -603,44 +770,121 @@ pub fn linearize_body(
                     }
                 }
 
-                // Issue #621: if the try has a catch handler, split the
+                // Issue #621 / #4438: if the try has a catch handler, split the
                 // post-await happy-path continuation (currently in `current`)
-                // from the post-try-catch continuation. Stmts that follow
-                // the LAST yield in the try body should only run on the
-                // happy path; the throw path runs the catch body and then
-                // resumes at the stmts AFTER the try/catch. Without this
-                // split, both paths land in the same state and the catch
-                // path incorrectly runs the post-await stmts.
-                if catch.is_some() {
-                    if !current.is_empty() {
-                        let happy_state = *state_num;
-                        *state_num += 1;
-                        let goto_target = *state_num;
-                        states.push(State {
-                            num: happy_state,
-                            body: std::mem::take(current),
-                            exit: StateExit::Goto(goto_target),
-                        });
-                    }
-                }
-                let post_catch_state = *state_num;
-
-                // Stash the catch so transform_generator_function can inline it
-                // into the .throw() closure later.
+                // from the catch and post-try-catch continuations, and linearize
+                // the catch body into its own states.
+                //
+                // Pre-#4438 the catch body was stashed and only inlined into the
+                // `.throw()` closure, so the catch handler did not exist in the
+                // normal `.next()` dispatch at all. Two consequences:
+                //   (a) a runtime `throw` executing inside the try during a plain
+                //       `.next()` was never caught — it propagated out of next();
+                //   (b) a `yield` inside the catch was swallowed (it was rewritten
+                //       to an `await` in the throw closure).
+                // Now the catch body is real states. The happy path skips them;
+                // runtime throws (via the dispatch-loop try/catch in lower.rs) and
+                // `.throw()` route into `catch_entry_state` for sync generators.
+                let post_catch_state;
                 if let Some(catch_clause) = catch {
-                    let param_id = catch_clause.param.as_ref().map(|(id, _)| *id);
+                    // Flush the happy-path tail (post-last-yield-in-try code) as
+                    // its own landing state. The last yield inside the try resumes
+                    // here on a normal `.next()`; it must skip the catch states.
+                    let happy_state = *state_num;
+                    *state_num += 1;
+                    let happy_idx = states.len();
+                    states.push(State {
+                        num: happy_state,
+                        body: std::mem::take(current),
+                        exit: StateExit::Goto(0), // patched to post_catch below
+                    });
+                    // Throws while suspended in the try body (states
+                    // protected_start..=happy_state) route to the catch. Catch
+                    // states (> happy_state) are EXCLUDED so a `throw` inside the
+                    // catch escapes to an enclosing handler, not back into here.
+                    let protected_end_state = happy_state;
+
+                    // Linearize the catch body into states.
+                    let catch_entry_state = *state_num;
+                    let mut catch_current = Vec::new();
+                    if body_contains_yield(&catch_clause.body) {
+                        linearize_body(
+                            &catch_clause.body,
+                            states,
+                            &mut catch_current,
+                            state_num,
+                            state_id,
+                            next_local_id,
+                            sent_id,
+                            catches,
+                            finallys,
+                        );
+                    } else {
+                        for s in &catch_clause.body {
+                            catch_current.push(s.clone());
+                        }
+                    }
+                    // The catch tail falls through to the code after try/catch.
+                    let catch_tail_state = *state_num;
+                    *state_num += 1;
+                    let catch_tail_idx = states.len();
+                    states.push(State {
+                        num: catch_tail_state,
+                        body: std::mem::take(&mut catch_current),
+                        exit: StateExit::Goto(0), // patched below
+                    });
+
+                    post_catch_state = *state_num;
+                    states[happy_idx].exit = StateExit::Goto(post_catch_state);
+                    states[catch_tail_idx].exit = StateExit::Goto(post_catch_state);
+
+                    let (param_id, param_name) = catch_clause
+                        .param
+                        .as_ref()
+                        .map(|(id, name)| (Some(*id), Some(name.clone())))
+                        .unwrap_or((None, None));
                     catches.push(CatchRoute {
                         param_id,
+                        param_name,
                         body: catch_clause.body.clone(),
                         protected_start_state,
                         post_catch_state,
+                        protected_end_state,
+                        catch_entry_state: Some(catch_entry_state),
                     });
+                } else {
+                    post_catch_state = *state_num;
                 }
 
-                // Finally block: linearize if it has yields (await-using path),
-                // otherwise push as-is.
+                // Finally block.
                 if let Some(fin) = finally {
-                    if body_contains_yield(fin) {
+                    let fin_has_yields = body_contains_yield(fin);
+                    if fin_has_yields {
+                        // #4438 B2-finally: a YIELDING finally is linearized into
+                        // states with a clean entry so abrupt completion can route
+                        // INTO it (its `yield`s suspend) and re-raise the pending
+                        // throw/return once it finishes.
+                        //
+                        // Flush the happy-path tail currently in `current` (the
+                        // post-last-yield try code, when there's no catch) as its
+                        // own state so the finally starts fresh — the abrupt path
+                        // must not re-run the try tail.
+                        let tail_state = *state_num;
+                        *state_num += 1;
+                        let tail_idx = states.len();
+                        states.push(State {
+                            num: tail_state,
+                            body: std::mem::take(current),
+                            exit: StateExit::Goto(0), // patched to finally_entry below
+                        });
+                        let finally_entry_state = *state_num;
+                        states[tail_idx].exit = StateExit::Goto(finally_entry_state);
+                        // Throws/returns while suspended in the try body (states
+                        // protected_start..=tail_state) route into the finally.
+                        // The finally's own states (> tail_state) are excluded.
+                        let finally_protected_end = tail_state;
+
+                        // Linearize the finally body into states.
                         linearize_body(
                             fin,
                             states,
@@ -650,8 +894,46 @@ pub fn linearize_body(
                             next_local_id,
                             sent_id,
                             catches,
+                            finallys,
                         );
+
+                        // Flush the finally tail as the completion-check state.
+                        // `transform_generator_function` appends the re-raise of a
+                        // pending throw/return to this state's body; on the normal
+                        // path (no pending) it just falls through to post-finally.
+                        let completion_state = *state_num;
+                        *state_num += 1;
+                        let comp_idx = states.len();
+                        states.push(State {
+                            num: completion_state,
+                            body: std::mem::take(current),
+                            exit: StateExit::Goto(0), // patched to post_finally below
+                        });
+                        let post_finally_state = *state_num;
+                        states[comp_idx].exit = StateExit::Goto(post_finally_state);
+
+                        finallys.push(FinallyRoute {
+                            body: fin.clone(),
+                            protected_start_state,
+                            post_finally_state,
+                            has_yields: true,
+                            finally_entry_state: Some(finally_entry_state),
+                            protected_end_state: finally_protected_end,
+                            completion_check_state: Some(completion_state),
+                        });
                     } else {
+                        // #4374: a non-yielding finally is inlined into the
+                        // .return()/.throw()/dispatch closures on abrupt
+                        // completion (and pushed as-is for the happy path).
+                        finallys.push(FinallyRoute {
+                            body: fin.clone(),
+                            protected_start_state,
+                            post_finally_state: post_catch_state,
+                            has_yields: false,
+                            finally_entry_state: None,
+                            protected_end_state: post_catch_state,
+                            completion_check_state: None,
+                        });
                         for s in fin {
                             current.push(s.clone());
                         }
@@ -713,6 +995,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
                 // After then-branch, flush into a goto-after state
                 let then_end_state = *state_num;
@@ -735,6 +1018,7 @@ pub fn linearize_body(
                         next_local_id,
                         sent_id,
                         catches,
+                        finallys,
                     );
                 }
                 let else_end_state = *state_num;
@@ -782,65 +1066,8 @@ pub fn linearize_body(
                 ty,
                 name,
             } => {
-                let del_iter_id = alloc_local(next_local_id);
-                let del_result_id = alloc_local(next_local_id);
-
-                // Initial pull: argless (first `next()` value is discarded per spec).
-                let next_call = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![],
-                    type_args: vec![],
-                };
-                // #1832: in-loop pull forwards the outer resume value (`sent_id`).
-                let next_call_resumed = Expr::Call {
-                    callee: Box::new(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_iter_id)),
-                        property: "next".to_string(),
-                    }),
-                    args: vec![Expr::LocalGet(sent_id)],
-                    type_args: vec![],
-                };
-
-                // #1831: resolve the iterator. For a generator *call* the result
-                // already is its iterator; for an arbitrary iterable (effect,
-                // custom `[Symbol.iterator]`) `js_get_iterator` invokes the
-                // well-known-symbol method to obtain one.
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_iter_id,
-                    Box::new(Expr::GetIterator(Box::new(*inner.clone()))),
-                )));
-                current.push(Stmt::Expr(Expr::LocalSet(
-                    del_result_id,
-                    Box::new(next_call),
-                )));
-
-                let while_body = vec![
-                    Stmt::Expr(Expr::Yield {
-                        value: Some(Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "value".to_string(),
-                        })),
-                        delegate: false,
-                    }),
-                    Stmt::Expr(Expr::LocalSet(del_result_id, Box::new(next_call_resumed))),
-                ];
-
-                let while_stmt = Stmt::While {
-                    condition: Expr::Unary {
-                        op: UnaryOp::Not,
-                        operand: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(del_result_id)),
-                            property: "done".to_string(),
-                        }),
-                    },
-                    body: while_body,
-                };
-
-                linearize_body(
-                    &[while_stmt],
+                let del_result_id = emit_yield_star_loop(
+                    inner,
                     states,
                     current,
                     state_num,
@@ -848,6 +1075,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
 
                 // After the loop, the iterator's final `value` (from
@@ -944,6 +1172,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
             }
 
@@ -976,6 +1205,7 @@ pub fn linearize_body(
                     next_local_id,
                     sent_id,
                     catches,
+                    finallys,
                 );
             }
 

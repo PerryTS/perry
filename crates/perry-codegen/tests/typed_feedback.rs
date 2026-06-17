@@ -2,6 +2,37 @@ use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 use perry_types::{FunctionType, Type};
 
+/// Serializes env-mutating tests so a concurrent test never observes a
+/// half-applied variable. Mirrors the guard in `typed_shape_descriptors.rs`.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Sets an env var for the duration of a test and restores the previous value
+/// (or unsets it) on drop, so the mutation never leaks to other tests.
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: Option<&str>) -> Self {
+        let prev = std::env::var_os(key);
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         target: None,
@@ -47,6 +78,8 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
     }
 }
 
@@ -58,6 +91,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
         default: None,
         decorators: Vec::new(),
         is_rest: false,
+        arguments_object: None,
     }
 }
 
@@ -87,6 +121,9 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         methods: Vec::new(),
         getters: Vec::new(),
         setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
         static_fields: Vec::new(),
         static_methods: Vec::new(),
         decorators: Vec::new(),
@@ -145,6 +182,9 @@ fn module_with_classes(
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
     }
 }
 
@@ -177,6 +217,12 @@ fn typed_feedback_trace_dump_runs_before_entry_return() {
 
 #[test]
 fn typed_feedback_instruments_property_and_method_boundaries() {
+    // Typed-feedback site *registration* is opt-in (emitted only when
+    // PERRY_TYPED_FEEDBACK / _TRACE is set); this test exercises the enabled
+    // path. Serialize on ENV_LOCK and restore the var on drop so concurrent or
+    // later tests in this binary never observe the changed environment.
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _env = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", Some("1"));
     let ir = ir_for(module(
         "typed_feedback_property.ts",
         vec![param(1, "obj", Type::Any)],
@@ -194,6 +240,7 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 }),
                 args: vec![Expr::Number(2.0)],
                 type_args: Vec::new(),
+                byte_offset: 0,
             }),
             Stmt::Return(Some(Expr::PropertyGet {
                 object: Box::new(Expr::LocalGet(1)),
@@ -284,6 +331,7 @@ fn typed_feedback_guards_direct_class_method_specialization() {
             }),
             args: vec![Expr::Number(5.0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         }))],
     ));
 
@@ -321,7 +369,9 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                     captures: Vec::new(),
                     mutable_captures: Vec::new(),
                     captures_this: false,
+                    captures_new_target: false,
                     enclosing_class: None,
+                    is_arrow: false,
                     is_async: false,
                     is_generator: false,
                     is_strict: false,
@@ -331,6 +381,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                 callee: Box::new(Expr::LocalGet(2)),
                 args: vec![Expr::Number(9.0)],
                 type_args: Vec::new(),
+                byte_offset: 0,
             })),
         ],
     ));
@@ -489,5 +540,9 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
 
     assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
     assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
-    assert!(ir.contains("call double @js_array_numeric_get_f64_unboxed"));
+    // The numeric fast path no longer calls `js_array_numeric_get_f64_unboxed`:
+    // the guard already proved raw-f64 layout + in-bounds, so the slot is loaded
+    // inline (a direct `load double` from the element address).
+    assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
+    assert!(ir.contains("load double"));
 }
