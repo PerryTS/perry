@@ -4714,15 +4714,24 @@ pub unsafe extern "C" fn js_native_call_method(
                 // synthetic `arguments` array local) — top 16 bits zero.
                 let args_arr_bits = args_arr_val.to_bits();
                 let arr_raw: usize = if args_arr_jsval.is_pointer() {
-                    (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+                    // A Symbol is POINTER_TAG'd but is a primitive, not an
+                    // Object — Type(argArray) is not Object, so reject it
+                    // below rather than treating its payload as an array
+                    // pointer (test262 apply/argarray-not-object `Symbol()`).
+                    if crate::symbol::js_is_symbol(args_arr_val) != 0 {
+                        0
+                    } else {
+                        (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+                    }
                 } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
                     args_arr_bits as usize
                 } else {
                     0
                 };
                 // Spec CreateListFromArrayLike: a non-nullish, non-object
-                // argArray (`fn.apply(null, true)` / `NaN` / `'1,2,3'`) is a
-                // TypeError. null/undefined mean "no arguments".
+                // argArray (`fn.apply(null, true)` / `NaN` / `'1,2,3'` /
+                // `Symbol()`) is a TypeError. null/undefined mean "no
+                // arguments".
                 if arr_raw == 0 && !args_arr_jsval.is_undefined() && !args_arr_jsval.is_null() {
                     throw_type_error_message(b"CreateListFromArrayLike called on non-object");
                 }
