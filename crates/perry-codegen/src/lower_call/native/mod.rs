@@ -112,6 +112,20 @@ pub(crate) fn lower_native_method_call(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
                     |arg| lower_expr(ctx, arg),
                 )?;
+                // #5247 (coverage gap): under `--debug-symbols`, the
+                // destructuring lowering passes the object-pattern's source byte
+                // offset as a second literal arg. Emit a `js_set_call_location`
+                // immediately before the coercibility check so the
+                // "Cannot convert undefined or null to object" throw renders
+                // `at <file>:<line>` for THIS destructure rather than the stale
+                // last-tracked call (which can be in an unrelated module). No-op
+                // in the default build (offset arg absent / locations disabled).
+                if ctx.strings.debug_locations_enabled() {
+                    if let Some(Expr::Number(off)) = args.get(1) {
+                        let byte_offset = *off as u32;
+                        crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+                    }
+                }
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_require_object_coercible",

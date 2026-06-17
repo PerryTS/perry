@@ -18,6 +18,21 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     source_path: &Path,
     target: Option<&str>,
 ) -> String {
+    wrap_commonjs_with_body_offset(source, source_path, target).0
+}
+
+/// Like [`wrap_commonjs_for_target`], but also returns the byte offset within
+/// the returned wrapped source at which the ORIGINAL module body begins (i.e.
+/// the length of the injected wrapper prefix: imports + aliases + hoisted
+/// classes + the IIFE/preamble scaffolding). `--debug-symbols` uses this to map
+/// a wrapped-coordinate `byte_offset` back to original-source coordinates.
+/// `None` when the body could not be located in the wrapped output (a
+/// special-case early rewrite changed it); callers then skip the mapping.
+pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
+    source: &str,
+    source_path: &Path,
+    target: Option<&str>,
+) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
     if is_depd_index_path(source_path) {
@@ -726,7 +741,16 @@ const _cjs = (function() {{
             wrapped
         );
     }
-    wrapped
+    // #5247: locate the original body within the wrapped output so callers can
+    // translate a wrapped-coordinate byte offset back to original coordinates.
+    // `body_for_iife` is interpolated verbatim into `wrapped`, so the first
+    // occurrence is its start. Empty body → no mapping.
+    let body_offset = if body_for_iife.is_empty() {
+        None
+    } else {
+        wrapped.find(body_for_iife.as_str())
+    };
+    (wrapped, body_offset)
 }
 
 fn target_node_platform(target: Option<&str>) -> Option<&'static str> {

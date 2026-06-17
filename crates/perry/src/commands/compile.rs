@@ -448,6 +448,9 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
+    // #5247: propagate `--debug-symbols` so `collect_modules` records the
+    // CJS-wrap source mapping needed to render original-source line numbers.
+    ctx.debug_symbols = args.debug_symbols;
 
     let build_cache_probe = BuildCacheProbe::new(&args, &project_root, &ctx.cache_root);
     let mut build_cache_stats = build_cache_probe.probe();
@@ -4037,10 +4040,34 @@ pub fn run_with_parse_cache(
                 // the module's original source so codegen can map a Call's byte
                 // offset to a 1-based line.
                 debug_locations: args.debug_symbols,
+                // #5247: source consulted to turn a node's `byte_offset` into a
+                // line. For a CommonJS module the offsets are in WRAPPED-source
+                // coordinates (perry parsed the injected-IIFE text), so we hand
+                // codegen the WRAPPED source — counting newlines up to a wrapped
+                // offset against the original would be off by the preamble byte
+                // length. `debug_source_line_offset` (below) then converts the
+                // wrapped line back to the original line. Non-wrapped modules
+                // read the original from disk.
                 module_source: if args.debug_symbols {
-                    std::fs::read_to_string(path).ok()
+                    match ctx.cjs_wrap_debug_sources.get(path) {
+                        Some(w) => Some(w.wrapped_source.clone()),
+                        None => std::fs::read_to_string(path).ok(),
+                    }
                 } else {
                     None
+                },
+                // #5247 (CJS-wrap coordinate skew): the number of newlines the
+                // injected wrapper prefix added before the original module body.
+                // Codegen subtracts this from the wrapped line number so the
+                // rendered location is in original-source coordinates. `0` for
+                // non-wrapped modules (and the entire default build).
+                debug_source_line_offset: if args.debug_symbols {
+                    ctx.cjs_wrap_debug_sources
+                        .get(path)
+                        .map(|w| w.prefix_line_count)
+                        .unwrap_or(0)
+                } else {
+                    0
                 },
             };
             // V2.2 + #686 object cache lookup. The key hashes every

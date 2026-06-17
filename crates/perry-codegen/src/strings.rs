@@ -83,6 +83,11 @@ pub struct StringPool {
     /// carries `(module_file_path, module_source)` so the call-lowering site
     /// can resolve a `Call.byte_offset` to a `file:line`.
     debug_location_ctx: Option<(String, String)>,
+    /// #5247 (CJS-wrap coordinate skew): newlines the wrapper prefix added
+    /// before the original body in `debug_location_ctx`'s (wrapped) source.
+    /// `call_location_for` subtracts this from the wrapped line number to
+    /// recover the original-source line. `0` for non-wrapped modules.
+    debug_source_line_offset: u32,
     /// #5247: the byte offset of the `Expr::Call` currently being lowered,
     /// recorded by the call dispatcher and consumed at the dynamic
     /// method-dispatch emission site (after the call's arguments — which may
@@ -122,6 +127,7 @@ impl StringPool {
             interned: HashMap::new(),
             entries: Vec::new(),
             debug_location_ctx: None,
+            debug_source_line_offset: 0,
             pending_call_offset: std::cell::Cell::new(0),
         }
     }
@@ -135,6 +141,13 @@ impl StringPool {
     /// `--debug-symbols` flag is on. No-op otherwise (`ctx` is `None`).
     pub fn set_debug_location_ctx(&mut self, ctx: Option<(String, String)>) {
         self.debug_location_ctx = ctx;
+    }
+
+    /// #5247 (CJS-wrap coordinate skew): set the wrapper-prefix line count that
+    /// `call_location_for` subtracts from the wrapped line number. `0` (the
+    /// default) leaves resolution unchanged.
+    pub fn set_debug_source_line_offset(&mut self, offset: u32) {
+        self.debug_source_line_offset = offset;
     }
 
     /// #5247: true iff source-location tracking is active for this module
@@ -170,11 +183,22 @@ impl StringPool {
             return None;
         }
         // 1-based line = 1 + count of newlines before the offset.
-        let line = 1 + src.as_bytes()[..offset]
+        let wrapped_line = 1 + src.as_bytes()[..offset]
             .iter()
             .filter(|&&b| b == b'\n')
-            .count();
-        Some((file.as_str(), line as u32))
+            .count() as u32;
+        // #5247 (CJS-wrap coordinate skew): `src` is the WRAPPED source for a
+        // CommonJS module, so deduct the wrapper-prefix line count to recover
+        // the original-source line. A wrapped line at or inside the preamble
+        // (`wrapped_line <= offset`) has no original counterpart → no location.
+        let line = if self.debug_source_line_offset == 0 {
+            wrapped_line
+        } else if wrapped_line > self.debug_source_line_offset {
+            wrapped_line - self.debug_source_line_offset
+        } else {
+            return None;
+        };
+        Some((file.as_str(), line))
     }
 
     /// Intern a string literal. Returns the interned index, stable for the

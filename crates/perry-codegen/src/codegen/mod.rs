@@ -138,6 +138,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     if opts.debug_locations {
         if let Some(src) = opts.module_source.clone() {
             strings.set_debug_location_ctx(Some((hir.name.clone(), src)));
+            // #5247 (CJS-wrap coordinate skew): `src` is the WRAPPED source for
+            // a CommonJS module; subtract the wrapper-prefix line count when
+            // resolving offsets so the rendered line is in original coordinates.
+            strings.set_debug_source_line_offset(opts.debug_source_line_offset);
         }
     }
 

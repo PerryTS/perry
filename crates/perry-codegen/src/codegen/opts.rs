@@ -380,6 +380,14 @@ pub struct CompileOptions {
     /// `debug_locations` is on (avoids cloning source for every module in the
     /// common build). `None` falls back to the `<anonymous>` frame.
     pub module_source: Option<String>,
+    /// #5247 (CJS-wrap coordinate skew): for a CommonJS module rewritten by
+    /// `cjs_wrap`, `module_source` is the WRAPPED text and `byte_offset`s are in
+    /// wrapped coordinates. This is the number of newlines the injected wrapper
+    /// prefix added before the original body; codegen subtracts it from the
+    /// wrapped line so the rendered location is in original-source coordinates.
+    /// `0` for non-wrapped modules and the entire default build (offsets inside
+    /// the preamble — wrapped line `<=` this — resolve to no location).
+    pub debug_source_line_offset: u32,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
