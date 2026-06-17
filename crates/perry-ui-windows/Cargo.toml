@@ -28,7 +28,7 @@ qrcodegen = "1.8"
 # webview2-com 0.34.x is the last release that uses windows 0.58 (matches
 # the rest of perry-ui-windows). 0.35+ moved to windows 0.59+ which would
 # clash with our HWND/PCWSTR types.
-webview2-com = "=0.34"
+webview2-com = "=0.39"
 
 [features]
 geisterhand = []
