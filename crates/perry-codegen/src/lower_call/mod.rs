@@ -39,6 +39,7 @@ mod console_promise;
 mod early_branches;
 mod event_target;
 mod extern_func;
+mod field_init;
 mod func_ref;
 mod jsx;
 mod method_override;
@@ -100,10 +101,8 @@ pub(crate) use native::lower_native_method_call;
 // Re-export pub(crate) `new.rs` items consumed outside this module
 // (codegen.rs / expr.rs / stmt.rs) so `crate::lower_call::lower_new`
 // etc. keep resolving after the split.
-pub(crate) use new::{
-    apply_field_initializers_recursive, bind_inline_constructor_params, lower_new,
-    restore_inline_constructor_scope, FieldInitMode,
-};
+pub(crate) use field_init::{apply_field_initializers_recursive, FieldInitMode};
+pub(crate) use new::{bind_inline_constructor_params, lower_new, restore_inline_constructor_scope};
 // `extract_options_fields` is consumed by `expr.rs` as
 // `crate::lower_call::extract_options_fields` — keep that path stable.
 pub(crate) use options::extract_options_fields;
