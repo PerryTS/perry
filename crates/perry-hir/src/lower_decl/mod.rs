@@ -35,6 +35,7 @@ pub(crate) use block::{
 };
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
 pub(crate) use class_captures::synthesize_class_captures;
+pub(crate) use class_computed::class_computed_member_registration_expr;
 pub(crate) use class_decl::{lower_class_decl, lower_class_from_ast};
 pub(crate) use class_members::{
     lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,

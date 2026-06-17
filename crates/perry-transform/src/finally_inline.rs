@@ -77,6 +77,10 @@ use std::collections::HashMap;
 use perry_hir::{Expr, Module, Stmt};
 use perry_types::{LocalId, Type};
 
+// #5293: the max-LocalId scan was copy-pasted here; route through the canonical
+// (exhaustive-walker-backed) implementation in `generator::id_scan` instead.
+use crate::generator::compute_max_local_id;
+
 /// One open try-with-finally on the lowering stack. The cloned `body`
 /// gets inlined ahead of any abrupt completion (return/break/continue)
 /// that would escape this try frame. `loop_depth_at_push` is the value
@@ -156,157 +160,6 @@ pub fn inline_finally_into_returns(module: &mut Module) {
         if let Some(s) = single.into_iter().next() {
             *stmt = s;
         }
-    }
-}
-
-/// Walk every Function / Method / Constructor / Getter / Setter body in
-/// the module to find the largest LocalId currently in use, so we can
-/// allocate fresh ids without colliding. Mirrors the equivalent helper in
-/// `async_to_generator.rs` (kept private there) — duplicated here to avoid
-/// a pub-visibility bump on a transform-internal helper.
-fn compute_max_local_id(module: &Module) -> LocalId {
-    let mut max_id: LocalId = 0;
-    for func in &module.functions {
-        for p in &func.params {
-            max_id = max_id.max(p.id);
-        }
-        scan_max(&func.body, &mut max_id);
-    }
-    for class in &module.classes {
-        for method in &class.methods {
-            for p in &method.params {
-                max_id = max_id.max(p.id);
-            }
-            scan_max(&method.body, &mut max_id);
-        }
-        for static_method in &class.static_methods {
-            for p in &static_method.params {
-                max_id = max_id.max(p.id);
-            }
-            scan_max(&static_method.body, &mut max_id);
-        }
-        if let Some(ctor) = &class.constructor {
-            for p in &ctor.params {
-                max_id = max_id.max(p.id);
-            }
-            scan_max(&ctor.body, &mut max_id);
-        }
-    }
-    for stmt in &module.init {
-        scan_max(std::slice::from_ref(stmt), &mut max_id);
-    }
-    for global in &module.globals {
-        max_id = max_id.max(global.id);
-    }
-    max_id
-}
-
-fn scan_max(stmts: &[Stmt], max_id: &mut LocalId) {
-    use perry_hir::walker::walk_expr_children;
-    fn scan_e(e: &Expr, m: &mut LocalId) {
-        match e {
-            Expr::LocalGet(id) => *m = (*m).max(*id),
-            Expr::LocalSet(id, v) => {
-                *m = (*m).max(*id);
-                scan_e(v, m);
-            }
-            Expr::Closure {
-                params,
-                captures,
-                mutable_captures,
-                body,
-                ..
-            } => {
-                for p in params {
-                    *m = (*m).max(p.id);
-                }
-                for c in captures {
-                    *m = (*m).max(*c);
-                }
-                for c in mutable_captures {
-                    *m = (*m).max(*c);
-                }
-                scan_max(body, m);
-            }
-            _ => walk_expr_children(e, &mut |c| scan_e(c, m)),
-        }
-    }
-    fn scan_s(s: &Stmt, m: &mut LocalId) {
-        match s {
-            Stmt::Let { id, init, .. } => {
-                *m = (*m).max(*id);
-                if let Some(e) = init {
-                    scan_e(e, m);
-                }
-            }
-            Stmt::Expr(e) | Stmt::Throw(e) => scan_e(e, m),
-            Stmt::Return(Some(e)) => scan_e(e, m),
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                scan_e(condition, m);
-                scan_max(then_branch, m);
-                if let Some(eb) = else_branch {
-                    scan_max(eb, m);
-                }
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                scan_e(condition, m);
-                scan_max(body, m);
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                if let Some(i) = init {
-                    scan_s(i, m);
-                }
-                if let Some(c) = condition {
-                    scan_e(c, m);
-                }
-                if let Some(u) = update {
-                    scan_e(u, m);
-                }
-                scan_max(body, m);
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                scan_max(body, m);
-                if let Some(c) = catch {
-                    if let Some((id, _)) = c.param {
-                        *m = (*m).max(id);
-                    }
-                    scan_max(&c.body, m);
-                }
-                if let Some(f) = finally {
-                    scan_max(f, m);
-                }
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } => {
-                scan_e(discriminant, m);
-                for case in cases {
-                    if let Some(t) = &case.test {
-                        scan_e(t, m);
-                    }
-                    scan_max(&case.body, m);
-                }
-            }
-            Stmt::Labeled { body, .. } => scan_s(body, m),
-            _ => {}
-        }
-    }
-    for s in stmts {
-        scan_s(s, max_id);
     }
 }
 
