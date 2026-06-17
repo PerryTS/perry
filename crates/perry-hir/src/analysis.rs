@@ -407,7 +407,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
         }
         _ => {}
     }
-    walk_expr_children(expr, &mut |child| collect_assigned_locals_expr(child, assigned));
+    walk_expr_children(expr, &mut |child| {
+        collect_assigned_locals_expr(child, assigned)
+    });
 }
 
 /// Rewrite all `Expr::This` references inside a block of statements to
