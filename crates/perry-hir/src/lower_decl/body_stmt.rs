@@ -344,6 +344,34 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     }
                 }
                 ctx.pending_classes.push(class);
+                // #5251 follow-up — a function-nested `class X { … }` whose
+                // name collides with an OUTER same-named local must SHADOW
+                // that local within this scope, exactly as a nested
+                // `function X(){}` does (see `lower_nested_fn_decl`, which
+                // `define_local`s the function name + emits a `Stmt::Let`).
+                // Without a scope-local binding, a later in-scope reference to
+                // `X` (e.g. the cjs_wrap `exports.X = X` that records the
+                // module's named export) falls through `lookup_local` to the
+                // enclosing module-scope `const X = _cjs.X` re-export binding —
+                // a circular self-read that resolves to `undefined`. That is
+                // the class-vs-function export asymmetry that left
+                // `require('./code').Name` undefined for ajv's `codegen/code.js`
+                // (`class Name`) while an identically-shaped `function Name`
+                // exported fine. Bind the name to a `ClassRef` value (the same
+                // shape `var C = class {…}` lowers to, recorded by codegen in
+                // `local_class_aliases`) so the in-scope read resolves to the
+                // class. Gated on a pre-existing outer binding so working
+                // packages (no collision) are byte-for-byte unaffected.
+                if ctx.lookup_local(&class_name).is_some() {
+                    let class_local = ctx.define_local(class_name.clone(), Type::Any);
+                    result.push(Stmt::Let {
+                        id: class_local,
+                        name: class_name.clone(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassRef(class_name.clone())),
+                        mutable: false,
+                    });
+                }
             } else {
                 // Duplicate same-named class: still evaluate its computed
                 // member keys for their spec-mandated side effects. See
