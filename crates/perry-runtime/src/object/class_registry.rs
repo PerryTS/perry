@@ -777,6 +777,30 @@ unsafe fn resolve_proto_chain_field_inner(
     let mut cid = class_id;
     let mut depth = 0usize;
     while depth < 32 {
+        // The reflective `ClassName.prototype` object
+        // (`CLASS_DECL_PROTOTYPE_OBJECTS`) is where a user
+        // `Object.defineProperty(ClassName.prototype, name, { get })` installs
+        // its accessor — distinct from the #711/#809 synthetic-proto cache
+        // (`CLASS_PROTOTYPE_OBJECTS`) that the rest of this walk reads. The
+        // instance-read walk historically only consulted the latter, so such a
+        // getter was invisible to `instance.name` (winston:
+        // `Object.defineProperty(Logger.prototype, 'transports', { get })`,
+        // read as `this.transports`, came back `undefined` → `.length` threw).
+        // Check the decl-proto object for an ACCESSOR only: it is allocated
+        // WITH this `class_id` (`js_object_alloc(class_id, 0)`), so routing its
+        // DATA reads back through `js_object_get_field_by_name` would re-enter
+        // this same walk for the same id and recurse infinitely (a Transform
+        // subclass's `_read` lookup stack-overflowed → SIGSEGV). Class methods /
+        // data are already covered by the vtable + `class_prototype_object`
+        // path below, so the accessor-only probe here is sufficient.
+        if let Some(receiver) = receiver {
+            let decl_proto = class_decl_prototype_object(cid);
+            if !decl_proto.is_null() {
+                if let Some(value) = inherited_proto_accessor_value(decl_proto, key, receiver) {
+                    return Some(value);
+                }
+            }
+        }
         let proto_obj = class_prototype_object(cid);
         if !proto_obj.is_null() {
             if let Some(receiver) = receiver {

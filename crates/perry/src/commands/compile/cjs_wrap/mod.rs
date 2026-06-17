@@ -51,7 +51,7 @@ pub(self) use extract_exports::{
 };
 pub(self) use extract_requires::{
     extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
-    function_local_specs, identifier_is_reassigned,
+    function_local_specs, identifier_is_declared_binding, identifier_is_reassigned,
 };
 pub(self) use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,
@@ -551,6 +551,67 @@ module.exports = inner;
     }
 
     #[test]
+    fn wrap_does_not_shadow_global_builtin_named_export() {
+        // Regression (bluebird errors.js): `module.exports = { Error: Error,
+        // TypeError: _TypeError, ... }`. The export KEY `Error` is a global
+        // builtin; the body has no `function/var/let/const/class Error`. Emitting
+        // `export const Error = _cjs.Error;` at module scope put an `Error`
+        // binding ahead of the global, so the IIFE body's free `Error`
+        // (`inherits(SubError, Error)`) resolved to the `export const` — value
+        // `_cjs.Error`, `undefined` until the IIFE returns — and reading
+        // `Error.prototype` threw `Cannot read properties of undefined (reading
+        // 'prototype')`. Fix: surface such builtin-named exports through a
+        // MANGLED module binding (`const __cjsexp_Error = _cjs.Error; export {
+        // __cjsexp_Error as Error };`) so no `Error` binding shadows the global.
+        let src = "var inherits = require('./util').inherits;\n\
+                   function subError() { function SubError() {} inherits(SubError, Error); return SubError; }\n\
+                   var Warning = subError();\n\
+                   module.exports = { Error: Error, Warning: Warning };";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/index.js"));
+        // `Error` (global builtin, undeclared in body) must NOT get a plain
+        // `export const Error` that shadows the global.
+        assert!(
+            !wrapped.contains("export const Error = _cjs.Error;"),
+            "must NOT emit a shadowing `export const Error`, got:\n{}",
+            wrapped
+        );
+        // It is surfaced via a mangled re-export instead.
+        assert!(
+            wrapped.contains("const __cjsexp_Error = _cjs.Error;")
+                && wrapped.contains("export { __cjsexp_Error as Error };"),
+            "expected mangled re-export of the builtin-named export, got:\n{}",
+            wrapped
+        );
+        // A NON-builtin named export (`Warning`, also undeclared as a body
+        // binding — it's a `var`) keeps the ordinary `export const` form.
+        assert!(
+            wrapped.contains("export const Warning = _cjs.Warning;"),
+            "expected ordinary `export const Warning`, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_keeps_export_const_for_builtin_name_declared_in_body() {
+        // A name that collides with a builtin but IS a real module binding
+        // (`function Error() {}`) is a genuine local export — keep the ordinary
+        // `export const Error = _cjs.Error;` (no global to shadow).
+        let src = "function Error() { this.x = 1; }\n\
+                   module.exports = { Error: Error };";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/index.js"));
+        assert!(
+            wrapped.contains("export const Error = _cjs.Error;"),
+            "a body-declared `Error` must keep the plain export const, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("__cjsexp_Error"),
+            "must NOT mangle a body-declared export name, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn identifier_is_reassigned_distinguishes_declaration_from_write() {
         use super::extract_requires::identifier_is_reassigned;
         // Pure read-only alias: declaration + member reads only.
@@ -572,6 +633,31 @@ module.exports = inner;
         assert!(!identifier_is_reassigned(
             "var s = require('./d'); if (s === other) {} obj.s = 1; cb(() => s);",
             "s"
+        ));
+    }
+
+    #[test]
+    fn identifier_is_declared_binding_detects_module_bindings() {
+        use super::extract_requires::identifier_is_declared_binding;
+        // Each declaration keyword form.
+        assert!(identifier_is_declared_binding(
+            "function Error() {}",
+            "Error"
+        ));
+        assert!(identifier_is_declared_binding("class Error {}", "Error"));
+        assert!(identifier_is_declared_binding("var Error = 1;", "Error"));
+        assert!(identifier_is_declared_binding("let Error = 1;", "Error"));
+        assert!(identifier_is_declared_binding("const Error = 1;", "Error"));
+        // A bare free reference / member access is NOT a declaration.
+        assert!(!identifier_is_declared_binding(
+            "inherits(SubError, Error); var x = Error.prototype;",
+            "Error"
+        ));
+        assert!(!identifier_is_declared_binding("obj.Error = 1;", "Error"));
+        // Substring of a longer identifier must not match.
+        assert!(!identifier_is_declared_binding(
+            "var ErrorType = 1;",
+            "Error"
         ));
     }
 

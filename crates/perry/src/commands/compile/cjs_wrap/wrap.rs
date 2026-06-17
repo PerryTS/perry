@@ -5,6 +5,63 @@ use super::*;
 use std::borrow::Cow;
 use std::path::Path;
 
+/// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
+/// bare identifier at runtime)? Used only to decide whether a CJS named export
+/// whose KEY equals such a name (`module.exports = { Error: Error }`) needs the
+/// mangled-rebinding emission so a module-scope `export const <name>` doesn't
+/// shadow the global for free references in the IIFE body. Deliberately limited
+/// to runtime VALUES (not TS-only utility types): an over-broad set would only
+/// route an unrelated export through the (correct) mangled re-export.
+fn is_global_value_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Error"
+            | "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "AggregateError"
+            | "SuppressedError"
+            | "Object"
+            | "Function"
+            | "Array"
+            | "Boolean"
+            | "Number"
+            | "String"
+            | "Symbol"
+            | "BigInt"
+            | "Math"
+            | "JSON"
+            | "Date"
+            | "RegExp"
+            | "Promise"
+            | "Proxy"
+            | "Reflect"
+            | "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "WeakRef"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "Buffer"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int8Array"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+    )
+}
+
 /// Wrap CJS source as ESM. `source_path` is the absolute path of the file
 /// being wrapped — used to resolve `require('./relative')` targets when
 /// peeking at re-export wrappers' transitive named exports.
@@ -497,6 +554,22 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .map(|(n, _)| n.clone())
         .collect();
 
+    // A named export whose name is a JS global-builtin VALUE (`Error`,
+    // `TypeError`, `Object`, `Promise`, …) and is NOT declared as a module
+    // binding in the body is the `module.exports = { Error: Error }` shape: the
+    // KEY collides with a global the IIFE body references freely. Emitting
+    // `export const Error = _cjs.Error;` puts a module-scope `Error` binding
+    // ahead of the global, so the body's `Error` (e.g. bluebird errors.js
+    // `inherits(SubError, Error)`) resolves to the `export const`, whose value
+    // `_cjs.Error` is `undefined` until the IIFE returns — `Parent.prototype`
+    // then threw `Cannot read properties of undefined (reading 'prototype')`.
+    // For these, surface the export through a MANGLED module-scope binding and
+    // re-export it under the original name (`const __cjsexp_Error = _cjs.Error;
+    // export { __cjsexp_Error as Error };`). The value still surfaces for named
+    // imports, but no `Error` binding shadows the global in the body.
+    let builtin_value_global_collision = |n: &str| -> bool {
+        is_global_value_builtin_name(n) && !identifier_is_declared_binding(source, n)
+    };
     let named_export_decls = if named_exports.is_empty() {
         String::new()
     } else {
@@ -504,7 +577,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             .iter()
             .filter(|n| !hoisted_class_names.contains(n))
             .filter(|n| !named_reexport_names.contains(n))
-            .map(|n| format!("export const {} = _cjs.{};", n, n))
+            .map(|n| {
+                if builtin_value_global_collision(n) {
+                    format!(
+                        "const __cjsexp_{n} = _cjs.{n};\nexport {{ __cjsexp_{n} as {n} }};",
+                        n = n
+                    )
+                } else {
+                    format!("export const {} = _cjs.{};", n, n)
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
