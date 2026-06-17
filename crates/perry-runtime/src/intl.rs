@@ -17,6 +17,7 @@ use crate::StringHeader;
 #[cfg(feature = "intl-segmenter")]
 use unicode_segmentation::UnicodeSegmentation;
 
+mod locale;
 mod locales;
 use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
 
@@ -1723,6 +1724,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         1,
         false,
     );
+    locale::install_locale(ns_obj);
     install_constructor(
         ns_obj,
         "NumberFormat",
