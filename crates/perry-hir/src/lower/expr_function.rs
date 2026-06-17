@@ -534,8 +534,7 @@ fn lower_named_fn_expr(
         },
         Stmt::Return(Some(Expr::LocalGet(self_id))),
     ];
-    let (captures, mutable_captures) =
-        compute_closure_captures(ctx, &body, &outer_local_ids, &[]);
+    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_local_ids, &[]);
     ctx.exit_scope(wrapper_scope);
 
     Ok(Expr::Call {

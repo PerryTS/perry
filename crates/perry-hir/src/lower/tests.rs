@@ -332,9 +332,16 @@ fn test_native_instance_index_shadowing_and_truncation() {
 
     // Enter an inner scope: shadow `e` with a different native type.
     let mark = ctx.native_instances.len();
-    ctx.register_native_instance("e".to_string(), "stream".to_string(), "Readable".to_string());
+    ctx.register_native_instance(
+        "e".to_string(),
+        "stream".to_string(),
+        "Readable".to_string(),
+    );
     // Inner (last) binding wins.
-    assert_eq!(ctx.lookup_native_instance("e"), Some(("stream", "Readable")));
+    assert_eq!(
+        ctx.lookup_native_instance("e"),
+        Some(("stream", "Readable"))
+    );
 
     // Pop the inner scope: the outer binding must be restored.
     ctx.truncate_native_instances(mark);
@@ -404,10 +411,7 @@ fn perf_registry_lookup_is_flat_in_k() {
             acc += ctx.lookup_native_instance("missing").is_some() as u64;
             acc += ctx.lookup_native_module("missing").is_some() as u64;
         }
-        eprintln!(
-            "K={k:<6} {M} x3 lookups: {:?}  (acc={acc})",
-            t.elapsed()
-        );
+        eprintln!("K={k:<6} {M} x3 lookups: {:?}  (acc={acc})", t.elapsed());
     }
 }
 

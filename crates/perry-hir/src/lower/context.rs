@@ -628,7 +628,9 @@ impl LoweringContext {
     ) {
         // Forward-scan (first-match-wins): index keeps the FIRST entry per name.
         let idx = self.class_statics.len();
-        self.class_statics_index.entry(class_name.clone()).or_insert(idx);
+        self.class_statics_index
+            .entry(class_name.clone())
+            .or_insert(idx);
         self.class_statics
             .push((class_name, static_fields, static_methods));
     }
@@ -1050,7 +1052,9 @@ impl LoweringContext {
         // Forward-scan (first-match-wins) semantics: only record the FIRST
         // index for a name so lookups match the old `.iter().find()`.
         let idx = self.native_modules.len();
-        self.native_modules_index.entry(local_name.clone()).or_insert(idx);
+        self.native_modules_index
+            .entry(local_name.clone())
+            .or_insert(idx);
         self.native_modules
             .push((local_name, module_name, method_name));
     }
