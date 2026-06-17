@@ -4,11 +4,128 @@
 //! Used by `expr.rs`, `lower_call.rs`, `lower_string_method.rs`,
 //! `lower_conditional.rs`, and `stmt.rs`.
 
-use perry_hir::{BinaryOp, Expr, UnaryOp};
+use perry_hir::{
+    infer_expr_type, infer_refinable_expr_type, BinaryOp, Expr, HirTypeFacts, UnaryOp,
+};
 use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
 use crate::type_analysis_net::{net_result_class, net_result_type};
+
+struct CodegenTypeFacts<'a> {
+    local_types: &'a std::collections::HashMap<u32, HirType>,
+    imported_func_return_types: &'a std::collections::HashMap<String, HirType>,
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    interfaces: &'a std::collections::HashMap<String, perry_hir::Interface>,
+    class_stack: &'a [String],
+    enums: &'a std::collections::HashMap<(String, String), perry_hir::EnumValue>,
+}
+
+impl<'a> CodegenTypeFacts<'a> {
+    fn from_ctx(ctx: &'a FnCtx<'a>) -> Self {
+        Self {
+            local_types: &ctx.local_types,
+            imported_func_return_types: ctx.imported_func_return_types,
+            classes: ctx.classes,
+            interfaces: ctx.interfaces,
+            class_stack: &ctx.class_stack,
+            enums: ctx.enums,
+        }
+    }
+}
+
+impl HirTypeFacts for CodegenTypeFacts<'_> {
+    fn local_type(&self, id: u32) -> Option<&HirType> {
+        self.local_types.get(&id)
+    }
+
+    fn global_type(&self, _id: u32) -> Option<&HirType> {
+        None
+    }
+
+    fn function_return_type(&self, _id: u32) -> Option<&HirType> {
+        None
+    }
+
+    fn extern_function_return_type(&self, name: &str) -> Option<&HirType> {
+        self.imported_func_return_types.get(name)
+    }
+
+    fn this_type(&self) -> Option<HirType> {
+        self.class_stack.last().cloned().map(HirType::Named)
+    }
+
+    fn enum_member_type(&self, enum_name: &str, member_name: &str) -> Option<HirType> {
+        match self
+            .enums
+            .get(&(enum_name.to_string(), member_name.to_string()))?
+        {
+            perry_hir::EnumValue::Number(_) => Some(HirType::Number),
+            perry_hir::EnumValue::String(_) => Some(HirType::String),
+        }
+    }
+
+    fn static_field_type(&self, class_name: &str, field_name: &str) -> Option<&HirType> {
+        lookup_codegen_static_field(self.classes, class_name, field_name)
+    }
+
+    fn static_method_return_type(&self, class_name: &str, method_name: &str) -> Option<&HirType> {
+        lookup_codegen_static_method_return(self.classes, class_name, method_name)
+    }
+
+    fn named_property_type(&self, type_name: &str, property: &str) -> Option<HirType> {
+        lookup_codegen_named_property(self.classes, self.interfaces, type_name, property)
+    }
+
+    fn super_property_type(&self, property: &str) -> Option<HirType> {
+        let current_class = self.class_stack.last()?;
+        lookup_codegen_super_property(self.classes, current_class, property)
+    }
+
+    fn super_method_return_type(&self, method: &str) -> Option<HirType> {
+        let current_class = self.class_stack.last()?;
+        lookup_codegen_super_method_return(self.classes, current_class, method).cloned()
+    }
+}
+
+#[cfg(test)]
+fn hir_inferred_refinable_type_from_locals(
+    local_types: &std::collections::HashMap<u32, HirType>,
+    expr: &Expr,
+) -> Option<HirType> {
+    infer_refinable_expr_type(expr, local_types)
+}
+
+fn hir_inferred_refinable_type_from_facts(
+    facts: &impl HirTypeFacts,
+    expr: &Expr,
+) -> Option<HirType> {
+    infer_refinable_expr_type(expr, facts)
+}
+
+fn hir_inferred_refinable_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<HirType> {
+    let facts = CodegenTypeFacts::from_ctx(ctx);
+    hir_inferred_refinable_type_from_facts(&facts, expr)
+}
+
+#[cfg(test)]
+fn hir_inferred_static_type_from_locals(
+    local_types: &std::collections::HashMap<u32, HirType>,
+    expr: &Expr,
+) -> Option<HirType> {
+    match infer_expr_type(expr, local_types) {
+        HirType::Any | HirType::Unknown => None,
+        ty => Some(ty),
+    }
+}
+
+fn hir_inferred_static_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<HirType> {
+    let facts = CodegenTypeFacts::from_ctx(ctx);
+    match infer_expr_type(expr, &facts) {
+        HirType::Any | HirType::Unknown => None,
+        ty => Some(ty),
+    }
+}
 
 // Class-field layout / declared-type resolution lives in a sibling module
 // (file-size gate). Re-exported here so existing `type_analysis::*` call
@@ -28,6 +145,232 @@ fn function_type_from_decl(function: &perry_hir::Function) -> HirType {
         is_async: function.is_async || function.was_plain_async,
         is_generator: function.is_generator,
     })
+}
+
+fn interface_method_type(method: &perry_hir::InterfaceMethod) -> HirType {
+    HirType::Function(perry_types::FunctionType {
+        params: method.params.clone(),
+        return_type: Box::new(method.return_type.clone()),
+        is_async: false,
+        is_generator: false,
+    })
+}
+
+fn named_type_base(ty: &HirType) -> Option<&str> {
+    match ty {
+        HirType::Named(name) => Some(name),
+        HirType::Generic { base, .. } => Some(base),
+        _ => None,
+    }
+}
+
+fn codegen_parent_class_name<'a>(
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    class: &'a perry_hir::Class,
+) -> Option<&'a str> {
+    if let Some(parent) = class.extends_name.as_deref() {
+        return Some(parent);
+    }
+    let parent_id = class.extends?;
+    classes
+        .values()
+        .copied()
+        .find(|candidate| candidate.id == parent_id)
+        .map(|parent| parent.name.as_str())
+}
+
+fn lookup_codegen_static_field<'a>(
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    class_name: &str,
+    field_name: &str,
+) -> Option<&'a HirType> {
+    let mut visited = std::collections::HashSet::new();
+    lookup_codegen_static_field_inner(classes, class_name, field_name, &mut visited)
+}
+
+fn lookup_codegen_static_field_inner<'a>(
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    class_name: &str,
+    field_name: &str,
+    visited: &mut std::collections::HashSet<String>,
+) -> Option<&'a HirType> {
+    let class = classes.get(class_name)?;
+    if let Some(field) = class
+        .static_fields
+        .iter()
+        .find(|field| field.name == field_name)
+    {
+        return Some(&field.ty);
+    }
+    if !visited.insert(class_name.to_string()) {
+        return None;
+    }
+    let parent = codegen_parent_class_name(classes, class)?;
+    lookup_codegen_static_field_inner(classes, parent, field_name, visited)
+}
+
+fn lookup_codegen_static_method_return<'a>(
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<&'a HirType> {
+    let mut visited = std::collections::HashSet::new();
+    lookup_codegen_static_method_return_inner(classes, class_name, method_name, &mut visited)
+}
+
+fn lookup_codegen_static_method_return_inner<'a>(
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    class_name: &str,
+    method_name: &str,
+    visited: &mut std::collections::HashSet<String>,
+) -> Option<&'a HirType> {
+    let class = classes.get(class_name)?;
+    if let Some(method) = class
+        .static_methods
+        .iter()
+        .find(|method| method.name == method_name)
+    {
+        return Some(&method.return_type);
+    }
+    if !visited.insert(class_name.to_string()) {
+        return None;
+    }
+    let parent = codegen_parent_class_name(classes, class)?;
+    lookup_codegen_static_method_return_inner(classes, parent, method_name, visited)
+}
+
+fn lookup_codegen_super_property(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    current_class_name: &str,
+    property: &str,
+) -> Option<HirType> {
+    let current = classes.get(current_class_name)?;
+    let parent = codegen_parent_class_name(classes, current)?;
+    let mut visited = std::collections::HashSet::new();
+    lookup_codegen_super_property_inner(classes, parent, property, &mut visited)
+}
+
+fn lookup_codegen_super_property_inner(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    class_name: &str,
+    property: &str,
+    visited: &mut std::collections::HashSet<String>,
+) -> Option<HirType> {
+    if !visited.insert(class_name.to_string()) {
+        return None;
+    }
+    let class = classes.get(class_name)?;
+    if let Some((_, getter)) = class.getters.iter().find(|(name, getter)| {
+        name == property && !class.static_accessor_fn_ids.contains(&getter.id)
+    }) {
+        return Some(getter.return_type.clone());
+    }
+    if let Some(method) = class.methods.iter().find(|method| method.name == property) {
+        return Some(function_type_from_decl(method));
+    }
+    let parent = codegen_parent_class_name(classes, class)?;
+    lookup_codegen_super_property_inner(classes, parent, property, visited)
+}
+
+fn lookup_codegen_super_method_return<'a>(
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    current_class_name: &str,
+    method: &str,
+) -> Option<&'a HirType> {
+    let current = classes.get(current_class_name)?;
+    let parent = codegen_parent_class_name(classes, current)?;
+    let mut visited = std::collections::HashSet::new();
+    lookup_codegen_super_method_return_inner(classes, parent, method, &mut visited)
+}
+
+fn lookup_codegen_super_method_return_inner<'a>(
+    classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    class_name: &str,
+    method_name: &str,
+    visited: &mut std::collections::HashSet<String>,
+) -> Option<&'a HirType> {
+    if !visited.insert(class_name.to_string()) {
+        return None;
+    }
+    let class = classes.get(class_name)?;
+    if let Some(method) = class
+        .methods
+        .iter()
+        .find(|method| method.name == method_name)
+    {
+        return Some(&method.return_type);
+    }
+    let parent = codegen_parent_class_name(classes, class)?;
+    lookup_codegen_super_method_return_inner(classes, parent, method_name, visited)
+}
+
+fn lookup_codegen_named_property(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    interfaces: &std::collections::HashMap<String, perry_hir::Interface>,
+    type_name: &str,
+    property: &str,
+) -> Option<HirType> {
+    let mut visited = std::collections::HashSet::new();
+    lookup_codegen_named_property_inner(classes, interfaces, type_name, property, &mut visited)
+}
+
+fn lookup_codegen_named_property_inner(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    interfaces: &std::collections::HashMap<String, perry_hir::Interface>,
+    type_name: &str,
+    property: &str,
+    visited: &mut std::collections::HashSet<String>,
+) -> Option<HirType> {
+    if !visited.insert(type_name.to_string()) {
+        return None;
+    }
+
+    if let Some(class) = classes.get(type_name) {
+        if let Some(field) = class.fields.iter().find(|field| field.name == property) {
+            return Some(field.ty.clone());
+        }
+        if let Some((_, getter)) = class.getters.iter().find(|(name, getter)| {
+            name == property && !class.static_accessor_fn_ids.contains(&getter.id)
+        }) {
+            return Some(getter.return_type.clone());
+        }
+        if let Some(method) = class.methods.iter().find(|method| method.name == property) {
+            return Some(function_type_from_decl(method));
+        }
+        if let Some(parent) = codegen_parent_class_name(classes, class) {
+            if let Some(ty) =
+                lookup_codegen_named_property_inner(classes, interfaces, parent, property, visited)
+            {
+                return Some(ty);
+            }
+        }
+    }
+
+    if let Some(interface) = interfaces.get(type_name) {
+        if let Some(prop) = interface
+            .properties
+            .iter()
+            .find(|prop| prop.name == property)
+        {
+            return Some(prop.ty.clone());
+        }
+        if let Some(method) = interface
+            .methods
+            .iter()
+            .find(|method| method.name == property)
+        {
+            return Some(interface_method_type(method));
+        }
+        for parent in interface.extends.iter().filter_map(named_type_base) {
+            if let Some(ty) =
+                lookup_codegen_named_property_inner(classes, interfaces, parent, property, visited)
+            {
+                return Some(ty);
+            }
+        }
+    }
+
+    None
 }
 
 pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
@@ -116,7 +459,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::Array(_) | Expr::ArraySpread(_) => {
             Some(HirType::Array(Box::new(HirType::Any)))
         }
-        // `new Array(n)` / `new Array(a, b, ...)` — the static_type_of arm
+        // `new Array(n)` / `new Array(a, b, ...)` — the shared HIR inference
         // already maps this to Array<Any>, so the let-binding refinement
         // must agree. Without it, `const xs = new Array(4); xs[i]` falls
         // through to the generic Object index path which doesn't translate
@@ -142,7 +485,8 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::ArrayEntries { .. }
         | Expr::ArrayKeys { .. }
         | Expr::ArrayValues { .. }
-        | Expr::StringMatch { .. } => Some(HirType::Array(Box::new(HirType::Any))),
+        | Expr::StringMatch { .. } => hir_inferred_refinable_type(ctx, init)
+            .or_else(|| Some(HirType::Array(Box::new(HirType::Any)))),
         Expr::StringMatchAll { .. } => Some(HirType::Any),
         // TextEncoder.encode(str) — runtime returns a BufferHeader with
         // packed u8 bytes (same shape as `new Uint8Array([...])`). Refining
@@ -160,18 +504,14 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::StringSplit { .. } => Some(HirType::Array(Box::new(HirType::String))),
         // Set.values() / Set.keys() → iterable, but Array.from wraps it
         // into an Array. Without an Array.from wrap, it's still iterable.
-        // Set/Map constructors refine to `Generic { base, type_args: [] }` —
+        // Set/Map constructors refine to `Generic { base, type_args }` —
         // `is_set_expr` / `is_map_expr` check `base == "Set" / "Map"` on the
         // Generic variant, so `Named("Set")` here used to silently miss the
-        // fast path and `s.has(v)` returned undefined.
-        Expr::SetNewFromArray(_) | Expr::SetNew => Some(HirType::Generic {
-            base: "Set".into(),
-            type_args: Vec::new(),
-        }),
-        Expr::MapNewFromArray(_) | Expr::MapNew => Some(HirType::Generic {
-            base: "Map".into(),
-            type_args: Vec::new(),
-        }),
+        // fast path and `s.has(v)` returned undefined. Delegate to shared HIR
+        // inference so constructor inputs can preserve key/value element facts.
+        Expr::SetNewFromArray(_) | Expr::SetNew | Expr::MapNewFromArray(_) | Expr::MapNew => {
+            hir_inferred_refinable_type(ctx, init)
+        }
         // Object.keys() / for-in keys always return string handles.
         Expr::ObjectKeys(_) | Expr::ForInKeys(_) => {
             Some(HirType::Array(Box::new(HirType::String)))
@@ -514,19 +854,6 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                     return Some(HirType::String);
                 }
             }
-            // Cross-module function calls: refine from the imported return
-            // type table. Without this, `const name = getFileName(path)`
-            // stays typed as Any even though `getFileName` declares
-            // `return_type: String` in the source module. This causes
-            // `name.charCodeAt(i)` to fall through to the generic method
-            // dispatcher (which returns [object Object] for strings).
-            if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
-                if let Some(ret_ty) = ctx.imported_func_return_types.get(name) {
-                    if !matches!(ret_ty, HirType::Any | HirType::Void) {
-                        return Some(ret_ty.clone());
-                    }
-                }
-            }
             if let Some(ret_ty) = static_type_of(ctx, init) {
                 if !matches!(ret_ty, HirType::Any | HirType::Void | HirType::Function(_)) {
                     return Some(ret_ty);
@@ -534,7 +861,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             None
         }
-        _ => None,
+        _ => hir_inferred_refinable_type(ctx, init),
     }
 }
 
@@ -1750,14 +2077,6 @@ pub(crate) fn is_native_module_dynamic_index(e: &Expr) -> bool {
 pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
     match e {
         Expr::Array(_) => Some(HirType::Array(Box::new(HirType::Any))),
-        // Built-in `new Array(...)` produces a real array, not a generic
-        // class instance. Without this, the receiver of any chained
-        // `.fill()` / `.push()` / `.length` would not be recognized by
-        // `is_array_expr`, falling out of the array method dispatch
-        // and crashing.
-        Expr::New { class_name, .. } if class_name == "Array" => {
-            Some(HirType::Array(Box::new(HirType::Any)))
-        }
         Expr::String(_) | Expr::WtfString(_) => Some(HirType::String),
         Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
         Expr::Bool(_) => Some(HirType::Boolean),
@@ -1804,104 +2123,83 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             {
                 return Some(static_method_ty);
             }
-            // If the object is a known class instance, look up the field
-            // type from the class definition.
-            let receiver_class = receiver_class_name(ctx, object)?;
-            if let Some(class) = ctx.classes.get(&receiver_class) {
-                if let Some(field_ty) = class
-                    .fields
-                    .iter()
-                    .find(|f| f.name == *property)
-                    .map(|f| f.ty.clone())
-                    .or_else(|| {
-                        // Walk up the inheritance chain.
-                        let mut parent = class.extends_name.as_deref();
-                        while let Some(p) = parent {
-                            if let Some(pc) = ctx.classes.get(p) {
-                                if let Some(field) = pc.fields.iter().find(|f| f.name == *property)
-                                {
-                                    return Some(field.ty.clone());
+            if let Some(receiver_class) = receiver_class_name(ctx, object) {
+                // If the object is a known class instance, look up the field
+                // type from the class definition.
+                if let Some(class) = ctx.classes.get(&receiver_class) {
+                    if let Some(field_ty) = class
+                        .fields
+                        .iter()
+                        .find(|f| f.name == *property)
+                        .map(|f| f.ty.clone())
+                        .or_else(|| {
+                            // Walk up the inheritance chain.
+                            let mut parent = class.extends_name.as_deref();
+                            while let Some(p) = parent {
+                                if let Some(pc) = ctx.classes.get(p) {
+                                    if let Some(field) =
+                                        pc.fields.iter().find(|f| f.name == *property)
+                                    {
+                                        return Some(field.ty.clone());
+                                    }
+                                    parent = pc.extends_name.as_deref();
+                                } else {
+                                    break;
                                 }
-                                parent = pc.extends_name.as_deref();
-                            } else {
-                                break;
                             }
-                        }
-                        None
-                    })
-                {
-                    return Some(field_ty);
+                            None
+                        })
+                    {
+                        return Some(field_ty);
+                    }
+                    if let Some(method_ty) = class
+                        .methods
+                        .iter()
+                        .find(|method| method.name == *property)
+                        .map(function_type_from_decl)
+                    {
+                        return Some(method_ty);
+                    }
                 }
-                if let Some(method_ty) = class
-                    .methods
-                    .iter()
-                    .find(|method| method.name == *property)
-                    .map(function_type_from_decl)
-                {
-                    return Some(method_ty);
-                }
-            }
-            // Issue #655: receiver may be typed against a TS `interface`
-            // rather than a class. The runtime layout is identical to a
-            // plain object literal, so the property's declared type is
-            // the right answer for the array fast-path / `length=` setter
-            // path. Walks the `extends` chain too so chained interfaces
-            // (`interface Sub extends Base { ... }`) resolve.
-            if let Some(iface) = ctx.interfaces.get(&receiver_class) {
-                if let Some(p) = iface.properties.iter().find(|p| p.name == *property) {
-                    return Some(p.ty.clone());
-                }
-                if let Some(method) = iface.methods.iter().find(|method| method.name == *property) {
-                    return Some(HirType::Function(perry_types::FunctionType {
-                        params: method.params.clone(),
-                        return_type: Box::new(method.return_type.clone()),
-                        is_async: false,
-                        is_generator: false,
-                    }));
-                }
-                for ext in &iface.extends {
-                    if let HirType::Named(parent_name) = ext {
-                        if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
-                            if let Some(p) =
-                                parent_iface.properties.iter().find(|p| p.name == *property)
-                            {
-                                return Some(p.ty.clone());
+                // Issue #655: receiver may be typed against a TS `interface`
+                // rather than a class. The runtime layout is identical to a
+                // plain object literal, so the property's declared type is
+                // the right answer for the array fast-path / `length=` setter
+                // path. Walks the `extends` chain too so chained interfaces
+                // (`interface Sub extends Base { ... }`) resolve.
+                if let Some(iface) = ctx.interfaces.get(&receiver_class) {
+                    if let Some(p) = iface.properties.iter().find(|p| p.name == *property) {
+                        return Some(p.ty.clone());
+                    }
+                    if let Some(method) =
+                        iface.methods.iter().find(|method| method.name == *property)
+                    {
+                        return Some(HirType::Function(perry_types::FunctionType {
+                            params: method.params.clone(),
+                            return_type: Box::new(method.return_type.clone()),
+                            is_async: false,
+                            is_generator: false,
+                        }));
+                    }
+                    for ext in &iface.extends {
+                        if let HirType::Named(parent_name) = ext {
+                            if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
+                                if let Some(p) =
+                                    parent_iface.properties.iter().find(|p| p.name == *property)
+                                {
+                                    return Some(p.ty.clone());
+                                }
                             }
                         }
                     }
                 }
             }
-            None
+            hir_inferred_static_type(ctx, e)
         }
         Expr::This => {
             let cls = ctx.class_stack.last()?.clone();
             Some(HirType::Named(cls))
         }
-        Expr::ArrayMap { .. }
-        | Expr::ArrayFilter { .. }
-        | Expr::ArraySpread(_)
-        | Expr::ArraySlice { .. }
-        | Expr::ArrayToReversed { .. }
-        | Expr::ArrayToSorted { .. }
-        | Expr::ArrayToSpliced { .. }
-        | Expr::ArrayWith { .. }
-        | Expr::ArrayFlat { .. }
-        | Expr::ArrayFlatMap { .. }
-        | Expr::ArrayFromMapped { .. }
-        | Expr::ArrayFrom(_)
-        | Expr::ArrayFromArrayLikeHoley(_)
-        | Expr::ArrayEntries(_)
-        | Expr::ArrayKeys(_)
-        | Expr::ArrayValues(_)
-        | Expr::ObjectKeys(_)
-        | Expr::ForInKeys(_)
-        | Expr::ObjectValues(_)
-        | Expr::ObjectEntries(_) => Some(HirType::Array(Box::new(HirType::Any))),
-        // `process.argv` is a real Array<string> at runtime (see
-        // `js_process_argv` in perry-runtime/os.rs). Without this entry
-        // `is_array_expr(Expr::ProcessArgv)` is false and `argv.includes(x)`
-        // takes the string-method dispatch path (issue #346) — closes #346.
-        Expr::ProcessArgv => Some(HirType::Array(Box::new(HirType::String))),
         // `str.split(delim)` returns Array<String>. Catches the generic
         // Call form that bypasses the `Expr::StringSplit` variant — e.g.
         // `"a,b,c".split(",")` in an expression position where we need
@@ -1946,7 +2244,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             if let Some(HirType::Function(ft)) = static_type_of(ctx, callee.as_ref()) {
                 return Some((*ft.return_type).clone());
             }
-            None
+            hir_inferred_static_type(ctx, e)
         }
         // `arr[i]` where `arr: Array<T>` has static type `T`. This lets
         // nested access like `grid[i][j]` and `grid[i].length` reach
@@ -1954,13 +2252,15 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // statically known to be `Array<Array<T>>` / `Array<Tuple<...>>`.
         // Also handles `Record<K, V>[key]` → V so `groups["a"].length`
         // on `Record<string, number[]>` finds the array fast path.
-        Expr::IndexGet { object, .. } => match static_type_of(ctx, object)? {
-            HirType::Array(inner) => Some(*inner),
-            HirType::Tuple(elems) if !elems.is_empty() => Some(elems[0].clone()),
-            HirType::Generic { base, type_args } if base == "Record" && type_args.len() == 2 => {
+        Expr::IndexGet { object, .. } => match static_type_of(ctx, object) {
+            Some(HirType::Array(inner)) => Some(*inner),
+            Some(HirType::Tuple(elems)) if !elems.is_empty() => Some(elems[0].clone()),
+            Some(HirType::Generic { base, type_args })
+                if base == "Record" && type_args.len() == 2 =>
+            {
                 Some(type_args[1].clone())
             }
-            _ => None,
+            _ => hir_inferred_static_type(ctx, e),
         },
         // `a || b` and `a ?? b` lower to `Expr::Logical`. Recognize the
         // result as Array-typed when EITHER branch is Array — `is_array_expr`
@@ -1995,6 +2295,392 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                 _ => None,
             }
         }
-        _ => None,
+        _ => hir_inferred_static_type(ctx, e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn hir_inferred_refinable_type_reuses_codegen_local_types() {
+        let mut local_types = HashMap::new();
+        local_types.insert(7, HirType::String);
+
+        assert_eq!(
+            hir_inferred_refinable_type_from_locals(&local_types, &Expr::LocalGet(7)),
+            Some(HirType::String)
+        );
+    }
+
+    #[test]
+    fn hir_inferred_refinable_type_filters_escape_hatch_types() {
+        let local_types = HashMap::new();
+
+        assert_eq!(
+            hir_inferred_refinable_type_from_locals(&local_types, &Expr::LocalGet(99)),
+            None
+        );
+        assert_eq!(
+            hir_inferred_refinable_type_from_locals(&local_types, &Expr::Undefined),
+            None
+        );
+        assert_eq!(
+            hir_inferred_refinable_type_from_locals(&local_types, &Expr::ProcessExit(None)),
+            None
+        );
+    }
+
+    #[test]
+    fn hir_inferred_refinable_type_keeps_path_to_namespaced_path_conservative() {
+        let mut local_types = HashMap::new();
+        local_types.insert(1, HirType::String);
+        local_types.insert(2, HirType::Number);
+
+        assert_eq!(
+            hir_inferred_refinable_type_from_locals(
+                &local_types,
+                &Expr::PathToNamespacedPath(Box::new(Expr::LocalGet(1))),
+            ),
+            Some(HirType::String)
+        );
+        assert_eq!(
+            hir_inferred_refinable_type_from_locals(
+                &local_types,
+                &Expr::PathToNamespacedPath(Box::new(Expr::LocalGet(2))),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn hir_inferred_static_type_provides_codegen_fallback_facts() {
+        let mut local_types = HashMap::new();
+        local_types.insert(1, HirType::Array(Box::new(HirType::String)));
+
+        assert_eq!(
+            hir_inferred_static_type_from_locals(&local_types, &Expr::ProcessArgv),
+            Some(HirType::Array(Box::new(HirType::String)))
+        );
+        assert_eq!(
+            hir_inferred_static_type_from_locals(
+                &local_types,
+                &Expr::New {
+                    class_name: "Array".to_string(),
+                    args: vec![Expr::Integer(4)],
+                    type_args: vec![],
+                },
+            ),
+            Some(HirType::Array(Box::new(HirType::Any)))
+        );
+        assert_eq!(
+            hir_inferred_static_type_from_locals(
+                &local_types,
+                &Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::Integer(0)),
+                },
+            ),
+            Some(HirType::String)
+        );
+        assert_eq!(
+            hir_inferred_static_type_from_locals(
+                &local_types,
+                &Expr::PropertyGet {
+                    object: Box::new(Expr::Object(vec![(
+                        "answer".to_string(),
+                        Expr::Number(1.0)
+                    )])),
+                    property: "answer".to_string(),
+                },
+            ),
+            Some(HirType::Number)
+        );
+        assert_eq!(
+            hir_inferred_refinable_type_from_locals(
+                &local_types,
+                &Expr::MapNewFromArray(Box::new(Expr::Array(vec![Expr::Array(vec![
+                    Expr::String("answer".to_string()),
+                    Expr::Number(1.0),
+                ])]))),
+            ),
+            Some(HirType::Generic {
+                base: "Map".to_string(),
+                type_args: vec![HirType::String, HirType::Number]
+            })
+        );
+    }
+
+    #[test]
+    fn hir_inferred_types_reuse_imported_function_return_facts() {
+        let local_types = HashMap::new();
+        let imported_func_return_types = HashMap::from([("readName".to_string(), HirType::String)]);
+        let classes = HashMap::new();
+        let interfaces = HashMap::new();
+        let class_stack = Vec::new();
+        let enums = HashMap::new();
+        let facts = CodegenTypeFacts {
+            local_types: &local_types,
+            imported_func_return_types: &imported_func_return_types,
+            classes: &classes,
+            interfaces: &interfaces,
+            class_stack: &class_stack,
+            enums: &enums,
+        };
+        let call = Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "readName".to_string(),
+                param_types: vec![],
+                return_type: HirType::Any,
+            }),
+            args: vec![],
+            type_args: vec![],
+        };
+
+        assert_eq!(
+            hir_inferred_refinable_type_from_facts(&facts, &call),
+            Some(HirType::String)
+        );
+        assert_eq!(infer_expr_type(&call, &facts), HirType::String);
+    }
+
+    #[test]
+    fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
+        let mut local_types = HashMap::new();
+        local_types.insert(1, HirType::Named("Widget".to_string()));
+        let imported_func_return_types = HashMap::new();
+        let class_stack = vec!["Widget".to_string()];
+        let interfaces = HashMap::new();
+        let enums = HashMap::from([(
+            ("Mode".to_string(), "Auto".to_string()),
+            perry_hir::EnumValue::String("auto".to_string()),
+        )]);
+        let base = perry_hir::Class {
+            id: 2,
+            name: "Base".to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            fields: Vec::new(),
+            constructor: None,
+            methods: vec![perry_hir::Function {
+                id: 4,
+                name: "baseScore".to_string(),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: HirType::Number,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            }],
+            getters: vec![(
+                "baseLabel".to_string(),
+                perry_hir::Function {
+                    id: 5,
+                    name: "get_baseLabel".to_string(),
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: HirType::String,
+                    body: Vec::new(),
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                    is_exported: false,
+                    captures: Vec::new(),
+                    decorators: Vec::new(),
+                    was_plain_async: false,
+                    was_unrolled: false,
+                },
+            )],
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+        };
+        let widget = perry_hir::Class {
+            id: 1,
+            name: "Widget".to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: Some("Base".to_string()),
+            native_extends: None,
+            extends_expr: None,
+            fields: vec![perry_hir::ClassField {
+                name: "label".to_string(),
+                key_expr: None,
+                ty: HirType::String,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            }],
+            constructor: None,
+            methods: vec![perry_hir::Function {
+                id: 3,
+                name: "score".to_string(),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: HirType::Number,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            }],
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: vec![perry_hir::ClassField {
+                name: "count".to_string(),
+                key_expr: None,
+                ty: HirType::Number,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            }],
+            static_methods: vec![perry_hir::Function {
+                id: 2,
+                name: "make".to_string(),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: HirType::Named("Widget".to_string()),
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            }],
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+        };
+        let classes = HashMap::from([("Base".to_string(), &base), ("Widget".to_string(), &widget)]);
+        let facts = CodegenTypeFacts {
+            local_types: &local_types,
+            imported_func_return_types: &imported_func_return_types,
+            classes: &classes,
+            interfaces: &interfaces,
+            class_stack: &class_stack,
+            enums: &enums,
+        };
+
+        assert_eq!(
+            infer_expr_type(&Expr::This, &facts),
+            HirType::Named("Widget".to_string())
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::EnumMember {
+                    enum_name: "Mode".to_string(),
+                    member_name: "Auto".to_string(),
+                },
+                &facts,
+            ),
+            HirType::String
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "label".to_string(),
+                },
+                &facts,
+            ),
+            HirType::String
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "score".to_string(),
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                },
+                &facts,
+            ),
+            HirType::Number
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::SuperMethodCall {
+                    method: "baseScore".to_string(),
+                    args: Vec::new(),
+                },
+                &facts,
+            ),
+            HirType::Number
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::SuperPropertyGet {
+                    property: "baseLabel".to_string(),
+                },
+                &facts,
+            ),
+            HirType::String
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::SuperPropertyGet {
+                    property: "baseScore".to_string(),
+                },
+                &facts,
+            ),
+            HirType::Function(perry_types::FunctionType {
+                params: Vec::new(),
+                return_type: Box::new(HirType::Number),
+                is_async: false,
+                is_generator: false,
+            })
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::StaticFieldGet {
+                    class_name: "Widget".to_string(),
+                    field_name: "count".to_string(),
+                },
+                &facts,
+            ),
+            HirType::Number
+        );
+        assert_eq!(
+            infer_expr_type(
+                &Expr::StaticMethodCall {
+                    class_name: "Widget".to_string(),
+                    method_name: "make".to_string(),
+                    args: Vec::new(),
+                },
+                &facts,
+            ),
+            HirType::Named("Widget".to_string())
+        );
     }
 }

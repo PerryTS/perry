@@ -815,7 +815,7 @@ pub fn lower_module_full(
     // over EVERY body first (LocalIds are module-unique; the assignment and
     // the `Stmt::Let` can live in different bodies), then rewrite.
     {
-        let mut widening = crate::lower::type_widening::TypeWidening::new();
+        let mut widening = crate::lower::type_widening::TypeWidening::from_module(&module);
         widening.collect(&module.init);
         for func in &module.functions {
             widening.collect(&func.body);
