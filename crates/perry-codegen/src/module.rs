@@ -244,7 +244,22 @@ impl LlModule {
         }
         ir.push('\n');
 
+        // Emit each function symbol's body at most once. Minified bundles can
+        // contain two DISTINCT classes with the same name (`class j` in separate
+        // scopes), whose methods mangle to the same `perry_method_<mod>__j__<m>`
+        // symbol via several emission paths, producing duplicate `define`s that
+        // clang rejects ("invalid redefinition of function"). perry's class
+        // identity is name-keyed, so every reference to that class+method already
+        // resolves to ONE symbol; emitting the body once (first wins) keeps def
+        // and refs consistent. Dispatch for the rare two-same-named-classes case
+        // resolves to the first (a pre-existing name-identity limitation), but the
+        // module compiles instead of being rejected. Unique-named symbols (the
+        // overwhelming common case) never collide, so this is a no-op for them.
+        let mut emitted_fn_names: HashSet<&str> = HashSet::new();
         for func in &self.functions {
+            if !emitted_fn_names.insert(func.name.as_str()) {
+                continue;
+            }
             ir.push_str(&func.to_ir());
             ir.push('\n');
         }
