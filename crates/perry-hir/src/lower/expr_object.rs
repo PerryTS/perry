@@ -21,7 +21,10 @@ use crate::analysis::{
     closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_stmt, uses_this_stmt,
 };
 use crate::ir::{EnumValue, Expr, Function, Param, Stmt};
-use crate::lower_decl::{append_synthetic_arguments_param, body_uses_arguments, lower_block_stmt};
+use crate::lower_decl::{
+    append_synthetic_arguments_param, body_uses_arguments, lower_block_stmt,
+    lower_fn_body_block_stmt,
+};
 use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, is_destructuring_pattern,
     is_rest_param,
@@ -303,7 +306,7 @@ fn lower_method_prop(
     }
 
     let mut body = if let Some(ref block) = method.function.body {
-        lower_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block)?
     } else {
         Vec::new()
     };
@@ -497,7 +500,7 @@ fn lower_accessor_prop(
     }
 
     let body = if let Some(block) = body {
-        lower_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block)?
     } else {
         Vec::new()
     };
