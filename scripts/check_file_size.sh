@@ -304,6 +304,13 @@ crates/perry-ext-http-server/src/http2_server.rs
 # on/once iterator machinery into the existing `events/` submodule is tracked
 # under #1435 with the other module-size cleanups.
 crates/perry-stdlib/src/events.rs
+# Runtime typed-feedback registry. Crossed the 2000-line gate (2004 LOC) after
+# the monomorphic array-guard fast cache (#5307) + pre-classification fast
+# observation builder (#5309) added the lock-free direct-mapped cache and its
+# slow-path fallbacks. The cache state is interwoven with the thread-local guard
+# accounting and can't move without scattering it. Splitting the fast-cache out
+# of the registry trunk is tracked under #1435.
+crates/perry-runtime/src/typed_feedback.rs
 EOF
 )
 

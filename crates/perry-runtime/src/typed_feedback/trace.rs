@@ -180,6 +180,9 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
     let mut rows = Vec::with_capacity(reg.sites.len());
     for site in reg.sites.values() {
         let state = site.state();
+        let fast_guard_passes = array_guard_cache_fast_passes(site.site_id);
+        let observed_count = site.observed_count.saturating_add(fast_guard_passes);
+        let guard_passes = site.guard_passes.saturating_add(fast_guard_passes);
         *snapshot
             .by_kind
             .entry(site.metadata.kind.as_str().to_string())
@@ -198,9 +201,9 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
             operation: site.metadata.operation.clone(),
             guard_name: site.metadata.guard_name.clone(),
             fallback_name: site.metadata.fallback_name.clone(),
-            observed_count: site.observed_count,
+            observed_count,
             observation_count: site.observations.len(),
-            guard_passes: site.guard_passes,
+            guard_passes,
             guard_failures: site.guard_failures,
             fallback_calls: site.fallback_calls,
             shape_invalidations: site.shape_invalidations,
@@ -208,7 +211,7 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
             representation_invalidations: site.representation_invalidations,
             observed_kinds: observed_kinds_snapshot(&site.observations),
         });
-        snapshot.guard_passes = snapshot.guard_passes.saturating_add(site.guard_passes);
+        snapshot.guard_passes = snapshot.guard_passes.saturating_add(guard_passes);
         snapshot.guard_failures = snapshot.guard_failures.saturating_add(site.guard_failures);
         snapshot.fallback_calls = snapshot.fallback_calls.saturating_add(site.fallback_calls);
         snapshot
@@ -219,7 +222,7 @@ pub fn typed_feedback_snapshot() -> TypedFeedbackSnapshot {
                 failures: 0,
                 fallback_calls: 0,
             })
-            .add_site(site);
+            .add_site(site, fast_guard_passes);
     }
     rows.sort_by_key(|row| row.site_id);
     snapshot.sites = rows;

@@ -102,3 +102,68 @@
   - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only` and the before/after comparison above uses the captured local first-cycle results.
   - This follow-up is intended as a stacked draft PR on top of the typed-feedback registration-hoist PR.
 - PR: https://github.com/PerryTS/perry/pull/5302
+
+## 2026-06-17 - Monomorphic array guard fast cache
+
+- Start revision: `ed71efde8585`
+- Branch: `codex/perry-array-guard-cache-fastpath`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux `/usr/bin/time -v`; local `node` cannot execute `.ts` benchmark inputs, so Node columns and correctness comparisons were skipped by the harness
+- Baseline commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-direct-final --trace llvm --quiet`
+  - `for i in 1 2 3 4 5; do /tmp/perry-matrix-direct-final; done`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-direct-final`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-typed-feedback.json /tmp/perry-matrix-direct-final`
+  - `./benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-direct-numeric-final-e816fc3e4.json`
+  - `./benchmarks/quick.sh`
+- Baseline results:
+  - direct matrix binary: 1736ms, 1730ms, 1729ms, 1738ms, 1714ms; checksum always `41079519680`
+  - `perf stat` direct matrix binary: 6,337,280,206 cycles, 28,036,164,989 instructions, 4,648,261,291 branches, 488,073 branch-misses, 1.7806s elapsed
+  - typed-feedback trace for direct matrix binary: 33,619,968 numeric array index-get guard passes, 65,536 numeric array index-set guard passes, 0 get/set guard failures
+  - compare quick medians: loop_overhead 56ms/19040KB, fibonacci 239ms/18764KB, math_intensive 58ms/18756KB, nested_loops 921ms/18944KB, factorial 89ms/18828KB
+  - quick: fibonacci 264ms/18MB, math_intensive 55ms/18MB, nested_loops 928ms/18MB, factorial 76ms/18MB, matrix_multiply 1745ms/28MB
+- Selected gap and evidence:
+  - After direct raw-f64 payload access, `matrix_multiply` remained the slowest `quick.sh` case at 1745ms.
+  - Matrix trace showed 33.6M successful numeric array get guard calls and 65K set guard calls, all monomorphic with no get/set failures.
+  - Sampled profiling/disassembly of `/tmp/perry-matrix-direct-final` showed the inner loop still calling `js_typed_feedback_numeric_array_index_get_guard` twice per `k` iteration; the guard path enters `guard_observe`, locks the global typed-feedback registry, does a `HashMap` lookup, updates counters, and rechecks the same monomorphic observation.
+  - A narrower raw-f64 classification shortcut was tested first and discarded: five direct matrix runs were 1767ms, 1774ms, 1757ms, 1806ms, 1763ms, which was slower/noisier than the 1714-1738ms baseline.
+- Change:
+  - Added a small lock-free, direct-mapped cache for array typed-feedback guard sites.
+  - The cache is seeded by the existing slow `guard_observe` path and fast-passes only when the current array observation exactly matches the cached feedback key and the runtime contract guard is valid.
+  - Slow paths still update the registry, failures, megamorphic state, invalidation-visible observations, and fallback counters; trace snapshots merge cache fast-pass counters back into `observed_count`, per-site guard passes, and by-guard totals.
+  - Direct non-guard observations also update or disable the cache so a reused site that becomes megamorphic cannot keep fast-passing from stale cache state.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-array-guard-cache-final --quiet`
+  - `for i in 1 2 3 4 5; do /tmp/perry-matrix-array-guard-cache-final; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-array-guard-cache-final-trace.json /tmp/perry-matrix-array-guard-cache-final`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-array-guard-cache-final`
+  - `./benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-array-guard-cache-final-ed71efde8.json`
+  - `./benchmarks/quick.sh`
+- Post-change results:
+  - direct matrix binary: 1239ms, 1258ms, 1223ms, 1247ms, 1226ms; checksum always `41079519680`
+  - final trace run: `matrix_multiply:1237`, checksum `41079519680`, 33,619,968 numeric array index-get guard passes, 65,536 numeric array index-set guard passes, 0 get/set guard failures
+  - `perf stat` direct matrix binary: 4,485,321,202 cycles, 16,737,765,528 instructions, 3,085,068,790 branches, 382,419 branch-misses, 1.2376s elapsed
+  - compare quick medians: loop_overhead 56ms/18728KB, fibonacci 240ms/18888KB, math_intensive 55ms/18768KB, nested_loops 662ms/22888KB, factorial 76ms/18836KB
+  - quick: fibonacci 268ms/18MB, math_intensive 74ms/18MB, nested_loops 670ms/22MB, factorial 75ms/18MB, matrix_multiply 1228ms/30MB
+- Measured impact:
+  - `16_matrix_multiply` direct median: 1730ms -> 1239ms, 28.4% faster
+  - `16_matrix_multiply` quick: 1745ms -> 1228ms, 29.6% faster
+  - Direct matrix binary instructions: 28.04B -> 16.74B, 40.3% fewer
+  - Direct matrix binary branches: 4.65B -> 3.09B, 33.6% fewer
+  - `10_nested_loops` compare median: 921ms -> 662ms, 28.1% faster
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-runtime typed_feedback`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen --test typed_shape_descriptors`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+  - `cargo build --release`
+  - Typed-feedback trace confirmed aggregate and per-site guard pass counts remain consistent with the pre-cache trace despite fast-path counter merging.
+- Notes:
+  - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only` and the before/after comparison above uses the captured local second-cycle results.
+  - This follow-up is intended as a stacked draft PR on top of the guarded numeric array direct payload access PR.
+- PR: https://github.com/PerryTS/perry/pull/5307
