@@ -5,7 +5,8 @@ use super::*;
 use crate::expr::{
     emit_typed_feedback_register_site, expr_has_numeric_pointer_free_array_layout,
     lower_guarded_array_index_get_trusted_i32, nanbox_pointer_inline, BoundedIndexPair,
-    IntRangeFact, PreguardedNumericArrayIndexGet, TypedFeedbackContract, TypedFeedbackKind,
+    IntRangeFact, PreguardedAffineIndexExpr, PreguardedNumericArrayAffineIndexGet,
+    PreguardedNumericArrayIndexGet, TypedFeedbackContract, TypedFeedbackKind,
 };
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
@@ -224,6 +225,12 @@ struct InvariantArrayIndexGetHoist {
 struct RangeNumericArrayIndexGetPreguard {
     array_local_id: u32,
     index_local_id: u32,
+}
+
+#[derive(Clone, Debug)]
+struct AffineNumericArrayIndexGetPreguard {
+    array_local_id: u32,
+    index: PreguardedAffineIndexExpr,
 }
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
@@ -617,8 +624,27 @@ pub(crate) fn lower_for(
         } else {
             None
         };
-    let has_loop_prebody =
-        invariant_array_get_hoist.is_some() || range_array_get_preguard.is_some();
+    let affine_array_get_preguards: Vec<AffineNumericArrayIndexGetPreguard> =
+        if let (Some((counter_id, bound_id, op)), Some(_)) =
+            (local_bound_classification, i32_local_bound_slot.as_ref())
+        {
+            if matches!(op, perry_hir::CompareOp::Lt)
+                && local_bound_index_bounds_are_safe
+                && ctx.i32_counter_slots.contains_key(&counter_id)
+                && ctx.i32_counter_slots.contains_key(&bound_id)
+            {
+                classify_affine_numeric_array_index_get_preguards(
+                    ctx, counter_id, bound_id, update, body,
+                )
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+    let has_loop_prebody = invariant_array_get_hoist.is_some()
+        || range_array_get_preguard.is_some()
+        || !affine_array_get_preguards.is_empty();
 
     let cond_idx = ctx.new_block("for.cond");
     let prebody_idx = if has_loop_prebody {
@@ -755,6 +781,7 @@ pub(crate) fn lower_for(
     }
 
     let mut range_preguard_runtime: Option<((u32, u32), PreguardedNumericArrayIndexGet)> = None;
+    let mut affine_preguard_runtime: Vec<PreguardedNumericArrayAffineIndexGet> = Vec::new();
     if let Some(pre_idx) = prebody_idx {
         ctx.current_block = pre_idx;
         if let (Some(hoist), Some(slot)) =
@@ -779,6 +806,20 @@ pub(crate) fn lower_for(
             )?;
             range_preguard_runtime =
                 Some(((preguard.array_local_id, preguard.index_local_id), info));
+        }
+        if !affine_array_get_preguards.is_empty() {
+            let bound_slot = i32_local_bound_slot
+                .as_ref()
+                .expect("affine array get preguard requires an i32 bound slot");
+            let counter_id = local_bound_classification
+                .map(|(counter_id, _, _)| counter_id)
+                .expect("affine preguard requires local-bound counter");
+            for preguard in affine_array_get_preguards.iter().cloned() {
+                let info = emit_affine_numeric_array_index_get_preguard(
+                    ctx, preguard, counter_id, bound_slot,
+                )?;
+                affine_preguard_runtime.push(info);
+            }
         }
         if !ctx.block().is_terminated() {
             ctx.block().br(&body_label);
@@ -814,7 +855,12 @@ pub(crate) fn lower_for(
     } else {
         None
     };
+    let affine_preguard_base_len = ctx.preguarded_numeric_array_affine_index_gets.len();
+    ctx.preguarded_numeric_array_affine_index_gets
+        .extend(affine_preguard_runtime.iter().cloned());
     let lower_result = lower_stmts(ctx, body);
+    ctx.preguarded_numeric_array_affine_index_gets
+        .truncate(affine_preguard_base_len);
     if let Some((key, previous)) = range_preguard_replacement {
         if let Some(previous) = previous {
             ctx.preguarded_numeric_array_index_gets
@@ -872,6 +918,21 @@ pub(crate) fn lower_for(
             ) {
                 return Err(anyhow::anyhow!(
                     "loop prebody missing backedge i32 condition"
+                ));
+            }
+        } else if let (Some((counter_id, _, op)), Some(ref bound_i32_slot)) =
+            (local_bound_classification, &i32_local_bound_slot)
+        {
+            if !emit_i32_length_loop_condition(
+                ctx,
+                counter_id,
+                op,
+                bound_i32_slot,
+                &body_label,
+                &exit_label,
+            ) {
+                return Err(anyhow::anyhow!(
+                    "loop prebody missing local-bound backedge i32 condition"
                 ));
             }
         } else {
@@ -1032,6 +1093,112 @@ fn emit_range_numeric_array_index_get_preguard(
     })
 }
 
+fn emit_affine_numeric_array_index_get_preguard(
+    ctx: &mut FnCtx<'_>,
+    preguard: AffineNumericArrayIndexGetPreguard,
+    counter_id: u32,
+    bound_i32_slot: &str,
+) -> Result<PreguardedNumericArrayAffineIndexGet> {
+    let arr_expr = perry_hir::Expr::LocalGet(preguard.array_local_id);
+    let arr_box = lower_expr(ctx, &arr_expr)?;
+    let counter_slot = ctx
+        .i32_counter_slots
+        .get(&counter_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("affine array get preguard missing i32 counter"))?;
+    let bound_i32 = ctx.block().load(I32, bound_i32_slot);
+    let counter_i32 = ctx.block().load(I32, &counter_slot);
+    let remaining_i32 = ctx.block().sub(I32, &bound_i32, &counter_i32);
+    let skipped_i32 = ctx.block().sub(I32, &remaining_i32, "1");
+    let skipped_i64 = ctx.block().zext(I32, &skipped_i32, I64);
+    let last_counter_i32 = ctx.block().sub(I32, &bound_i32, "1");
+
+    let max_i32 = match &preguard.index {
+        PreguardedAffineIndexExpr::MulLocalBoundPlusCounter {
+            mul_local_id,
+            bound_local_id,
+            ..
+        } => {
+            let mul_slot = ctx
+                .i32_counter_slots
+                .get(mul_local_id)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("affine array get preguard missing i32 multiplier")
+                })?;
+            let bound_slot = ctx
+                .i32_counter_slots
+                .get(bound_local_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("affine array get preguard missing i32 bound"))?;
+            let mul = ctx.block().load(I32, &mul_slot);
+            let bound = ctx.block().load(I32, &bound_slot);
+            let base = ctx.block().mul(I32, &mul, &bound);
+            ctx.block().add(I32, &base, &last_counter_i32)
+        }
+        PreguardedAffineIndexExpr::CounterTimesBoundPlusLocal {
+            bound_local_id,
+            add_local_id,
+            ..
+        } => {
+            let bound_slot = ctx
+                .i32_counter_slots
+                .get(bound_local_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("affine array get preguard missing i32 bound"))?;
+            let add_slot = ctx
+                .i32_counter_slots
+                .get(add_local_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("affine array get preguard missing i32 addend"))?;
+            let bound = ctx.block().load(I32, &bound_slot);
+            let add = ctx.block().load(I32, &add_slot);
+            let base = ctx.block().mul(I32, &last_counter_i32, &bound);
+            ctx.block().add(I32, &base, &add)
+        }
+    };
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        "array[index]",
+        TypedFeedbackContract::numeric_array_get_index(),
+    );
+    let guard_result = ctx.block().call(
+        I32,
+        "js_typed_feedback_numeric_array_index_get_guard_i32",
+        &[
+            (I64, &site_id),
+            (DOUBLE, &arr_box),
+            (I32, &max_i32),
+            (I32, "1"),
+        ],
+    );
+    let guard_ok_slot = ctx.func.alloca_entry(I32);
+    ctx.block().store(I32, &guard_result, &guard_ok_slot);
+    let guard_ok = ctx.block().icmp_ne(I32, &guard_result, "0");
+
+    let fast_idx = ctx.new_block("affine_preguard.fast");
+    let done_idx = ctx.new_block("affine_preguard.done");
+    let fast_label = ctx.block_label(fast_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&guard_ok, &fast_label, &done_label);
+
+    ctx.current_block = fast_idx;
+    ctx.block().call_void(
+        "js_typed_feedback_record_array_guard_fast_passes",
+        &[(I64, &site_id), (I64, &skipped_i64)],
+    );
+    ctx.block().br(&done_label);
+
+    ctx.current_block = done_idx;
+    Ok(PreguardedNumericArrayAffineIndexGet {
+        array_local_id: preguard.array_local_id,
+        index: preguard.index,
+        site_id,
+        guard_ok_slot,
+    })
+}
+
 fn emit_i32_length_loop_condition(
     ctx: &mut FnCtx<'_>,
     counter_id: u32,
@@ -1111,6 +1278,287 @@ fn classify_range_numeric_array_index_get_preguard(
         array_local_id: arr_id,
         index_local_id: counter_id,
     })
+}
+
+fn classify_affine_numeric_array_index_get_preguards(
+    ctx: &crate::expr::FnCtx<'_>,
+    counter_id: u32,
+    bound_id: u32,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> Vec<AffineNumericArrayIndexGetPreguard> {
+    let [perry_hir::Stmt::Expr(expr)] = body else {
+        return Vec::new();
+    };
+    let Some(mut candidates) = collect_affine_numeric_array_index_gets(expr, counter_id, bound_id)
+    else {
+        return Vec::new();
+    };
+    if candidates.is_empty() || candidates.len() > 4 {
+        return Vec::new();
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|candidate| seen.insert((candidate.array_local_id, candidate.index.clone())));
+
+    for candidate in &candidates {
+        if !expr_has_numeric_pointer_free_array_layout(
+            ctx,
+            &perry_hir::Expr::LocalGet(candidate.array_local_id),
+        ) {
+            return Vec::new();
+        }
+
+        let protected = affine_index_protected_locals(candidate);
+        if protected.iter().any(|id| expr_mutates_local(expr, *id)) {
+            return Vec::new();
+        }
+        if update.is_some_and(|expr| {
+            protected
+                .iter()
+                .any(|id| *id != counter_id && expr_mutates_local(expr, *id))
+        }) {
+            return Vec::new();
+        }
+        if !affine_index_i32_slots_are_available(ctx, &candidate.index) {
+            return Vec::new();
+        }
+        if !affine_index_nonnegative_inputs_are_safe(ctx, &candidate.index) {
+            return Vec::new();
+        }
+    }
+
+    candidates
+}
+
+fn affine_index_protected_locals(candidate: &AffineNumericArrayIndexGetPreguard) -> Vec<u32> {
+    let mut locals = vec![candidate.array_local_id];
+    match &candidate.index {
+        PreguardedAffineIndexExpr::MulLocalBoundPlusCounter {
+            mul_local_id,
+            bound_local_id,
+            counter_local_id,
+        } => {
+            locals.push(*mul_local_id);
+            locals.push(*bound_local_id);
+            locals.push(*counter_local_id);
+        }
+        PreguardedAffineIndexExpr::CounterTimesBoundPlusLocal {
+            counter_local_id,
+            bound_local_id,
+            add_local_id,
+        } => {
+            locals.push(*counter_local_id);
+            locals.push(*bound_local_id);
+            locals.push(*add_local_id);
+        }
+    }
+    locals.sort_unstable();
+    locals.dedup();
+    locals
+}
+
+fn affine_index_i32_slots_are_available(
+    ctx: &crate::expr::FnCtx<'_>,
+    index: &PreguardedAffineIndexExpr,
+) -> bool {
+    match index {
+        PreguardedAffineIndexExpr::MulLocalBoundPlusCounter {
+            mul_local_id,
+            bound_local_id,
+            counter_local_id,
+        } => {
+            ctx.i32_counter_slots.contains_key(mul_local_id)
+                && ctx.i32_counter_slots.contains_key(bound_local_id)
+                && ctx.i32_counter_slots.contains_key(counter_local_id)
+        }
+        PreguardedAffineIndexExpr::CounterTimesBoundPlusLocal {
+            counter_local_id,
+            bound_local_id,
+            add_local_id,
+        } => {
+            ctx.i32_counter_slots.contains_key(counter_local_id)
+                && ctx.i32_counter_slots.contains_key(bound_local_id)
+                && ctx.i32_counter_slots.contains_key(add_local_id)
+        }
+    }
+}
+
+fn affine_index_nonnegative_inputs_are_safe(
+    ctx: &crate::expr::FnCtx<'_>,
+    index: &PreguardedAffineIndexExpr,
+) -> bool {
+    match index {
+        PreguardedAffineIndexExpr::MulLocalBoundPlusCounter { mul_local_id, .. } => {
+            loop_counter_is_nonnegative_at_entry(ctx, *mul_local_id)
+        }
+        PreguardedAffineIndexExpr::CounterTimesBoundPlusLocal { add_local_id, .. } => {
+            loop_counter_is_nonnegative_at_entry(ctx, *add_local_id)
+        }
+    }
+}
+
+fn collect_affine_numeric_array_index_gets(
+    expr: &perry_hir::Expr,
+    counter_id: u32,
+    bound_id: u32,
+) -> Option<Vec<AffineNumericArrayIndexGetPreguard>> {
+    use perry_hir::{ArrayElement, Expr};
+
+    let collect = |expr: &Expr| collect_affine_numeric_array_index_gets(expr, counter_id, bound_id);
+    let collect_pair = |left: &Expr, right: &Expr| {
+        let mut out = collect(left)?;
+        out.extend(collect(right)?);
+        Some(out)
+    };
+
+    match expr {
+        Expr::IndexGet { object, index } => match object.as_ref() {
+            Expr::LocalGet(array_local_id) => {
+                let index = classify_affine_index_expr(index.as_ref(), counter_id, bound_id)?;
+                Some(vec![AffineNumericArrayIndexGetPreguard {
+                    array_local_id: *array_local_id,
+                    index,
+                }])
+            }
+            _ => None,
+        },
+        Expr::LocalSet(id, value) => {
+            if *id == counter_id || *id == bound_id {
+                None
+            } else {
+                collect(value)
+            }
+        }
+        Expr::Update { id, .. } => (*id != counter_id && *id != bound_id).then_some(Vec::new()),
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            collect_pair(left.as_ref(), right.as_ref())
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand) => collect(operand),
+        Expr::Array(elements) => elements.iter().try_fold(Vec::new(), |mut acc, expr| {
+            acc.extend(collect(expr)?);
+            Some(acc)
+        }),
+        Expr::ArraySpread(elements) => elements.iter().try_fold(Vec::new(), |mut acc, element| {
+            match element {
+                ArrayElement::Expr(expr) | ArrayElement::Spread(expr) => {
+                    acc.extend(collect(expr)?);
+                }
+                ArrayElement::Hole => {}
+            }
+            Some(acc)
+        }),
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            collect_pair(left.as_ref(), right.as_ref())
+        }
+        Expr::MathMin(elements) | Expr::MathMax(elements) => {
+            elements.iter().try_fold(Vec::new(), |mut acc, expr| {
+                acc.extend(collect(expr)?);
+                Some(acc)
+            })
+        }
+        Expr::MathAbs(expr)
+        | Expr::MathSqrt(expr)
+        | Expr::MathFloor(expr)
+        | Expr::MathCeil(expr)
+        | Expr::MathRound(expr)
+        | Expr::MathF16round(expr) => collect(expr),
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::String(_)
+        | Expr::WtfString(_) => Some(Vec::new()),
+        // Avoid preguarding across runtime calls, short-circuit paths, or
+        // HIR variants whose evaluation order/mutation behavior is not
+        // modeled by this narrow classifier.
+        _ => None,
+    }
+}
+
+fn classify_affine_index_expr(
+    expr: &perry_hir::Expr,
+    counter_id: u32,
+    bound_id: u32,
+) -> Option<PreguardedAffineIndexExpr> {
+    use perry_hir::{BinaryOp, Expr};
+
+    fn local(expr: &Expr) -> Option<u32> {
+        match expr {
+            Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn mul_pair(expr: &Expr) -> Option<(u32, u32)> {
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                left,
+                right,
+            } => Some((local(left.as_ref())?, local(right.as_ref())?)),
+            _ => None,
+        }
+    }
+
+    fn other_mul_local(pair: (u32, u32), known: u32) -> Option<u32> {
+        if pair.0 == known {
+            Some(pair.1)
+        } else if pair.1 == known {
+            Some(pair.0)
+        } else {
+            None
+        }
+    }
+
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    else {
+        return None;
+    };
+
+    for (mul, add) in [
+        (mul_pair(left.as_ref()), local(right.as_ref())),
+        (mul_pair(right.as_ref()), local(left.as_ref())),
+    ] {
+        let (Some(pair), Some(add_id)) = (mul, add) else {
+            continue;
+        };
+        if add_id == counter_id {
+            if let Some(mul_local_id) = other_mul_local(pair, bound_id) {
+                if mul_local_id != counter_id {
+                    return Some(PreguardedAffineIndexExpr::MulLocalBoundPlusCounter {
+                        mul_local_id,
+                        bound_local_id: bound_id,
+                        counter_local_id: counter_id,
+                    });
+                }
+            }
+        } else if add_id != counter_id {
+            if other_mul_local(pair, counter_id) == Some(bound_id) {
+                return Some(PreguardedAffineIndexExpr::CounterTimesBoundPlusLocal {
+                    counter_local_id: counter_id,
+                    bound_local_id: bound_id,
+                    add_local_id: add_id,
+                });
+            }
+        }
+    }
+
+    None
 }
 
 fn count_range_numeric_array_index_gets(

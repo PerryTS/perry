@@ -490,3 +490,59 @@
   - The classifier intentionally rejects calls, conditionals, logical short-circuit expressions, and unrelated index reads so cached raw loads do not span possible runtime calls or branch-only reads.
   - This is a stacked draft PR on top of the trusted-i32 numeric get guard PR.
 - PR: https://github.com/PerryTS/perry/pull/5315
+
+## 2026-06-17 - Preguard affine numeric array reads in local-bound loops
+
+- Start revision: `ac49a3a93`
+- Branch: `codex/perry-affine-array-range-preguard`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux direct binaries, `perf stat`, and `benchmarks/quick.sh`; baseline binary was `/tmp/perry-16_matrix-current-tip` from the previous stacked tip
+- Baseline commands:
+  - `for i in 1 2 3 4 5; do /tmp/perry-16_matrix-current-tip; done`
+  - `perf stat -r 3 -e cycles,instructions,branches,branch-misses -x, /tmp/perry-16_matrix-current-tip`
+- Baseline results:
+  - direct matrix binary samples: 373ms, 373ms, 380ms, 376ms, 379ms; checksum always `41079519680`
+  - `perf stat -r 3`: 1,398,388,105 cycles, 6,614,237,912 instructions, 1,434,047,560 branches, 244,866 branch-misses
+- Selected gap and evidence:
+  - After trusted-i32 numeric get guards, `16_matrix_multiply.ts` still executed two numeric array index-get guards on every inner-loop multiply: `a[i * size + k]` and `b[k * size + j]`.
+  - The inner loop condition `k < size`, plus nonnegative i32 slots for `i`, `j`, `k`, and `size`, lets codegen compute the maximum visited affine index once per `j` row/column loop.
+  - Current IR attributed the matrix hot path to the two direct payload load/guard regions in `perry_fn__16_matrix_multiply_ts__matmul`.
+- Change:
+  - Added loop-local affine numeric-array preguards for conservative local-bound loops matching `mulLocal * bound + counter` and `counter * bound + addLocal`.
+  - The loop prebody guards the maximum visited affine index once for each matching read, records skipped fast passes in bulk on success, and stores each guard result in a stack slot.
+  - While lowering the loop body, matching computed numeric reads branch on the cached guard flag and use direct raw-f64 payload loads on the fast side.
+  - The fallback side still calls `js_typed_feedback_array_index_get_fallback_boxed`, preserving correctness if a preguard fails.
+  - Added a typed-feedback IR regression test for matrix-style affine reads.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-16_matrix-affine-preguard --trace llvm --quiet`
+  - `rg -n "affine_preguard|bidx\\.preguarded|js_typed_feedback_numeric_array_index_get_guard_i32" /tmp/perry_llvm_3381585_1781687978308796112_0.ll`
+  - `for i in 1 2 3 4 5; do /tmp/perry-16_matrix-affine-preguard; done`
+  - `perf stat -r 3 -e cycles,instructions,branches,branch-misses -x, /tmp/perry-16_matrix-affine-preguard`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-affine-typed-feedback.json /tmp/perry-16_matrix-affine-preguard`
+  - `benchmarks/quick.sh`
+- Post-change results:
+  - LLVM IR contains two `affine_preguard.fast` blocks in the `k < size` loop prebody and two `bidx.preguarded.fast` loads in the hot body; the hot body no longer calls `js_typed_feedback_numeric_array_index_get_guard_i32` for the two multiply reads.
+  - direct matrix binary samples: 35ms, 24ms, 24ms, 24ms, 24ms; checksum always `41079519680`
+  - `perf stat -r 3`: 156,239,095 cycles, 273,924,224 instructions, 49,583,032 branches, 141,290 branch-misses
+  - typed-feedback trace: matmul get sites `3181980809628221440` and `3181980809628221441` each reported 16,777,216 guard passes, 0 failures, and 0 fallback calls
+  - quick: fibonacci 268ms/18MB, math_intensive 72ms/18MB, nested_loops 25ms/22MB, factorial 93ms/18MB, matrix_multiply 26ms/30MB
+- Measured impact:
+  - `16_matrix_multiply` direct binary: 376ms -> 24ms median, 93.6% faster wall time
+  - Direct matrix binary cycles: 1.398B -> 156.2M, 88.8% fewer
+  - Direct matrix binary instructions: 6.614B -> 273.9M, 95.9% fewer
+  - Direct matrix binary branches: 1.434B -> 49.6M, 96.5% fewer
+  - Quick `matrix_multiply`: 381ms from the previous quick sweep -> 26ms, 93.2% faster
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen native_value::verify::tests::rejects_raw_f64_checked_native_without_consumed_layout_fact`
+  - `cargo test -p perry-codegen --test native_proof_regressions`
+  - `cargo build --release`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+- Notes:
+  - The classifier is deliberately narrow: one-expression loop bodies, no calls/conditionals/logicals, no unrelated index reads, no mutations of participating arrays or affine locals, and all affine locals must already have i32 slots plus nonnegative evidence.
+  - This is a stacked draft PR on top of the numeric array range preguard PR.
+- PR: https://github.com/PerryTS/perry/pull/5317

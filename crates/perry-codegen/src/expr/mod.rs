@@ -612,6 +612,11 @@ pub(crate) struct FnCtx<'a> {
     pub preguarded_numeric_array_index_gets:
         std::collections::HashMap<(u32, u32), PreguardedNumericArrayIndexGet>,
 
+    /// Loop-local guards for numeric array reads with affine computed indices
+    /// where a local-bound loop prebody guarded the maximum visited index.
+    /// Active only while lowering that loop body.
+    pub preguarded_numeric_array_affine_index_gets: Vec<PreguardedNumericArrayAffineIndexGet>,
+
     /// `(counter_local_id, array_local_id)` pairs that are guaranteed
     /// inbounds inside the current loop nest — populated by
     /// `lower_for` when it detects the same `for (...; i < arr.length;
@@ -1041,6 +1046,28 @@ pub(crate) struct BoundedIndexPair {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreguardedNumericArrayIndexGet {
+    pub site_id: String,
+    pub guard_ok_slot: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum PreguardedAffineIndexExpr {
+    MulLocalBoundPlusCounter {
+        mul_local_id: u32,
+        bound_local_id: u32,
+        counter_local_id: u32,
+    },
+    CounterTimesBoundPlusLocal {
+        counter_local_id: u32,
+        bound_local_id: u32,
+        add_local_id: u32,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreguardedNumericArrayAffineIndexGet {
+    pub array_local_id: u32,
+    pub index: PreguardedAffineIndexExpr,
     pub site_id: String,
     pub guard_ok_slot: String,
 }
