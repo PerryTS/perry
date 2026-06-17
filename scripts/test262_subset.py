@@ -97,19 +97,24 @@ PREAMBLE = TEST262_DIR / "preamble.js"
 SELF_VALIDATE_FEATURES_FILE = TEST262_DIR / "self-validate-features.txt"
 
 # Default subtrees to walk (relative to <root>/test). Language + builtins are
-# the cleanest TS-subset denominator; intl402/staging are out of scope.
-DEFAULT_DIRS = ("language", "built-ins")
+# intl402 is now measured (Perry has substantial Intl: ~78% — the old "no ICU"
+# assumption was stale). staging (TC39 proposals) stays out of scope.
+DEFAULT_DIRS = ("language", "built-ins", "intl402")
 
 # Subtrees skipped wholesale — out of scope for Perry's TS subset regardless of
 # feature tags (some cases in these dirs carry no `features:`).
+#
+# History: `eval`, `intl402`, and `RegExp/property-escapes` USED to be skipped
+# here as "AOT can't eval" / "no ICU" / "Rust regex crate gap". Those are all
+# stale — Perry measures eval-code ~94%, intl402 ~78%, property-escapes ~87%, so
+# they are no longer skipped (the eval cases run with PERRY_ALLOW_EVAL=1, set in
+# the compile env below). `RegExp/lookbehind` was vestigial (no such subdir).
+# Only genuinely-out-of-scope `staging` (proposals) remains.
+# NB: Temporal is judged in self-validating mode (#4792) — the Node oracle lacks
+# it; under intl402/ the Temporal locale-format cases are now measured too.
 _PATH_SKIP = re.compile(
     r"(?:^|/)(?:"
-    r"intl402|staging|"
-    r"eval|"  # dynamic eval — Perry is AOT
-    # NB: Temporal is intentionally NOT skipped — Perry implements it but the
-    # Node oracle does not, so it is judged in self-validating mode (#4792).
-    # (Temporal under intl402/ stays out: intl402 is skipped wholesale above.)
-    r"RegExp/(?:lookbehind|property-escapes)"  # Rust regex crate gaps
+    r"staging"
     r")(?:/|$)"
 )
 # NB: Atomics/SharedArrayBuffer are now in scope (#4794). The agent-based cases
@@ -464,7 +469,7 @@ def main() -> int:
             # 2) Perry compile (permissive — unimplemented surfaces as a gap).
             out_bin = workdir / "case.out"
             c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                         PERRY_NO_AUTO_OPTIMIZE="1")
+                         PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1")
             c_exit, c_out = run(
                 [str(args.perry_bin), "compile", str(staged), "-o",
                  str(out_bin)], c_env, args.timeout, cwd=str(workdir))

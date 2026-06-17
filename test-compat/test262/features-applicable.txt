@@ -63,12 +63,36 @@ Proxy
 SharedArrayBuffer
 Atomics
 
+# --- Intl / ECMA-402 (#5298) — measured ~78%; the old "no ICU" was stale ---
+Intl.DateTimeFormat-datetimestyle
+Intl.DateTimeFormat-dayPeriod
+Intl.DateTimeFormat-extend-timezonename
+Intl.DateTimeFormat-formatRange
+Intl.DateTimeFormat-fractionalSecondDigits
+Intl.DisplayNames
+Intl.DisplayNames-v2
+Intl.DurationFormat
+Intl.Era-monthcode
+Intl.ListFormat
+Intl.Locale
+Intl.Locale-info
+Intl.NumberFormat-unified
+Intl.NumberFormat-v3
+Intl.RelativeTimeFormat
+Intl.Segmenter
+intl-normative-optional
+
+# --- regexp (#5300) — \p{} property escapes measured ~87% ---
+regexp-unicode-property-escapes
+
+# --- eval (#5300) — measured ~94%; runs with PERRY_ALLOW_EVAL=1 (not "AOT can't") ---
+eval
+
 # --- explicit non-targets (commented for visibility) ---
-# eval                         — Perry is AOT
 # Function-prototype-toString  — Perry does not retain source text
-# Intl                         — out of scope (no ICU)
 # top-level-await              — partial; semantics depend on loader
-# regexp-lookbehind            — Rust regex crate lacks lookbehind
+# regexp-lookbehind            — vestigial (no such test262 subdir); lookbehind cases run inline
+# regexp-v-flag                — RegExp `v` flag not yet measured
 # resizable-arraybuffer        — not implemented
 # Temporal                     — implemented, but scored via self-validate-features.txt
 #                                (the Node oracle lacks Temporal; see #4792)
