@@ -112,10 +112,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
     );
-    // #5247: outlined class-field-SET inline cache. One call replaces the
-    // ~18-line inline guard+fast-store+fallback+merge diamond.
+    // #5247: class-field-SET inline-cache SLOW path. The hot fast path stays
+    // inline (cheap shape compare + bare slot store); only the cold miss/
+    // fallback collapses to this one call.
     module.declare_function(
-        "js_class_field_set_ic",
+        "js_class_field_set_slow",
         VOID,
         &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
     );

@@ -599,16 +599,27 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     }
 }
 
-/// Outlined class-field-SET inline-cache (#5247, `PERRY_OUTLINE_FIELDSET`).
+/// Class-field-SET inline-cache COLD/SLOW path (#5247, `PERRY_INLINE_FIELDSET`).
 ///
-/// Replaces the ~18-line codegen diamond (guard call + inline fast slot store +
-/// by-name fallback + merge) at every `obj.field = v` site on a typed class
-/// field with a single `call @js_class_field_set_ic(...)`. The body reproduces
-/// the inline diamond's behavior EXACTLY:
+/// This is the single helper the inline-cache miss block calls. The hot fast
+/// path stays INLINE in codegen: a cheap shape compare (`emit_class_field_inline_precheck`)
+/// + the bare slot store. Only the cold miss/fallback path collapses to one
+/// `call @js_class_field_set_slow(...)`. The inline compare is conservative —
+/// it takes the inline fast store ONLY when the receiver is definitely a plain
+/// writable own-field store (matching class id + keys, intact typed layout, not
+/// frozen, plain-number for raw-f64, and the process-global inline-enable flag
+/// unset). Everything else — first-time shapes, typed-feedback enabled,
+/// descriptors in use, polymorphic / non-pointer receivers, frozen / accessor /
+/// non-writable / setter-in-chain — falls here.
+///
+/// The body reproduces TODAY'S full semantics for every case the inline compare
+/// doesn't cover:
 ///
 ///   1. Run the same `js_typed_feedback_class_field_set_guard` (so the typed-
-///      feedback observation/recording is identical to the inline path).
-///   2. On a guard PASS, do the SAME fast slot store the inline fast path does:
+///      feedback observation/recording is identical to the old inline path).
+///   2. On a guard PASS (e.g. typed-feedback now says fast-ok, or a first-time
+///      shape that matches the contract), do the SAME slot store the inline
+///      fast path would have done:
 ///        * `require_raw_f64` slot → a bare `f64` store into the field slot
 ///          (the inline path emits a plain `store double` with no GC barrier —
 ///          the slot is pointer-free by typed-shape descriptor and the guard
@@ -616,7 +627,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
 ///        * boxed slot → `js_object_set_field`, which performs the identical
 ///          slot write + `js_gc_note_slot_layout` + `js_write_barrier_slot` the
 ///          inline `emit_jsvalue_slot_store_on_block` emits.
-///   3. On a guard FAIL, record the fallback (matching the inline fallback
+///   3. On a guard FAIL, record the fallback (matching the old inline fallback
 ///      block's `js_typed_feedback_record_fallback_call`) and route through the
 ///      by-name setter `js_object_set_field_by_name`, which handles
 ///      frozen / accessor / non-writable / setter-in-chain semantics.
@@ -625,7 +636,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
 /// guard returns 0 for them, sending the write to the by-name fallback), so no
 /// special-casing is needed here.
 #[no_mangle]
-pub extern "C" fn js_class_field_set_ic(
+pub extern "C" fn js_class_field_set_slow(
     site_id: u64,
     receiver: f64,
     expected_class_id: u32,
@@ -924,7 +935,7 @@ mod keep_guard_symbols {
     use super::*;
     #[used] static G0: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
     #[used] static G1: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
-    #[used] static G1B: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
+    #[used] static G1B: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_slow;
     #[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
 }

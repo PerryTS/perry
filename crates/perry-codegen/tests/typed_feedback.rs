@@ -265,39 +265,76 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
 
 #[test]
 fn typed_feedback_guards_direct_class_field_specialization() {
-    let point = class(101, "Point", vec![field("x", Type::Number)]);
-    let ir = ir_for(module_with_classes(
-        "typed_feedback_class_field.ts",
-        vec![point],
-        vec![param(1, "p", Type::Named("Point".to_string()))],
-        Type::Number,
-        vec![
-            Stmt::Expr(Expr::PropertySet {
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
-                value: Box::new(Expr::Number(7.0)),
-            }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
-            })),
-        ],
-    ));
+    // Build the same `p.x = 7; return p.x;` module fresh for each gate state so
+    // the env-var read in codegen is observed deterministically.
+    let build = || {
+        let point = class(101, "Point", vec![field("x", Type::Number)]);
+        module_with_classes(
+            "typed_feedback_class_field.ts",
+            vec![point],
+            vec![param(1, "p", Type::Named("Point".to_string()))],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                    value: Box::new(Expr::Number(7.0)),
+                }),
+                Stmt::Return(Some(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                })),
+            ],
+        )
+    };
 
-    assert!(ir.contains("class_field_set_guard"));
-    assert!(ir.contains("class_field_get_guard"));
-    assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
-    assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
-    assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
-    assert!(ir.contains("class_field_set.fast"));
-    assert!(ir.contains("class_field_set.fallback"));
-    assert!(ir.contains("class_field_get.fast"));
-    assert!(ir.contains("class_field_get.fallback"));
-    assert!(ir.contains("store double"));
-    assert!(!ir.contains("call void @js_gc_note_slot_layout"));
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
-    assert!(ir.contains("call void @js_object_set_field_by_name"));
-    assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
+    let _lock = ENV_LOCK.lock().unwrap();
+
+    // DEFAULT (#5247 kept OPT-IN: PERRY_INLINE_FIELDSET unset). The SET site
+    // emits the original guard-call diamond — guard CALL drives the
+    // fast/%slow branch, and the %slow block records the fallback + sets by
+    // name inline (NOT the slow helper, which would double-run the guard).
+    {
+        let _g = EnvVarGuard::set("PERRY_INLINE_FIELDSET", None);
+        let ir = ir_for(build());
+        assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
+        assert!(ir.contains("class_field_set.fast"));
+        assert!(ir.contains("class_field_set.slow"));
+        assert!(!ir.contains("call void @js_class_field_set_slow"));
+        assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+        assert!(ir.contains("call void @js_object_set_field_by_name"));
+        // GET path (always-on guard diamond) and shared expectations.
+        assert!(ir.contains("class_field_get_guard"));
+        assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
+        assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
+        assert!(ir.contains("class_field_get.fast"));
+        assert!(ir.contains("class_field_get.fallback"));
+        assert!(ir.contains("store double"));
+        assert!(!ir.contains("call void @js_gc_note_slot_layout"));
+        assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
+    }
+
+    // OPT-IN (PERRY_INLINE_FIELDSET=1): fast-inline / slow-outline inline
+    // cache. The hot path is the inline shape compare + the byte-identical
+    // bare slot store; the cold miss path collapses to one
+    // `call @js_class_field_set_slow` (which internally runs the real guard +
+    // records the fallback + by-name set). The SET site no longer emits the
+    // guard CALL, the inline `record_fallback_call`, or the by-name set.
+    {
+        let _g = EnvVarGuard::set("PERRY_INLINE_FIELDSET", Some("1"));
+        let ir = ir_for(build());
+        assert!(ir.contains("class_field_set.fast"));
+        assert!(ir.contains("class_field_set.slow"));
+        assert!(ir.contains("call void @js_class_field_set_slow"));
+        assert!(!ir.contains("class_field_set.fallback"));
+        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_set_guard"));
+        // The inline shape precheck is emitted (the perf-flat hot compare).
+        assert!(ir.contains("class_field_inline.deref"));
+        // GET path is unchanged regardless of the SET gate.
+        assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
+        assert!(ir.contains("class_field_get.fast"));
+        assert!(ir.contains("store double"));
+    }
 }
 
 #[test]
@@ -339,7 +376,11 @@ fn typed_feedback_guards_direct_class_method_specialization() {
     assert!(ir.contains("js_typed_feedback_method_direct_call_guard"));
     assert!(ir.contains("method_direct.fast"));
     assert!(ir.contains("method_direct.fallback"));
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    // (The method-direct fallback here has no typed-feedback site, so it calls
+    // js_native_call_method directly without an inline record_fallback_call.
+    // #5247: the incidental record_fallback_call this used to observe came from
+    // the synthesized constructor's field-set, now folded into the SET inline
+    // cache's slow helper — no longer emitted inline.)
     assert!(ir.contains("call double @js_native_call_method"));
 }
 

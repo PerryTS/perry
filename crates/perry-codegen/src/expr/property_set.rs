@@ -56,6 +56,54 @@ fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool
         .is_some_and(|class| !class.computed_members.is_empty())
 }
 
+/// #5247: compile-time guard for the BOXED class-field-SET inline fast path.
+///
+/// The inline shape compare matches class_id + keys + not-frozen, but it does
+/// NOT model `class_setter_in_chain` / accessor-in-chain (an ancestor class
+/// declaring a `set <prop>()` / `get <prop>()` for a key the receiver class
+/// declares as a plain data field). A raw inline slot store would bypass that
+/// setter — a semantic regression. The runtime's sticky inline-disable flag
+/// covers descriptors / typed-feedback but NOT class-vtable accessors, so we
+/// must rule those out at compile time.
+///
+/// Returns `true` only when NO class in the receiver's statically-known ancestor
+/// chain declares a getter or setter for `property`, and the whole chain is
+/// statically resolvable (`extends_name` links only; a dynamic / native /
+/// unresolved parent forces the conservative answer `false`). Conservative on
+/// any uncertainty → keep the guard call.
+fn boxed_field_inline_safe(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    // Bounded walk mirroring the runtime's 32-deep chain scan.
+    for _ in 0..32 {
+        let Some(name) = current else {
+            // Reached the top of a fully-resolved chain with no accessor — safe.
+            return true;
+        };
+        let Some(class) = ctx.classes.get(&name) else {
+            // Parent class not statically known (cross-module without info).
+            return false;
+        };
+        if class.getters.iter().any(|(p, _)| p == property)
+            || class.setters.iter().any(|(p, _)| p == property)
+        {
+            return false;
+        }
+        // A non-static-class parent (dynamic `extends expr`, or native extends)
+        // could install an accessor we can't see — be conservative.
+        if class.extends_expr.is_some() || class.native_extends.is_some() {
+            return false;
+        }
+        // `extends` (a ClassId) without `extends_name` means the parent isn't
+        // resolvable by name here — bail conservatively.
+        if class.extends.is_some() && class.extends_name.is_none() {
+            return false;
+        }
+        current = class.extends_name.clone();
+    }
+    // Chain longer than the bound — conservative.
+    false
+}
+
 fn lower_runtime_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -324,18 +372,90 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let val_bits = blk.bitcast_double_to_i64(&val_double);
                             (obj_bits, obj_handle, key_raw, expected_keys, val_bits)
                         };
-                        // #5247: outline the whole class-field-SET IC diamond
-                        // (guard call + inline fast slot store + by-name
-                        // fallback + merge — ~18 lines of IR) into a single
-                        // `call @js_class_field_set_ic(...)`. The runtime helper
-                        // reproduces the inline path's behavior exactly (guard,
-                        // then the same raw/boxed slot store + GC barrier on a
-                        // pass, or the recorded by-name fallback on a miss).
-                        // Gated for A/B measurement: opt in with
-                        // PERRY_OUTLINE_FIELDSET, keep the inline diamond off.
-                        if std::env::var_os("PERRY_OUTLINE_FIELDSET").is_some() {
-                            ctx.block().call_void(
-                                "js_class_field_set_ic",
+                        // #5247: class-field-SET inline cache. The HOT fast path
+                        // stays INLINE — a cheap shape compare
+                        // (`emit_class_field_inline_precheck`) REPLACING the guard
+                        // CALL, followed by the SAME inline slot store. Only the
+                        // cold miss/fallback path collapses to a SINGLE
+                        // `call @js_class_field_set_slow(...)`, which reproduces
+                        // today's full guard-miss semantics (feedback recording,
+                        // descriptor/accessor/frozen handling, raw-f64 contract,
+                        // and the by-name fallback).
+                        //
+                        // PERF is flat by construction: the `class_field_set.fast`
+                        // store is byte-identical to the original inline diamond's
+                        // fast block (proved: same `inttoptr→gep+24→gep→store
+                        // double→br merge`), and the inline compare is conservative
+                        // (falls to %slow whenever the sticky inline-enable flag is
+                        // set — descriptors / typed-feedback in use). MEASURED flat
+                        // on the 30M-iter hot loop (best-of-5, on 17.74s vs off
+                        // 18.08s, interleaved → within noise).
+                        //
+                        // IR SIZE, however, GROWS per straight-line site (raw-f64
+                        // 26→71, boxed 30→69 lines/site), because the inline shape
+                        // precheck is emitted at every site (it only collapses to a
+                        // bare store after LICM hoists the compare out of a hot
+                        // loop). Since the IR-shrink goal that motivated #5247 is
+                        // NOT met here, this is kept OPT-IN: enable with
+                        // PERRY_INLINE_FIELDSET=1. Default (unset / =0) keeps the
+                        // original guard-call diamond.
+                        let inline_enabled = std::env::var("PERRY_INLINE_FIELDSET")
+                            .map(|v| v != "0")
+                            .unwrap_or(false);
+                        // BOXED fields additionally require a compile-time proof
+                        // that no class in the receiver's ancestor chain declares
+                        // an accessor for this key (the inline compare doesn't
+                        // model `class_setter_in_chain`, and the runtime's sticky
+                        // inline-disable flag covers descriptors / typed-feedback
+                        // but NOT class-vtable setters). raw-f64 fields are always
+                        // inline-eligible — the typed-shape descriptor + the
+                        // precheck's intact/finite/not-frozen checks fully cover
+                        // their fast contract, and a setter on a raw-f64 field is
+                        // already handled by the setter-dispatch branch above.
+                        let inline_fieldset = inline_enabled
+                            && (requires_raw_f64
+                                || boxed_field_inline_safe(ctx, &class_name, property));
+
+                        let fast_idx = ctx.new_block("class_field_set.fast");
+                        let slow_idx = ctx.new_block("class_field_set.slow");
+                        let merge_idx = ctx.new_block("class_field_set.merge");
+                        let fast_label = ctx.block_label(fast_idx);
+                        let slow_label = ctx.block_label(slow_idx);
+                        let merge_label = ctx.block_label(merge_idx);
+
+                        if inline_fieldset {
+                            // Inline shape compare for BOTH raw-f64 and boxed
+                            // fields. On a monomorphic hit it branches straight to
+                            // the inline fast store, skipping the call entirely; on
+                            // any miss it branches to %slow. The precheck is
+                            // conservative — frozen / non-plain-number (raw-f64) /
+                            // non-pointer receivers, and any state where the inline
+                            // enable flag is set (descriptors / typed-feedback in
+                            // use), all route to %slow.
+                            let slow_from_precheck =
+                                crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
+                                    ctx,
+                                    &obj_bits,
+                                    &obj_handle,
+                                    &expected_class_id_str,
+                                    &expected_keys,
+                                    field_index,
+                                    requires_raw_f64,
+                                    Some(&val_bits),
+                                    &fast_label,
+                                );
+                            // The precheck leaves current_block at its "guardcall"
+                            // miss block; route that to %slow.
+                            ctx.block().br(&slow_label);
+                            let _ = slow_from_precheck;
+                        } else {
+                            // A/B opt-out: original guard-call diamond. The guard
+                            // CALL drives the fast/slow branch; %slow still uses the
+                            // single slow helper for the fallback so the IR diff is
+                            // purely the inline-compare-vs-guard-call swap.
+                            let guard_ok = ctx.block().call(
+                                I32,
+                                "js_typed_feedback_class_field_set_guard",
                                 &[
                                     (I64, &site_id),
                                     (DOUBLE, &recv_box),
@@ -347,54 +467,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     (I32, requires_raw_f64_str),
                                 ],
                             );
-                            let _ = &obj_bits;
-                            let _ = &obj_handle;
-                            return Ok(val_double);
+                            let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+                            ctx.block().cond_br(&guard_pass, &fast_label, &slow_label);
                         }
-                        let fast_idx = ctx.new_block("class_field_set.fast");
-                        let fallback_idx = ctx.new_block("class_field_set.fallback");
-                        let merge_idx = ctx.new_block("class_field_set.merge");
-                        let fast_label = ctx.block_label(fast_idx);
-                        let fallback_label = ctx.block_label(fallback_idx);
-                        let merge_label = ctx.block_label(merge_idx);
-
-                        // #5093: inline shape pre-check, raw-f64 fields only. The
-                        // boxed-store path keeps the guard call (its setter-in-
-                        // chain handling and write barrier aren't reproduced
-                        // inline). On a hit this branches straight to the raw
-                        // store, skipping the call; on a miss the guard-call path
-                        // below runs unchanged.
-                        if requires_raw_f64 {
-                            let _guardcall_label =
-                                crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
-                                    ctx,
-                                    &obj_bits,
-                                    &obj_handle,
-                                    &expected_class_id_str,
-                                    &expected_keys,
-                                    field_index,
-                                    true,
-                                    Some(&val_bits),
-                                    &fast_label,
-                                );
-                        }
-                        let guard_ok = ctx.block().call(
-                            I32,
-                            "js_typed_feedback_class_field_set_guard",
-                            &[
-                                (I64, &site_id),
-                                (DOUBLE, &recv_box),
-                                (I32, &expected_class_id_str),
-                                (I64, &expected_keys),
-                                (I64, &key_raw),
-                                (I32, &field_idx_str),
-                                (DOUBLE, &val_double),
-                                (I32, requires_raw_f64_str),
-                            ],
-                        );
-                        let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
-                        ctx.block()
-                            .cond_br(&guard_pass, &fast_label, &fallback_label);
 
                         ctx.current_block = fast_idx;
                         let blk = ctx.block();
@@ -461,14 +536,48 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             );
                         }
 
-                        ctx.current_block = fallback_idx;
+                        // %slow — the cold miss/fallback path, collapsed to ONE
+                        // call. `js_class_field_set_slow` reproduces today's full
+                        // guard-miss semantics: it runs the real
+                        // `js_typed_feedback_class_field_set_guard` (feedback
+                        // recording, descriptor/accessor/frozen handling, raw-f64
+                        // contract); on a guard PASS it does the same slot store
+                        // (raw-f64 bare store / boxed slot store + write barrier);
+                        // on a FAIL it records the fallback and routes through the
+                        // by-name setter. This covers every case the conservative
+                        // inline compare doesn't take %fast on.
+                        ctx.current_block = slow_idx;
                         let blk = ctx.block();
-                        blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
-                        blk.call_void(
-                            "js_object_set_field_by_name",
-                            &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
-                        );
+                        if inline_fieldset {
+                            blk.call_void(
+                                "js_class_field_set_slow",
+                                &[
+                                    (I64, &site_id),
+                                    (DOUBLE, &recv_box),
+                                    (I32, &expected_class_id_str),
+                                    (I64, &expected_keys),
+                                    (I64, &key_raw),
+                                    (I32, &field_idx_str),
+                                    (DOUBLE, &val_double),
+                                    (I32, requires_raw_f64_str),
+                                ],
+                            );
+                        } else {
+                            // A/B opt-out: the guard already ran and FAILED in the
+                            // entry block, so this is a pure guard-miss fallback —
+                            // record it and route by-name (NOT the slow helper,
+                            // which would re-run the guard and double-record).
+                            blk.call_void(
+                                "js_typed_feedback_record_fallback_call",
+                                &[(I64, &site_id)],
+                            );
+                            blk.call_void(
+                                "js_object_set_field_by_name",
+                                &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+                            );
+                        }
                         blk.br(&merge_label);
+                        let _ = &obj_bits;
                         if requires_raw_f64 {
                             let fallback = LoweredValue {
                                 semantic: SemanticKind::JsValue,
@@ -479,7 +588,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             ctx.record_lowered_value_with_access_mode_and_facts(
                                 "ClassFieldSet",
                                 None,
-                                "js_object_set_field_by_name",
+                                "js_class_field_set_slow",
                                 &fallback,
                                 Some(BoundsState::Unknown),
                                 None,
