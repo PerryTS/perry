@@ -283,9 +283,13 @@ fn typed_feedback_guards_direct_class_field_specialization() {
                 property: "x".to_string(),
                 value: Box::new(Expr::Number(7.0)),
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Sub,
+                left: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                }),
+                right: Box::new(Expr::Integer(1)),
             })),
         ],
     ));
@@ -310,6 +314,10 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     // js_class_field_set_fallback).
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
+    assert!(
+        ir.contains("call double @js_number_coerce"),
+        "class-field raw fallback must be coerced at numeric consumers:\n{ir}"
+    );
 }
 
 #[test]
@@ -584,8 +592,10 @@ fn typed_feedback_guards_array_index_specialization() {
     assert!(ir.contains("js_typed_feedback_array_index_set_fallback_boxed"));
     assert!(ir.contains("js_typed_feedback_numeric_array_index_get_guard"));
     assert!(ir.contains("js_typed_feedback_array_index_get_fallback_boxed"));
-    assert!(ir.contains("js_array_numeric_set_f64_unboxed"));
-    assert!(ir.contains("js_array_numeric_get_f64_unboxed"));
+    assert!(ir.contains("idxset.inbounds"));
+    assert!(ir.contains("store double"));
+    assert!(!ir.contains("call i32 @js_array_numeric_set_f64_unboxed"));
+    assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
 }
 
 #[test]

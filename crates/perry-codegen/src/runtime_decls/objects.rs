@@ -288,7 +288,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_typed_feedback_array_index_set_fallback_boxed",
         DOUBLE,
-        &[I64, DOUBLE, I32, DOUBLE],
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_typed_feedback_observe_array_element",

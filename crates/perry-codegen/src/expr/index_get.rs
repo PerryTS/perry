@@ -193,6 +193,7 @@ fn lower_guarded_array_index_get(
     idx_i32: &str,
     block_prefix: &str,
     require_numeric_layout: bool,
+    coerce_numeric_fallback: bool,
 ) -> Result<String> {
     let contract = if require_numeric_layout {
         TypedFeedbackContract::numeric_array_get_index()
@@ -235,7 +236,7 @@ fn lower_guarded_array_index_get(
     ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
 
     ctx.current_block = fallback_idx;
-    let fallback_val = ctx.block().call(
+    let fallback_boxed = ctx.block().call(
         DOUBLE,
         "js_typed_feedback_array_index_get_fallback_boxed",
         &[
@@ -244,15 +245,16 @@ fn lower_guarded_array_index_get(
             (DOUBLE, idx_box),
         ],
     );
+    let fallback_val = if require_numeric_layout && coerce_numeric_fallback {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &fallback_boxed)])
+    } else {
+        fallback_boxed.clone()
+    };
     let fallback_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     if require_numeric_layout {
-        let fallback = LoweredValue {
-            semantic: SemanticKind::JsValue,
-            rep: NativeRep::JsValue,
-            llvm_ty: DOUBLE,
-            value: fallback_val.clone(),
-        };
+        let fallback = LoweredValue::js_value(fallback_boxed.clone());
         ctx.record_lowered_value_with_access_mode_and_facts(
             "NumericArrayIndexGet",
             None,
@@ -361,6 +363,51 @@ fn lower_guarded_array_index_get(
             (&fallback_val, &fallback_end_label),
         ],
     ))
+}
+
+pub(crate) fn lower_numeric_index_get_for_number_context(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+) -> Result<Option<String>> {
+    let Expr::IndexGet { object, index } = expr else {
+        return Ok(None);
+    };
+    if !is_array_expr(ctx, object) || !expr_has_numeric_pointer_free_array_layout(ctx, object) {
+        return Ok(None);
+    }
+
+    if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) {
+        if ctx
+            .bounded_index_pairs
+            .iter()
+            .any(|fact| fact.index_local_id == *idx_id && fact.array_local_id == *arr_id)
+        {
+            let arr_box = lower_expr(ctx, object)?;
+            let i32_slot_opt = ctx.i32_counter_slots.get(idx_id).cloned();
+            let idx_i32 = if let Some(ref i32_slot) = i32_slot_opt {
+                ctx.block().load(I32, i32_slot)
+            } else {
+                let idx_double = lower_expr(ctx, index)?;
+                ctx.block().fptosi(DOUBLE, &idx_double, I32)
+            };
+            let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+            return lower_guarded_array_index_get(
+                ctx,
+                &arr_box,
+                &idx_double,
+                &idx_i32,
+                "bidx.num",
+                true,
+                true,
+            )
+            .map(Some);
+        }
+    }
+
+    let arr_box = lower_expr(ctx, object)?;
+    let idx_double = lower_expr(ctx, index)?;
+    let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
+    lower_guarded_array_index_get(ctx, &arr_box, &idx_double, &idx_i32, "arr", true, true).map(Some)
 }
 
 fn lower_bounded_array_index_get(
@@ -678,7 +725,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(k) = k {
                         if k < slots.len() {
                             let value = ctx.block().load(DOUBLE, &slots[k]);
-                            let lowered = LoweredValue {
+                            let raw_f64_element =
+                                crate::type_analysis::scalar_replaced_array_element_is_raw_f64(
+                                    ctx,
+                                    object.as_ref(),
+                                    index.as_ref(),
+                                );
+                            let lowered_js = LoweredValue {
                                 semantic: SemanticKind::JsValue,
                                 rep: NativeRep::JsValue,
                                 llvm_ty: DOUBLE,
@@ -688,15 +741,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 "ScalarArrayIndexGet",
                                 Some(*id),
                                 "scalar_array_element_load",
-                                &lowered,
+                                &lowered_js,
                                 None,
                                 None,
                                 None,
                                 None,
                                 false,
                                 false,
-                                vec![format!("index={}", k)],
+                                vec![
+                                    format!("index={}", k),
+                                    format!("raw_f64_element={}", raw_f64_element as u8),
+                                ],
                             );
+                            if raw_f64_element {
+                                let lowered_f64 = LoweredValue::f64(value.clone());
+                                ctx.record_lowered_value_with_access_mode(
+                                    "ScalarArrayIndexGet",
+                                    Some(*id),
+                                    "scalar_array_element_load.raw_f64",
+                                    &lowered_f64,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    false,
+                                    false,
+                                    vec![format!("index={}", k), "raw_f64_element=1".to_string()],
+                                );
+                            }
                             return Ok(value);
                         }
                     }
@@ -844,6 +916,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &idx_i32,
                                 "bidx.num",
                                 true,
+                                false,
                             );
                         }
                         return lower_bounded_array_index_get(ctx, &arr_box, &idx_i32);
@@ -865,6 +938,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &idx_i32,
                     "arr",
                     require_numeric_layout,
+                    false,
                 );
             }
             // Generic dynamic object access: stringify the index (no-op

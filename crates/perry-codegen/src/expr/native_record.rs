@@ -73,6 +73,13 @@ pub(super) fn native_fact_uses_for_record(
     let mut consumed = Vec::new();
     let mut rejected = Vec::new();
     match &lowered.rep {
+        NativeRep::JsValueBits => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "js_value_bits",
+            None,
+        )),
         NativeRep::JsValue => {}
         NativeRep::I32 => consumed.push(native_fact_use(
             "representation",

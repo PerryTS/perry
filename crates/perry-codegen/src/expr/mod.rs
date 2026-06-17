@@ -14,6 +14,7 @@ use perry_types::Type as HirType;
 
 use crate::block::LlBlock;
 use crate::codegen::AppMetadata;
+use crate::collectors::NativeRegionFactGraph;
 use crate::function::LlFunction;
 use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
 use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
@@ -155,6 +156,14 @@ pub(crate) struct FnCtx<'a> {
     pub source_function_slug: String,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
+    /// Full native-region fact graph collected for this lowered HIR region.
+    ///
+    /// Existing fields below borrow individual subgraphs for compatibility
+    /// with older lowering consumers. New native-lowering decisions should
+    /// prefer this structured graph so representation, range, bounds, alias,
+    /// escape, shape, constants, and materialization-hazard facts stay tied
+    /// to the same collector snapshot.
+    pub native_facts: &'a NativeRegionFactGraph,
     /// Map from HIR LocalId → LLVM alloca pointer (e.g. `%r3`).
     pub locals: std::collections::HashMap<u32, String>,
     /// Map from HIR LocalId → static HIR Type. Used by `is_string_expr` and
@@ -2049,7 +2058,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
 pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let raw = lower_expr(ctx, expr)?;
-    if is_numeric_expr(ctx, expr) {
+    if is_numeric_expr(ctx, expr)
+        && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr)
+    {
         Ok(raw)
     } else {
         Ok(ctx

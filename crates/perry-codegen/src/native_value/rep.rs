@@ -18,6 +18,10 @@ pub(crate) enum SemanticKind {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub(crate) enum NativeRep {
+    /// Internal NaN-box bit pattern carried as an integer. Public Perry ABI
+    /// slots still use `JsValue`/LLVM `double`; this rep is for optimizer-local
+    /// boxed values where preserving payload bits matters.
+    JsValueBits,
     JsValue,
     I32,
     /// Legacy signed 64-bit scalar. Kept for existing native-library
@@ -73,6 +77,7 @@ pub(crate) enum NativeRep {
 impl NativeRep {
     pub(crate) fn name(&self) -> &'static str {
         match self {
+            Self::JsValueBits => "js_value_bits",
             Self::JsValue => "js_value",
             Self::I32 => "i32",
             Self::I64 => "i64",
@@ -95,6 +100,10 @@ impl NativeRep {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExpectedNativeRep {
+    // #854: internal boxed-bits request path. Production GC/layout consumers
+    // record this rep for region-local NaN-box payload bits; external ABI
+    // classifiers must still select `JsValue`.
+    JsValueBits,
     I32,
     I64,
     U32,
@@ -179,6 +188,10 @@ impl LoweredValue {
         Self::new(SemanticKind::JsValue, NativeRep::JsValue, DOUBLE, value)
     }
 
+    pub(crate) fn js_value_bits(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsValue, NativeRep::JsValueBits, I64, value)
+    }
+
     pub(crate) fn native_handle(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::JsValue, NativeRep::NativeHandle, I64, value)
     }
@@ -228,7 +241,8 @@ impl LoweredValue {
     pub(crate) fn is_rep(&self, expected: ExpectedNativeRep) -> bool {
         matches!(
             (expected, &self.rep),
-            (ExpectedNativeRep::I32, NativeRep::I32)
+            (ExpectedNativeRep::JsValueBits, NativeRep::JsValueBits)
+                | (ExpectedNativeRep::I32, NativeRep::I32)
                 | (ExpectedNativeRep::I64, NativeRep::I64)
                 | (ExpectedNativeRep::U32, NativeRep::U32)
                 | (ExpectedNativeRep::U64, NativeRep::U64)

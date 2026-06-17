@@ -267,6 +267,10 @@ def _access_mode_name(value: Any) -> str:
     return _state_name(value)
 
 
+def _field_name(value: Any) -> str:
+    return _state_name(value) or str(value or "")
+
+
 def _is_unchecked_native_unknown_bounds(record: dict[str, Any]) -> bool:
     return (
         _access_mode_name(record.get("access_mode")) == "unchecked_native"
@@ -331,6 +335,24 @@ def _fact_matches(fact: Any, *, kind: Any = None, state: Any = None) -> bool:
     return True
 
 
+def _fact_matches_spec(fact: Any, spec: dict[str, Any], prefix: str) -> bool:
+    if not _fact_matches(
+        fact,
+        kind=spec.get(f"{prefix}_fact_kind"),
+        state=spec.get(f"{prefix}_fact_state"),
+    ):
+        return False
+    reason = spec.get(f"{prefix}_fact_reason")
+    if reason is not None and _field_name(fact.get("reason")) != str(reason):
+        return False
+    fact_id_contains = spec.get(f"{prefix}_fact_id_contains")
+    if fact_id_contains is not None and str(fact_id_contains) not in str(
+        fact.get("fact_id") or ""
+    ):
+        return False
+    return True
+
+
 def _record_has_fact(
     record: dict[str, Any],
     field: str,
@@ -354,9 +376,11 @@ def _record_matches_required(record: dict[str, Any], spec: dict[str, Any]) -> bo
         "block_label",
         "function",
         "materialization_reason",
+        "fallback_reason",
+        "native_value_state",
     )
     for field in exact_fields:
-        if field in spec and str(record.get(field) or "") != str(spec[field]):
+        if field in spec and _field_name(record.get(field)) != str(spec[field]):
             return False
     contains_fields = (
         ("consumer_contains", "consumer"),
@@ -388,30 +412,32 @@ def _record_matches_required(record: dict[str, Any], spec: dict[str, Any]) -> bo
         record.get("alias_state"), spec["alias_state"], state_kind="alias"
     ):
         return False
-    if "consumed_fact_kind" in spec and not _record_has_fact(
-        record,
-        "consumed_facts",
-        kind=spec.get("consumed_fact_kind"),
-        state=spec.get("consumed_fact_state"),
+    if "consumed_fact_kind" in spec and not any(
+        _fact_matches_spec(fact, spec, "consumed")
+        for fact in record.get("consumed_facts", []) or []
     ):
         return False
-    if "consumed_fact_state" in spec and "consumed_fact_kind" not in spec and not _record_has_fact(
-        record,
-        "consumed_facts",
-        state=spec.get("consumed_fact_state"),
+    if (
+        "consumed_fact_state" in spec
+        and "consumed_fact_kind" not in spec
+        and not any(
+            _fact_matches_spec(fact, spec, "consumed")
+            for fact in record.get("consumed_facts", []) or []
+        )
     ):
         return False
-    if "rejected_fact_kind" in spec and not _record_has_fact(
-        record,
-        "rejected_facts",
-        kind=spec.get("rejected_fact_kind"),
-        state=spec.get("rejected_fact_state"),
+    if "rejected_fact_kind" in spec and not any(
+        _fact_matches_spec(fact, spec, "rejected")
+        for fact in record.get("rejected_facts", []) or []
     ):
         return False
-    if "rejected_fact_state" in spec and "rejected_fact_kind" not in spec and not _record_has_fact(
-        record,
-        "rejected_facts",
-        state=spec.get("rejected_fact_state"),
+    if (
+        "rejected_fact_state" in spec
+        and "rejected_fact_kind" not in spec
+        and not any(
+            _fact_matches_spec(fact, spec, "rejected")
+            for fact in record.get("rejected_facts", []) or []
+        )
     ):
         return False
     return True
@@ -463,11 +489,22 @@ def generic_native_rep_contract_results(
         r
         for r in records
         if r.get("materialization_reason")
-        and (
-            _state_name(r.get("materialization_reason"))
-            or str(r.get("materialization_reason") or "")
-        )
-        not in allowed_reasons
+        and _field_name(r.get("materialization_reason")) not in allowed_reasons
+    ]
+    dynamic_fallbacks = [r for r in records if _is_dynamic_fallback(r)]
+    missing_fallback_reason = [
+        r
+        for r in dynamic_fallbacks
+        if not _field_name(r.get("fallback_reason"))
+        or not _field_name(r.get("materialization_reason"))
+    ]
+    mismatched_fallback_reason = [
+        r
+        for r in dynamic_fallbacks
+        if _field_name(r.get("fallback_reason"))
+        and _field_name(r.get("materialization_reason"))
+        and _field_name(r.get("fallback_reason"))
+        != _field_name(r.get("materialization_reason"))
     ]
 
     add(
@@ -502,6 +539,16 @@ def generic_native_rep_contract_results(
         + json.dumps(sorted(allowed_reasons))
         + " unexpected="
         + json.dumps(unexpected_materializations[:5], sort_keys=True),
+    )
+    add(
+        "native_reps_dynamic_fallbacks_have_reasons",
+        not missing_fallback_reason,
+        json.dumps(missing_fallback_reason[:5], sort_keys=True),
+    )
+    add(
+        "native_reps_dynamic_fallback_reasons_match_materialization",
+        not mismatched_fallback_reason,
+        json.dumps(mismatched_fallback_reason[:5], sort_keys=True),
     )
 
     for required in check_spec.get("require_records", []) or []:
@@ -612,6 +659,32 @@ def native_rep_contract_results(
                 bool(bounded),
                 f"{region} bounded_records={len(bounded)}",
             )
+            consumed_rep_names = {
+                r.get("native_rep_name")
+                for r in region_records
+                if r.get("native_rep_name") in {"i32", "buffer_view", "u8"}
+                and _record_has_fact(
+                    r, "consumed_facts", kind="representation", state="consumed"
+                )
+            }
+            add(
+                f"native_reps_{region}_consumes_representation_facts",
+                {"i32", "buffer_view", "u8"}.issubset(consumed_rep_names),
+                f"{region} consumed_rep_names={sorted(consumed_rep_names)}",
+            )
+            consumed_bounds = [
+                r
+                for r in region_records
+                if r.get("native_rep_name") in {"buffer_view", "u8"}
+                and _record_has_fact(
+                    r, "consumed_facts", kind="bounds", state="consumed"
+                )
+            ]
+            add(
+                f"native_reps_{region}_consumes_bounds_facts",
+                bool(consumed_bounds),
+                f"{region} consumed_bounds_records={len(consumed_bounds)}",
+            )
 
         same_region_records = records_for_native_region("same_buffer")
         if not same_region_records:
@@ -630,6 +703,20 @@ def native_rep_contract_results(
         ]
         same_reps = {r.get("native_rep_name") for r in same_records}
         same_noalias = [r for r in same_region_records if r.get("emitted_noalias")]
+        same_consumed_reps = {
+            r.get("native_rep_name")
+            for r in same_region_records
+            if r.get("native_rep_name") in {"buffer_view", "u8"}
+            and _record_has_fact(
+                r, "consumed_facts", kind="representation", state="consumed"
+            )
+        }
+        same_consumed_bounds = [
+            r
+            for r in same_region_records
+            if r.get("native_rep_name") in {"buffer_view", "u8"}
+            and _record_has_fact(r, "consumed_facts", kind="bounds", state="consumed")
+        ]
         add(
             "native_reps_same_buffer_has_raw_buffer_view",
             "buffer_view" in same_reps and "u8" in same_reps,
@@ -639,6 +726,16 @@ def native_rep_contract_results(
             "native_reps_same_buffer_denies_noalias",
             not same_noalias,
             json.dumps(same_noalias[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_same_buffer_consumes_representation_facts",
+            {"buffer_view", "u8"}.issubset(same_consumed_reps),
+            f"same_buffer consumed_rep_names={sorted(same_consumed_reps)}",
+        )
+        add(
+            "native_reps_same_buffer_consumes_bounds_facts",
+            bool(same_consumed_bounds),
+            f"same_buffer consumed_bounds_records={len(same_consumed_bounds)}",
         )
 
     if workload == "h1_buffer_alias_negative":
@@ -713,6 +810,33 @@ def native_rep_contract_results(
             for r in records
             if r.get("materialization_reason")
         }
+        dynamic_fallback_records = [r for r in records if _is_dynamic_fallback(r)]
+        dynamic_fallbacks_missing_reason = [
+            r
+            for r in dynamic_fallback_records
+            if not _field_name(r.get("fallback_reason"))
+            or not _field_name(r.get("materialization_reason"))
+        ]
+        dynamic_fallbacks_missing_rejection = [
+            r
+            for r in dynamic_fallback_records
+            if not (
+                _record_has_fact(r, "rejected_facts", kind="bounds", state="missing")
+                or _record_has_fact(
+                    r, "rejected_facts", kind="alias_noalias", state="missing"
+                )
+            )
+        ]
+        dynamic_fallbacks_missing_invalidation = [
+            r
+            for r in dynamic_fallback_records
+            if not _record_has_fact(
+                r,
+                "rejected_facts",
+                kind="materialization_hazard",
+                state="invalidated",
+            )
+        ]
         add(
             "native_reps_negative_denies_unsafe_noalias",
             bool(denied_noalias),
@@ -727,6 +851,21 @@ def native_rep_contract_results(
             "native_reps_negative_reports_boundary_reason",
             bool(reasons),
             f"materialization_reasons={sorted(reasons)}",
+        )
+        add(
+            "native_reps_negative_dynamic_fallbacks_have_reasons",
+            not dynamic_fallbacks_missing_reason,
+            json.dumps(dynamic_fallbacks_missing_reason[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_dynamic_fallbacks_reject_guards",
+            not dynamic_fallbacks_missing_rejection,
+            json.dumps(dynamic_fallbacks_missing_rejection[:5], sort_keys=True),
+        )
+        add(
+            "native_reps_negative_dynamic_fallbacks_invalidate_hazards",
+            not dynamic_fallbacks_missing_invalidation,
+            json.dumps(dynamic_fallbacks_missing_invalidation[:5], sort_keys=True),
         )
         alias_local_records = records_for_native_region("alias_local")
         reassignment_records = records_for_native_region("reassignment_region")

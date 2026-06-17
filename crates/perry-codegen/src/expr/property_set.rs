@@ -26,8 +26,9 @@ use crate::native_value::{
 };
 #[allow(unused_imports)]
 use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    compute_auto_captures, expr_may_return_boxed_value_from_raw_f64_fallback, is_array_expr,
+    is_bigint_expr, is_bool_expr, is_map_expr, is_numeric_expr, is_set_expr, is_string_expr,
+    is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -50,6 +51,17 @@ use super::{
     variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
     TypedFeedbackKind,
 };
+
+fn canonicalize_raw_f64_numeric_store_value(
+    blk: &mut crate::block::LlBlock,
+    value_double: &str,
+) -> String {
+    blk.call(
+        DOUBLE,
+        "js_array_numeric_value_to_raw_f64",
+        &[(DOUBLE, value_double)],
+    )
+}
 
 fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes
@@ -193,9 +205,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .and_then(|fs| fs.get(property.as_str()))
                     .cloned()
                 {
+                    let raw_f64_field = crate::type_analysis::scalar_replaced_field_is_raw_f64(
+                        ctx,
+                        object.as_ref(),
+                        property,
+                    );
+                    let numeric_store = raw_f64_field
+                        && is_numeric_expr(ctx, value)
+                        && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, value);
                     let val_double = lower_expr(ctx, value)?;
-                    ctx.block().store(DOUBLE, &val_double, &slot);
-                    let lowered = LoweredValue {
+                    let stored_value = if numeric_store {
+                        canonicalize_raw_f64_numeric_store_value(ctx.block(), &val_double)
+                    } else {
+                        val_double.clone()
+                    };
+                    ctx.block().store(DOUBLE, &stored_value, &slot);
+                    let lowered_js = LoweredValue {
                         semantic: SemanticKind::JsValue,
                         rep: NativeRep::JsValue,
                         llvm_ty: DOUBLE,
@@ -205,30 +230,61 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "ScalarObjectFieldSet",
                         Some(*id),
                         "scalar_object_field_store",
-                        &lowered,
+                        &lowered_js,
                         None,
                         None,
                         None,
                         None,
                         false,
                         false,
-                        vec![format!("field={}", property)],
+                        vec![
+                            format!("field={}", property),
+                            format!("raw_f64_field={}", raw_f64_field as u8),
+                        ],
                     );
+                    if numeric_store {
+                        let lowered_f64 = LoweredValue::f64(stored_value.clone());
+                        ctx.record_lowered_value_with_access_mode(
+                            "ScalarObjectFieldSet",
+                            Some(*id),
+                            "scalar_object_field_store.raw_f64",
+                            &lowered_f64,
+                            None,
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            vec![format!("field={}", property), "raw_f64_field=1".to_string()],
+                        );
+                    }
                     return Ok(val_double);
                 }
             }
             // Handle `this` during scalar-replaced constructor inlining:
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx
-                    .scalar_ctor_target
-                    .last()
-                    .and_then(|tid| ctx.scalar_replaced.get(tid))
-                {
-                    let maybe_slot = slot.get(property.as_str()).cloned();
+                if let Some(target_id) = ctx.scalar_ctor_target.last().copied() {
+                    let maybe_slot = ctx
+                        .scalar_replaced
+                        .get(&target_id)
+                        .and_then(|slots| slots.get(property.as_str()).cloned());
+                    let raw_f64_field = crate::type_analysis::scalar_replaced_field_is_raw_f64(
+                        ctx,
+                        object.as_ref(),
+                        property,
+                    );
+                    let numeric_store = raw_f64_field
+                        && is_numeric_expr(ctx, value)
+                        && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, value);
                     let val_double = lower_expr(ctx, value)?;
                     if let Some(slot) = maybe_slot {
-                        ctx.block().store(DOUBLE, &val_double, &slot);
-                        let lowered = LoweredValue {
+                        let stored_value = if numeric_store {
+                            canonicalize_raw_f64_numeric_store_value(ctx.block(), &val_double)
+                        } else {
+                            val_double.clone()
+                        };
+                        ctx.block().store(DOUBLE, &stored_value, &slot);
+                        let lowered_js = LoweredValue {
                             semantic: SemanticKind::JsValue,
                             rep: NativeRep::JsValue,
                             llvm_ty: DOUBLE,
@@ -236,17 +292,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         };
                         ctx.record_lowered_value_with_access_mode(
                             "ScalarThisFieldSet",
-                            None,
+                            Some(target_id),
                             "scalar_object_field_store",
-                            &lowered,
+                            &lowered_js,
                             None,
                             None,
                             None,
                             None,
                             false,
                             false,
-                            vec![format!("field={}", property)],
+                            vec![
+                                format!("field={}", property),
+                                format!("raw_f64_field={}", raw_f64_field as u8),
+                            ],
                         );
+                        if numeric_store {
+                            let lowered_f64 = LoweredValue::f64(stored_value.clone());
+                            ctx.record_lowered_value_with_access_mode(
+                                "ScalarThisFieldSet",
+                                Some(target_id),
+                                "scalar_object_field_store.raw_f64",
+                                &lowered_f64,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                vec![format!("field={}", property), "raw_f64_field=1".to_string()],
+                            );
+                        }
                     }
                     return Ok(val_double);
                 }
@@ -418,39 +493,48 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // as the array-store barrier elision.
                         let field_set_barrier_needed =
                             !expr_produces_non_pointer_bits_by_construction(ctx, value);
-                        let blk = ctx.block();
-                        let obj_ptr = blk.inttoptr(I64, &obj_handle);
-                        let header_skip = "24".to_string();
-                        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                        let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-                        if requires_raw_f64 {
-                            // Guarded raw-f64 slots are pointer-free by typed
-                            // shape descriptor; non-number writes miss the
-                            // guard and use the boxed setter fallback.
-                            // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
-                            // slots contain numbers only.
-                            blk.store(DOUBLE, &val_double, &field_ptr);
-                        } else {
-                            let field_addr = blk.ptrtoint(&field_ptr, I64);
-                            emit_jsvalue_slot_store_on_block(
-                                blk,
-                                &field_ptr,
-                                &val_double,
-                                &obj_handle,
-                                &field_idx_str,
-                                true,
-                                &obj_bits,
-                                &field_addr,
-                                field_set_barrier_needed,
-                            );
-                        }
-                        blk.br(&merge_label);
-                        if requires_raw_f64 {
+                        let raw_stored_value = {
+                            let blk = ctx.block();
+                            let obj_ptr = blk.inttoptr(I64, &obj_handle);
+                            let header_skip = "24".to_string();
+                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
+                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+                            let raw_stored_value = if requires_raw_f64 {
+                                // Guarded raw-f64 slots are pointer-free by typed
+                                // shape descriptor; non-number writes miss the
+                                // guard and use the boxed setter fallback.
+                                // GC_STORE_AUDIT(POINTER_FREE): typed raw-f64 class
+                                // slots contain numbers only.
+                                let numeric_value =
+                                    canonicalize_raw_f64_numeric_store_value(blk, &val_double);
+                                blk.store(DOUBLE, &numeric_value, &field_ptr);
+                                Some(numeric_value)
+                            } else {
+                                // #5334 lever D: skip the barrier when the value
+                                // is a non-pointer by construction.
+                                let field_addr = blk.ptrtoint(&field_ptr, I64);
+                                emit_jsvalue_slot_store_on_block(
+                                    blk,
+                                    &field_ptr,
+                                    &val_double,
+                                    &obj_handle,
+                                    &field_idx_str,
+                                    true,
+                                    &obj_bits,
+                                    &field_addr,
+                                    field_set_barrier_needed,
+                                );
+                                None
+                            };
+                            blk.br(&merge_label);
+                            raw_stored_value
+                        };
+                        if let Some(numeric_value) = raw_stored_value {
                             let stored = LoweredValue {
                                 semantic: SemanticKind::JsNumber,
                                 rep: NativeRep::F64,
                                 llvm_ty: DOUBLE,
-                                value: val_double.clone(),
+                                value: numeric_value.clone(),
                             };
                             ctx.record_lowered_value_with_access_mode_and_facts(
                                 "ClassFieldSet",

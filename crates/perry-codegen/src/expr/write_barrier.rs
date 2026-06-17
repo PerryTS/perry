@@ -8,6 +8,7 @@ use perry_hir::Expr;
 use super::{lower_expr, FnCtx};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
+use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I32, I64};
 
 /// Gen-GC Phase C2 helper: emit a write barrier after heap-store sites
@@ -20,6 +21,19 @@ pub(crate) fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_b
     if !crate::codegen::write_barriers_enabled() {
         return;
     }
+    let child_bits_value = LoweredValue::js_value_bits(child_bits.to_string());
+    ctx.record_lowered_value(
+        "WriteBarrier",
+        None,
+        "write_barrier.child_bits",
+        &child_bits_value,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
     ctx.block()
         .call_void("js_write_barrier", &[(I64, parent_bits), (I64, child_bits)]);
 }

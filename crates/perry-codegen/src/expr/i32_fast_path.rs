@@ -5,7 +5,9 @@ use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
 use super::{lower_expr, unbox_to_i64, FlatConstInfo, FnCtx};
-use crate::native_value::{ExpectedNativeRep, LoweredValue};
+use crate::native_value::{
+    materialize_js_value_bits, ExpectedNativeRep, LoweredValue, MaterializationReason,
+};
 use crate::types::{DOUBLE, F32, I32, I64};
 
 /// Returns true if `e` is guaranteed to produce a finite double value
@@ -358,6 +360,7 @@ pub(crate) fn lower_expr_native(
     expected: ExpectedNativeRep,
 ) -> Result<LoweredValue> {
     match expected {
+        ExpectedNativeRep::JsValueBits => lower_expr_native_js_value_bits(ctx, e),
         ExpectedNativeRep::I32 => lower_expr_native_i32(ctx, e),
         ExpectedNativeRep::I64 => lower_expr_native_i64(ctx, e),
         ExpectedNativeRep::U32 => lower_expr_native_u32(ctx, e),
@@ -412,6 +415,10 @@ fn buffer_len_lowered(value: String) -> LoweredValue {
 
 fn handle_id_lowered(value: String) -> LoweredValue {
     LoweredValue::handle_id(value)
+}
+
+fn js_value_bits_lowered(value: String) -> LoweredValue {
+    LoweredValue::js_value_bits(value)
 }
 
 fn native_expr_kind(e: &Expr) -> &'static str {
@@ -544,6 +551,29 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         native_expr_kind(e),
         None,
         "lower_expr_native_i32",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
+fn lower_expr_native_js_value_bits(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    let value = lower_expr(ctx, e)?;
+    let bits = materialize_js_value_bits(
+        ctx,
+        LoweredValue::js_value(value),
+        MaterializationReason::FunctionAbi,
+    );
+    let lowered = js_value_bits_lowered(bits);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_js_value_bits",
         &lowered,
         None,
         None,
