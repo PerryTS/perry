@@ -82,8 +82,7 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
 /// `strip_comments_and_strings` blanks the quoted key.
 fn has_bracket_cjs_export(source: &str) -> bool {
     // `module['exports'] = …` / `module["exports"] = …` (default export).
-    let module_default =
-        regex::Regex::new(r#"\bmodule\[\s*['"]exports['"]\s*\]\s*="#).unwrap();
+    let module_default = regex::Regex::new(r#"\bmodule\[\s*['"]exports['"]\s*\]\s*="#).unwrap();
     // `exports['name'] = …` / `module.exports['name'] = …` (named export).
     let named =
         regex::Regex::new(r#"\bexports\[\s*['"][A-Za-z_$][A-Za-z0-9_$]*['"]\s*\]\s*="#).unwrap();

@@ -254,9 +254,7 @@ module.exports = inner;
     #[test]
     fn issue_5275_detects_bracket_module_exports() {
         // @colors/colors/lib/custom/trap.js shape: bracket default export.
-        assert!(is_commonjs(
-            "module['exports'] = function runTheTrap() {};"
-        ));
+        assert!(is_commonjs("module['exports'] = function runTheTrap() {};"));
         assert!(is_commonjs(
             "module[\"exports\"] = function runTheTrap() {};"
         ));
