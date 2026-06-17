@@ -437,4 +437,52 @@ mod tests {
         // A position inside line 1 → line 1.
         assert_eq!(p.call_location_for(2), Some(("foo.ts", 1)));
     }
+
+    // ───────────── #5247 CJS-wrap coordinate skew correction ─────────────
+    // For a CJS-wrapped module `src` is the WRAPPED text and offsets are in
+    // wrapped coords. `set_debug_source_line_offset(N)` makes `call_location_for`
+    // report `wrapped_line - N` so the location is in original-source coords.
+
+    #[test]
+    fn cjs_wrap_offset_subtracts_prefix_lines() {
+        // Wrapped: 3 preamble lines, then the original body's two lines.
+        //   line1: import _req_0 ...
+        //   line2: const _cjs = (function() {
+        //   line3:   /* preamble */
+        //   line4:   foo();   <- original body line 1
+        //   line5:   bar();   <- original body line 2
+        let src = "import _req_0;\nconst _cjs = (function() {\n  // preamble\n  foo();\n  bar();\n";
+        let mut p = pool_with_src(src);
+        p.set_debug_source_line_offset(3);
+        // 'f' of foo() is on wrapped line 4 → original line 1.
+        let off_foo = (src.find("foo();").unwrap() + 1) as u32;
+        assert_eq!(p.call_location_for(off_foo), Some(("foo.ts", 1)));
+        // 'b' of bar() is on wrapped line 5 → original line 2.
+        let off_bar = (src.find("bar();").unwrap() + 1) as u32;
+        assert_eq!(p.call_location_for(off_bar), Some(("foo.ts", 2)));
+    }
+
+    #[test]
+    fn cjs_wrap_offset_inside_preamble_is_none() {
+        // An offset whose wrapped line is at/inside the prefix has no original
+        // counterpart → no location (rather than a bogus negative/zero line).
+        let src = "import _req_0;\nconst _cjs = (function() {\n  // preamble\n  foo();\n";
+        let mut p = pool_with_src(src);
+        p.set_debug_source_line_offset(3);
+        // Offset on wrapped line 1 (the injected import) → None.
+        assert_eq!(p.call_location_for(3), None);
+        // Offset on wrapped line 3 (preamble, == prefix count) → None.
+        let off_preamble = (src.find("// preamble").unwrap() + 1) as u32;
+        assert_eq!(p.call_location_for(off_preamble), None);
+    }
+
+    #[test]
+    fn zero_offset_leaves_lines_unchanged() {
+        // Non-wrapped module (offset 0): line resolution is the raw wrapped line.
+        let src = "foo();\nbar();\n";
+        let mut p = pool_with_src(src);
+        p.set_debug_source_line_offset(0);
+        let off_bar = (src.find("bar();").unwrap() + 1) as u32;
+        assert_eq!(p.call_location_for(off_bar), Some(("foo.ts", 2)));
+    }
 }

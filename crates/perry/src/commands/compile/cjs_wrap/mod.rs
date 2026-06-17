@@ -74,9 +74,37 @@ mod tests {
         extract_require_aliases_with_ranges, extract_require_specifiers,
     };
     use super::hoist_classes::{source_has_top_level_return, top_level_class_names};
-    use super::wrap::{wrap_commonjs, wrap_commonjs_for_target};
+    use super::wrap::{wrap_commonjs, wrap_commonjs_for_target, wrap_commonjs_with_body_offset};
     use std::fs;
     use std::path::PathBuf;
+
+    // #5247: the wrapped output must report where the ORIGINAL body begins, and
+    // because blanking/hoisting preserve newlines, the prefix line count lets a
+    // wrapped body line map back to its original-source line. This is the unit
+    // that backs the `--debug-symbols` CJS-wrap coordinate correction.
+    #[test]
+    fn cjs_wrap_body_offset_maps_back_to_original_line() {
+        // Original body: `function f(){...}` on line 1, `module.exports = f`
+        // on line 3. A throw inside f (wrapped line L) must map to original
+        // line `L - prefix_line_count`.
+        let original = "function f() {\n  return new Nope();\n}\nmodule.exports = f;\n";
+        let path = PathBuf::from("/tmp/x/index.js");
+        let (wrapped, body_off) = wrap_commonjs_with_body_offset(original, &path, None);
+        let body_off = body_off.expect("body should be locatable in wrapped output");
+        // Prefix line count = newlines before the body in the wrapped output.
+        let prefix_lines = wrapped.as_bytes()[..body_off]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
+        // The `return new Nope();` line is original line 2. Find its wrapped
+        // line and confirm subtracting the prefix recovers line 2.
+        let needle_off = wrapped.find("return new Nope();").unwrap();
+        let wrapped_line = 1 + wrapped.as_bytes()[..needle_off]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
+        assert_eq!(wrapped_line - prefix_lines, 2);
+    }
 
     #[test]
     fn detects_module_exports_assignment() {
