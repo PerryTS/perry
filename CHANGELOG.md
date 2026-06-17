@@ -1,3 +1,54 @@
+## v0.5.1184 — fix(compile): Windows global `fetch` links the real stdlib impl (#5000); `notificationSend` links the UI lib (#5283)
+
+Two Windows-only linker/dispatch bugs.
+
+**#5000 — global `fetch` ran no-op stubs instead of the real perry-stdlib
+implementation.** On Windows the standalone `perry_runtime.lib` is linked
+*first* so its canonical `js_*` symbols win lld-link's `/FORCE:MULTIPLE`
+first-definition rule over the (possibly stale) perry-runtime copies bundled
+inside `perry_stdlib.lib` / `perry_ui_windows.lib` (see #880). But the
+standalone runtime is built **without** the `stdlib` Cargo feature, so it also
+defines the `#[cfg(not(feature = "stdlib"))]` no-op `stdlib_stubs` symbols
+(`js_fetch_with_options`, `js_stdlib_init_dispatch`, `js_stdlib_process_pending`,
+the `js_ws_*` WebSocket family, the `js_readline_*` family). Linked first, those
+stubs shadowed perry-stdlib's real implementations: `await fetch(...)` resolved
+to a no-op, `response.json()` failed with `Error: Invalid response handle`, and
+the binary printed `[perry] warning: js_fetch_with_options is a no-op stub …`.
+The bug only reproduced with the **prebuilt distribution** (winget/installer);
+the local auto-optimize rebuild compiles perry-runtime + perry-stdlib in one
+cargo invocation, where feature unification turns the `stdlib` feature on for the
+standalone runtime too, so it carries no stubs.
+
+Fix: a new `localize_stdlib_stub_symbols_for_windows` link step
+(`crates/perry/src/commands/compile/strip_dedup.rs`) rewrites a temp copy of the
+runtime archive on Windows, removing each stub symbol *that perry-stdlib also
+defines* from its member's COFF symbol table via `llvm-objcopy --strip-symbol`
+(COFF rejects the ELF/Mach-O `--localize-symbol`/`--weaken-symbol`, but
+`--strip-symbol` is supported). lld-link then resolves those references from
+`perry_stdlib.lib` and `/OPT:REF` drops the now-unreferenced stub bodies; every
+other runtime symbol keeps its first-definition win. Only the few affected
+members are spliced back with `llvm-ar r` (extracting and rebuilding the whole
+hundreds-of-members archive overflows the Windows command-line limit). The
+stdlib cross-check guarantees no reference is left unresolved, and a missing
+LLVM tool or any failed sub-step falls back to the untouched runtime archive
+(pre-fix behavior), so the build never regresses. The runtime is scanned first
+and the step early-returns before the stdlib scan when no stub is present (the
+auto-optimize case). Verified end-to-end: a `fetch("https://example.com/")`
+program now prints `status=200` with no stub warnings.
+
+**#5283 — `notificationSend` did nothing on Windows.**
+`perry_system_notification_send` is implemented in the platform UI crates
+(`perry-ui-windows` MessageBox, `perry-ui-macos` `UNUserNotificationCenter`, …),
+not in perry-stdlib, but importing `notificationSend` from `perry/system` did not
+flip `ctx.needs_ui`, so a console program that only used notifications never
+pulled the UI lib in and the symbol had no real backing. Added the
+`notification*` methods (`notificationSend`, `notificationSchedule`,
+`notificationCancel`, `notificationRegisterRemote`, `notificationOnReceive`,
+`notificationOnBackgroundReceive`, `notificationOnTap`) to the `perry/system`
+UI-trigger list in `collect_modules.rs`, alongside the existing audio /
+geolocation / image-picker triggers, so the platform UI lib is linked and
+`notificationSend` has a real implementation.
+
 ## v0.5.1183 — feat(hir): ambient `require` in compiled compilePackages modules — Tier 1 of #5389 (fixes #5373)
 
 A bare or **computed** `require(expr)` inside a `compilePackages`-compiled module

@@ -535,8 +535,25 @@ pub(super) fn build_and_run_link(
                 // runtime_lib is the canonical / auto-optimize-fresh
                 // source; making it authoritative on Windows matches every
                 // other platform (all of which already link runtime_lib).
+                //
+                // #5000: but the standalone runtime is built WITHOUT the
+                // `stdlib` feature, so it also defines the no-op
+                // `stdlib_stubs` symbols (js_fetch_with_options,
+                // js_stdlib_init_dispatch, js_ws_*, js_readline_*). Linked
+                // first, those stubs shadow perry-stdlib's REAL fetch /
+                // WebSocket / readline implementations — `fetch()` then
+                // silently no-ops and `response.json()` fails with "Invalid
+                // response handle". Localize exactly those stub symbols in a
+                // copy of the runtime archive so they no longer satisfy
+                // user-code references; lld-link resolves them from
+                // perry_stdlib.lib instead, while every other runtime symbol
+                // keeps its first-definition win. Non-fatal: falls back to the
+                // untouched runtime_lib if the LLVM archive tools are missing.
                 if is_windows {
-                    cmd.arg(runtime_lib);
+                    let runtime_for_link = super::localize_stdlib_stub_symbols_for_windows(
+                        runtime_lib, stdlib,
+                    );
+                    cmd.arg(&runtime_for_link);
                 }
                 if prefer_well_known_before_stdlib {
                     for wk in &well_known_libs {

@@ -1077,7 +1077,23 @@ fn collect_module_one(
                 let triggers_ui = import.specifiers.iter().any(|s| match s {
                     perry_hir::ImportSpecifier::Named { imported, .. } => matches!(
                         imported.as_str(),
-                        "audioStart"
+                        // Notifications (#5283): `perry_system_notification_*`
+                        // is implemented in the platform UI crates
+                        // (perry-ui-windows MessageBox/toast, perry-ui-macos
+                        // UNUserNotificationCenter, …), NOT in perry-stdlib. A
+                        // console program that only imports `notificationSend`
+                        // left the symbol with no real backing because nothing
+                        // pulled the UI lib in — `notificationSend` then did
+                        // nothing on Windows. Linking the UI lib for any
+                        // notification* import gives it a real implementation.
+                        "notificationSend"
+                            | "notificationSchedule"
+                            | "notificationCancel"
+                            | "notificationRegisterRemote"
+                            | "notificationOnReceive"
+                            | "notificationOnBackgroundReceive"
+                            | "notificationOnTap"
+                            | "audioStart"
                             | "audioStop"
                             | "audioGetLevel"
                             | "audioGetPeak"
