@@ -600,6 +600,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // ObjectHeader, and the outer PropertyGet routes through
             // `js_object_get_field_by_name`'s NATIVE_MODULE_CLASS_ID arm.
             if let Expr::NativeModuleRef(module_name) = object.as_ref() {
+                // Devirt: register this module's runtime dispatch bucket before
+                // the namespace value is produced, so later method calls on it
+                // route to the real handlers. The CJS-`require` shim lowers
+                // `require("path")` to `PropertyGet { NativeModuleRef("path"),
+                // "default" }` (NOT a bare NativeModuleRef), so the bare-ref
+                // install in `static_field_meta` never fired for the
+                // require-then-`.default.join()` shape (Next.js' `_path.default
+                // .join(...)` returned undefined — the dispatcher was unregistered
+                // and `nm_dispatch_lookup` fell to the `None`/undefined arm).
+                // Emitting it here mirrors the bare-ref path and keeps the
+                // handlers alive against the auto-optimize dead-strip.
+                if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
+                    ctx.block().call_void(install_sym, &[]);
+                }
                 if module_name == "process" && property == "version" {
                     let blk = ctx.block();
                     let handle = blk.call(I64, "js_process_version", &[]);
