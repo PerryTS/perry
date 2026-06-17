@@ -112,8 +112,20 @@ jobs:
     timeout-minutes: 30
     env:
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: "2G"
+      # sccache on a LOCAL DISK cache, persisted as a single tarball via
+      # actions/cache (see the "Cache sccache objects" step) — NOT the GitHub
+      # Actions cache backend (SCCACHE_GHA_ENABLED). The GHA backend stores one
+      # cache object per compilation unit; GitHub's cache service throttled /
+      # LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k
+      # objects (≈35 min of write time) yet the next run got ~0% Rust hits
+      # (measured: 3 hits / 3209 misses, 613 write errors) — i.e. every run
+      # recompiled the dependency graph cold. A single tarball'd disk cache
+      # restores in one step and gives real cross-run hit rates. Note
+      # SCCACHE_CACHE_SIZE is honoured by the disk backend (it was a silent
+      # no-op under the GHA backend, which is why the old "2G" never mattered).
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
@@ -121,8 +133,22 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Start sccache
+      - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      # Persist the sccache disk cache across runs. The github.job +
+      # github.run_id key makes every run (including PRs) save its own fresh
+      # entry — distinct per job so the three sccache jobs don't collide on
+      # save — while the shared prefix restore-keys pull the most recent prior
+      # cache from ANY of them. The object cache therefore warms continuously
+      # and cross-pollinates instead of starting cold each run.
+      - name: Cache sccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -175,13 +201,17 @@ jobs:
     # don't exercise any platform behavior; they're pure logic +
     # codegen.
     runs-on: ubuntu-latest
-    # Was unbounded (the workflow default of 360 min). This gate legitimately
-    # runs ~45-50 min (per-package serial build+prune loop below, plus the big
-    # stdlib links), and a cold sccache run can be a bit slower — so the bound
-    # is set well ABOVE the real runtime: it exists only to cut a true hang
-    # (e.g. a flaky link SIGBUS retry storm) at ~2 h instead of 6 h, never to
-    # fail a normal slow run.
-    timeout-minutes: 120
+    # The per-package serial build+prune loop below (plus the big stdlib links)
+    # takes ~50-60 min with a WARM sccache disk cache. A fully cold cache
+    # (recompiling the whole dependency graph) measured ~90-103 min, and PRs
+    # that invalidate perry-runtime/perry-codegen previously exceeded the old
+    # 120-min bound entirely. The bound is 180 to (a) leave headroom while the
+    # disk cache warms after the sccache-backend fix, and (b) still cut a true
+    # hang (e.g. a flaky link SIGBUS retry storm). Once warm hit rates are
+    # confirmed in CI this can come back down. NOTE: the old "~45-50 min" figure
+    # predated the sccache GHA-backend rot — it was never accurate once that
+    # cache stopped delivering Rust hits.
+    timeout-minutes: 180
     # sccache (compiler-level cache, shared across ALL branches/jobs via the
     # GitHub Actions cache backend) on top of Swatinem/rust-cache (target/ +
     # registry). rust-cache only writes on main (save-if below), so PRs can't
@@ -193,8 +223,20 @@ jobs:
     # loop below).
     env:
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: "2G"
+      # sccache on a LOCAL DISK cache, persisted as a single tarball via
+      # actions/cache (see the "Cache sccache objects" step) — NOT the GitHub
+      # Actions cache backend (SCCACHE_GHA_ENABLED). The GHA backend stores one
+      # cache object per compilation unit; GitHub's cache service throttled /
+      # LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k
+      # objects (≈35 min of write time) yet the next run got ~0% Rust hits
+      # (measured: 3 hits / 3209 misses, 613 write errors) — i.e. every run
+      # recompiled the dependency graph cold. A single tarball'd disk cache
+      # restores in one step and gives real cross-run hit rates. Note
+      # SCCACHE_CACHE_SIZE is honoured by the disk backend (it was a silent
+      # no-op under the GHA backend, which is why the old "2G" never mattered).
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
@@ -202,8 +244,22 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Start sccache
+      - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      # Persist the sccache disk cache across runs. The github.job +
+      # github.run_id key makes every run (including PRs) save its own fresh
+      # entry — distinct per job so the three sccache jobs don't collide on
+      # save — while the shared prefix restore-keys pull the most recent prior
+      # cache from ANY of them. The object cache therefore warms continuously
+      # and cross-pollinates instead of starting cold each run.
+      - name: Cache sccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -348,8 +404,20 @@ jobs:
     timeout-minutes: 45
     env:
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_CACHE_SIZE: "2G"
+      # sccache on a LOCAL DISK cache, persisted as a single tarball via
+      # actions/cache (see the "Cache sccache objects" step) — NOT the GitHub
+      # Actions cache backend (SCCACHE_GHA_ENABLED). The GHA backend stores one
+      # cache object per compilation unit; GitHub's cache service throttled /
+      # LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k
+      # objects (≈35 min of write time) yet the next run got ~0% Rust hits
+      # (measured: 3 hits / 3209 misses, 613 write errors) — i.e. every run
+      # recompiled the dependency graph cold. A single tarball'd disk cache
+      # restores in one step and gives real cross-run hit rates. Note
+      # SCCACHE_CACHE_SIZE is honoured by the disk backend (it was a silent
+      # no-op under the GHA backend, which is why the old "2G" never mattered).
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v6
@@ -357,8 +425,22 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Start sccache
+      - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.10
+
+      # Persist the sccache disk cache across runs. The github.job +
+      # github.run_id key makes every run (including PRs) save its own fresh
+      # entry — distinct per job so the three sccache jobs don't collide on
+      # save — while the shared prefix restore-keys pull the most recent prior
+      # cache from ANY of them. The object cache therefore warms continuously
+      # and cross-pollinates instead of starting cold each run.
+      - name: Cache sccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
 
       - uses: Swatinem/rust-cache@v2
         with:

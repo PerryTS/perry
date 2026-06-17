@@ -1,3 +1,32 @@
+## v0.5.1179 — ci: move sccache off the GHA backend onto a persisted disk cache (fix cargo-test timeouts)
+
+The `cargo-test` gate was timing out at its 120-min cap on PRs that touch
+`perry-runtime`/`perry-codegen`, and even successful runs were taking 90-103 min
+(not the "~45-50 min" the stale comment claimed). Root cause: sccache was using
+the GitHub Actions cache backend (`SCCACHE_GHA_ENABLED=true`), which stores one
+cache object per compilation unit. GitHub's cache service throttled and
+LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k objects
+(≈35 min of write time) yet the next run got essentially **zero** Rust cache
+hits (measured on a timed-out run: 3 hits / 3209 misses, 613 write errors). Every
+run effectively recompiled the whole dependency graph cold. `SCCACHE_CACHE_SIZE`
+was a silent no-op under the GHA backend, so the old `2G` never mattered.
+
+Changes (all three sccache jobs — `cargo-test`, `api-docs-drift`,
+`compiler-output-regression` — which compile overlapping crate graphs):
+
+- Switch sccache to a **local disk cache** (`SCCACHE_DIR`, `SCCACHE_GHA_ENABLED=false`,
+  `SCCACHE_CACHE_SIZE=12G`) persisted as a single tarball via `actions/cache@v4`.
+  The cache key is `sccache-<os>-perry-<job>-<run_id>` with a shared
+  `sccache-<os>-perry-` restore-keys prefix, so every run (PRs included) saves
+  its own entry while restoring the most recent one from any of the three jobs —
+  the object cache warms continuously and cross-pollinates instead of starting
+  cold each run.
+- Raise the `cargo-test` `timeout-minutes` 120 → 180 as headroom while the disk
+  cache warms (cold runs are ~90-103 min); can be lowered once warm hit rates are
+  confirmed.
+
+No production code changes.
+
 ## v0.5.1178 — perf(codegen): outline per-new-site inline allocator (smaller IR + faster)
 
 `new ClassName(...)` previously emitted the full object-allocation prologue
