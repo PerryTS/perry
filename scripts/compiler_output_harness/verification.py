@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from .analyzers import (
@@ -186,6 +187,10 @@ def _text_check_passes(text: str, check: dict[str, Any]) -> bool:
         if not function_text:
             return False
         text = function_text
+    if "equals" in check and text != str(check["equals"]):
+        return False
+    if "line_equals" in check and str(check["line_equals"]) not in text.splitlines():
+        return False
     if "contains" in check and check["contains"] not in text:
         return False
     if "contains_all" in check and not all(part in text for part in check["contains_all"]):
@@ -203,6 +208,20 @@ def _text_check_passes(text: str, check: dict[str, Any]) -> bool:
     if "regex_none" in check and any(re.search(pattern, text) for pattern in check["regex_none"]):
         return False
     return True
+
+
+def _benchmark_run_stdout(run: dict[str, Any]) -> str:
+    stdout_path = run.get("stdout_path")
+    if stdout_path:
+        try:
+            return Path(stdout_path).read_text(encoding="utf-8")
+        except OSError:
+            pass
+    first = str(run.get("stdout_first") or "")
+    last = str(run.get("stdout_last") or "")
+    if last and last != first:
+        return first + last
+    return first
 
 
 def _function_text_containing(text: str, fragment: str) -> str:
@@ -1197,19 +1216,38 @@ def verify_artifacts(
         )
 
     if benchmark is not None:
+        benchmark_runs = list(benchmark.get("runs", []) or [])
         add(
             "benchmark_exit_zero",
-            all(run.get("exit_code") == 0 for run in benchmark.get("runs", [])),
+            bool(benchmark_runs)
+            and all(run.get("exit_code") == 0 for run in benchmark_runs),
             "all benchmark runs exited zero",
         )
-        benchmark_stdout = "\n".join(
-            str(run.get("stdout_first") or "") for run in benchmark.get("runs", [])
-        )
-        for check in workload_info.get("stdout_checks", []) or []:
+    else:
+        benchmark_runs = []
+
+    stdout_checks = workload_info.get("stdout_checks", []) or []
+    if stdout_checks and not benchmark_runs:
+        for check in stdout_checks:
             add(
                 check["name"],
-                _text_check_passes(benchmark_stdout, check),
-                check.get("detail", check["name"]),
+                False,
+                f"{check.get('detail', check['name'])}: no benchmark stdout captured",
+            )
+    if benchmark_runs:
+        for check in stdout_checks:
+            failed_runs = [
+                int(run.get("run", index))
+                for index, run in enumerate(benchmark_runs, start=1)
+                if not _text_check_passes(_benchmark_run_stdout(run), check)
+            ]
+            add(
+                check["name"],
+                not failed_runs,
+                (
+                    f"{check.get('detail', check['name'])}: "
+                    f"checked_runs={len(benchmark_runs)} failed_runs={failed_runs}"
+                ),
             )
 
     for budget in runtime_budget_results(workload, runtime_summary, workloads):
