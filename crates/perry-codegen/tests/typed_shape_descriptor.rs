@@ -110,6 +110,7 @@ fn module_with_new(class: Class) -> Module {
                 class_name,
                 args: Vec::new(),
                 type_args: Vec::new(),
+                byte_offset: 0,
             }))],
             is_async: false,
             is_generator: false,

@@ -720,6 +720,7 @@ mod tests {
             class_name: name.to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
+            byte_offset: 0,
         })
     }
 
