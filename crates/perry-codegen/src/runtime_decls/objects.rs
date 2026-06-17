@@ -83,6 +83,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_typed_feedback_record_guard_fail", VOID, &[I64]);
     module.declare_function("js_typed_feedback_record_fallback_call", VOID, &[I64]);
     module.declare_function(
+        "js_typed_feedback_record_array_guard_fast_passes",
+        VOID,
+        &[I64, I64],
+    );
+    module.declare_function(
         "js_typed_feedback_observe_property_get",
         VOID,
         &[I64, I64, I64],

@@ -93,6 +93,7 @@ pub(crate) use i32_fast_path::{
     try_flat_const_2d_int, try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
+pub(crate) use index_get::lower_guarded_array_index_get;
 pub(crate) use nanbox_inline::{
     i32_bool_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline, nanbox_pointer_inline_pub,
     nanbox_string_inline,
@@ -598,6 +599,12 @@ pub(crate) struct FnCtx<'a> {
     /// declines to do because the IndexSet slow path is an external
     /// call that LLVM can't prove won't modify the length).
     pub cached_lengths: std::collections::HashMap<u32, String>,
+
+    /// Loop-local replacements for an invariant numeric array read that was
+    /// guarded once in a loop prebody. Keyed as `(array_local_id,
+    /// index_local_id)` and active only while lowering the loop body whose
+    /// prebody filled the slot.
+    pub hoisted_array_index_gets: std::collections::HashMap<(u32, u32), String>,
 
     /// `(counter_local_id, array_local_id)` pairs that are guaranteed
     /// inbounds inside the current loop nest — populated by

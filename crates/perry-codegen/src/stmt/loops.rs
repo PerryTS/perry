@@ -2,7 +2,10 @@
 
 use super::*;
 
-use crate::expr::{nanbox_pointer_inline, BoundedIndexPair, IntRangeFact};
+use crate::expr::{
+    expr_has_numeric_pointer_free_array_layout, lower_guarded_array_index_get,
+    nanbox_pointer_inline, BoundedIndexPair, IntRangeFact,
+};
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
 use crate::native_value::{BoundedBufferIndex, BoundsProof, BoundsState, LengthSource};
@@ -207,6 +210,13 @@ fn lower_numeric_bulk_fill_loop(ctx: &mut FnCtx<'_>, matched: NumericBulkFillLoo
         ctx.block().store(I32, &bound_i32, &i32_slot);
     }
     Ok(true)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InvariantArrayIndexGetHoist {
+    array_local_id: u32,
+    index_local_id: u32,
+    inner_counter_local_id: u32,
 }
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
@@ -554,15 +564,53 @@ pub(crate) fn lower_for(
         ctx.int_range_facts.push(fact);
     }
 
+    let invariant_array_get_hoist: Option<InvariantArrayIndexGetHoist> =
+        if let (Some((arr_id, inner_counter_id, op)), Some(_)) =
+            (hoist_classification, i32_length_slot.as_ref())
+        {
+            if matches!(op, perry_hir::CompareOp::Lt)
+                && hoisted_index_bounds_are_safe
+                && ctx.i32_counter_slots.contains_key(&inner_counter_id)
+            {
+                classify_invariant_numeric_array_index_get_hoist(
+                    ctx,
+                    arr_id,
+                    inner_counter_id,
+                    update,
+                    body,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    let invariant_array_get_slot: Option<String> = invariant_array_get_hoist
+        .as_ref()
+        .map(|_| ctx.func.alloca_entry(DOUBLE));
+
     let cond_idx = ctx.new_block("for.cond");
+    let prebody_idx = if invariant_array_get_hoist.is_some() {
+        Some(ctx.new_block("for.prebody"))
+    } else {
+        None
+    };
     let body_idx = ctx.new_block("for.body");
     let update_idx = ctx.new_block("for.update");
+    let backedge_cond_idx = if invariant_array_get_hoist.is_some() {
+        Some(ctx.new_block("for.cond.backedge"))
+    } else {
+        None
+    };
     let exit_idx = ctx.new_block("for.exit");
 
     let cond_label = ctx.block_label(cond_idx);
+    let prebody_label = prebody_idx.map(|idx| ctx.block_label(idx));
     let body_label = ctx.block_label(body_idx);
     let update_label = ctx.block_label(update_idx);
+    let backedge_cond_label = backedge_cond_idx.map(|idx| ctx.block_label(idx));
     let exit_label = ctx.block_label(exit_idx);
+    let cond_true_label = prebody_label.as_ref().unwrap_or(&body_label);
 
     // Branch from the block holding the init into the cond block.
     ctx.block().br(&cond_label);
@@ -581,7 +629,7 @@ pub(crate) fn lower_for(
                 perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &len),
                 _ => ctx.block().icmp_slt(I32, &ctr, &len),
             };
-            ctx.block().cond_br(&cmp, &body_label, &exit_label);
+            ctx.block().cond_br(&cmp, cond_true_label, &exit_label);
             true
         } else {
             false
@@ -598,7 +646,7 @@ pub(crate) fn lower_for(
                 perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
                 _ => ctx.block().icmp_slt(I32, &ctr, &bound),
             };
-            ctx.block().cond_br(&cmp, &body_label, &exit_label);
+            ctx.block().cond_br(&cmp, cond_true_label, &exit_label);
             true
         } else {
             false
@@ -648,11 +696,11 @@ pub(crate) fn lower_for(
         if let Some(cond_expr) = condition {
             let cv = lower_expr(ctx, cond_expr)?;
             let i1 = lower_truthy(ctx, &cv, cond_expr);
-            ctx.block().cond_br(&i1, &body_label, &exit_label);
+            ctx.block().cond_br(&i1, cond_true_label, &exit_label);
         } else {
             // `for (;;)` — unconditional jump into the body. May be an
             // infinite loop unless the body contains a `break`.
-            ctx.block().br(&body_label);
+            ctx.block().br(cond_true_label);
         }
     }
 
@@ -675,6 +723,25 @@ pub(crate) fn lower_for(
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
+    if let (Some(pre_idx), Some(hoist), Some(slot)) = (
+        prebody_idx,
+        invariant_array_get_hoist,
+        invariant_array_get_slot.as_ref(),
+    ) {
+        ctx.current_block = pre_idx;
+        let value = emit_invariant_numeric_array_index_get_hoist(
+            ctx,
+            hoist,
+            i32_length_slot
+                .as_ref()
+                .expect("invariant array get hoist requires an i32 length slot"),
+        )?;
+        ctx.block().store(DOUBLE, &value, slot);
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&body_label);
+        }
+    }
+
     // Body block.
     ctx.current_block = body_idx;
     if let Some(cond) = condition {
@@ -683,7 +750,26 @@ pub(crate) fn lower_for(
         guarded.retain(|fact| loop_counter_bounds_are_safe(ctx, fact.index_local_id, update, body));
         ctx.guarded_buffer_index_pairs.extend(guarded);
     }
-    lower_stmts(ctx, body)?;
+    let hoisted_replacement = if let (Some(hoist), Some(slot)) =
+        (invariant_array_get_hoist, invariant_array_get_slot.as_ref())
+    {
+        Some((
+            (hoist.array_local_id, hoist.index_local_id),
+            ctx.hoisted_array_index_gets
+                .insert((hoist.array_local_id, hoist.index_local_id), slot.clone()),
+        ))
+    } else {
+        None
+    };
+    let lower_result = lower_stmts(ctx, body);
+    if let Some((key, previous)) = hoisted_replacement {
+        if let Some(previous) = previous {
+            ctx.hoisted_array_index_gets.insert(key, previous);
+        } else {
+            ctx.hoisted_array_index_gets.remove(&key);
+        }
+    }
+    lower_result?;
     clear_loop_body_shadow_slots(ctx, body);
     // Issue #74: insert an empty `asm sideeffect` in bodies whose
     // statements are all LLVM-pure (local-only arithmetic, no calls,
@@ -706,7 +792,32 @@ pub(crate) fn lower_for(
         let _ = lower_expr(ctx, update_expr)?;
     }
     if !ctx.block().is_terminated() {
-        ctx.block().br(&cond_label);
+        ctx.block()
+            .br(backedge_cond_label.as_ref().unwrap_or(&cond_label));
+    }
+
+    if let Some(backedge_idx) = backedge_cond_idx {
+        ctx.current_block = backedge_idx;
+        if let (Some((_, counter_id, op)), Some(ref len_i32_slot)) =
+            (hoist_classification, &i32_length_slot)
+        {
+            if !emit_i32_length_loop_condition(
+                ctx,
+                counter_id,
+                op,
+                len_i32_slot,
+                &body_label,
+                &exit_label,
+            ) {
+                return Err(anyhow::anyhow!(
+                    "invariant array get hoist missing backedge i32 condition"
+                ));
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "invariant array get hoist missing backedge condition inputs"
+            ));
+        }
     }
     ctx.active_region_id = previous_region_id;
 
@@ -765,6 +876,207 @@ pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
         return;
     }
     emit_shadow_slot_clears(ctx, &slots);
+}
+
+fn emit_invariant_numeric_array_index_get_hoist(
+    ctx: &mut FnCtx<'_>,
+    hoist: InvariantArrayIndexGetHoist,
+    len_i32_slot: &str,
+) -> Result<String> {
+    let arr_expr = perry_hir::Expr::LocalGet(hoist.array_local_id);
+    let idx_expr = perry_hir::Expr::LocalGet(hoist.index_local_id);
+    let arr_box = lower_expr(ctx, &arr_expr)?;
+    let idx_i32 =
+        if let Some(idx_i32_slot) = ctx.i32_counter_slots.get(&hoist.index_local_id).cloned() {
+            ctx.block().load(I32, &idx_i32_slot)
+        } else {
+            let idx_double = lower_expr(ctx, &idx_expr)?;
+            ctx.block().fptosi(DOUBLE, &idx_double, I32)
+        };
+    let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+
+    let inner_counter_slot = ctx
+        .i32_counter_slots
+        .get(&hoist.inner_counter_local_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("invariant array get hoist missing inner i32 counter"))?;
+    let len_i32 = ctx.block().load(I32, len_i32_slot);
+    let inner_i32 = ctx.block().load(I32, &inner_counter_slot);
+    let remaining_i32 = ctx.block().sub(I32, &len_i32, &inner_i32);
+    let skipped_i32 = ctx.block().sub(I32, &remaining_i32, "1");
+    let skipped_i64 = ctx.block().zext(I32, &skipped_i32, I64);
+
+    lower_guarded_array_index_get(
+        ctx,
+        &arr_box,
+        &idx_double,
+        &idx_i32,
+        "hoist.num",
+        true,
+        Some(&skipped_i64),
+    )
+}
+
+fn emit_i32_length_loop_condition(
+    ctx: &mut FnCtx<'_>,
+    counter_id: u32,
+    op: perry_hir::CompareOp,
+    len_i32_slot: &str,
+    true_label: &str,
+    false_label: &str,
+) -> bool {
+    let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&counter_id).cloned() else {
+        return false;
+    };
+    let ctr = ctx.block().load(I32, &ctr_i32_slot);
+    let len = ctx.block().load(I32, len_i32_slot);
+    let cmp = match op {
+        perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &len),
+        _ => ctx.block().icmp_slt(I32, &ctr, &len),
+    };
+    ctx.block().cond_br(&cmp, true_label, false_label);
+    true
+}
+
+fn classify_invariant_numeric_array_index_get_hoist(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    inner_counter_id: u32,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> Option<InvariantArrayIndexGetHoist> {
+    if !expr_has_numeric_pointer_free_array_layout(ctx, &perry_hir::Expr::LocalGet(arr_id)) {
+        return None;
+    }
+    let [perry_hir::Stmt::Expr(expr)] = body else {
+        return None;
+    };
+    let index_id = find_invariant_array_index_get_candidate(ctx, expr, arr_id, inner_counter_id)?;
+    if update
+        .is_some_and(|expr| expr_mutates_local(expr, arr_id) || expr_mutates_local(expr, index_id))
+    {
+        return None;
+    }
+    if expr_mutates_local(expr, arr_id) || expr_mutates_local(expr, index_id) {
+        return None;
+    }
+    if !expr_preserves_invariant_array_read(expr, arr_id, index_id) {
+        return None;
+    }
+    Some(InvariantArrayIndexGetHoist {
+        array_local_id: arr_id,
+        index_local_id: index_id,
+        inner_counter_local_id: inner_counter_id,
+    })
+}
+
+fn find_invariant_array_index_get_candidate(
+    ctx: &crate::expr::FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    inner_counter_id: u32,
+) -> Option<u32> {
+    use perry_hir::{ArrayElement, Expr};
+
+    let find =
+        |expr: &Expr| find_invariant_array_index_get_candidate(ctx, expr, arr_id, inner_counter_id);
+    let find_in_order = |exprs: &[&Expr]| exprs.iter().find_map(|expr| find(expr));
+
+    match expr {
+        Expr::IndexGet { object, index } => {
+            if let (Expr::LocalGet(candidate_arr_id), Expr::LocalGet(candidate_index_id)) =
+                (object.as_ref(), index.as_ref())
+            {
+                if *candidate_arr_id == arr_id
+                    && *candidate_index_id != inner_counter_id
+                    && ctx.bounded_index_pairs.iter().any(|fact| {
+                        fact.array_local_id == arr_id && fact.index_local_id == *candidate_index_id
+                    })
+                {
+                    return Some(*candidate_index_id);
+                }
+            }
+            find_in_order(&[object.as_ref(), index.as_ref()])
+        }
+        Expr::LocalSet(_, value) => find(value),
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            find_in_order(&[left.as_ref(), right.as_ref()])
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand) => find(operand),
+        Expr::Array(elements) => elements.iter().find_map(find),
+        Expr::ArraySpread(elements) => elements.iter().find_map(|element| match element {
+            ArrayElement::Expr(expr) | ArrayElement::Spread(expr) => find(expr),
+            ArrayElement::Hole => None,
+        }),
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            find_in_order(&[left.as_ref(), right.as_ref()])
+        }
+        Expr::MathMin(elements) | Expr::MathMax(elements) => elements.iter().find_map(find),
+        Expr::MathAbs(expr)
+        | Expr::MathSqrt(expr)
+        | Expr::MathFloor(expr)
+        | Expr::MathCeil(expr)
+        | Expr::MathRound(expr)
+        | Expr::MathF16round(expr) => find(expr),
+        // Avoid changing semantics for short-circuited or branch-only reads.
+        Expr::Conditional { .. } | Expr::Logical { .. } => None,
+        _ => None,
+    }
+}
+
+fn expr_preserves_invariant_array_read(expr: &perry_hir::Expr, arr_id: u32, index_id: u32) -> bool {
+    use perry_hir::{ArrayElement, Expr};
+    let walk = |expr: &Expr| expr_preserves_invariant_array_read(expr, arr_id, index_id);
+    match expr {
+        Expr::LocalSet(id, value) => *id != arr_id && *id != index_id && walk(value),
+        Expr::Update { id, .. } => *id != arr_id && *id != index_id,
+        Expr::Binary { left, right, .. }
+        | Expr::Compare { left, right, .. }
+        | Expr::Logical { left, right, .. } => walk(left) && walk(right),
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand) => walk(operand),
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => walk(condition) && walk(then_expr) && walk(else_expr),
+        Expr::IndexGet { object, index } => walk(object) && walk(index),
+        Expr::Array(elements) => elements.iter().all(&walk),
+        Expr::ArraySpread(elements) => elements.iter().all(|element| match element {
+            ArrayElement::Expr(expr) | ArrayElement::Spread(expr) => walk(expr),
+            ArrayElement::Hole => true,
+        }),
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => walk(left) && walk(right),
+        Expr::MathMin(elements) | Expr::MathMax(elements) => elements.iter().all(&walk),
+        Expr::MathAbs(expr)
+        | Expr::MathSqrt(expr)
+        | Expr::MathFloor(expr)
+        | Expr::MathCeil(expr)
+        | Expr::MathRound(expr)
+        | Expr::MathF16round(expr) => walk(expr),
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::String(_)
+        | Expr::WtfString(_) => true,
+        _ => false,
+    }
 }
 
 /// Inspect a `for` loop's condition expression and body, and return

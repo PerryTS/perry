@@ -301,3 +301,69 @@
   - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only`, and the before/after comparison above uses the captured local fourth-cycle baseline.
   - This is a smaller cleanup than the preceding guard-cache work. The keeper signal is the consistent matrix wall-time reduction plus removal of double arithmetic from the hottest generated get-index chains; perf counters should be watched on future runs.
 - PR: https://github.com/PerryTS/perry/pull/5310
+
+## 2026-06-17 - Hoist invariant numeric array reads out of inner loops
+
+- Start revision: `ec79e68ff`
+- Branch: `codex/perry-invariant-array-read-hoist`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux `/usr/bin/time` and `perf stat`; local `node` cannot execute `.ts` benchmark inputs, so Node columns and correctness comparisons were skipped by the harness
+- Baseline commands:
+  - `target/release/perry compile --no-cache benchmarks/suite/10_nested_loops.ts -o /tmp/perry-nested-i32-index-baseline --trace llvm --quiet`
+  - `/usr/bin/time -f "nested wall=%e rss_kb=%M" /tmp/perry-nested-i32-index-baseline`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-nested-i32-index-baseline-trace.json /usr/bin/time -f "wall=%e rss_kb=%M" /tmp/perry-nested-i32-index-baseline && jq '[.sites[] | select(.kind=="array_element") | {site_id, guard_name, observed_count, guard_passes, guard_failures, fallback_calls}]' /tmp/perry-nested-i32-index-baseline-trace.json`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-nested-i32-index-baseline`
+  - `benchmarks/quick.sh`
+  - `benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-i32-index-proto.json`
+- Baseline results:
+  - direct nested binary: `nested_loops:221`, sum `26991000000`, wall 0.23s, RSS 19396KB
+  - trace run: `nested_loops:223`, wall 0.22s, RSS 23068KB, both numeric array index-get sites reported 9,000,000 observations/passes, 0 failures, and 0 fallback calls
+  - `perf stat` direct nested binary: 813,901,295 cycles, 3,643,681,343 instructions, 820,579,143 branches, 158,322 branch-misses, 0.2303s elapsed
+  - quick: fibonacci 251ms/18MB, math_intensive 71ms/18MB, nested_loops 202ms/22MB, factorial 99ms/18MB, matrix_multiply 387ms/30MB
+  - compare quick medians: loop_overhead 56ms/18784KB, fibonacci 248ms/18896KB, math_intensive 55ms/18900KB, nested_loops 214ms/23268KB, factorial 78ms/18776KB
+- Selected gap and evidence:
+  - After i32 index lowering, `10_nested_loops.ts` had become the clearest remaining tight-loop bottleneck: two guarded raw-f64 array reads inside the 9M-iteration inner loop.
+  - `perf record`/`perf report` on `/tmp/perry-nested-i32-index-baseline` showed the hottest generated instructions were two payload loads at offsets `0x853f0` and `0x85384`.
+  - Disassembly showed the first hot load was `arr[i]`, invariant across the inner `j` loop, while `arr[j]` remained truly inner-loop variant.
+  - The typed-feedback trace confirmed both get sites were monomorphic and fallback-free with 9,000,000 successful guard passes each.
+- Change:
+  - Added a narrowly scoped loop-lowering peephole for the shape `for (...; j < arr.length; j++)` nested under an already bounded `i < arr.length` loop.
+  - When the body is a single eager expression statement containing `arr[i]`, the body/update do not mutate `arr` or `i`, and the array is a numeric pointer-free array, the inner loop now guard-loads `arr[i]` once in a first-entry prebody and reuses a stack slot in the loop body.
+  - Split the loop CFG so only the initial true edge goes through `for.prebody`; backedges branch through `for.cond.backedge` directly to `for.body`, avoiding accidental reloading every inner iteration.
+  - Added `js_typed_feedback_record_array_guard_fast_passes(site_id, count)` so the skipped fast-path passes are bulk-accounted in the trace while preserving per-site observed/pass totals.
+  - Restricted candidate discovery to eager expression forms and added a negative test proving branch-only conditional reads are not hoisted.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/10_nested_loops.ts -o /tmp/perry-nested-invariant-hoist-final --trace llvm --quiet`
+  - `for i in 1 2 3 4 5; do /usr/bin/time -f "nested final direct wall=%e rss_kb=%M" /tmp/perry-nested-invariant-hoist-final; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-nested-invariant-hoist-final-trace.json /usr/bin/time -f "nested final trace wall=%e rss_kb=%M" /tmp/perry-nested-invariant-hoist-final && jq '[.sites[] | select(.kind=="array_element") | {site_id, guard_name, observed_count, guard_passes, guard_failures, fallback_calls}]' /tmp/perry-nested-invariant-hoist-final-trace.json`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-nested-invariant-hoist-final`
+  - `benchmarks/quick.sh`
+  - `benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-compare-invariant-hoist-final.json`
+- Post-change results:
+  - direct nested binary: 103ms, 102ms, 102ms, 104ms, 102ms; sum always `26991000000`
+  - direct run wall/RSS samples: 0.10s/23028KB, 0.10s/22812KB, 0.10s/22780KB, 0.10s/22852KB, 0.10s/23140KB
+  - trace run: `nested_loops:125`, sum `26991000000`, wall 0.13s, RSS 23324KB, both numeric array index-get sites reported 9,000,000 observations/passes, 0 failures, and 0 fallback calls
+  - `perf stat` direct nested binary: 422,566,715 cycles, 1,842,815,590 instructions, 415,434,773 branches, 121,411 branch-misses, 0.1194s elapsed
+  - quick: fibonacci 237ms/18MB, math_intensive 75ms/18MB, nested_loops 124ms/22MB, factorial 76ms/18MB, matrix_multiply 390ms/30MB
+  - compare quick medians: loop_overhead 72ms/18856KB, fibonacci 258ms/18876KB, math_intensive 56ms/18948KB, nested_loops 101ms/23176KB, factorial 76ms/18744KB
+- Measured impact:
+  - `10_nested_loops` direct binary: 221ms -> 102ms median, 53.8% faster
+  - `10_nested_loops` compare median: 214ms -> 101ms, 52.8% faster
+  - Direct nested binary cycles: 813.9M -> 422.6M, 48.1% fewer
+  - Direct nested binary instructions: 3.64B -> 1.84B, 49.4% fewer
+  - Direct nested binary branches: 820.6M -> 415.4M, 49.4% fewer
+  - `16_matrix_multiply` quick stayed in the expected range: 387ms -> 390ms
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen --test typed_shape_descriptors`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+  - `cargo build --release`
+  - Final typed-feedback trace confirmed the bulk-accounted hoisted read still reports the original 9,000,000 get observations/passes and zero fallback calls.
+- Notes:
+  - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only`, and the before/after comparison above uses the captured local fifth-cycle baseline.
+  - This follow-up is intended as a stacked draft PR on top of the i32 array index lowering PR.
+- PR: https://github.com/PerryTS/perry/pull/5312

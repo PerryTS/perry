@@ -323,6 +323,7 @@ pub(super) fn compile_closure(
         arena_state_slot: None,
         class_keys_slots: HashMap::new(),
         cached_lengths: HashMap::new(),
+        hoisted_array_index_gets: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         i32_counter_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),

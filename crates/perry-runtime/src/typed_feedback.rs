@@ -483,6 +483,24 @@ fn array_guard_cache_fast_passes(site_id: u64) -> u64 {
     }
 }
 
+fn record_array_guard_fast_passes(site_id: u64, count: u64) {
+    if site_id == 0 || count == 0 {
+        return;
+    }
+
+    let entry = &ARRAY_GUARD_FAST_CACHE[array_guard_cache_index(site_id)];
+    if entry.site_id.load(Ordering::Acquire) == site_id {
+        entry.fast_passes.fetch_add(count, Ordering::Relaxed);
+        return;
+    }
+
+    let mut reg = registry();
+    if let Some(site) = reg.sites.get_mut(&site_id) {
+        site.observed_count = site.observed_count.saturating_add(count);
+        site.guard_passes = site.guard_passes.saturating_add(count);
+    }
+}
+
 #[cfg(test)]
 fn reset_array_guard_fast_cache_for_tests() {
     for entry in ARRAY_GUARD_FAST_CACHE.iter() {
@@ -954,6 +972,11 @@ pub extern "C" fn js_typed_feedback_record_guard_fail(site_id: u64) {
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_record_fallback_call(site_id: u64) {
     record_fallback_call(site_id);
+}
+
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_record_array_guard_fast_passes(site_id: u64, count: u64) {
+    record_array_guard_fast_passes(site_id, count);
 }
 
 fn observe_property(
