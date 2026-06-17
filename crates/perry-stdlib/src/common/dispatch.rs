@@ -287,6 +287,41 @@ unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option
     Some(bind_method(method))
 }
 
+/// `AsyncLocalStorage` METHOD-VALUE reads (the property-read counterpart of
+/// `dispatch_async_local_storage_method`). `als.getStore()` (a direct call)
+/// already dispatched, but reading `als.getStore` AS A VALUE (`const gs =
+/// als.getStore`, `{ getStore } = als`, `typeof als.getStore`) returned
+/// `undefined` — there was no property-read dispatch for ALS handles (only
+/// EventEmitter had one, #4995). Next.js' server startup reads `getStore` as a
+/// value (cacheComponents / patch-fetch async-storage setup) and then calls it,
+/// so it threw `TypeError: getStore is not a function` BEFORE `✓ Ready`. Bind
+/// each method to the handle so the read yields a callable bound method, exactly
+/// like `dispatch_event_emitter_property`.
+unsafe fn dispatch_async_local_storage_property(handle: i64, property: &str) -> Option<f64> {
+    if !matches!(
+        property,
+        "run" | "getStore" | "enterWith" | "exit" | "disable"
+    ) {
+        return None;
+    }
+    if get_handle_mut::<crate::async_local_storage::AsyncLocalStorageHandle>(handle).is_none() {
+        return None;
+    }
+    extern "C" {
+        fn js_class_method_bind(
+            instance: f64,
+            method_name_ptr: *const u8,
+            method_name_len: usize,
+        ) -> f64;
+    }
+    let m = property.as_bytes();
+    Some(js_class_method_bind(
+        nanbox_handle_value(handle),
+        m.as_ptr(),
+        m.len(),
+    ))
+}
+
 /// Dispatch a method call on a handle-based object.
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
@@ -1813,6 +1848,10 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return value;
     }
 
+    if let Some(value) = dispatch_async_local_storage_property(handle, property_name) {
+        return value;
+    }
+
     #[cfg(feature = "http-client")]
     if let Some(value) = crate::http::dispatch_agent_property(handle, property_name) {
         return value;
@@ -3292,6 +3331,42 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     }
     #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     perry_runtime::js_set_native_events_construct(events_native_construct);
+
+    // Dynamic `new <bound async_hooks ctor>()` -> real handle. Next.js does
+    // `globalThis.AsyncLocalStorage = AsyncLocalStorage` then
+    // `new maybeGlobalAsyncLocalStorage()`; the dynamic callee misses the static
+    // `new AsyncLocalStorage()` codegen arm, so the runtime construct path must
+    // build the handle here (else `.getStore` is undefined at server startup).
+    unsafe extern "C" fn async_hooks_native_construct(
+        method_ptr: *const u8,
+        method_len: usize,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64 {
+        let method = std::slice::from_raw_parts(method_ptr, method_len);
+        match method {
+            b"AsyncLocalStorage" => {
+                let handle = crate::async_local_storage::js_async_local_storage_new();
+                perry_runtime::js_nanbox_pointer(handle)
+            }
+            b"AsyncResource" => {
+                let type_value = if !args_ptr.is_null() && args_len > 0 {
+                    *args_ptr
+                } else {
+                    TAG_UNDEFINED_F64
+                };
+                let options = if !args_ptr.is_null() && args_len > 1 {
+                    *args_ptr.add(1)
+                } else {
+                    TAG_UNDEFINED_F64
+                };
+                let handle = perry_runtime::async_hooks::js_async_resource_new(type_value, options);
+                perry_runtime::js_nanbox_pointer(handle)
+            }
+            _ => TAG_UNDEFINED_F64,
+        }
+    }
+    perry_runtime::js_set_native_async_hooks_construct(async_hooks_native_construct);
     super::net_socket_bridge::register_net_socket_handle_probe();
     js_register_worker_threads_namespace_getters(
         crate::worker_threads::js_worker_threads_get_worker_data,
