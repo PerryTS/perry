@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tier-3 fixture: minimal Hono app exercising route registration, path params, JSON response, 404 fallback. No port-bind — uses app.fetch directly so output is deterministic.",
   "dependencies": {
-    "hono": "^4.12.21"
+    "hono": "^4.12.25"
   },
   "perry": {
     "compilePackages": ["hono"],
