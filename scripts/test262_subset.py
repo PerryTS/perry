@@ -68,6 +68,7 @@ Usage
     scripts/test262_subset.py --root vendor/test262 --dir language/expressions
     scripts/test262_subset.py --root vendor/test262 --max 500
     scripts/test262_subset.py --root vendor/test262 --all-features
+    scripts/test262_subset.py --root vendor/test262 --dir staging   # TC39 proposals (#5299)
 
 See test-compat/test262/README.md.
 """
@@ -109,7 +110,9 @@ DEFAULT_DIRS = ("language", "built-ins", "intl402")
 # stale — Perry measures eval-code ~94%, intl402 ~78%, property-escapes ~87%, so
 # they are no longer skipped (the eval cases run with PERRY_ALLOW_EVAL=1, set in
 # the compile env below). `RegExp/lookbehind` was vestigial (no such subdir).
-# Only genuinely-out-of-scope `staging` (proposals) remains.
+# Only genuinely-out-of-scope `staging` (proposals) remains skipped by default;
+# pass `--dir staging` to measure it anyway (the guard is bypassed for any
+# subtree the user names explicitly — see `discover`, #5299).
 # NB: Temporal is judged in self-validating mode (#4792) — the Node oracle lacks
 # it; under intl402/ the Temporal locale-format cases are now measured too.
 _PATH_SKIP = re.compile(
@@ -265,11 +268,17 @@ def discover(root: Path, dirs: list[str], applicable: set[str],
         base = test_root / d
         if not base.is_dir():
             continue
+        # `_PATH_SKIP` guards the *default* wholesale walk (it keeps `staging`
+        # out of the headline parity number). When the user deliberately names
+        # a normally-skipped subtree — `--dir staging` (#5299) — honor it: the
+        # whole point of the request is to measure that subtree, so don't let
+        # the same-named guard filter every case back out.
+        dir_opt_in = bool(_PATH_SKIP.search(d.strip("/") + "/"))
         for path in sorted(base.rglob("*.js")):
             rel = path.relative_to(test_root).as_posix()
             if path.name.endswith("_FIXTURE.js") or "_FIXTURE" in path.name:
                 continue
-            if _PATH_SKIP.search(rel):
+            if not dir_opt_in and _PATH_SKIP.search(rel):
                 continue
             try:
                 src = path.read_text(encoding="utf-8", errors="replace")
