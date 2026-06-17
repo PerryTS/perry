@@ -822,6 +822,43 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             ],
         )
     } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
+        if std::env::var_os("PERRY_INLINE_NEW").is_none() {
+            // [#bloat] Default: outline the per-`new`-site allocator. Opt back
+            // into the old inline bump-allocator with PERRY_INLINE_NEW=1.
+            // Measured win-win vs inline: −45 IR lines/site AND ~17% faster on an
+            // 8M-allocation loop (the inline bump bloated the hot loop, hurting
+            // icache/regalloc more than the saved call). Outline the per-`new`-site
+            // inline bump-allocator (~145 lines of per-class-constant IR) into a
+            // single call to the runtime `js_object_alloc_class_inline_keys`,
+            // which performs the identical bump alloc + header init + slot
+            // zero-fill and returns the same user pointer (as i64). Cuts ~145 IR
+            // lines per `new` site to ~3. Only the per-class keys-array global is
+            // loaded (cached per function, same as the inline path).
+            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
+                s
+            } else {
+                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                ctx.class_keys_slots
+                    .insert(class_name.to_string(), s.clone());
+                s
+            };
+            let keys_ptr = ctx.block().load(I64, &keys_slot);
+            ctx.pending_declares.push((
+                "js_object_alloc_class_inline_keys".to_string(),
+                I64,
+                vec![I32, I32, I32, I64],
+            ));
+            ctx.block().call(
+                I64,
+                "js_object_alloc_class_inline_keys",
+                &[
+                    (I32, &cid_str),
+                    (I32, &parent_cid_str),
+                    (I32, &field_count.to_string()),
+                    (I64, &keys_ptr),
+                ],
+            )
+        } else {
         // Compile-time layout constants.
         const GC_HEADER_SIZE: u64 = 8;
         const OBJECT_HEADER_SIZE: u64 = 24;
@@ -987,6 +1024,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // the existing nanbox_pointer_inline expects.
         let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
         blk.ptrtoint(&user_ptr, I64)
+        }
     } else {
         // Fallback: build the packed-keys string at this site and
         // call the slower SHAPE_CACHE-aware allocator. Used when the
