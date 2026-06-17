@@ -611,6 +611,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let prop_idx = ctx.strings.intern(property);
                 let prop_bytes_global = format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
                 let prop_len_str = property.len().to_string();
+                // The value read of a native-module callable export (`const f =
+                // util.inherits`) mints a BOUND_METHOD closure that, when invoked
+                // indirectly, dispatches through the per-module `NM_DISPATCH_REGISTRY`
+                // populated by `js_nm_install_<module>()`. The *direct* call form
+                // (`util.inherits(a, b)`) is statically lowered to the runtime extern
+                // and never touches the registry, so a module reached ONLY via this
+                // value-read path would leave the registry empty and the indirect call
+                // would resolve to `undefined` (winston/readable-stream's
+                // `require('inherits')` → `util.inherits` value → `inherits(Sub, Base)`
+                // silently skipped, breaking the ES5 super-chain). Emit the install
+                // here so the value-read path's later dispatch finds the module fn.
+                if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
+                    ctx.block().call_void(install_sym, &[]);
+                }
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_native_module_property_by_name",
