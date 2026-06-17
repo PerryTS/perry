@@ -1263,12 +1263,29 @@ pub(crate) fn lower_stmt(
         }
         ast::Stmt::Labeled(labeled_stmt) => {
             let label = labeled_stmt.label.sym.to_string();
-            // #2383: a labeled *block* — `a: { ... break a; ... }` — exits the
-            // block via `break a`. Desugar to a labeled run-once do-while so the
-            // existing loop-based labeled-break codegen has an exit block to
-            // target. See the matching comment in lower_decl/body_stmt.rs.
-            if let ast::Stmt::Block(block) = &*labeled_stmt.body {
-                let body = lower_block_stmt_scoped(ctx, block)?;
+            // #2383 + #5247: a labeled *non-loop* statement — a block
+            // (`a: { ... break a; ... }`) or an `if`/`switch`/expression — exits via
+            // `break a`. It is not a loop, so the loop-based labeled-break codegen
+            // has nothing to bind the label to. Desugar any labeled non-loop to a
+            // labeled run-once do-while so it has an exit block to target (also
+            // correct when `break a` fires from inside a nested loop in the body).
+            // Labeled LOOPS skip this and keep the label bound to the loop, so
+            // `continue a` targets the loop. See the matching code in
+            // lower_decl/body_stmt.rs.
+            let body_is_loop = matches!(
+                &*labeled_stmt.body,
+                ast::Stmt::For(_)
+                    | ast::Stmt::While(_)
+                    | ast::Stmt::DoWhile(_)
+                    | ast::Stmt::ForIn(_)
+                    | ast::Stmt::ForOf(_)
+            );
+            if !body_is_loop {
+                let body = if let ast::Stmt::Block(block) = &*labeled_stmt.body {
+                    lower_block_stmt_scoped(ctx, block)?
+                } else {
+                    lower_body_stmt(ctx, &labeled_stmt.body)?
+                };
                 module.init.push(Stmt::Labeled {
                     label,
                     body: Box::new(Stmt::DoWhile {
