@@ -632,9 +632,26 @@ fn annexb_nested_stmt(
         ast::Stmt::DoWhile(do_while) => {
             annexb_nested_stmt(&do_while.body, forbidden, all_out, var_out)
         }
-        ast::Stmt::For(for_stmt) => annexb_nested_stmt(&for_stmt.body, forbidden, all_out, var_out),
-        ast::Stmt::ForIn(for_in) => annexb_nested_stmt(&for_in.body, forbidden, all_out, var_out),
-        ast::Stmt::ForOf(for_of) => annexb_nested_stmt(&for_of.body, forbidden, all_out, var_out),
+        // A `for`/`for-in`/`for-of` lexical head (`for (let f; ...)`,
+        // `for (let f in/of ...)`) introduces a binding whose scope encloses
+        // the loop body; an equivalent `var f` in the body is an early error
+        // (14.7.4.1 / 14.7.5.1), so the AnnexB legacy `var` for a same-named
+        // block function in the body must be skipped.
+        ast::Stmt::For(for_stmt) => {
+            let names = match &for_stmt.init {
+                Some(ast::VarDeclOrExpr::VarDecl(vd)) => var_decl_lexical_names(vd),
+                _ => Vec::new(),
+            };
+            annexb_nested_loop_body(&for_stmt.body, names, forbidden, all_out, var_out);
+        }
+        ast::Stmt::ForIn(for_in) => {
+            let names = for_head_lexical_names(&for_in.left);
+            annexb_nested_loop_body(&for_in.body, names, forbidden, all_out, var_out);
+        }
+        ast::Stmt::ForOf(for_of) => {
+            let names = for_head_lexical_names(&for_of.left);
+            annexb_nested_loop_body(&for_of.body, names, forbidden, all_out, var_out);
+        }
         ast::Stmt::Labeled(labeled) => {
             annexb_nested_stmt(&labeled.body, forbidden, all_out, var_out)
         }
@@ -654,7 +671,25 @@ fn annexb_nested_stmt(
         ast::Stmt::Try(try_stmt) => {
             annexb_nested_block(&try_stmt.block.stmts, forbidden, all_out, var_out);
             if let Some(handler) = &try_stmt.handler {
-                annexb_nested_block(&handler.body.stmts, forbidden, all_out, var_out);
+                // B.3.5: a `var` whose name is also a bound name of a
+                // *destructuring* CatchParameter is an early error, so the
+                // equivalent AnnexB legacy `var` for a same-named block
+                // function in the handler body must be skipped. The B.3.5
+                // exception only exempts a simple `catch (e)` BindingIdentifier
+                // (where the var IS allowed), so only pattern catch params
+                // (`catch ({ f })` / `catch ([f])`) contribute to `forbidden`.
+                let mut handler_forbidden;
+                let inner = match &handler.param {
+                    Some(param) if !matches!(param, ast::Pat::Ident(_)) => {
+                        handler_forbidden = forbidden.clone();
+                        let mut names = Vec::new();
+                        collect_var_binding_names_from_pat(param, &mut names);
+                        handler_forbidden.extend(names);
+                        &handler_forbidden
+                    }
+                    _ => forbidden,
+                };
+                annexb_nested_block(&handler.body.stmts, inner, all_out, var_out);
             }
             if let Some(finalizer) = &try_stmt.finalizer {
                 annexb_nested_block(&finalizer.stmts, forbidden, all_out, var_out);
@@ -664,6 +699,48 @@ fn annexb_nested_stmt(
             annexb_nested_stmt(&with_stmt.body, forbidden, all_out, var_out)
         }
         _ => {}
+    }
+}
+
+/// Lexical (`let`/`const`) binding names introduced by a `VarDecl`. A `var`
+/// declaration introduces no lexical names and yields an empty list.
+fn var_decl_lexical_names(vd: &ast::VarDecl) -> Vec<String> {
+    if vd.kind == ast::VarDeclKind::Var {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    for decl in &vd.decls {
+        collect_var_binding_names_from_pat(&decl.name, &mut names);
+    }
+    names
+}
+
+/// Lexical binding names of a `for-in` / `for-of` head (`for (let f in …)`).
+/// A `var` head or a bare assignment-target pattern introduces no lexical
+/// binding here and yields an empty list.
+fn for_head_lexical_names(head: &ast::ForHead) -> Vec<String> {
+    match head {
+        ast::ForHead::VarDecl(vd) => var_decl_lexical_names(vd),
+        _ => Vec::new(),
+    }
+}
+
+/// Descend into a loop body, adding the loop head's lexical binding names to
+/// the forbidden set so a same-named block function in the body skips its
+/// AnnexB legacy `var` (the equivalent `var` would be an early error).
+fn annexb_nested_loop_body(
+    body: &ast::Stmt,
+    lexical_names: Vec<String>,
+    forbidden: &std::collections::HashSet<String>,
+    all_out: &mut Vec<String>,
+    var_out: &mut Vec<String>,
+) {
+    if lexical_names.is_empty() {
+        annexb_nested_stmt(body, forbidden, all_out, var_out);
+    } else {
+        let mut inner = forbidden.clone();
+        inner.extend(lexical_names);
+        annexb_nested_stmt(body, &inner, all_out, var_out);
     }
 }
 
