@@ -291,9 +291,11 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     let _lock = ENV_LOCK.lock().unwrap();
 
     // DEFAULT (#5247 kept OPT-IN: PERRY_INLINE_FIELDSET unset). The SET site
-    // emits the original guard-call diamond — guard CALL drives the
-    // fast/%slow branch, and the %slow block records the fallback + sets by
-    // name inline (NOT the slow helper, which would double-run the guard).
+    // emits the guard-call diamond — guard CALL drives the fast/%slow branch.
+    // #5334 lever A: the cold %slow arm (guard already FAILED in the entry
+    // block) collapses from the old inline pair (record_fallback_call +
+    // by-name set) into ONE outlined `js_class_field_set_fallback` call. NOT
+    // the slow helper, which would double-run the guard.
     {
         let _g = EnvVarGuard::set("PERRY_INLINE_FIELDSET", None);
         let ir = ir_for(build());
@@ -301,8 +303,13 @@ fn typed_feedback_guards_direct_class_field_specialization() {
         assert!(ir.contains("class_field_set.fast"));
         assert!(ir.contains("class_field_set.slow"));
         assert!(!ir.contains("call void @js_class_field_set_slow"));
-        assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
-        assert!(ir.contains("call void @js_object_set_field_by_name"));
+        assert!(ir.contains("call void @js_class_field_set_fallback"));
+        // The by-name SET call the helper replaces is no longer emitted at the
+        // set site (the GET diamond uses get_by_name, never set_by_name).
+        assert!(!ir.contains("call void @js_object_set_field_by_name"));
+        // NB: `record_fallback_call` is still present — but from the always-on
+        // class-field-GET fallback block below, not the SET site (the SET site's
+        // copy is now folded into js_class_field_set_fallback).
         // GET path (always-on guard diamond) and shared expectations.
         assert!(ir.contains("class_field_get_guard"));
         assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));

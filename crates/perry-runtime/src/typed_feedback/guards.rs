@@ -699,6 +699,42 @@ pub extern "C" fn js_class_field_set_slow(
     );
 }
 
+/// Class-field-SET guard-MISS fallback, outlined (#5334, lever A).
+///
+/// This is the cold arm of the DEFAULT (guard-CALL) class-field-set diamond.
+/// Unlike [`js_class_field_set_slow`] — which the opt-in inline-precheck path
+/// uses and which RE-RUNS the guard — this helper is called only after the
+/// inline `js_typed_feedback_class_field_set_guard` has ALREADY run and FAILED
+/// in the entry block (that failure is what branched control here). So there is
+/// nothing left to decide: just reproduce the two operations the inline
+/// `class_field_set` fallback block used to emit, collapsed into ONE call so the
+/// cold arm costs a single instruction per site instead of two.
+///
+/// Byte-identical semantics to the old inline fallback:
+///   1. `js_typed_feedback_record_fallback_call(site_id)` — record the miss.
+///   2. `js_object_set_field_by_name(obj_bits, key_raw, value)` — route the
+///      write by name (handles frozen / accessor / non-writable / setter-in-
+///      chain). `obj_bits` keeps the full NaN-box tag (the by-name setter
+///      inspects it for proxy/exotic dispatch before masking to the heap
+///      address); `key_raw` is the POINTER_MASK-stripped key handle.
+///
+/// Cold-path only, so the extra call frame has zero hot-loop cost; the win is
+/// purely in emitted IR size (2 calls + operand list → 1 call per set site).
+#[no_mangle]
+pub extern "C" fn js_class_field_set_fallback(
+    site_id: u64,
+    obj_bits: u64,
+    key_raw: u64,
+    value: f64,
+) {
+    crate::typed_feedback::js_typed_feedback_record_fallback_call(site_id);
+    crate::object::js_object_set_field_by_name(
+        obj_bits as *mut ObjectHeader,
+        key_raw as *const crate::StringHeader,
+        value,
+    );
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_typed_feedback_native_call_method(
     site_id: u64,
@@ -936,6 +972,7 @@ mod keep_guard_symbols {
     #[used] static G0: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
     #[used] static G1: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
     #[used] static G1B: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_slow;
+    #[used] static G1C: extern "C" fn(u64, u64, u64, f64) = js_class_field_set_fallback;
     #[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
 }

@@ -563,17 +563,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 ],
                             );
                         } else {
-                            // A/B opt-out: the guard already ran and FAILED in the
-                            // entry block, so this is a pure guard-miss fallback —
-                            // record it and route by-name (NOT the slow helper,
-                            // which would re-run the guard and double-record).
+                            // #5334 lever A: the guard already ran and FAILED in
+                            // the entry block, so this cold arm is a pure
+                            // guard-miss fallback. Outline the two operations it
+                            // used to emit inline (record_fallback + by-name set)
+                            // into ONE `js_class_field_set_fallback` call. NOT the
+                            // slow helper, which would RE-RUN the guard and
+                            // double-record. Semantics are byte-identical to the
+                            // old two-call block; only the emitted IR shrinks
+                            // (cold path → zero hot-loop cost). `obj_bits` keeps
+                            // the full NaN-box tag; `key_raw` is POINTER_MASK-
+                            // stripped — same operands the two calls received.
                             blk.call_void(
-                                "js_typed_feedback_record_fallback_call",
-                                &[(I64, &site_id)],
-                            );
-                            blk.call_void(
-                                "js_object_set_field_by_name",
-                                &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
+                                "js_class_field_set_fallback",
+                                &[
+                                    (I64, &site_id),
+                                    (I64, &obj_bits),
+                                    (I64, &key_raw),
+                                    (DOUBLE, &val_double),
+                                ],
                             );
                         }
                         blk.br(&merge_label);
