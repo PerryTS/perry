@@ -1,3 +1,28 @@
+## v0.5.1180 — ci: warm the main-scoped CI cache so PRs stop building cold
+
+Follow-up to v0.5.1179. Moving sccache to a persisted disk cache was necessary
+but not sufficient: `test.yml` runs only on pull_request + version tags, never
+on push to main. GitHub Actions cache scoping lets a run restore caches from its
+own branch or the default branch (main) — but never another PR's — so with
+nothing running the cache-producing build on main, no main-scoped cache ever
+existed and every PR started cold. (The same flaw silently disabled
+`Swatinem/rust-cache`: its `save-if: refs/heads/main` never fired because
+test.yml doesn't run on main, so target/ was never saved either.)
+
+New `cache-warm.yml`: on every push to main that touches Rust (`crates/**`,
+`Cargo.toml`, `Cargo.lock`), compile — `--no-run` — the test binaries of the
+heaviest crates (`perry-runtime`, `perry-stdlib`, `perry-codegen`, `perry`),
+which pull in essentially the whole dependency graph. It saves under the SAME
+`rust-cache` shared-key (`<os>-perry`) and sccache key prefix
+(`sccache-<os>-perry-`) that test.yml's jobs restore, so the main-scoped caches
+now exist for every PR to pick up. The job is `continue-on-error` (a cache warm,
+never a gate), prunes test binaries between crates to stay within the runner
+disk budget, and uses `concurrency` to cancel superseded warms.
+
+Expected effect: after the first warm run lands on main, PR `cargo-test` should
+restore a warm cache and run ~50-60 min instead of ~90-103 min cold. No
+production code changes.
+
 ## v0.5.1179 — ci: move sccache off the GHA backend onto a persisted disk cache (fix cargo-test timeouts)
 
 The `cargo-test` gate was timing out at its 120-min cap on PRs that touch
