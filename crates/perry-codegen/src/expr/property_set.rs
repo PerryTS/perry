@@ -324,6 +324,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let val_bits = blk.bitcast_double_to_i64(&val_double);
                             (obj_bits, obj_handle, key_raw, expected_keys, val_bits)
                         };
+                        // #5247: outline the whole class-field-SET IC diamond
+                        // (guard call + inline fast slot store + by-name
+                        // fallback + merge — ~18 lines of IR) into a single
+                        // `call @js_class_field_set_ic(...)`. The runtime helper
+                        // reproduces the inline path's behavior exactly (guard,
+                        // then the same raw/boxed slot store + GC barrier on a
+                        // pass, or the recorded by-name fallback on a miss).
+                        // Gated for A/B measurement: opt in with
+                        // PERRY_OUTLINE_FIELDSET, keep the inline diamond off.
+                        if std::env::var_os("PERRY_OUTLINE_FIELDSET").is_some() {
+                            ctx.block().call_void(
+                                "js_class_field_set_ic",
+                                &[
+                                    (I64, &site_id),
+                                    (DOUBLE, &recv_box),
+                                    (I32, &expected_class_id_str),
+                                    (I64, &expected_keys),
+                                    (I64, &key_raw),
+                                    (I32, &field_idx_str),
+                                    (DOUBLE, &val_double),
+                                    (I32, requires_raw_f64_str),
+                                ],
+                            );
+                            let _ = &obj_bits;
+                            let _ = &obj_handle;
+                            return Ok(val_double);
+                        }
                         let fast_idx = ctx.new_block("class_field_set.fast");
                         let fallback_idx = ctx.new_block("class_field_set.fallback");
                         let merge_idx = ctx.new_block("class_field_set.merge");

@@ -963,7 +963,8 @@ pub extern "C" fn js_typed_feedback_object_set_field_by_name_fast(
 #[path = "typed_feedback/guards.rs"]
 mod guards;
 pub use guards::{
-    js_typed_feedback_class_field_get_guard, js_typed_feedback_class_field_set_guard,
+    js_class_field_set_ic, js_typed_feedback_class_field_get_guard,
+    js_typed_feedback_class_field_set_guard,
     js_typed_feedback_closure_direct_call_guard, js_typed_feedback_method_direct_call_guard,
     js_typed_feedback_native_call_method, js_typed_feedback_native_call_method_apply,
 };

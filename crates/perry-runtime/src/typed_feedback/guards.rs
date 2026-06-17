@@ -599,6 +599,95 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     }
 }
 
+/// Outlined class-field-SET inline-cache (#5247, `PERRY_OUTLINE_FIELDSET`).
+///
+/// Replaces the ~18-line codegen diamond (guard call + inline fast slot store +
+/// by-name fallback + merge) at every `obj.field = v` site on a typed class
+/// field with a single `call @js_class_field_set_ic(...)`. The body reproduces
+/// the inline diamond's behavior EXACTLY:
+///
+///   1. Run the same `js_typed_feedback_class_field_set_guard` (so the typed-
+///      feedback observation/recording is identical to the inline path).
+///   2. On a guard PASS, do the SAME fast slot store the inline fast path does:
+///        * `require_raw_f64` slot → a bare `f64` store into the field slot
+///          (the inline path emits a plain `store double` with no GC barrier —
+///          the slot is pointer-free by typed-shape descriptor and the guard
+///          already proved `is_plain_number_bits(value)`).
+///        * boxed slot → `js_object_set_field`, which performs the identical
+///          slot write + `js_gc_note_slot_layout` + `js_write_barrier_slot` the
+///          inline `emit_jsvalue_slot_store_on_block` emits.
+///   3. On a guard FAIL, record the fallback (matching the inline fallback
+///      block's `js_typed_feedback_record_fallback_call`) and route through the
+///      by-name setter `js_object_set_field_by_name`, which handles
+///      frozen / accessor / non-writable / setter-in-chain semantics.
+///
+/// Frozen/accessor/writable/setter handling all live behind the guard (the
+/// guard returns 0 for them, sending the write to the by-name fallback), so no
+/// special-casing is needed here.
+#[no_mangle]
+pub extern "C" fn js_class_field_set_ic(
+    site_id: u64,
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    key: *const crate::StringHeader,
+    expected_field_index: u32,
+    value: f64,
+    require_raw_f64: i32,
+) {
+    let guard_ok = js_typed_feedback_class_field_set_guard(
+        site_id,
+        receiver,
+        expected_class_id,
+        expected_keys,
+        key,
+        expected_field_index,
+        value,
+        require_raw_f64,
+    );
+
+    if guard_ok != 0 {
+        // FAST PATH — identical to the codegen-inlined `class_field_set.fast`
+        // block. The guard has already validated the receiver class/shape,
+        // the field index bound, frozen/accessor/writable/setter state, and
+        // (for raw-f64) the typed-shape descriptor + plain-number value.
+        let object_addr = normalize_raw_object_addr(receiver.to_bits());
+        if require_raw_f64 != 0 {
+            // Pointer-free raw-f64 slot: bare store, no GC barrier — exactly
+            // what the inline `blk.store(DOUBLE, val, field_ptr)` emits.
+            unsafe {
+                let fields_ptr =
+                    (object_addr as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
+                let slot = fields_ptr.add(expected_field_index as usize);
+                std::ptr::write(slot, value);
+            }
+        } else {
+            // Boxed slot: same slot write + layout note + write barrier the
+            // inline path emits via `emit_jsvalue_slot_store_on_block`.
+            crate::object::js_object_set_field(
+                object_addr as *mut ObjectHeader,
+                expected_field_index,
+                crate::value::JSValue::from_bits(value.to_bits()),
+            );
+        }
+        return;
+    }
+
+    // FALLBACK — identical to the codegen-inlined `class_field_set.fallback`
+    // block: record the fallback, then route the write by name.
+    crate::typed_feedback::js_typed_feedback_record_fallback_call(site_id);
+    // The inline fallback passes the receiver's FULL bits (NaN-box tag intact —
+    // `js_object_set_field_by_name` inspects the tag for proxy/exotic dispatch
+    // before masking to the heap address) and the POINTER_MASK-stripped key.
+    let obj_bits = receiver.to_bits();
+    let key_raw = key as u64 & crate::value::POINTER_MASK;
+    crate::object::js_object_set_field_by_name(
+        obj_bits as *mut ObjectHeader,
+        key_raw as *const crate::StringHeader,
+        value,
+    );
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_typed_feedback_native_call_method(
     site_id: u64,
@@ -835,6 +924,7 @@ mod keep_guard_symbols {
     use super::*;
     #[used] static G0: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
     #[used] static G1: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
+    #[used] static G1B: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
     #[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
 }
