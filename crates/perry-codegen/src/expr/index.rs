@@ -222,6 +222,9 @@ pub(crate) fn lower_index_set_fast(
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
         if require_numeric_layout {
             let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
+            // GC_STORE_AUDIT(POINTER_FREE): require_numeric_layout proves the
+            // array is raw-f64 and the value is canonicalized to a plain f64 —
+            // no GC pointer is written into the slot, so no write barrier.
             blk.store(DOUBLE, &numeric_value, &element_ptr);
         } else {
             // In-place overwrite of a non-raw-layout (e.g. downgraded `any[]`)
@@ -306,6 +309,9 @@ pub(crate) fn lower_index_set_fast(
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
         if require_numeric_layout {
             let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
+            // GC_STORE_AUDIT(POINTER_FREE): require_numeric_layout proves the
+            // array is raw-f64 and the value is canonicalized to a plain f64 —
+            // no GC pointer is written into the slot, so no write barrier.
             blk.store(DOUBLE, &numeric_value, &element_ptr);
         } else {
             let value_bits = emit_jsvalue_slot_store_on_block(

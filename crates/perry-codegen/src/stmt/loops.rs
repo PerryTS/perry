@@ -21,6 +21,15 @@ struct NumericBulkFillLoop {
     value: NumericBulkFillValue,
 }
 
+#[derive(Clone, Copy)]
+struct LengthHoist {
+    arr_id: u32,
+    counter_id: u32,
+    op: perry_hir::CompareOp,
+    lhs_addend: i32,
+    buffer_bounds_width_units: Option<u32>,
+}
+
 /// Runtime-guarded i32 specialization for `i < n` loops whose bound `n` is an
 /// `any`/untyped (non-`number`) local. The `is-number` flag and `fptosi(n)`
 /// value are both hoisted to stack slots once before the loop; the cond block
@@ -273,7 +282,7 @@ pub(crate) fn lower_for(
     // Saves ~25-30% on `for (let i = 0; i < arr.length; i++) arr[i] = i`
     // and `for (let i = 0; i < arr.length; i++) for (let j = 0; j <
     // arr.length; j++) ...` patterns.
-    let hoist_classification: Option<(u32, u32, perry_hir::CompareOp)> = condition
+    let hoist_classification: Option<LengthHoist> = condition
         .and_then(|cond| classify_for_length_hoist(cond, body))
         // `__arr_N` is the for-of desugar's holder — an ALIAS of the user's
         // iterable local. Body mutations go through the user's name
@@ -282,79 +291,85 @@ pub(crate) fn lower_for(
         // length every step (array-expand/contract in test262), so never
         // hoist for desugared for-of loops; user-written `i < arr.length`
         // loops keep the peephole.
-        .filter(|(arr_id, _, _)| {
+        .filter(|hoist| {
             !ctx.local_id_to_name
-                .get(arr_id)
+                .get(&hoist.arr_id)
                 .is_some_and(|n| n.starts_with("__arr_"))
         });
-    let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|(arr, _, _)| arr);
-    let hoisted_index_bounds_are_safe = hoist_classification.is_some_and(|(_, counter_id, op)| {
-        matches!(op, perry_hir::CompareOp::Lt)
-            && loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+    let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|hoist| hoist.arr_id);
+    let hoisted_index_bounds_are_safe = hoist_classification.is_some_and(|hoist| {
+        matches!(hoist.op, perry_hir::CompareOp::Lt)
+            && hoist.lhs_addend == 0
+            && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
     });
-    let hoisted_length_slot: Option<String> =
-        if let Some((arr_id, counter_id, _op)) = hoist_classification {
-            let arr_box_loaded = lower_expr(
-                ctx,
-                &perry_hir::Expr::PropertyGet {
-                    object: Box::new(perry_hir::Expr::LocalGet(arr_id)),
-                    property: "length".to_string(),
+    let hoisted_buffer_bounds_width = hoist_classification.and_then(|hoist| {
+        hoist.buffer_bounds_width_units.filter(|_| {
+            ctx.buffer_view_slots.contains_key(&hoist.arr_id)
+                && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
+        })
+    });
+    let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
+        let arr_box_loaded = lower_expr(
+            ctx,
+            &perry_hir::Expr::PropertyGet {
+                object: Box::new(perry_hir::Expr::LocalGet(hoist.arr_id)),
+                property: "length".to_string(),
+            },
+        )?;
+        let slot = ctx.func.alloca_entry(DOUBLE);
+        ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
+        ctx.cached_lengths.insert(hoist.arr_id, slot.clone());
+        // Also tell `lower_index_set_fast` (and similar sites) that
+        // `arr[counter_id]` is statically inbounds for this body, so
+        // it can skip the runtime length-load + bound check.
+        if hoisted_index_bounds_are_safe {
+            ctx.bounded_index_pairs.push(BoundedIndexPair {
+                index_local_id: hoist.counter_id,
+                array_local_id: hoist.arr_id,
+                scope_id: loop_proof_scope_id,
+            });
+        }
+        if let Some(bounds_width_units) = hoisted_buffer_bounds_width {
+            ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
+                index_local_id: hoist.counter_id,
+                buffer_local_id: hoist.arr_id,
+                scope_id: loop_proof_scope_id,
+                bounds_width_units,
+                bounds: BoundsState::Proven {
+                    proof: BoundsProof::LoopGuard,
                 },
-            )?;
-            let slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.block().store(DOUBLE, &arr_box_loaded, &slot);
-            ctx.cached_lengths.insert(arr_id, slot.clone());
-            // Also tell `lower_index_set_fast` (and similar sites) that
-            // `arr[counter_id]` is statically inbounds for this body, so
-            // it can skip the runtime length-load + bound check.
-            if hoisted_index_bounds_are_safe {
-                ctx.bounded_index_pairs.push(BoundedIndexPair {
-                    index_local_id: counter_id,
-                    array_local_id: arr_id,
-                    scope_id: loop_proof_scope_id,
-                });
-                if ctx.buffer_view_slots.contains_key(&arr_id) {
-                    ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
-                        index_local_id: counter_id,
-                        buffer_local_id: arr_id,
-                        scope_id: loop_proof_scope_id,
-                        bounds_width_units: 1,
-                        bounds: BoundsState::Proven {
-                            proof: BoundsProof::LoopGuard,
-                        },
-                    });
-                }
-            }
+            });
+        }
 
-            // If the counter is provably integer-valued (initialized from
-            // an Integer literal, only mutated via Update ++/--), allocate
-            // a parallel i32 slot. The Update lowering will keep it in sync,
-            // and IndexGet/IndexSet will load the i32 directly instead of
-            // emitting a `fptosi double → i32` on every iteration.
-            if ctx.integer_locals.contains(&counter_id) {
-                if let Some(counter_slot) = ctx.locals.get(&counter_id).cloned() {
-                    let i32_slot = ctx.func.alloca_entry(I32);
-                    // Initialize from the current double value.
-                    let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
-                    let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
-                    ctx.block().store(I32, &cur_i32, &i32_slot);
-                    ctx.i32_counter_slots.insert(counter_id, i32_slot);
-                }
+        // If the counter is provably integer-valued (initialized from
+        // an Integer literal, only mutated via Update ++/--), allocate
+        // a parallel i32 slot. The Update lowering will keep it in sync,
+        // and IndexGet/IndexSet will load the i32 directly instead of
+        // emitting a `fptosi double → i32` on every iteration.
+        if ctx.integer_locals.contains(&hoist.counter_id) {
+            if let Some(counter_slot) = ctx.locals.get(&hoist.counter_id).cloned() {
+                let i32_slot = ctx.func.alloca_entry(I32);
+                // Initialize from the current double value.
+                let cur_dbl = ctx.block().load(DOUBLE, &counter_slot);
+                let cur_i32 = ctx.block().fptosi(DOUBLE, &cur_dbl, I32);
+                ctx.block().store(I32, &cur_i32, &i32_slot);
+                ctx.i32_counter_slots.insert(hoist.counter_id, i32_slot);
             }
+        }
 
-            Some(slot)
-        } else {
-            None
-        };
+        Some(slot)
+    } else {
+        None
+    };
 
     // If we have an i32 counter AND a hoisted length, pre-compute the
     // length as i32 so the loop condition can use `icmp slt/sle i32`
     // instead of `fcmp olt/ole double`. This eliminates the float counter fadd +
     // fcmp per iteration — saves ~2 instructions on the inner loop of
     // nested_loops and similar patterns.
-    let i32_length_slot: Option<String> = if let Some((_, counter_id, _op)) = hoist_classification {
+    let i32_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
         if let (Some(_), Some(len_dbl_slot)) = (
-            ctx.i32_counter_slots.get(&counter_id).cloned(),
+            ctx.i32_counter_slots.get(&hoist.counter_id).cloned(),
             hoisted_length_slot.as_ref(),
         ) {
             let len_dbl = ctx.block().load(DOUBLE, len_dbl_slot);
@@ -558,81 +573,83 @@ pub(crate) fn lower_for(
 
     // Cond block — fast i32 path when both counter and length are i32.
     ctx.current_block = cond_idx;
-    let used_i32_cond = if let (Some((_, counter_id, op)), Some(ref len_i32_slot)) =
-        (hoist_classification, &i32_length_slot)
-    {
-        // Existing path: `i < arr.length` / `i <= arr.length` with
-        // hoisted i32 length.
-        if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&counter_id).cloned() {
-            let ctr = ctx.block().load(I32, &ctr_i32_slot);
-            let len = ctx.block().load(I32, len_i32_slot);
-            let cmp = match op {
-                perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &len),
-                _ => ctx.block().icmp_slt(I32, &ctr, &len),
-            };
-            ctx.block().cond_br(&cmp, &body_label, &exit_label);
-            true
-        } else {
-            false
-        }
-    } else if let (Some((counter_id, _, op)), Some(ref bound_i32_slot)) =
-        (local_bound_classification, &i32_local_bound_slot)
-    {
-        // Issue #168: `i < n` / `i <= n` where `n` is a number-typed local
-        // or parameter.  The fptosi(n) was hoisted above; use icmp i32.
-        if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&counter_id).cloned() {
-            let ctr = ctx.block().load(I32, &ctr_i32_slot);
-            let bound = ctx.block().load(I32, bound_i32_slot);
-            let cmp = match op {
-                perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
-                _ => ctx.block().icmp_slt(I32, &ctr, &bound),
-            };
-            ctx.block().cond_br(&cmp, &body_label, &exit_label);
-            true
-        } else {
-            false
-        }
-    } else if let Some(ref dyn_bound) = dynamic_i32_bound {
-        // Issue #168 follow-up: `i < n` / `i <= n` where `n` is an `any`/untyped
-        // local. Branch on the one-time `is-number` flag hoisted above: the
-        // fast loop uses `icmp slt i32`; the slow loop keeps full JS comparison
-        // semantics. The branch is loop-invariant, so LLVM's LoopUnswitch peels
-        // it into two loops at -O2+; even unswitched, the hot (is-number) path
-        // executes pure integer compares with no per-iteration `sitofp` / call.
-        if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&dyn_bound.counter_id).cloned() {
-            let fast_idx = ctx.new_block("for.cond.fast");
-            let slow_idx = ctx.new_block("for.cond.slow");
-            let fast_label = ctx.block_label(fast_idx);
-            let slow_label = ctx.block_label(slow_idx);
-            let flag = ctx.block().load(I1, &dyn_bound.flag_slot);
-            ctx.block().cond_br(&flag, &fast_label, &slow_label);
-
-            // Fast path: integer induction variable + `icmp`.
-            ctx.current_block = fast_idx;
-            let ctr = ctx.block().load(I32, &ctr_i32_slot);
-            let bound = ctx.block().load(I32, &dyn_bound.bound_i32_slot);
-            let cmp = match dyn_bound.op {
-                perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
-                _ => ctx.block().icmp_slt(I32, &ctr, &bound),
-            };
-            ctx.block().cond_br(&cmp, &body_label, &exit_label);
-
-            // Slow path: generic per-iteration comparison (full coercion).
-            ctx.current_block = slow_idx;
-            if let Some(cond_expr) = condition {
-                let cv = lower_expr(ctx, cond_expr)?;
-                let i1 = lower_truthy(ctx, &cv, cond_expr);
-                ctx.block().cond_br(&i1, &body_label, &exit_label);
+    let used_i32_cond =
+        if let (Some(hoist), Some(ref len_i32_slot)) = (hoist_classification, &i32_length_slot) {
+            // Existing path: `i < arr.length` / `i <= arr.length` with
+            // hoisted i32 length.
+            if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&hoist.counter_id).cloned() {
+                let mut ctr = ctx.block().load(I32, &ctr_i32_slot);
+                if hoist.lhs_addend != 0 {
+                    ctr = ctx.block().add(I32, &ctr, &hoist.lhs_addend.to_string());
+                }
+                let len = ctx.block().load(I32, len_i32_slot);
+                let cmp = match hoist.op {
+                    perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &len),
+                    _ => ctx.block().icmp_slt(I32, &ctr, &len),
+                };
+                ctx.block().cond_br(&cmp, &body_label, &exit_label);
+                true
             } else {
-                ctx.block().br(&body_label);
+                false
             }
-            true
+        } else if let (Some((counter_id, _, op)), Some(ref bound_i32_slot)) =
+            (local_bound_classification, &i32_local_bound_slot)
+        {
+            // Issue #168: `i < n` / `i <= n` where `n` is a number-typed local
+            // or parameter.  The fptosi(n) was hoisted above; use icmp i32.
+            if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&counter_id).cloned() {
+                let ctr = ctx.block().load(I32, &ctr_i32_slot);
+                let bound = ctx.block().load(I32, bound_i32_slot);
+                let cmp = match op {
+                    perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
+                    _ => ctx.block().icmp_slt(I32, &ctr, &bound),
+                };
+                ctx.block().cond_br(&cmp, &body_label, &exit_label);
+                true
+            } else {
+                false
+            }
+        } else if let Some(ref dyn_bound) = dynamic_i32_bound {
+            // Issue #168 follow-up: `i < n` / `i <= n` where `n` is an `any`/untyped
+            // local. Branch on the one-time `is-number` flag hoisted above: the
+            // fast loop uses `icmp slt i32`; the slow loop keeps full JS comparison
+            // semantics. The branch is loop-invariant, so LLVM's LoopUnswitch peels
+            // it into two loops at -O2+; even unswitched, the hot (is-number) path
+            // executes pure integer compares with no per-iteration `sitofp` / call.
+            if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&dyn_bound.counter_id).cloned() {
+                let fast_idx = ctx.new_block("for.cond.fast");
+                let slow_idx = ctx.new_block("for.cond.slow");
+                let fast_label = ctx.block_label(fast_idx);
+                let slow_label = ctx.block_label(slow_idx);
+                let flag = ctx.block().load(I1, &dyn_bound.flag_slot);
+                ctx.block().cond_br(&flag, &fast_label, &slow_label);
+
+                // Fast path: integer induction variable + `icmp`.
+                ctx.current_block = fast_idx;
+                let ctr = ctx.block().load(I32, &ctr_i32_slot);
+                let bound = ctx.block().load(I32, &dyn_bound.bound_i32_slot);
+                let cmp = match dyn_bound.op {
+                    perry_hir::CompareOp::Le => ctx.block().icmp_sle(I32, &ctr, &bound),
+                    _ => ctx.block().icmp_slt(I32, &ctr, &bound),
+                };
+                ctx.block().cond_br(&cmp, &body_label, &exit_label);
+
+                // Slow path: generic per-iteration comparison (full coercion).
+                ctx.current_block = slow_idx;
+                if let Some(cond_expr) = condition {
+                    let cv = lower_expr(ctx, cond_expr)?;
+                    let i1 = lower_truthy(ctx, &cv, cond_expr);
+                    ctx.block().cond_br(&i1, &body_label, &exit_label);
+                } else {
+                    ctx.block().br(&body_label);
+                }
+                true
+            } else {
+                false
+            }
         } else {
             false
-        }
-    } else {
-        false
-    };
+        };
     if !used_i32_cond {
         if let Some(cond_expr) = condition {
             let cv = lower_expr(ctx, cond_expr)?;
@@ -703,8 +720,8 @@ pub(crate) fn lower_for(
 
     // Pop the hoisted-length entry so nested loops or sibling loops
     // don't see a stale slot.
-    if let Some((_, counter_id, _op)) = hoist_classification {
-        ctx.i32_counter_slots.remove(&counter_id);
+    if let Some(hoist) = hoist_classification {
+        ctx.i32_counter_slots.remove(&hoist.counter_id);
     }
     if let Some(arr_id) = hoisted_length_arr_id {
         ctx.cached_lengths.remove(&arr_id);
@@ -752,21 +769,24 @@ pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
 }
 
 /// Inspect a `for` loop's condition expression and body, and return
-/// `Some((arr_local_id, counter_local_id, op))` if the loop is the
-/// well-known shape `for (let i = ...; i < <arr>.length; ...) { body }`
-/// (or `<=`) AND the body is provably free of operations that can change
-/// `arr.length`.
+/// `Some(...)` if the loop is the well-known shape
+/// `for (let i = ...; i < <arr>.length; ...) { body }` (or `<=`) AND the
+/// body is provably free of operations that can change `arr.length`.
+///
+/// Also recognizes fixed-width native-buffer guards such as
+/// `i + 4 <= buf.length`. The hoist descriptor keeps the LHS addend so the
+/// fast condition remains `i + 4 <= len`, not `i <= len`.
 ///
 /// The walker also accepts `arr[i] = expr` IndexSets where `i` is the
 /// loop counter from a strict `<` condition — those are guaranteed
 /// inbounds and therefore can't trigger the realloc slow path that would
 /// extend `arr.length`. Under `<=`, `i == arr.length` is reachable, so
 /// array writes must go through the normal extension-capable path.
-pub(crate) fn classify_for_length_hoist(
+fn classify_for_length_hoist(
     cond: &perry_hir::Expr,
     body: &[perry_hir::Stmt],
-) -> Option<(u32, u32, perry_hir::CompareOp)> {
-    use perry_hir::{CompareOp, Expr};
+) -> Option<LengthHoist> {
+    use perry_hir::{BinaryOp, CompareOp, Expr};
     let (op, left, right) = match cond {
         Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
@@ -781,18 +801,53 @@ pub(crate) fn classify_for_length_hoist(
         },
         _ => return None,
     };
-    let bounded_idx_id = match left {
-        Expr::LocalGet(id) => *id,
+    let (bounded_idx_id, lhs_addend) = match left {
+        Expr::LocalGet(id) => (*id, 0),
+        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                    let addend = if matches!(op, BinaryOp::Sub) {
+                        addend.checked_neg()?
+                    } else {
+                        *addend
+                    };
+                    if !(0..=i32::MAX as i64).contains(&addend) {
+                        return None;
+                    }
+                    (*id, addend as i32)
+                }
+                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                    if !(0..=i32::MAX as i64).contains(addend) {
+                        return None;
+                    }
+                    (*id, *addend as i32)
+                }
+                _ => return None,
+            }
+        }
         _ => return None,
     };
-    let has_strict_bound = matches!(op, CompareOp::Lt);
+    let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
     if !body
         .iter()
         .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
     {
         return None;
     }
-    Some((arr_id, bounded_idx_id, op))
+    let buffer_bounds_width_units = match op {
+        CompareOp::Lt => i64::from(lhs_addend).checked_add(1),
+        CompareOp::Le => Some(i64::from(lhs_addend)),
+        _ => None,
+    }
+    .filter(|width| *width >= 1 && *width <= u32::MAX as i64)
+    .map(|width| width as u32);
+    Some(LengthHoist {
+        arr_id,
+        counter_id: bounded_idx_id,
+        op,
+        lhs_addend,
+        buffer_bounds_width_units,
+    })
 }
 
 /// Inspect a `for` loop's condition and return `Some((counter_id, bound_id,

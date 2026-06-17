@@ -479,6 +479,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let element_ptr = blk.inttoptr(I64, &element_addr);
                                 let numeric_value =
                                     canonicalize_raw_f64_numeric_store_value(blk, &val_double);
+                                // GC_STORE_AUDIT(POINTER_FREE): guarded raw-f64
+                                // numeric store — the canonicalized value is a
+                                // plain f64, never a GC pointer, so no barrier.
                                 blk.store(DOUBLE, &numeric_value, &element_ptr);
                                 blk.br(&merge_label);
                             }
