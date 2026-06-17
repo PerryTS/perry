@@ -1234,6 +1234,58 @@ fn pod_field_read_after_dynamic_materialization_uses_number_coerce() {
 }
 
 #[test]
+fn number_coerce_of_proven_numeric_loop_expression_skips_runtime_call() {
+    let body = vec![
+        number_let(1, "sum", true, int(0)),
+        Stmt::For {
+            init: Some(Box::new(number_let(2, "i", true, int(0)))),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(local(2)),
+                right: Box::new(int(64)),
+            }),
+            update: Some(increment(2)),
+            body: vec![Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(add(
+                    local(1),
+                    Expr::NumberCoerce(Box::new(add(local(2), number(0.5)))),
+                )),
+            ))],
+        },
+        Stmt::Return(Some(local(1))),
+    ];
+
+    let ir = compile_ir("number_coerce_numeric_loop_no_runtime_call.ts", body);
+    assert!(
+        !ir.contains("call double @js_number_coerce"),
+        "Number(i + 0.5) with a proven integer loop counter is already a primitive number:\n{ir}"
+    );
+}
+
+#[test]
+fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
+    let module = module_with_classes_and_params(
+        "number_coerce_numeric_array_fallback.ts",
+        Vec::new(),
+        vec![param(1, "values", Type::Array(Box::new(Type::Number)))],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(
+            Expr::IndexGet {
+                object: Box::new(local(1)),
+                index: Box::new(int(0)),
+            },
+        ))))],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_number_coerce"),
+        "Number(values[0]) must still coerce boxed numeric-array fallback values:\n{ir}"
+    );
+}
+
+#[test]
 fn typed_array_f64_store_coerces_raw_numeric_array_fallback_value() {
     let module = module_with_classes_and_params(
         "typed_array_f64_store_coerces_numeric_array_fallback.ts",

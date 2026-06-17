@@ -846,13 +846,11 @@ fn explicit_width_guard_proves_wide_buffer_read() {
         records.iter().any(|record| {
             record["expr_kind"] == "BufferNumericRead"
                 && record["consumer"] == "BufferNumericRead.native_u32"
-                && record["bounds_state"]["guarded"]["guard_id"]
-                    .as_str()
-                    .is_some_and(|id| id.contains("width_4"))
+                && record["bounds_state"]["proven"]["proof"] == "loop_guard"
                 && record["buffer_access"]["access_width_bytes"] == 4
                 && record["buffer_access"]["bounds_width_units"] == 4
         }),
-        "expected i + 4 <= buf.length to guard a 4-byte native read:\n{artifact:#}"
+        "expected i + 4 <= buf.length to prove a 4-byte native read:\n{artifact:#}"
     );
 }
 
