@@ -234,3 +234,70 @@
   - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only` and the before/after comparison above uses the captured local third-cycle results.
   - This follow-up is intended as a stacked draft PR on top of the monomorphic array guard fast-cache PR.
 - PR: https://github.com/PerryTS/perry/pull/5309
+
+## 2026-06-17 - I32 lowering for loop-bound numeric array indices
+
+- Start revision: `966729232`
+- Branch: `codex/perry-i32-array-index-lowering`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux `/usr/bin/time`; local `node` cannot execute `.ts` benchmark inputs, so Node columns and correctness comparisons were skipped by the harness
+- Baseline commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-guard-precheck-final2 --quiet`
+  - `for i in 1 2 3 4 5; do /usr/bin/time -f "sample=$i wall=%e rss_kb=%M" /tmp/perry-matrix-guard-precheck-final2; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-guard-precheck-final2-trace.json /usr/bin/time -f "wall=%e rss_kb=%M" /tmp/perry-matrix-guard-precheck-final2 && jq '.guards' /tmp/perry-matrix-guard-precheck-final2-trace.json`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-guard-precheck-final2`
+  - `benchmarks/quick.sh`
+  - `benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-guard-precheck-final2.json`
+- Baseline results:
+  - direct matrix binary: 400ms, 398ms, 398ms, 385ms, 386ms; checksum always `41079519680`
+  - final trace run: `matrix_multiply:395`, checksum `41079519680`, wall 0.42s, RSS 31500KB, 33,619,968 numeric array index-get guard passes, 65,536 numeric array index-set guard passes, 0 get/set guard failures; push guard retained 39 fallback calls
+  - `perf stat` direct matrix binary: 1,443,394,074 cycles, 7,034,084,638 instructions, 1,568,434,556 branches, 241,348 branch-misses, 0.4222s elapsed
+  - compare quick medians: loop_overhead 76ms/18880KB, fibonacci 266ms/18764KB, math_intensive 55ms/19092KB, nested_loops 225ms/23204KB, factorial 95ms/18764KB
+  - quick: fibonacci 254ms/18MB, math_intensive 73ms/18MB, nested_loops 229ms/22MB, factorial 97ms/18MB, matrix_multiply 407ms/30MB
+- Selected gap and evidence:
+  - After numeric array guard pre-classification, `matrix_multiply` remained the slowest `quick.sh` case at 407ms.
+  - LLVM trace for `benchmarks/suite/16_matrix_multiply.ts` still lowered hot computed get indices such as `i * size + k` through `sitofp`/`fmul`/`fadd`/`fptosi` before calling the typed-feedback numeric array get guard.
+  - Loop-bound analysis already proved and hoisted `size` as an i32 loop bound for `i < size` and `k < size`, but that trusted bound was not visible to the existing i32 expression lowering used by index expressions.
+- Change:
+  - Reused or inserted an i32 slot for local loop bounds classified by the `i < n` loop-bound path and kept that slot visible while lowering the loop body.
+  - Used the existing `can_lower_expr_as_i32` / `lower_expr_as_i32` machinery for known-array computed get indices when the index expression is fully backed by trusted i32 slots, integer locals, or constants.
+  - Preserved the typed-feedback numeric array get guard and fallback path; the final i32 index is converted back to double only for the guard's double index argument.
+  - Added an IR regression test covering `xs[i * size + 1]` inside `for (let i = 0; i < size; i++)`, asserting guarded fallback emission plus `mul i32`/`add i32` and no `fmul double` for that computed index.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-i32-index-proto --trace llvm --quiet`
+  - `rg -n "js_typed_feedback_numeric_array_index_get_guard|fmul double|mul i32|add i32|sitofp i32" .perry-trace/llvm/_16_matrix_multiply_ts.ll`
+  - `for i in 1 2 3 4 5; do /usr/bin/time -f "sample=$i wall=%e rss_kb=%M" /tmp/perry-matrix-i32-index-proto; done`
+  - `PERRY_TYPED_FEEDBACK_TRACE=/tmp/perry-matrix-i32-index-proto-trace.json /usr/bin/time -f "wall=%e rss_kb=%M" /tmp/perry-matrix-i32-index-proto && jq '.guards' /tmp/perry-matrix-i32-index-proto-trace.json`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-i32-index-proto`
+  - `benchmarks/quick.sh`
+  - `benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-i32-index-proto.json`
+  - `for i in 1 2 3 4 5 6 7 8 9 10; do /usr/bin/time -f "sample=$i wall=%e rss_kb=%M" /tmp/perry-matrix-i32-index-proto; done`
+- Post-change results:
+  - LLVM trace confirmed the two hot matmul numeric-array get indices now use `mul i32` and `add i32` before `call i32 @js_typed_feedback_numeric_array_index_get_guard`; remaining `sitofp i32` values feed the guard's double index argument.
+  - direct matrix binary first sample set: 400ms, 393ms, 388ms, 403ms, 393ms; checksum always `41079519680`
+  - direct matrix binary 10-sample set: 397ms, 396ms, 390ms, 392ms, 392ms, 393ms, 383ms, 389ms, 386ms, 384ms; checksum always `41079519680`
+  - trace run: `matrix_multiply:397`, checksum `41079519680`, wall 0.42s, RSS 31440KB, 33,619,968 numeric array index-get guard passes, 65,536 numeric array index-set guard passes, 0 get/set guard failures; push guard retained 39 fallback calls
+  - `perf stat` direct matrix binary: 1,456,553,467 cycles, 7,017,622,346 instructions, 1,568,480,860 branches, 249,497 branch-misses, 0.4217s elapsed
+  - quick: fibonacci 251ms/18MB, math_intensive 71ms/18MB, nested_loops 202ms/22MB, factorial 99ms/18MB, matrix_multiply 387ms/30MB
+  - compare quick medians: loop_overhead 56ms/18784KB, fibonacci 248ms/18896KB, math_intensive 55ms/18900KB, nested_loops 214ms/23268KB, factorial 78ms/18776KB
+- Measured impact:
+  - `16_matrix_multiply` direct median: 398ms -> 391ms, 1.8% faster
+  - `16_matrix_multiply` quick: 407ms -> 387ms, 4.9% faster
+  - Direct matrix binary instructions: 7.034B -> 7.018B, 0.2% fewer
+  - Direct matrix binary cycles: 1.443B -> 1.457B, 0.9% more in the single perf sample; branch misses also rose from 241K to 249K, so counter impact is mixed despite lower wall-time samples
+  - `10_nested_loops` compare median: 225ms -> 214ms, 4.9% faster
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen --test typed_shape_descriptors`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+  - `cargo build --release`
+  - Typed-feedback trace confirmed get/set guard pass counts and zero get/set failures match the pre-change trace.
+- Notes:
+  - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only`, and the before/after comparison above uses the captured local fourth-cycle baseline.
+  - This is a smaller cleanup than the preceding guard-cache work. The keeper signal is the consistent matrix wall-time reduction plus removal of double arithmetic from the hottest generated get-index chains; perf counters should be watched on future runs.
+- PR: https://github.com/PerryTS/perry/pull/5310

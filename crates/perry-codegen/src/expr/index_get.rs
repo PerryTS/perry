@@ -35,7 +35,7 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 use super::arrays_finds::lower_buffer_index_get_i32;
 #[allow(unused_imports)]
 use super::{
-    buffer_access_materialization_reason, buffer_alias_metadata_suffix,
+    buffer_access_materialization_reason, buffer_alias_metadata_suffix, can_lower_expr_as_i32,
     emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
     emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
@@ -847,8 +847,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 let arr_box = lower_expr(ctx, object)?;
-                let idx_double = lower_expr(ctx, index)?;
-                let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
+                let i32_slots = ctx.i32_counter_slots.clone();
+                let flat_const_arrays = ctx.flat_const_arrays.clone();
+                let array_row_aliases = ctx.array_row_aliases.clone();
+                let integer_locals = ctx.integer_locals.clone();
+                let use_i32_index = can_lower_expr_as_i32(
+                    index,
+                    &i32_slots,
+                    &flat_const_arrays,
+                    &array_row_aliases,
+                    &integer_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                );
+                let (idx_double, idx_i32) = if use_i32_index {
+                    let idx_i32 = lower_expr_as_i32(ctx, index)?;
+                    let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+                    (idx_double, idx_i32)
+                } else {
+                    let idx_double = lower_expr(ctx, index)?;
+                    let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
+                    (idx_double, idx_i32)
+                };
                 if !require_numeric_layout
                     && !matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_))
                 {

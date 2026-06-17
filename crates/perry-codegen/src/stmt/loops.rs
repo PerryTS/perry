@@ -386,6 +386,7 @@ pub(crate) fn lower_for(
     // site having done so already).  Only the site that inserted should
     // remove it at loop exit to avoid disturbing a pre-existing slot.
     let local_bound_counter_i32_was_fresh: bool;
+    let local_bound_bound_i32_was_fresh: bool;
     let i32_local_bound_slot: Option<String> =
         if let Some((counter_id, bound_id, _op)) = local_bound_classification {
             // Allocate a parallel i32 slot for the counter if not already
@@ -411,18 +412,28 @@ pub(crate) fn lower_for(
             local_bound_counter_i32_was_fresh = fresh;
             // Hoist `fptosi(n)` to a fresh i32 alloca before the cond block
             // so LLVM sees a loop-invariant integer bound — critical for
-            // SCEV / LoopVectorizer to recognize the induction variable.
-            if let Some(bound_slot) = ctx.locals.get(&bound_id).cloned() {
+            // SCEV / LoopVectorizer to recognize the induction variable. Also
+            // expose that slot while lowering the loop body so integer index
+            // expressions like `i * n + k` can reuse the same trusted bound
+            // instead of rebuilding the index through double arithmetic.
+            if let Some(existing) = ctx.i32_counter_slots.get(&bound_id).cloned() {
+                local_bound_bound_i32_was_fresh = false;
+                Some(existing)
+            } else if let Some(bound_slot) = ctx.locals.get(&bound_id).cloned() {
                 let bound_dbl = ctx.block().load(DOUBLE, &bound_slot);
                 let bound_i32 = ctx.block().fptosi(DOUBLE, &bound_dbl, I32);
                 let slot = ctx.func.alloca_entry(I32);
                 ctx.block().store(I32, &bound_i32, &slot);
+                ctx.i32_counter_slots.insert(bound_id, slot.clone());
+                local_bound_bound_i32_was_fresh = true;
                 Some(slot)
             } else {
+                local_bound_bound_i32_was_fresh = false;
                 None
             }
         } else {
             local_bound_counter_i32_was_fresh = false;
+            local_bound_bound_i32_was_fresh = false;
             None
         };
     // Issue #168 follow-up: when neither the `arr.length` hoist nor the static
@@ -716,6 +727,11 @@ pub(crate) fn lower_for(
     if local_bound_counter_i32_was_fresh {
         if let Some((counter_id, _, _)) = local_bound_classification {
             ctx.i32_counter_slots.remove(&counter_id);
+        }
+    }
+    if local_bound_bound_i32_was_fresh {
+        if let Some((_, bound_id, _)) = local_bound_classification {
+            ctx.i32_counter_slots.remove(&bound_id);
         }
     }
     let _ = i32_local_bound_slot;
