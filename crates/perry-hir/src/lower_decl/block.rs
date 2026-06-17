@@ -535,6 +535,151 @@ pub(crate) fn collect_var_binding_names_from_stmt(stmt: &ast::Stmt, out: &mut Ve
     }
 }
 
+/// Collect the lexically-declared names (`let` / `const` / `class`) at the top
+/// level of a statement list. A `var` or a `function` declaration is NOT
+/// lexical and does not belong here. Used to build the Annex B "forbidden" set:
+/// a block-level function declaration whose name collides with a lexical
+/// binding in an enclosing scope would make the equivalent `var` an early
+/// error, so B.3.3 skips creating the enclosing-scope `var`.
+pub(crate) fn collect_lexical_decl_names(
+    stmts: &[ast::Stmt],
+    out: &mut std::collections::HashSet<String>,
+) {
+    for stmt in stmts {
+        match stmt {
+            ast::Stmt::Decl(ast::Decl::Var(var_decl)) if var_decl.kind != ast::VarDeclKind::Var => {
+                for decl in &var_decl.decls {
+                    let mut names = Vec::new();
+                    collect_var_binding_names_from_pat(&decl.name, &mut names);
+                    out.extend(names);
+                }
+            }
+            ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
+                out.insert(class_decl.ident.sym.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Annex B B.3.3 (#5297): collect the names of function declarations that
+/// appear *inside a nested block* of a function/program body. In sloppy mode
+/// such a legacy block-level function declaration ALSO creates a `var`-style
+/// binding in the enclosing function/global scope (`f` is visible — as a `var`
+/// initialised to `undefined` until the declaration runs — outside the block).
+///
+/// `body_stmts` are the body's own top-level statements: a `function f(){}`
+/// directly among them is an ordinary FunctionDeclaration (already function-
+/// scoped) and is NOT collected; every function declaration reached by
+/// descending through a block / `if` branch / loop body / `switch` case /
+/// `try` part / labeled / `with` body IS. `forbidden` seeds the names for which
+/// the legacy `var` must be skipped — the spec gates B.3.3 on "replacing the
+/// FunctionDeclaration with a `var` produces no early error and the name is not
+/// a parameter": callers pass the parameter names, the body's own top-level
+/// lexical names, and `"arguments"`. As we descend, each block contributes its
+/// own `let`/`const`/`class` names to the forbidden set for everything nested
+/// within it (so `{ let f; { function f(){} } }` is correctly skipped). Nested
+/// function and class bodies own their own var environment and are not entered.
+/// One traversal yields two results:
+/// - `all_out`: EVERY block-nested function declaration name. Every block-level
+///   function declaration is block-scoped (gets its own binding), so
+///   `lower_nested_fn_decl` gives these a fresh local rather than clobbering an
+///   enclosing same-named parameter/binding.
+/// - `var_out`: the subset that ALSO gets the legacy enclosing-scope `var` —
+///   names not in `forbidden` and not shadowed by an enclosing block's
+///   `let`/`const`/`class` (which would make `var f` an early error).
+pub(crate) fn collect_annexb_block_fn_decl_names(
+    body_stmts: &[ast::Stmt],
+    forbidden: &std::collections::HashSet<String>,
+    all_out: &mut Vec<String>,
+    var_out: &mut Vec<String>,
+) {
+    for stmt in body_stmts {
+        // A direct top-level function declaration is already function-scoped.
+        if matches!(stmt, ast::Stmt::Decl(ast::Decl::Fn(_))) {
+            continue;
+        }
+        annexb_nested_stmt(stmt, forbidden, all_out, var_out);
+    }
+}
+
+fn annexb_nested_stmt(
+    stmt: &ast::Stmt,
+    forbidden: &std::collections::HashSet<String>,
+    all_out: &mut Vec<String>,
+    var_out: &mut Vec<String>,
+) {
+    match stmt {
+        ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) => {
+            let name = fn_decl.ident.sym.to_string();
+            all_out.push(name.clone());
+            if !forbidden.contains(&name) {
+                var_out.push(name);
+            }
+        }
+        // Nested function/class bodies have their own var environment.
+        ast::Stmt::Decl(ast::Decl::Class(_)) => {}
+        ast::Stmt::Block(block) => annexb_nested_block(&block.stmts, forbidden, all_out, var_out),
+        ast::Stmt::If(if_stmt) => {
+            annexb_nested_stmt(&if_stmt.cons, forbidden, all_out, var_out);
+            if let Some(alt) = &if_stmt.alt {
+                annexb_nested_stmt(alt, forbidden, all_out, var_out);
+            }
+        }
+        ast::Stmt::While(while_stmt) => {
+            annexb_nested_stmt(&while_stmt.body, forbidden, all_out, var_out)
+        }
+        ast::Stmt::DoWhile(do_while) => {
+            annexb_nested_stmt(&do_while.body, forbidden, all_out, var_out)
+        }
+        ast::Stmt::For(for_stmt) => annexb_nested_stmt(&for_stmt.body, forbidden, all_out, var_out),
+        ast::Stmt::ForIn(for_in) => annexb_nested_stmt(&for_in.body, forbidden, all_out, var_out),
+        ast::Stmt::ForOf(for_of) => annexb_nested_stmt(&for_of.body, forbidden, all_out, var_out),
+        ast::Stmt::Labeled(labeled) => {
+            annexb_nested_stmt(&labeled.body, forbidden, all_out, var_out)
+        }
+        ast::Stmt::Switch(switch_stmt) => {
+            // All cases of a switch share one block scope, so their lexical
+            // names contribute together to the forbidden set.
+            let mut inner = forbidden.clone();
+            for case in &switch_stmt.cases {
+                collect_lexical_decl_names(&case.cons, &mut inner);
+            }
+            for case in &switch_stmt.cases {
+                for stmt in &case.cons {
+                    annexb_nested_stmt(stmt, &inner, all_out, var_out);
+                }
+            }
+        }
+        ast::Stmt::Try(try_stmt) => {
+            annexb_nested_block(&try_stmt.block.stmts, forbidden, all_out, var_out);
+            if let Some(handler) = &try_stmt.handler {
+                annexb_nested_block(&handler.body.stmts, forbidden, all_out, var_out);
+            }
+            if let Some(finalizer) = &try_stmt.finalizer {
+                annexb_nested_block(&finalizer.stmts, forbidden, all_out, var_out);
+            }
+        }
+        ast::Stmt::With(with_stmt) => {
+            annexb_nested_stmt(&with_stmt.body, forbidden, all_out, var_out)
+        }
+        _ => {}
+    }
+}
+
+fn annexb_nested_block(
+    stmts: &[ast::Stmt],
+    forbidden: &std::collections::HashSet<String>,
+    all_out: &mut Vec<String>,
+    var_out: &mut Vec<String>,
+) {
+    let mut inner = forbidden.clone();
+    collect_lexical_decl_names(stmts, &mut inner);
+    for stmt in stmts {
+        annexb_nested_stmt(stmt, &inner, all_out, var_out);
+    }
+}
+
 /// Returns the (name, id) pairs newly created here (i.e. names that did not
 /// already have a binding in the current scope, like a same-named param).
 /// The caller emits an undefined-initialised `Stmt::Let` for each at body
@@ -570,6 +715,59 @@ fn predefine_var_bindings_in_function_body(
         });
         ctx.var_hoisted_ids.insert(local_id);
     }
+
+    // Annex B B.3.3 (#5297): in sloppy mode a block-nested `function f(){}`
+    // also gets an enclosing-scope `var f` (undefined until the declaration
+    // runs). Register one hoisted slot per such name and record name -> slot in
+    // `annexb_block_fn_var_ids` so `lower_nested_fn_decl` can write the closure
+    // into it at the declaration point while keeping the block-local binding
+    // independent. Strict bodies get pure block scoping (no outer var).
+    if !ctx.current_strict {
+        // Forbidden: names for which the legacy `var` must be skipped. The
+        // body's own top-level `let`/`const`/`class` make `var f` an early
+        // error; `arguments` is excluded by spec. Parameters are handled below
+        // (at this point only params and the `var`s collected just above are in
+        // this scope — a `var`-hoisted binding is reusable, a non-hoisted one is
+        // a parameter and yields to it).
+        let mut forbidden = std::collections::HashSet::new();
+        collect_lexical_decl_names(&block.stmts, &mut forbidden);
+        forbidden.insert("arguments".to_string());
+
+        let mut all_names = Vec::new();
+        let mut annexb_names = Vec::new();
+        collect_annexb_block_fn_decl_names(
+            &block.stmts,
+            &forbidden,
+            &mut all_names,
+            &mut annexb_names,
+        );
+        ctx.annexb_block_fn_names_all.extend(all_names);
+        annexb_names.sort();
+        annexb_names.dedup();
+        for name in annexb_names {
+            let existing = ctx
+                .locals
+                .lookup_index_in_scope(&name, scope_start)
+                .map(|pos| ctx.locals[pos].1);
+            match existing {
+                Some(id) if ctx.var_hoisted_ids.contains(&id) => {
+                    // Shares the existing `var` binding (entry slot already
+                    // emitted via `created` by the var pre-pass above).
+                    ctx.annexb_block_fn_var_ids.insert(name, id);
+                }
+                Some(_) => {
+                    // A parameter of the same name — B.3.3 yields to it.
+                }
+                None => {
+                    let id = ctx.define_local(name.clone(), Type::Any);
+                    created.push((name.clone(), id));
+                    ctx.var_hoisted_ids.insert(id);
+                    ctx.annexb_block_fn_var_ids.insert(name, id);
+                }
+            }
+        }
+    }
+
     created
 }
 
@@ -598,6 +796,13 @@ pub fn lower_fn_body_block_stmt(
     let parent_strict = ctx.current_strict;
     ctx.current_strict =
         parent_strict || crate::lower::stmt_list_starts_with_use_strict_directive(&block.stmts);
+    // Annex B B.3.3 (#5297): this body's block-nested function declarations get
+    // their own enclosing-scope `var` map; nested function bodies lowered while
+    // we are inside this one save/restore their own, so take ours aside now and
+    // restore it on every exit. `predefine_var_bindings_in_function_body`
+    // repopulates it for this body below.
+    let saved_annexb_block_fn_var_ids = std::mem::take(&mut ctx.annexb_block_fn_var_ids);
+    let saved_annexb_block_fn_names_all = std::mem::take(&mut ctx.annexb_block_fn_names_all);
     // Boundary between outer-scope locals (+ this function's params, defined by
     // the caller before entry) and locals defined while lowering THIS body.
     // Used by the Phase 1.6 forward `let`/`const` pre-registration so a const
@@ -685,6 +890,8 @@ pub fn lower_fn_body_block_stmt(
         Err(err) => {
             ctx.current_strict = parent_strict;
             ctx.forward_class_names = saved_forward_class_names;
+            ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
+            ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
             return Err(err);
         }
     };
@@ -761,6 +968,8 @@ pub fn lower_fn_body_block_stmt(
 
     if hoisted_id_set.is_empty() && forward_boxed_ids.is_empty() {
         ctx.current_strict = parent_strict;
+        ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
+        ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
         let mut result = var_slot_lets;
         result.extend(body);
         return Ok(result);
@@ -816,6 +1025,8 @@ pub fn lower_fn_body_block_stmt(
     result.extend(hoisted_lets);
     result.extend(other);
     ctx.current_strict = parent_strict;
+    ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
+    ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
     Ok(result)
 }
 

@@ -111,6 +111,8 @@ impl LoweringContext {
             unresolved_ident_as_global: false,
             with_env_stack: Vec::new(),
             var_hoisted_ids: HashSet::new(),
+            annexb_block_fn_var_ids: HashMap::new(),
+            annexb_block_fn_names_all: HashSet::new(),
             lexical_forward_decls: HashMap::new(),
             functions_index: HashMap::new(),
             classes_index: HashMap::new(),

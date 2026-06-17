@@ -28,6 +28,7 @@ mod typeof_narrow;
 // (the consumer at `crate::lower::*` would otherwise see nothing). Keep
 // this list in sync with each sibling's `pub fn` declarations.
 pub(crate) use block::{
+    collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
     collect_refs_in_closure_bodies_stmt, collect_top_level_let_ids_stmt,
     collect_var_binding_names_from_stmt, compute_prealloc_for_hoisted_closures, lower_block_stmt,
     lower_block_stmt_scoped, lower_fn_body_block_stmt, lower_stmts_using_aware,

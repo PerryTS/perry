@@ -608,6 +608,63 @@ pub fn lower_module_full(
         }
     }
 
+    // Annex B B.3.3 (#5297): in sloppy (non-strict) global code, a block-nested
+    // `function f(){}` also creates a global `var f` (undefined until the
+    // declaration runs). Mirror the function-body pre-pass: register one hoisted
+    // slot per such name, emit an undefined-initialised entry, and record name
+    // -> slot in `annexb_block_fn_var_ids` so the block-nested declaration
+    // (lowered via `lower_nested_fn_decl`) writes the closure into it while
+    // keeping its block-local binding independent.
+    if !ctx.module_strict {
+        let body_stmts: Vec<ast::Stmt> = ast_module
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                ast::ModuleItem::Stmt(stmt) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect();
+        // Forbidden: the program's own top-level lexical names make `var f` an
+        // early error; `arguments` is excluded. There are no parameters at
+        // program scope. Nested blocks add their own lexical names while
+        // descending.
+        let mut forbidden = std::collections::HashSet::new();
+        crate::lower_decl::collect_lexical_decl_names(&body_stmts, &mut forbidden);
+        forbidden.insert("arguments".to_string());
+
+        let mut all_names = Vec::new();
+        let mut names = Vec::new();
+        crate::lower_decl::collect_annexb_block_fn_decl_names(
+            &body_stmts,
+            &forbidden,
+            &mut all_names,
+            &mut names,
+        );
+        ctx.annexb_block_fn_names_all.extend(all_names);
+        names.sort();
+        names.dedup();
+        for name in names {
+            // Reuse an existing global `var`, else mint a fresh hoisted slot;
+            // either way emit an undefined-init entry slot so the block's B.3.3
+            // write (which runs before any source-position `var f = …`) has
+            // storage to target.
+            let id = if let Some(existing) = ctx.lookup_local(&name) {
+                existing
+            } else {
+                ctx.define_local(name.clone(), Type::Any)
+            };
+            module.init.push(Stmt::Let {
+                id,
+                name: name.clone(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+            ctx.var_hoisted_ids.insert(id);
+            ctx.annexb_block_fn_var_ids.insert(name, id);
+        }
+    }
+
     // Pre-register all class declarations so that static method calls between
     // classes declared in the same file resolve correctly regardless of declaration order.
     // Without this, SqrtPriceMath.getAmount0Delta calling FullMath.mulDivRoundingUp

@@ -351,6 +351,23 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// Annex B B.3.3 (#5297): for the function/program scope currently being
+    /// lowered, maps each name declared by a *block-nested* `function f(){}`
+    /// (legacy sloppy-mode block-level function declaration) to the enclosing-
+    /// scope `var`-style binding it must also write at its declaration point.
+    /// `lower_nested_fn_decl` consults this (only when `inside_block_scope > 0`
+    /// and the enclosing scope is sloppy) to keep the block-local binding
+    /// independent of the hoisted outer `var`, then assigns the closure into the
+    /// outer slot. Saved/restored across nested function bodies.
+    pub(crate) annexb_block_fn_var_ids: HashMap<String, LocalId>,
+    /// Annex B (#5297): names of ALL block-nested function declarations in the
+    /// scope currently being lowered (superset of `annexb_block_fn_var_ids`
+    /// keys — includes those whose legacy `var` is suppressed by a parameter or
+    /// lexical conflict). Every block-level function declaration is block-scoped,
+    /// so `lower_nested_fn_decl` gives one a fresh block-local instead of
+    /// reusing an enclosing same-named binding (e.g. a parameter). Saved/restored
+    /// across nested function bodies alongside `annexb_block_fn_var_ids`.
+    pub(crate) annexb_block_fn_names_all: HashSet<String>,
     /// #4973: top-of-function-body `let`/`const` Ident bindings pre-registered
     /// by the function-body hoist pass so hoisted sibling FUNCTIONS that
     /// reference them before their lexical position bind the (boxed) local

@@ -681,6 +681,13 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     let is_strict = outer_strict || block_has_use_strict(fn_expr.function.body.as_ref());
     ctx.current_strict = is_strict;
 
+    // Annex B B.3.3 (#5297): this function-expression body owns its own
+    // block-nested-function `var` map; take the enclosing one aside and restore
+    // it on exit (mirrors `lower_fn_body_block_stmt`). The nested-var pass below
+    // repopulates it for this body.
+    let saved_annexb_block_fn_var_ids = std::mem::take(&mut ctx.annexb_block_fn_var_ids);
+    let saved_annexb_block_fn_names_all = std::mem::take(&mut ctx.annexb_block_fn_names_all);
+
     // Generate Let statements for destructuring patterns BEFORE lowering body
     let mut destructuring_stmts = Vec::new();
     for (param_id, pat) in &destructuring_params {
@@ -895,6 +902,60 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                 }
             }
         }
+        // Annex B B.3.3 (#5297): a block-nested `function f(){}` in this sloppy
+        // function-expression body also gets an enclosing-scope `var f`
+        // (undefined until the declaration runs). Register one hoisted slot per
+        // such name and record name -> slot so the block-nested declaration
+        // writes the closure into it while keeping its block-local binding
+        // independent. The IIFE wrapper `(function(){ { function f(){} } f(); }())`
+        // is exactly the test262 `annexB/.../function-code` shape. The legacy
+        // `var` is skipped when the name collides with a parameter or a lexical
+        // binding (it would make `var f` an early error) — `forbidden` carries
+        // the parameter names, the body's top-level lexical names, and
+        // `arguments`; nested blocks add their own lexical names as we descend.
+        if !ctx.current_strict {
+            let mut forbidden: std::collections::HashSet<String> =
+                params.iter().map(|p| p.name.clone()).collect();
+            crate::lower_decl::collect_lexical_decl_names(&block.stmts, &mut forbidden);
+            forbidden.insert("arguments".to_string());
+
+            let mut all_names = Vec::new();
+            let mut names = Vec::new();
+            crate::lower_decl::collect_annexb_block_fn_decl_names(
+                &block.stmts,
+                &forbidden,
+                &mut all_names,
+                &mut names,
+            );
+            ctx.annexb_block_fn_names_all.extend(all_names);
+            names.sort();
+            names.dedup();
+            for name in names {
+                // Reuse an existing in-scope `var` (parameters are excluded by
+                // `forbidden`, so any same-name binding here is a hoisted
+                // `var`); otherwise mint a fresh hoisted slot. Either way emit
+                // an undefined-init entry slot: a direct top-level `var f = …`
+                // in a function expression has no entry `Let` (only its source-
+                // position one), but the block's B.3.3 write runs BEFORE that
+                // position, so the slot must already exist (#5297
+                // `existing-var-update`).
+                let id =
+                    if let Some(pos) = ctx.locals.lookup_index_in_scope(&name, outer_locals_len) {
+                        ctx.locals[pos].1
+                    } else {
+                        ctx.define_local(name.clone(), Type::Any)
+                    };
+                nested_var_prologue.push(Stmt::Let {
+                    id,
+                    name: name.clone(),
+                    ty: Type::Any,
+                    mutable: true,
+                    init: Some(Expr::Undefined),
+                });
+                ctx.var_hoisted_ids.insert(id);
+                ctx.annexb_block_fn_var_ids.insert(name, id);
+            }
+        }
         // Forward-captured `let`/`const` (incl. destructuring) referenced by an
         // EARLIER closure than their declaration. The `#4973` pass above only
         // covers `Pat::Ident` and only when the body has a `function`
@@ -1007,6 +1068,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         Vec::new()
     };
     ctx.current_strict = outer_strict;
+    ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
+    ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
     ctx.forward_class_names = saved_forward_class_names;
 
     // Prepend destructuring statements to body
