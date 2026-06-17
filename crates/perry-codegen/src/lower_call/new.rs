@@ -1108,7 +1108,24 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             collect_decl_local_ids(&c.body, &mut ids);
             ids.iter().any(|id| ctx.closure_captures.contains_key(id))
         });
-    if ctx.class_stack.iter().any(|active| active == class_name) || ctor_alias_collision {
+    // [#bloat] Default: CALL the shared standalone-symbol constructor instead of
+    // inlining the constructor body at every `new` site. The inlined ctor body
+    // (field-init stores etc.) is the dominant per-`new`-site IR after the
+    // allocator (~136 lines/site); calling the shared ctor symbol emits it once.
+    // Measured win-win vs inlining: ~2.5x FASTER on an 8M construct-heavy loop
+    // AND much smaller IR. Opt back into inlining with PERRY_INLINE_CTOR=1.
+    // Restricted to classes with their OWN constructor: a no-own-ctor subclass
+    // (`class C extends B {}`) gets a synthesized symbol, but the symbol-call
+    // path doesn't reproduce the inline path's leaf-keys/shape setup, so by-name
+    // field reads on the instance return undefined. Own-ctor classes (incl. ones
+    // with `super(...)`/rest params) round-trip correctly through the call.
+    let force_ctor_call = std::env::var_os("PERRY_INLINE_CTOR").is_none()
+        && class.constructor.is_some()
+        && local_constructor_symbol_exists(ctx, class);
+    if ctx.class_stack.iter().any(|active| active == class_name)
+        || ctor_alias_collision
+        || force_ctor_call
+    {
         call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
         return Ok(obj_box);
     }
