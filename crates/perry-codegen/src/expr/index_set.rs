@@ -100,6 +100,135 @@ fn numeric_index_needs_runtime_key(index: &Expr) -> bool {
     }
 }
 
+fn lower_preguarded_numeric_array_index_set(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    val_double: &str,
+    arr_id: u32,
+    site_id: &str,
+    guard_ok_slot: &str,
+) -> Result<()> {
+    let slot = ctx
+        .locals
+        .get(&arr_id)
+        .ok_or_else(|| anyhow!("IndexSet: local {} not in scope", arr_id))?
+        .clone();
+
+    let fast_idx = ctx.new_block("idxset.preguarded_numeric_fast");
+    let fallback_idx = ctx.new_block("idxset.preguarded_numeric_fallback");
+    let merge_idx = ctx.new_block("idxset.preguarded_numeric_merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let guard_ok_i32 = ctx.block().load(I32, guard_ok_slot);
+    let guard_ok = ctx.block().icmp_ne(I32, &guard_ok_i32, "0");
+    ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+    ctx.current_block = fallback_idx;
+    {
+        let fallback_box = ctx.block().call(
+            DOUBLE,
+            "js_typed_feedback_array_index_set_fallback_boxed",
+            &[
+                (I64, site_id),
+                (DOUBLE, arr_box),
+                (I32, idx_i32),
+                (DOUBLE, val_double),
+            ],
+        );
+        ctx.block().store(DOUBLE, &fallback_box, &slot);
+        ctx.block().br(&merge_label);
+        let fallback = LoweredValue {
+            semantic: SemanticKind::JsValue,
+            rep: NativeRep::JsValue,
+            llvm_ty: DOUBLE,
+            value: fallback_box,
+        };
+        ctx.record_lowered_value_with_access_mode_and_facts(
+            "NumericArrayIndexSet",
+            Some(arr_id),
+            "js_typed_feedback_array_index_set_fallback_boxed",
+            &fallback,
+            Some(BoundsState::Unknown),
+            None,
+            Some(BufferAccessMode::DynamicFallback),
+            Some(MaterializationReason::RuntimeApi),
+            None,
+            None,
+            Vec::new(),
+            vec![
+                raw_f64_layout_fact(
+                    Some(arr_id),
+                    "rejected",
+                    "numeric_array_index_set_preguard",
+                    Some(MaterializationReason::RuntimeApi),
+                ),
+                raw_f64_layout_fact(
+                    Some(arr_id),
+                    "invalidated",
+                    "runtime_api",
+                    Some(MaterializationReason::RuntimeApi),
+                ),
+            ],
+            false,
+            false,
+            Vec::new(),
+        );
+    }
+
+    ctx.current_block = fast_idx;
+    {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+        let idx_i64 = blk.zext(I32, idx_i32, I64);
+        let byte_offset = blk.shl(I64, &idx_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(POINTER_FREE): the loop set-preguard proved raw-f64
+        // layout and a numeric value; a plain f64 (no GC pointer) is written
+        // into the array payload slot, so no write barrier is required.
+        blk.store(DOUBLE, val_double, &element_ptr);
+        blk.br(&merge_label);
+    }
+    let stored = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::F64,
+        llvm_ty: DOUBLE,
+        value: val_double.to_string(),
+    };
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "NumericArrayIndexSet",
+        Some(arr_id),
+        "numeric_array_index_set.raw_f64_store",
+        &stored,
+        Some(BoundsState::Guarded {
+            guard_id: "numeric_array_index_set_preguard".to_string(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        vec![raw_f64_layout_fact(
+            Some(arr_id),
+            "consumed",
+            "numeric_array_index_set_preguard",
+            None,
+        )],
+        Vec::new(),
+        false,
+        false,
+        Vec::new(),
+    );
+
+    ctx.current_block = merge_idx;
+    Ok(())
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::IndexSet {
@@ -350,6 +479,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
                         if require_numeric_layout {
+                            if let Some(preguard) = ctx
+                                .preguarded_numeric_array_index_sets
+                                .get(&(*arr_id, *idx_id))
+                                .cloned()
+                            {
+                                lower_preguarded_numeric_array_index_set(
+                                    ctx,
+                                    &arr_box,
+                                    &idx_i32,
+                                    &val_double,
+                                    *arr_id,
+                                    &preguard.site_id,
+                                    &preguard.guard_ok_slot,
+                                )?;
+                                return Ok(val_double);
+                            }
                             let feedback_site_id = emit_typed_feedback_register_site(
                                 ctx,
                                 TypedFeedbackKind::ArrayElement,

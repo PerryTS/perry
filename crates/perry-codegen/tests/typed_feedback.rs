@@ -430,6 +430,71 @@ fn typed_feedback_guards_array_index_specialization() {
 }
 
 #[test]
+fn typed_feedback_preguards_bounded_numeric_array_writes() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let ir = ir_for(module(
+        "typed_feedback_range_array_set_preguard.ts",
+        vec![param(1, "xs", array_ty.clone())],
+        array_ty,
+        vec![
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "length".to_string(),
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                // `xs[i] = i + 1`, not `xs[i] = i`: a plain iota/const store
+                // (`xs[i] = i` / `xs[i] = 0`) is claimed by the bulk-fill loop
+                // lowering (`js_array_fill_f64_iota_len_extend`) before the
+                // range-set preguard runs, so use a computed numeric value to
+                // exercise the preguard fast/fallback path itself.
+                body: vec![Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(2)),
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+
+    assert!(ir.contains("range_set_preguard.fast"), "{ir}");
+    assert!(ir.contains("idxset.preguarded_numeric_fast"), "{ir}");
+    assert!(ir.contains("idxset.preguarded_numeric_fallback"), "{ir}");
+    assert!(
+        ir.contains("call void @js_typed_feedback_record_array_guard_fast_passes"),
+        "{ir}"
+    );
+    assert_eq!(
+        ir.matches("call i32 @js_typed_feedback_numeric_array_index_set_guard")
+            .count(),
+        1,
+        "{ir}"
+    );
+    assert!(ir.contains("call double @js_typed_feedback_array_index_set_fallback_boxed"));
+    assert!(!ir.contains("idxset.bounded_numeric_fast"), "{ir}");
+}
+
+#[test]
 fn typed_feedback_guards_numeric_array_push_specialization() {
     let array_ty = Type::Array(Box::new(Type::Number));
     let ir = ir_for(module(
