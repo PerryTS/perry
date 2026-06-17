@@ -23,8 +23,9 @@ use crate::lower_string_method::{
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 #[allow(unused_imports)]
 use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    compute_auto_captures, expr_may_return_boxed_value_from_raw_f64_fallback, is_array_expr,
+    is_bigint_expr, is_bool_expr, is_map_expr, is_numeric_expr, is_set_expr, is_string_expr,
+    is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -402,6 +403,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // path below (and Dates are subsumed — they aren't numeric_expr).
             let both_numeric = is_numeric_expr(ctx, left)
                 && is_numeric_expr(ctx, right)
+                && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left)
+                && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right)
                 && !is_bigint_expr(ctx, left)
                 && !is_bigint_expr(ctx, right);
             if is_relational_op && !both_numeric {

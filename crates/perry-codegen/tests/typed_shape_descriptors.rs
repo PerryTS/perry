@@ -444,8 +444,12 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     let ir = ir_for(module);
 
     assert!(
-        ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
-        "bounded numeric array store should route through the raw-f64 payload helper"
+        ir.contains("idxset.bounded_numeric_fast") && ir.contains("store double"),
+        "bounded numeric array store should inline the guarded raw-f64 payload store"
+    );
+    assert!(
+        !ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
+        "bounded numeric array store should not call the redundant raw-f64 set helper"
     );
     assert!(
         ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),

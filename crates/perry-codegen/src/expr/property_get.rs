@@ -688,7 +688,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .cloned()
                 {
                     let value = ctx.block().load(DOUBLE, &slot);
-                    let lowered = LoweredValue {
+                    let declared_raw_f64 = crate::type_analysis::scalar_replaced_field_is_raw_f64(
+                        ctx,
+                        object.as_ref(),
+                        property,
+                    );
+                    let raw_f64_field =
+                        crate::type_analysis::scalar_replaced_field_raw_f64_store_state(
+                            ctx,
+                            Some(*id),
+                            property,
+                            declared_raw_f64,
+                        );
+                    let lowered_js = LoweredValue {
                         semantic: SemanticKind::JsValue,
                         rep: NativeRep::JsValue,
                         llvm_ty: DOUBLE,
@@ -698,15 +710,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "ScalarObjectFieldGet",
                         Some(*id),
                         "scalar_object_field_load",
-                        &lowered,
+                        &lowered_js,
                         None,
                         None,
                         None,
                         None,
                         false,
                         false,
-                        vec![format!("field={}", property)],
+                        vec![
+                            format!("field={}", property),
+                            format!("raw_f64_field={}", raw_f64_field as u8),
+                        ],
                     );
+                    if raw_f64_field {
+                        let lowered_f64 = LoweredValue::f64(value.clone());
+                        ctx.record_lowered_value_with_access_mode(
+                            "ScalarObjectFieldGet",
+                            Some(*id),
+                            "scalar_object_field_load.raw_f64",
+                            &lowered_f64,
+                            None,
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            vec![format!("field={}", property), "raw_f64_field=1".to_string()],
+                        );
+                    }
                     return Ok(value);
                 }
                 // Issue #613: when the local is scalar-replaced but the
@@ -739,14 +770,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Also handle `this` during scalar-replaced ctor inlining
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx.scalar_ctor_target.last().and_then(|tid| {
-                    ctx.scalar_replaced
-                        .get(tid)
-                        .map(|fs| fs.get(property.as_str()).cloned())
-                }) {
+                if let Some(target_id) = ctx.scalar_ctor_target.last().copied() {
+                    let slot = ctx
+                        .scalar_replaced
+                        .get(&target_id)
+                        .and_then(|fs| fs.get(property.as_str()).cloned());
                     if let Some(slot) = slot {
                         let value = ctx.block().load(DOUBLE, &slot);
-                        let lowered = LoweredValue {
+                        let declared_raw_f64 =
+                            crate::type_analysis::scalar_replaced_field_is_raw_f64(
+                                ctx,
+                                object.as_ref(),
+                                property,
+                            );
+                        let raw_f64_field =
+                            crate::type_analysis::scalar_replaced_field_raw_f64_store_state(
+                                ctx,
+                                Some(target_id),
+                                property,
+                                declared_raw_f64,
+                            );
+                        let lowered_js = LoweredValue {
                             semantic: SemanticKind::JsValue,
                             rep: NativeRep::JsValue,
                             llvm_ty: DOUBLE,
@@ -754,17 +798,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         };
                         ctx.record_lowered_value_with_access_mode(
                             "ScalarThisFieldGet",
-                            None,
+                            Some(target_id),
                             "scalar_object_field_load",
-                            &lowered,
+                            &lowered_js,
                             None,
                             None,
                             None,
                             None,
                             false,
                             false,
-                            vec![format!("field={}", property)],
+                            vec![
+                                format!("field={}", property),
+                                format!("raw_f64_field={}", raw_f64_field as u8),
+                            ],
                         );
+                        if raw_f64_field {
+                            let lowered_f64 = LoweredValue::f64(value.clone());
+                            ctx.record_lowered_value_with_access_mode(
+                                "ScalarThisFieldGet",
+                                Some(target_id),
+                                "scalar_object_field_load.raw_f64",
+                                &lowered_f64,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                vec![format!("field={}", property), "raw_f64_field=1".to_string()],
+                            );
+                        }
                         return Ok(value);
                     }
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
@@ -1696,11 +1759,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.current_block = fallback_idx;
                         let blk = ctx.block();
                         blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
-                        let val_fallback = blk.call(
+                        let val_fallback_js = blk.call(
                             DOUBLE,
                             "js_object_get_field_by_name_f64",
                             &[(I64, &obj_bits), (I64, &key_raw)],
                         );
+                        let val_fallback = val_fallback_js.clone();
                         let fallback_end_label = blk.label.clone();
                         blk.br(&merge_label);
                         if requires_raw_f64 {
@@ -1708,7 +1772,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 semantic: SemanticKind::JsValue,
                                 rep: NativeRep::JsValue,
                                 llvm_ty: DOUBLE,
-                                value: val_fallback.clone(),
+                                value: val_fallback_js.clone(),
                             };
                             ctx.record_lowered_value_with_access_mode_and_facts(
                                 "ClassFieldGet",

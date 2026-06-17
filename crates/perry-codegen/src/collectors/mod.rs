@@ -48,7 +48,9 @@ pub(crate) use escape_objects::{
     check_object_literal_escapes_in_expr, check_object_literal_escapes_in_stmts,
     collect_non_escaping_object_literals, find_object_literal_candidates,
 };
-pub(crate) use hir_facts::{collect_hir_facts, collect_native_region_fact_graph};
+pub(crate) use hir_facts::{
+    collect_hir_facts, collect_native_region_fact_graph, collect_type_facts, NativeRegionFactGraph,
+};
 pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_expr_filtered, collect_localset_ids_in_stmts,
     collect_localset_ids_in_stmts_filtered, collect_strictly_i32_bounded_locals,

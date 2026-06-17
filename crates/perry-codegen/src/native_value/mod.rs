@@ -16,7 +16,7 @@ pub(crate) use buffer::{
     GuardedBufferIndex, LengthSource, NativeOwnedViewFact, NativeOwnedViewSlot,
 };
 pub(crate) use materialize::{
-    materialize_js_value, materialize_native_handle_to_js_value,
+    materialize_js_value, materialize_js_value_bits, materialize_native_handle_to_js_value,
     materialize_promise_boundary_to_js_value, record_runtime_native_handle_box_transition,
     MaterializationReason,
 };

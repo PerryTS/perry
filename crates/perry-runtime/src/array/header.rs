@@ -739,6 +739,11 @@ pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
     Some(canonical_raw_f64(f64::from_bits(value_bits)))
 }
 
+#[no_mangle]
+pub extern "C" fn js_array_numeric_value_to_raw_f64(value: f64) -> f64 {
+    value_bits_to_number(value.to_bits()).unwrap_or(f64::NAN)
+}
+
 #[inline]
 fn canonical_raw_f64(value: f64) -> f64 {
     if value.is_nan() {

@@ -23,8 +23,10 @@ use crate::lower_string_method::{
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 #[allow(unused_imports)]
 use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    add_operands_have_pod_materialization_hazard, compute_auto_captures,
+    expr_may_return_boxed_value_from_raw_f64_fallback, is_array_expr, is_bigint_expr, is_bool_expr,
+    is_map_expr, is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    receiver_class_name,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -45,6 +47,17 @@ use super::{
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
     I18nLowerCtx,
 };
+
+fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
+    if expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
+        if let Some(value) =
+            super::index_get::lower_numeric_index_get_for_number_context(ctx, expr)?
+        {
+            return Ok((value, true));
+        }
+    }
+    Ok((lower_expr(ctx, expr)?, false))
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -116,6 +129,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // → string concat, BIGINT → bigint add, otherwise numeric.
                 if !(crate::type_analysis::is_numeric_expr(ctx, left)
                     && crate::type_analysis::is_numeric_expr(ctx, right))
+                    || add_operands_have_pod_materialization_hazard(ctx, left, right)
                 {
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
@@ -205,25 +219,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(blk.sitofp(I64, &m, DOUBLE));
             }
 
-            let l_raw = lower_expr(ctx, left)?;
-            let r_raw = lower_expr(ctx, right)?;
+            let (l_raw, l_fallback_coerced) = lower_arithmetic_operand(ctx, left)?;
+            let (r_raw, r_fallback_coerced) = lower_arithmetic_operand(ctx, right)?;
             // Coerce non-numeric operands to numbers for arithmetic.
             // JS: `true + true = 2`, `null + 1 = 1`, etc. Without
             // this, fadd on NaN-tagged booleans propagates the NaN
             // payload instead of computing 1.0 + 1.0 = 2.0.
             let l_numeric = is_numeric_expr(ctx, left);
             let r_numeric = is_numeric_expr(ctx, right);
-            let l = if l_numeric {
-                l_raw
-            } else {
+            let l_needs_coerce = !l_fallback_coerced
+                && (!l_numeric || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left));
+            let r_needs_coerce = !r_fallback_coerced
+                && (!r_numeric || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right));
+            let l = if l_needs_coerce {
                 ctx.block()
                     .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
-            };
-            let r = if r_numeric {
-                r_raw
             } else {
+                l_raw
+            };
+            let r = if r_needs_coerce {
                 ctx.block()
                     .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])
+            } else {
+                r_raw
             };
             let v = match op {
                 BinaryOp::Add => {

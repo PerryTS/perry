@@ -622,7 +622,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 11);
+    assert_eq!(artifact["schema_version"], 12);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -655,7 +655,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 11);
+    assert_eq!(artifact["schema_version"], 12);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -701,7 +701,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 11);
+    assert_eq!(artifact["schema_version"], 12);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -1176,7 +1176,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 11);
+    assert_eq!(artifact["schema_version"], 12);
     assert!(
         artifact["records"]
             .as_array()
@@ -1195,6 +1195,41 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
                     })
             }),
         "expected explicit POD dynamic write fallback record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn pod_field_read_after_dynamic_materialization_uses_number_coerce() {
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU32".to_string())),
+        ("gain", Type::Named("PerryF32".to_string())),
+    ]);
+    let body = vec![
+        pod_let(
+            1,
+            "packet",
+            packet_ty,
+            vec![("tag", int(7)), ("gain", number(1.5))],
+        ),
+        Stmt::Expr(Expr::PropertySet {
+            object: Box::new(local(1)),
+            property: "tag".to_string(),
+            value: Box::new(Expr::String("x".to_string())),
+        }),
+        Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::Sub,
+            left: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "tag".to_string(),
+            }),
+            right: Box::new(int(1)),
+        })),
+    ];
+
+    let ir = compile_ir("pod_dynamic_materialized_read_coerce.ts", body);
+    assert!(
+        ir.contains("call double @js_number_coerce"),
+        "POD field reads after dynamic materialization must not feed boxed JSValue fallbacks into raw numeric arithmetic:\n{ir}"
     );
 }
 
@@ -1223,7 +1258,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 11);
+    assert_eq!(artifact["schema_version"], 12);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -1274,7 +1309,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 11);
+    assert_eq!(artifact["schema_version"], 12);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -1899,6 +1934,58 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
             .unwrap_or(0)
             >= 1,
         "expected raw-f64 layout invalidation summary:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_write_barrier_child_js_value_bits() {
+    let module = module_with_classes_and_params(
+        "artifact_write_barrier_js_value_bits.ts",
+        Vec::new(),
+        vec![
+            param(1, "xs", Type::Array(Box::new(Type::Any))),
+            param(2, "key", Type::String),
+            param(3, "value", Type::Any),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(1)),
+                index: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "WriteBarrier"
+                && record["consumer"] == "write_barrier.child_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["native_value_state"] == "region_local"
+                && record["access_mode"].is_null()
+                && record["native_abi_type"].is_null()
+        }),
+        "expected production write-barrier js_value_bits record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "lower_expr_native_js_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["native_abi_type"].is_null()
+        }),
+        "expected production js_value_bits selector record:\n{artifact:#}"
+    );
+    assert!(
+        artifact["summary"]["js_value_bits_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "expected js_value_bits summary count:\n{artifact:#}"
     );
 }
 

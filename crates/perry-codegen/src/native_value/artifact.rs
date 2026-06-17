@@ -36,6 +36,8 @@ pub(crate) enum NativeValueState {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NativeAbiTransitionOp {
     None,
+    JsValueToBits,
+    BitsToJsValue,
     SignedIntToFloat,
     UnsignedIntToFloat,
     FloatExtend,
@@ -302,6 +304,7 @@ struct NativeRepSummary {
     consumed_fact_count: usize,
     rejected_fact_count: usize,
     raw_f64_layout_fact_counts: BTreeMap<String, usize>,
+    js_value_bits_count: usize,
     native_owned_view_count: usize,
     pod_layout_count: usize,
     pod_record_count: usize,
@@ -326,6 +329,7 @@ impl NativeRepSummary {
             ("rejected".to_string(), 0),
             ("invalidated".to_string(), 0),
         ]);
+        let mut js_value_bits_count = 0;
         let mut native_owned_view_count = 0;
         let mut pod_layout_count = 0;
         let mut pod_record_count = 0;
@@ -335,6 +339,9 @@ impl NativeRepSummary {
             *native_rep_counts
                 .entry(record.native_rep_name.clone())
                 .or_insert(0) += 1;
+            if matches!(record.native_rep, NativeRep::JsValueBits) {
+                js_value_bits_count += 1;
+            }
             if record.materialization_reason.is_some() {
                 materialization_count += 1;
             }
@@ -362,6 +369,8 @@ impl NativeRepSummary {
                 native_abi_transition_count += 1;
                 let op_name = match transition.op {
                     NativeAbiTransitionOp::None => "none",
+                    NativeAbiTransitionOp::JsValueToBits => "js_value_to_bits",
+                    NativeAbiTransitionOp::BitsToJsValue => "bits_to_js_value",
                     NativeAbiTransitionOp::SignedIntToFloat => "signed_int_to_float",
                     NativeAbiTransitionOp::UnsignedIntToFloat => "unsigned_int_to_float",
                     NativeAbiTransitionOp::FloatExtend => "float_extend",
@@ -433,6 +442,7 @@ impl NativeRepSummary {
             consumed_fact_count,
             rejected_fact_count,
             raw_f64_layout_fact_counts,
+            js_value_bits_count,
             native_owned_view_count,
             pod_layout_count,
             pod_record_count,
@@ -486,7 +496,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 11,
+        schema_version: 12,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

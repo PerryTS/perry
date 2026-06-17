@@ -142,6 +142,7 @@ pub(super) fn compile_method(
             class.name, method.name
         )),
         active_region_id: None,
+        native_facts: &native_facts,
         locals,
         local_types,
         current_block: 0,
@@ -648,6 +649,7 @@ pub(super) fn compile_static_method(
             class.name, f.name
         )),
         active_region_id: None,
+        native_facts: &native_facts,
         locals,
         local_types,
         current_block: 0,

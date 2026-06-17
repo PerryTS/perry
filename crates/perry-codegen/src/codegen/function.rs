@@ -155,6 +155,7 @@ pub(super) fn compile_function(
         source_function: f.name.clone(),
         source_function_slug: crate::expr::native_region_slug(&f.name),
         active_region_id: None,
+        native_facts: &native_facts,
         locals,
         local_types,
         current_block: 0,
