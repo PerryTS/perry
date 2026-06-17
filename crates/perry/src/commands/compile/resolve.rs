@@ -729,7 +729,15 @@ pub(super) fn resolve_exports_candidates(
     exports: &serde_json::Value,
     subpath: &str,
 ) -> Vec<String> {
-    const CONDITIONS: &[&str] = &["perry", "import", "module", "default", "require", "node"];
+    // `node` ranked above `default` (perry compiles a Node target): a
+    // `{ node, default }` conditional pair must resolve the Node build, not the
+    // reduced browser/edge `default`. Candidates are collected in this order
+    // and the caller picks the first that exists on disk, so listing `node`
+    // first makes the Node entry win. (unicorn-magic exposes toPath/
+    // traversePathUp only in `./node.js`; resolving `./default.js` left them
+    // undefined → npm-run-path → execa LINK failure.) Mirrors `resolve_exports`
+    // / `resolve_subpath_import`.
+    const CONDITIONS: &[&str] = &["perry", "node", "import", "module", "default", "require"];
     fn collect(value: &serde_json::Value, subpath: &str, out: &mut Vec<String>) {
         match value {
             serde_json::Value::String(s) => {
