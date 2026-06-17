@@ -75,9 +75,13 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
 // just the #4914 invariant (both workers bind the shared port and report
 // `'listening'`); run it explicitly with `cargo test -- --ignored` on a
 // Linux host to exercise the SO_REUSEPORT path end-to-end.
-#[cfg(unix)]
+// `not(target_os = "macos")`: macOS SO_REUSEPORT doesn't give this the
+// shared-port semantics the test asserts (it fails deterministically there),
+// so exclude it from the gate entirely — running `--ignored` on macOS would
+// only produce a guaranteed platform failure, not a useful signal.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
-#[ignore = "flaky: real cluster/SO_REUSEPORT networking, unreliable in sandboxed CI (and unsupported on macOS); run with --ignored on Linux"]
+#[ignore = "flaky: real cluster/SO_REUSEPORT networking, unreliable in sandboxed CI; run with --ignored on Linux"]
 fn two_workers_share_one_port() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
