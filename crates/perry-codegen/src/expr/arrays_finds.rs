@@ -680,6 +680,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ))
         }
         Expr::Uint8ArrayGet { array, index } => {
+            // A symbol-keyed read (`u8[Symbol.toStringTag]`,
+            // `u8[Symbol.iterator]`) must resolve through the symbol-property
+            // path, which exposes the `%TypedArray%.prototype` symbol accessors
+            // (`@@toStringTag` — used by `safe-stable-stringify` — and
+            // `@@iterator`). The dynamic-index helper below stringifies the key
+            // and would miss them.
+            if matches!(index.as_ref(), Expr::SymbolFor(_)) {
+                let a = lower_expr(ctx, array)?;
+                let key = lower_expr(ctx, index)?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_symbol_property",
+                    &[(DOUBLE, &a), (DOUBLE, &key)],
+                ));
+            }
             if !is_numeric_expr(ctx, index) {
                 let a = lower_expr(ctx, array)?;
                 let key = lower_expr(ctx, index)?;
