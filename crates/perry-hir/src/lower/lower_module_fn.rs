@@ -557,6 +557,28 @@ pub fn lower_module_full(
                                 .insert(ident.id.sym.to_string());
                         }
                     }
+                } else if matches!(&decl.name, ast::Pat::Object(_) | ast::Pat::Array(_)) {
+                    // #5358: a module-level DESTRUCTURING binding
+                    // (`const { src, t } = require('./re.js')`) declared after
+                    // code that references those names — the canonical CJS
+                    // "require at the bottom for cyclic deps" pattern — must
+                    // pre-register each destructured leaf so a class/function
+                    // body lowered earlier resolves `src`/`t` to the module
+                    // slot, not an undefined implicit global. Without this the
+                    // destructuring leaf later allocates a *fresh* id and the
+                    // earlier reference points at the wrong (undefined) slot.
+                    // (The simple-ident arm above already handles `const x =`.)
+                    let mut leaf_names = Vec::new();
+                    crate::lower_patterns::collect_binding_names(&decl.name, &mut leaf_names);
+                    for name in leaf_names {
+                        if ctx.lookup_local(&name).is_none() {
+                            ctx.define_local(name.clone(), Type::Any);
+                            ctx.pre_registered_module_vars.insert(name.clone());
+                            if var_decl.kind == ast::VarDeclKind::Var {
+                                ctx.pre_registered_module_var_decls.insert(name);
+                            }
+                        }
+                    }
                 }
             }
         }

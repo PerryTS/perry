@@ -355,6 +355,23 @@ pub(crate) fn lower_pattern_binding_into(
                     }
                     pre_id
                 }
+                None if ctx.scope_depth == 0
+                    && ctx.inside_block_scope == 0
+                    && ctx.pre_registered_module_vars.remove(&name) =>
+                {
+                    // #5358: reuse the slot pre-registered by the module-level
+                    // forward-declaration pass for a destructured leaf
+                    // (`const { src, t } = require(...)` at the bottom of a
+                    // file). An earlier class/function body already resolved
+                    // `src`/`t` to this id; allocating a fresh one here would
+                    // strand that reference on an undefined slot.
+                    ctx.pre_registered_module_var_decls.remove(&name);
+                    let id = ctx.lookup_local(&name).unwrap();
+                    if let Some(existing_ty) = ctx.locals.lookup_type_mut(&name) {
+                        *existing_ty = ty.clone();
+                    }
+                    id
+                }
                 None => ctx.define_local(name.clone(), ty.clone()),
             };
             if !mutable {
@@ -547,6 +564,27 @@ pub(crate) fn lower_pattern_binding_into(
                                     *ety = ty.clone();
                                 }
                                 pre_id
+                            }
+                            None if ctx.scope_depth == 0
+                                && ctx.inside_block_scope == 0
+                                && ctx.pre_registered_module_vars.remove(&name) =>
+                            {
+                                // #5358: reuse the module-level slot pre-
+                                // registered for a `{ key }` shorthand leaf of a
+                                // bottom-of-file destructuring require (`const {
+                                // src, t } = require('./re.js')` — the canonical
+                                // cyclic-dep CJS shape used by semver's
+                                // classes/comparator.js). An earlier class/
+                                // function body already resolved `src`/`t` to
+                                // this id; allocating a fresh one here would
+                                // strand that read on an undefined slot and the
+                                // destructure's write would land elsewhere.
+                                ctx.pre_registered_module_var_decls.remove(&name);
+                                let id = ctx.lookup_local(&name).unwrap();
+                                if let Some(existing_ty) = ctx.locals.lookup_type_mut(&name) {
+                                    *existing_ty = ty.clone();
+                                }
+                                id
                             }
                             None => ctx.define_local(name.clone(), ty.clone()),
                         };
