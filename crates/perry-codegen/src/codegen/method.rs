@@ -490,7 +490,33 @@ pub(super) fn compile_method(
         }
     }
 
-    if method.is_async {
+    // ECMAScript TDZ-on-`this`: a DERIVED constructor whose body never calls
+    // `super()` leaves `this` uninitialized, so the implicit `return this`
+    // throws ReferenceError. The inline `new` path enforces this in
+    // `lower_new`; mirror it here for the standalone constructor-symbol path
+    // — the DEFAULT when `force_ctor_call` routes `new C(...)` through the
+    // shared `<class>_constructor` symbol instead of inlining. Without this,
+    // `class A extends Array { constructor() {} }; new A()` constructs
+    // silently instead of throwing. The predicate combination matches the
+    // inline path verbatim (closure-`super()` without a direct `this` use
+    // suppresses; a value-bearing `return` takes the return-override path).
+    // Refs class/subclass/builtin-objects/*/super-must-be-called.
+    let ctor_no_super_throw = is_constructor_method
+        && (class.extends.is_some()
+            || class.extends_name.is_some()
+            || class.native_extends.is_some()
+            || class.extends_expr.is_some())
+        && class.constructor.as_ref().is_some_and(|ctor| {
+            !crate::lower_call::ctor_body_calls_super(&ctor.body)
+                && !(crate::lower_call::ctor_body_closure_calls_super(&ctor.body)
+                    && !crate::lower_call::ctor_body_uses_this(&ctor.body))
+                && !crate::lower_call::ctor_body_has_value_return(&ctor.body)
+        });
+    if ctor_no_super_throw {
+        ctx.block()
+            .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
+        ctx.block().unreachable();
+    } else if method.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &method.body).with_context(|| {
             format!(
                 "lowering async body of method '{}::{}'",

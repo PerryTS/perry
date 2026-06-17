@@ -103,6 +103,15 @@ pub(crate) use native::lower_native_method_call;
 // etc. keep resolving after the split.
 pub(crate) use field_init::{apply_field_initializers_recursive, FieldInitMode};
 pub(crate) use new::{bind_inline_constructor_params, lower_new, restore_inline_constructor_scope};
+// The derived-ctor no-super static-throw predicates (shared with the
+// standalone-ctor-symbol path in `codegen/method.rs`, which is the default
+// `new` lowering when `force_ctor_call` redirects construction to the shared
+// symbol instead of inlining). Refs class/subclass/builtin-objects/*/
+// super-must-be-called.
+pub(crate) use new_helpers::{
+    ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
+    ctor_body_uses_this,
+};
 // `extract_options_fields` is consumed by `expr.rs` as
 // `crate::lower_call::extract_options_fields` — keep that path stable.
 pub(crate) use options::extract_options_fields;
