@@ -233,7 +233,7 @@ fn lower_packed_f64_versioned_for(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<bool> {
-    let Some(matched) = match_packed_f64_versioned_loop(ctx, condition, update, body) else {
+    let Some(matched) = match_packed_f64_versioned_loop(ctx, init, condition, update, body) else {
         return Ok(false);
     };
 
@@ -324,7 +324,11 @@ fn record_packed_f64_loop_guard_artifacts(
         Vec::new(),
         false,
         false,
-        vec!["loop_versioning=packed_f64".to_string()],
+        vec![
+            "loop_versioning=packed_f64".to_string(),
+            "index_range=nonnegative_i32".to_string(),
+            "length_range=guarded_i32".to_string(),
+        ],
     );
 
     let fallback_arr = LoweredValue::js_value(arr_box.to_string());
@@ -368,6 +372,7 @@ fn record_packed_f64_loop_guard_artifacts(
 
 fn match_packed_f64_versioned_loop(
     ctx: &FnCtx<'_>,
+    init: Option<&perry_hir::Stmt>,
     condition: Option<&perry_hir::Expr>,
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
@@ -381,6 +386,7 @@ fn match_packed_f64_versioned_loop(
     }
     if !ctx.integer_locals.contains(&hoist.counter_id)
         || !loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
+        || !loop_counter_entry_i32_range_is_safe(init, hoist.counter_id)
     {
         return None;
     }
@@ -1514,6 +1520,28 @@ fn loop_counter_bounds_are_safe(
     loop_counter_is_nonnegative_at_entry(ctx, counter_id)
         && update_is_absent_or_counter_increment(update, counter_id)
         && !stmts_mutate_local(body, counter_id)
+}
+
+fn loop_counter_entry_i32_range_is_safe(init: Option<&perry_hir::Stmt>, counter_id: u32) -> bool {
+    use perry_hir::{Expr, Stmt};
+    let Some(Stmt::Let {
+        id,
+        init: Some(init),
+        ..
+    }) = init
+    else {
+        return false;
+    };
+    if *id != counter_id {
+        return false;
+    }
+    match init {
+        Expr::Integer(n) => (0..=i64::from(i32::MAX)).contains(n),
+        Expr::Number(n) => {
+            n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= f64::from(i32::MAX)
+        }
+        _ => false,
+    }
 }
 
 fn loop_counter_is_nonnegative_at_entry(ctx: &crate::expr::FnCtx<'_>, counter_id: u32) -> bool {

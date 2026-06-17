@@ -1140,6 +1140,11 @@ fn packed_f64_array_loop_guard(arr: *const ArrayHeader) -> bool {
         {
             return false;
         }
+        if (*header).obj_type == crate::gc::GC_TYPE_ARRAY
+            && (*(raw_addr as *const ArrayHeader)).length > i32::MAX as u32
+        {
+            return false;
+        }
     }
     crate::array::js_array_is_numeric_f64_layout(raw_addr as *const ArrayHeader) != 0
 }

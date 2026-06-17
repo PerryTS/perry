@@ -18,4 +18,22 @@ function packedF64LoopVersioningChecksum(): number {
   return sum + rewritten;
 }
 
-console.log(packedF64LoopVersioningChecksum());
+function dynamicRhsPackedStore(value: number): number {
+  const values: number[] = [1, 2, 3];
+
+  for (let i = 0; i < values.length; i++) {
+    values[i] = value;
+  }
+
+  let score = 0;
+  for (let i = 0; i < values.length; i++) {
+    score += values[i];
+  }
+  return score;
+}
+
+const rhsFromAny: any = 2;
+
+console.log(
+  packedF64LoopVersioningChecksum() + dynamicRhsPackedStore(rhsFromAny as number)
+);

@@ -239,6 +239,7 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
             ));
         }
         validate_raw_f64_layout_facts(record, &mut errors);
+        validate_packed_f64_loop_record(record, &mut errors);
     }
     validate_buffer_span_pairs(records, &mut errors);
     validate_pod_view_span_pairs(records, &mut errors);
@@ -322,6 +323,10 @@ fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
                 "NumericArrayIndexSet",
                 "js_typed_feedback_array_index_set_fallback_boxed"
             )
+            | (
+                "PackedF64LoopStore",
+                "js_typed_feedback_array_index_set_fallback_boxed"
+            )
             | ("PackedF64LoopGuard", "packed_f64_loop_fallback")
             | ("ClassFieldGet", "js_object_get_field_by_name_f64")
             | ("ClassFieldSet", "js_object_set_field_by_name")
@@ -380,6 +385,43 @@ fn validate_raw_f64_layout_facts(record: &NativeRepRecord, errors: &mut Vec<Stri
                 "{}:{} {} raw-f64 fallback missing invalidated raw_f64_layout fact",
                 record.function, record.block_label, record.consumer
             ));
+        }
+    }
+}
+
+fn record_has_note(record: &NativeRepRecord, note: &str) -> bool {
+    record.notes.iter().any(|candidate| candidate == note)
+}
+
+fn validate_packed_f64_loop_record(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    if !matches!(
+        record.consumer.as_str(),
+        "packed_f64_loop_guard" | "packed_f64_loop_load" | "packed_f64_loop_store"
+    ) {
+        return;
+    }
+    for required in ["index_range=nonnegative_i32", "length_range=guarded_i32"] {
+        if !record_has_note(record, required) {
+            errors.push(format!(
+                "{}:{} {} packed-f64 loop access missing {} proof note",
+                record.function, record.block_label, record.consumer, required
+            ));
+        }
+    }
+    if record.consumer == "packed_f64_loop_store" {
+        for required in [
+            "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard",
+            "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64",
+            "array_reloaded_after_rhs=1",
+            "array_reloaded_after_store_guard=1",
+            "array_reloaded_after_canonicalization=1",
+        ] {
+            if !record_has_note(record, required) {
+                errors.push(format!(
+                    "{}:{} {} packed-f64 loop store missing {} safety note",
+                    record.function, record.block_label, record.consumer, required
+                ));
+            }
         }
     }
 }
@@ -1096,6 +1138,51 @@ mod tests {
             state: state.to_string(),
             reason,
         }
+    }
+
+    fn packed_f64_loop_store_record() -> NativeRepRecord {
+        let mut r = record();
+        r.expr_kind = "PackedF64LoopStore".to_string();
+        r.consumer = "packed_f64_loop_store".to_string();
+        r.native_rep = NativeRep::F64;
+        r.native_rep_name = "f64".to_string();
+        r.llvm_ty = DOUBLE;
+        r.access_mode = Some(BufferAccessMode::CheckedNative);
+        r.bounds_state = Some(BoundsState::Guarded {
+            guard_id: "packed_f64_array_loop_guard".to_string(),
+        });
+        r.consumed_facts.push(raw_f64_layout_fact("consumed", None));
+        r
+    }
+
+    #[test]
+    fn verifier_accepts_packed_f64_loop_store_with_runtime_safety_notes() {
+        let mut r = packed_f64_loop_store_record();
+        r.notes = vec![
+            "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard".to_string(),
+            "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64".to_string(),
+            "array_reloaded_after_rhs=1".to_string(),
+            "array_reloaded_after_store_guard=1".to_string(),
+            "array_reloaded_after_canonicalization=1".to_string(),
+            "index_range=nonnegative_i32".to_string(),
+            "length_range=guarded_i32".to_string(),
+        ];
+        assert!(verify_native_rep_records(&[r]).is_ok());
+    }
+
+    #[test]
+    fn verifier_rejects_packed_f64_loop_store_without_canonicalization_notes() {
+        let mut r = packed_f64_loop_store_record();
+        r.notes = vec![
+            "index_range=nonnegative_i32".to_string(),
+            "length_range=guarded_i32".to_string(),
+        ];
+        let err = verify_native_rep_records(&[r]).expect_err("missing packed store notes");
+        assert!(
+            err.to_string()
+                .contains("packed-f64 loop store missing raw_f64_canonicalized"),
+            "{err}"
+        );
     }
 
     fn pod_layout() -> crate::native_value::PodLayoutManifest {

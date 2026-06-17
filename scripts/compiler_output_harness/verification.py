@@ -105,7 +105,7 @@ def runtime_budget_results(
     budgets = workloads.get(workload, {}).get("runtime_budgets", {})
     results = []
     trace_budget_fields = sorted(set(budgets).intersection(TRACE_RUNTIME_BUDGET_FIELDS))
-    if trace_budget_fields and runtime_summary.get("gc_trace_enabled") is False:
+    if trace_budget_fields and runtime_summary.get("gc_trace_enabled") is not True:
         results.append(
             {
                 "field": "gc_trace_enabled",

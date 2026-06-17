@@ -886,27 +886,29 @@ detail = "fast clone loads raw f64 array slots without per-access guards or nume
 
 [[workloads.packed_f64_loop_versioning.ir_checks]]
 name = "packed_f64_fast_loop_raw_store"
-regex = '''for\.packed_f64_fast\.body\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?\bstore double\b'''
+contains = "js_typed_feedback_numeric_array_index_set_guard"
+regex = '''packed_f64_loop_store\.fast\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_array_numeric_value_to_raw_f64[\s\S]*?\bstore double\b'''
 regex_none = [
-  '''for\.packed_f64_fast\.body\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_typed_feedback_numeric_array_index_set_guard''',
-  '''for\.packed_f64_fast\.body\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_typed_feedback_array_index_set_fallback_boxed''',
-  '''for\.packed_f64_fast\.body\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_array_numeric_value_to_raw_f64''',
+  '''packed_f64_loop_store\.fast\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_typed_feedback_array_index_set_fallback_boxed''',
 ]
-detail = "fast clone stores raw f64 array slots without per-access guards or store canonicalization helpers"
+detail = "fast clone stores raw f64 array slots only after the packed-loop store guard and raw-f64 canonicalization"
 
 [[workloads.packed_f64_loop_versioning.stdout_checks]]
 name = "packed_f64_loop_versioning_checksum"
-equals = "64\n"
+equals = "70\n"
 detail = "packed-f64 loop versioning fixture stdout checksum"
 
 [[workloads.packed_f64_loop_versioning.named_regions]]
 name = "packed_f64_fast_loop"
 required = true
-no_runtime_calls = true
-allowed_runtime_calls = []
+no_runtime_calls = false
+allowed_runtime_calls = [
+  "js_typed_feedback_numeric_array_index_set_guard",
+  "js_array_numeric_value_to_raw_f64",
+]
 
 [[workloads.packed_f64_loop_versioning.named_regions.selectors]]
-label_prefix_any = ["for.packed_f64_fast.body"]
+label_prefix_any = ["for.packed_f64_fast.body", "packed_f64_loop_store.fast"]
 
 [[workloads.packed_f64_loop_versioning.named_regions.checks]]
 name = "packed_f64_fast_loop_raw_double_accesses"
@@ -930,6 +932,7 @@ access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
 consumed_fact_kind = "array_kind"
 consumed_fact_state = "consumed"
+notes_contains = "length_range=guarded_i32"
 
 [[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
 name = "packed_f64_loop_guard_consumes_raw_layout"
@@ -950,6 +953,7 @@ access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
 consumed_fact_kind = "array_kind"
 consumed_fact_state = "consumed"
+notes_contains = "index_range=nonnegative_i32"
 
 [[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
 name = "packed_f64_loop_store_fast_f64"
@@ -960,6 +964,36 @@ access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
 consumed_fact_kind = "array_kind"
 consumed_fact_state = "consumed"
+notes_contains = "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64"
+
+[[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
+name = "packed_f64_loop_store_rhs_guard"
+expr_kind = "PackedF64LoopStore"
+consumer = "packed_f64_loop_store"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard"
+
+[[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
+name = "packed_f64_loop_store_safepoint_reload"
+expr_kind = "PackedF64LoopStore"
+consumer = "packed_f64_loop_store"
+native_rep_name = "f64"
+access_mode = "checked_native"
+bounds_state = "proven_or_guarded"
+notes_contains = "array_reloaded_after_canonicalization=1"
+
+[[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
+name = "packed_f64_loop_store_dynamic_rhs_fallback"
+expr_kind = "PackedF64LoopStore"
+consumer = "js_typed_feedback_array_index_set_fallback_boxed"
+access_mode = "dynamic_fallback"
+materialization_reason = "runtime_api"
+fallback_reason = "runtime_api"
+rejected_fact_kind = "raw_f64_layout"
+rejected_fact_state = "rejected"
+rejected_fact_reason = "runtime_api"
 
 [[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
 name = "packed_f64_loop_fallback_rejects_array_kind"

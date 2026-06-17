@@ -541,12 +541,22 @@ def _native_rep_artifact_paths(root: Path, manifest: dict[str, Any]) -> list[Pat
     artifacts = manifest.get("artifacts") if isinstance(manifest, dict) else {}
     retained = artifacts.get("native_reps", []) if isinstance(artifacts, dict) else []
     if isinstance(retained, list):
+        missing: list[str] = []
         for row in retained:
             if not isinstance(row, dict):
                 continue
             path = _resolve_artifact_path(root, row.get("native_reps_artifact"))
-            if path and path.exists():
+            if not path:
+                continue
+            if path.exists():
                 paths.append(path)
+            else:
+                missing.append(str(path))
+        if missing:
+            raise HarnessError(
+                "missing native reps artifacts listed in manifest: "
+                + ", ".join(missing)
+            )
     if not paths:
         paths.extend(sorted(root.glob("native-reps-*.json"), key=_native_rep_sort_key))
     alias = root / "native-reps.json"

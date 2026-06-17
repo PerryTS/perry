@@ -244,11 +244,26 @@ pub(crate) fn lower_let(
     if let Some(perry_hir::Expr::Closure {
         func_id: cfid,
         params,
+        body,
+        captures,
         ..
     }) = init
     {
         ctx.local_closure_func_ids.insert(id, *cfid);
         ctx.local_closure_param_counts.insert(id, params.len());
+        let auto_captures =
+            crate::type_analysis::compute_auto_captures(ctx, params, body, captures);
+        for cap_id in auto_captures {
+            if ctx.buffer_view_slots.contains_key(&cap_id)
+                || ctx.known_noalias_buffer_locals.contains(&cap_id)
+            {
+                crate::expr::downgrade_buffer_alias(
+                    ctx,
+                    cap_id,
+                    MaterializationReason::ClosureCapture,
+                );
+            }
+        }
     }
 
     // #1803: hoisted `var` redeclaration. A `var x` that appears more
@@ -1196,7 +1211,7 @@ fn register_noalias_buffer_view(
     init_expr: &perry_hir::Expr,
     value: &str,
 ) {
-    let Some(init) = buffer_view_init_for_expr(init_expr) else {
+    let Some(init) = buffer_view_init_for_expr(ctx, init_expr) else {
         return;
     };
     let blk = ctx.block();
@@ -1258,7 +1273,7 @@ fn register_noalias_buffer_view(
     );
 }
 
-fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
+fn buffer_view_init_for_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<BufferViewInit> {
     match expr {
         perry_hir::Expr::NativeMethodCall {
             module,
@@ -1271,7 +1286,7 @@ fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
             index_unit: BufferIndexUnit::Byte,
             data_offset_bytes: 8,
             length_offset_from_data: -8,
-            length_source: buffer_alloc_length_source(expr),
+            length_source: buffer_alloc_length_source(ctx, expr),
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
@@ -1284,7 +1299,7 @@ fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
             index_unit: BufferIndexUnit::Byte,
             data_offset_bytes: 8,
             length_offset_from_data: -8,
-            length_source: buffer_alloc_length_source(expr),
+            length_source: buffer_alloc_length_source(ctx, expr),
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
@@ -1297,7 +1312,7 @@ fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
                 index_unit: BufferIndexUnit::Element,
                 data_offset_bytes: 16,
                 length_offset_from_data: -16,
-                length_source: buffer_alloc_length_source(expr),
+                length_source: buffer_alloc_length_source(ctx, expr),
                 native_owner_local_id: None,
                 native_byte_offset: None,
                 native_byte_length: None,
@@ -1323,7 +1338,8 @@ fn buffer_view_init_for_expr(expr: &perry_hir::Expr) -> Option<BufferViewInit> {
                 index_unit: BufferIndexUnit::Element,
                 data_offset_bytes: 24,
                 length_offset_from_data: 0,
-                length_source: length_source_from_expr(length).unwrap_or(LengthSource::Unknown),
+                length_source: length_source_from_expr(ctx, length)
+                    .unwrap_or(LengthSource::Unknown),
                 native_owner_local_id: Some(owner_local_id),
                 native_byte_offset: byte_offset_const,
                 native_byte_length,
@@ -1386,7 +1402,7 @@ fn length_of_local_buffer_id(expr: &perry_hir::Expr) -> Option<u32> {
     }
 }
 
-fn buffer_alloc_length_source(expr: &perry_hir::Expr) -> LengthSource {
+fn buffer_alloc_length_source(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> LengthSource {
     let len = match expr {
         perry_hir::Expr::BufferAlloc { size, .. } => Some(size.as_ref()),
         perry_hir::Expr::BufferAllocUnsafe(size) => Some(size.as_ref()),
@@ -1406,7 +1422,7 @@ fn buffer_alloc_length_source(expr: &perry_hir::Expr) -> LengthSource {
         perry_hir::Expr::NativeArenaView { length, .. } => Some(length.as_ref()),
         _ => None,
     };
-    len.and_then(length_source_from_expr)
+    len.and_then(|expr| length_source_from_expr(ctx, expr))
         .unwrap_or(LengthSource::Unknown)
 }
 
@@ -1418,7 +1434,12 @@ fn const_i64_expr(expr: &perry_hir::Expr) -> Option<i64> {
     }
 }
 
-fn length_source_from_expr(expr: &perry_hir::Expr) -> Option<LengthSource> {
+fn length_source_from_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<LengthSource> {
+    if let Some(range) = crate::expr::int_range_expr(ctx, expr) {
+        if range.min == range.max {
+            return Some(LengthSource::Constant(range.min));
+        }
+    }
     match expr {
         perry_hir::Expr::Integer(n) => Some(LengthSource::Constant(*n)),
         perry_hir::Expr::LocalGet(id) => Some(LengthSource::Local { id: *id, addend: 0 }),

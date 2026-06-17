@@ -776,6 +776,24 @@ idxset.bounded_numeric_merge.5:
                 json.dumps({"records": image_native_records()}),
                 encoding="utf-8",
             )
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "benchmark": {
+                            "gc_trace_enabled": True,
+                            "runs": [
+                                {
+                                    "run": 1,
+                                    "exit_code": 0,
+                                    "gc_trace_enabled": True,
+                                    "gc_trace_summary": {},
+                                }
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             args = type(
                 "Args",
                 (),
@@ -809,6 +827,17 @@ idxset.bounded_numeric_merge.5:
   "compile_plan": {
     "effective_target": "x86_64-unknown-linux-gnu",
     "clang_args": ["-c", "-O3", "-fno-math-errno", "-march=native"]
+  },
+  "benchmark": {
+    "gc_trace_enabled": true,
+    "runs": [
+      {
+        "run": 1,
+        "exit_code": 0,
+        "gc_trace_enabled": true,
+        "gc_trace_summary": {}
+      }
+    ]
   }
 }
 """,
@@ -847,11 +876,14 @@ idxset.bounded_numeric_merge.5:
                 json.dumps(
                     {
                         "benchmark": {
+                            "gc_trace_enabled": True,
                             "runs": [
                                 {
                                     "run": 1,
                                     "exit_code": 0,
                                     "stdout_first": "25\n",
+                                    "gc_trace_enabled": True,
+                                    "gc_trace_summary": {},
                                 }
                             ]
                         }
@@ -959,6 +991,63 @@ idxset.bounded_numeric_merge.5:
                 },
             )()
             self.assertEqual(HARNESS.verify_existing(args), 0)
+
+    def test_verify_existing_fails_when_manifest_native_rep_shard_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ir = numeric_arrays_inline_ir()
+            records = numeric_array_native_records()
+            (root / "llvm-before-opt.ll").write_text(ir, encoding="utf-8")
+            (root / "llvm-after-opt.analysis.ll").write_text(ir, encoding="utf-8")
+            (root / "object-disassembly.s").write_text(GOOD_ASM, encoding="utf-8")
+            (root / "native-reps-0.json").write_text(
+                json.dumps({"records": records[:4]}),
+                encoding="utf-8",
+            )
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "artifacts": {
+                            "native_reps": [
+                                {"native_reps_artifact": "native-reps-0.json"},
+                                {"native_reps_artifact": "native-reps-1.json"},
+                            ]
+                        },
+                        "benchmark": {
+                            "gc_trace_enabled": True,
+                            "runs": [
+                                {
+                                    "run": 1,
+                                    "exit_code": 0,
+                                    "stdout_first": "25\n",
+                                    "gc_trace_enabled": True,
+                                    "gc_trace_summary": {},
+                                }
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "artifact_dir": str(root),
+                    "workload": "numeric_arrays",
+                    "gate": True,
+                    "print_summary": False,
+                    "target": None,
+                    "clang_arg": None,
+                    "fp_contract": None,
+                    "expect_fma": "auto",
+                },
+            )()
+            with self.assertRaisesRegex(
+                HARNESS.HarnessError,
+                "missing native reps artifacts listed in manifest",
+            ):
+                HARNESS.verify_existing(args)
 
     def test_explicit_perry_path_is_repo_relative(self):
         resolved = HARNESS.resolve_perry("target/debug/perry")
@@ -1134,6 +1223,38 @@ idxset.bounded_numeric_merge.5:
                     "run": 1,
                     "exit_code": 0,
                     "gc_trace_enabled": False,
+                    "gc_trace_summary": {},
+                }
+            ],
+        }
+        counters = HARNESS.structural_counters(GOOD_IR, GOOD_IR, GOOD_ASM)
+        report = HARNESS.verify_artifacts(
+            workload="image_convolution",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark=benchmark,
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            counters=counters,
+            runtime_summary=HARNESS.runtime_counter_summary(benchmark, counters),
+            native_reps=[{"records": image_native_records()}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("runtime_budget_gc_trace_enabled" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_trace_runtime_budgets_fail_when_gc_trace_state_missing(self):
+        benchmark = {
+            "runs": [
+                {
+                    "run": 1,
+                    "exit_code": 0,
                     "gc_trace_summary": {},
                 }
             ],

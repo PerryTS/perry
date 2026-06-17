@@ -40,16 +40,16 @@ use super::{
     emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
     emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
     expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix, int_range_expr,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_array_literal, lower_buffer_load, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_typed_array_load, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
     nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
     raw_f64_layout_fact, try_flat_const_2d_int, try_lower_flat_const_index_get,
     try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
-    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, PackedF64LoopFact,
-    TypedFeedbackContract, TypedFeedbackKind,
+    variant_name, BufferAccessSpec, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx,
+    PackedF64LoopFact, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -77,6 +77,11 @@ fn is_uint8array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 }
 
 fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+    fn range_is_nonnegative_i32(ctx: &FnCtx<'_>, index: &Expr) -> bool {
+        int_range_expr(ctx, index)
+            .is_some_and(|range| range.min >= 0 && range.max <= i32::MAX as i64)
+    }
+
     match index {
         Expr::Integer(i) => (0..=i32::MAX as i64).contains(i),
         Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64,
@@ -91,8 +96,9 @@ fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index: &Expr) ->
                         .int_range_facts
                         .iter()
                         .any(|fact| fact.local_id == *id && fact.range.min >= 0))
+                || range_is_nonnegative_i32(ctx, index)
         }
-        _ => false,
+        _ => range_is_nonnegative_i32(ctx, index),
     }
 }
 
@@ -128,6 +134,11 @@ fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr)
     // property "1.5" instead of truncating to element 1.
     is_numeric_expr(ctx, index)
         && !numeric_index_has_integer_array_index_proof(ctx, index)
+        && !numeric_index_has_loop_array_index_proof(ctx, object, index)
+}
+
+fn typed_array_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
+    !numeric_index_has_integer_array_index_proof(ctx, index)
         && !numeric_index_has_loop_array_index_proof(ctx, object, index)
 }
 
@@ -472,7 +483,10 @@ fn lower_packed_f64_loop_index_get(
         Vec::new(),
         false,
         false,
-        Vec::new(),
+        vec![
+            "index_range=nonnegative_i32".to_string(),
+            "length_range=guarded_i32".to_string(),
+        ],
     );
     value
 }
@@ -754,40 +768,43 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
                     ));
                 }
-                // #2063: a key that isn't provably a number — a method-name
-                // string (`ta["copyWithin"]`, `ta[m]` where m iterates method
-                // names), a numeric string (`ta["2"]`), or any non-numeric /
-                // unknown-typed key — must NOT take the integer-indexed element
-                // fast path below. That path blindly `fptosi`s the key; a
-                // NaN-boxed string coerces to 0, so `ta["copyWithin"]`/`ta[m]`
-                // returned element 0 (`typeof` was "number") and `ta["2"]`
-                // returned element 0 instead of element 2. Route such keys
-                // through the runtime dispatcher, which reads an element only
-                // for a canonical numeric index and otherwise performs an
-                // ordinary [[Get]] (the same `js_object_get_field_by_name_f64`
-                // the dotted `ta.copyWithin` PropertyGet path uses — resolving
-                // the prototype method once reified, undefined until then,
-                // never a stray element value). `is_numeric_expr` stays true
-                // for literal/loop-counter indices, so every proven element
-                // fast path below is preserved.
-                if !is_numeric_expr(ctx, index) {
-                    let arr_box = lower_expr(ctx, object)?;
-                    let key_box = lower_expr(ctx, index)?;
-                    let blk = ctx.block();
-                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                    return Ok(blk.call(
-                        DOUBLE,
-                        "js_typed_array_index_get_dynamic",
-                        &[(I64, &arr_i64), (DOUBLE, &key_box)],
-                    ));
-                }
+                // #2063 / fractional numeric keys: only proven integer element
+                // indices may take an i32 helper path. Try native
+                // buffer-view lowering first because it carries stronger
+                // bounds facts than the syntactic integer-key predicate.
                 if let Some(value) = lower_typed_array_load(ctx, object, index)? {
                     return Ok(materialize_js_value(
                         ctx,
                         value,
                         MaterializationReason::RuntimeApi,
                     ));
+                }
+                if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    let result = blk.call(
+                        DOUBLE,
+                        "js_typed_array_index_get_dynamic",
+                        &[(I64, &arr_i64), (DOUBLE, &key_box)],
+                    );
+                    let slow = LoweredValue::js_value(result.clone());
+                    ctx.record_lowered_value_with_access_mode(
+                        "TypedArrayGet",
+                        None,
+                        "TypedArrayGet.slow_path",
+                        &slow,
+                        Some(BoundsState::Unknown),
+                        None,
+                        Some(BufferAccessMode::DynamicFallback),
+                        Some(buffer_access_materialization_reason(ctx, object)),
+                        false,
+                        false,
+                        vec!["typed_array_fallback=untracked_or_unproven".to_string()],
+                    );
+                    return Ok(result);
                 }
 
                 // Width-aware typed-array native lowering is only sound for
@@ -821,19 +838,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 return Ok(result);
             }
-            if is_uint8array_receiver(ctx, object) && !is_numeric_expr(ctx, index) {
-                let arr_box = lower_expr(ctx, object)?;
-                let key_box = lower_expr(ctx, index)?;
-                let blk = ctx.block();
-                let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                return Ok(blk.call(
-                    DOUBLE,
-                    "js_typed_array_index_get_dynamic",
-                    &[(I64, &arr_i64), (DOUBLE, &key_box)],
-                ));
-            }
             if is_uint8array_receiver(ctx, object) && is_numeric_expr(ctx, index) {
+                if let Some(value) =
+                    lower_buffer_load(ctx, object, index, BufferAccessSpec::uint8array_get())?
+                {
+                    let reason = buffer_access_materialization_reason(ctx, object);
+                    return Ok(materialize_js_value(ctx, value, reason));
+                }
+                if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_typed_array_index_get_dynamic",
+                        &[(I64, &arr_i64), (DOUBLE, &key_box)],
+                    ));
+                }
                 let value = lower_buffer_index_get_i32(ctx, object, index)?;
                 let reason = buffer_access_materialization_reason(ctx, object);
                 return Ok(materialize_js_value(ctx, value, reason));
