@@ -59,8 +59,9 @@ pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::compile_function;
 use helpers::{
-    collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
-    sanitize, sanitize_member, scoped_fn_name, scoped_method_name, scoped_static_method_name,
+    collect_return_class, duplicate_class_names, emit_buffer_alias_metadata,
+    function_body_returns_generator_object, sanitize, sanitize_member, scoped_fn_name,
+    scoped_method_name, scoped_static_method_name,
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
@@ -140,6 +141,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             strings.set_debug_location_ctx(Some((hir.name.clone(), src)));
         }
     }
+
+    // Names borne by more than one class in this module (the minified-bundle
+    // `class j` reused across scopes). Methods of these classes are mangled with
+    // a disambiguating class-id infix so two distinct classes can't collide into
+    // one `perry_method_…` symbol (clang `invalid redefinition of function`).
+    // Every other class — including all exported / cross-module classes, which
+    // are name-unique — keeps the id-less, cross-module-stable symbol.
+    let dup_class_names = duplicate_class_names(&hir.classes);
 
     // Class lookup table for `Expr::New`. Indexed by class name —
     // the HIR has unique names per module.
@@ -1660,8 +1669,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .map(|s| s.as_str())
             .unwrap_or(c.name.as_str());
         let class_symbol_id = class_ids.get(&c.name).copied().unwrap_or(c.id);
+        // Disambiguate this class's method symbols with its id ONLY when another
+        // class in the module shares its name (the minified-duplicate case).
+        let disambiguate = dup_class_names.contains(&c.name);
         for m in &c.methods {
-            let llvm_name = scoped_method_name(class_prefix, mangle_class_name, &m.name);
+            let llvm_name =
+                scoped_method_name(class_prefix, c.id, mangle_class_name, &m.name, disambiguate);
             method_names.insert((c.name.clone(), m.name.clone()), llvm_name.clone());
             // Refs #486: also register self-binding aliases (e.g. `_X` from
             // `var X = class _X`) so static method dispatch on a receiver typed
@@ -1682,7 +1695,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     &member.function.name,
                 )
             } else {
-                scoped_method_name(class_prefix, mangle_class_name, &member.function.name)
+                scoped_method_name(
+                    class_prefix,
+                    c.id,
+                    mangle_class_name,
+                    &member.function.name,
+                    disambiguate,
+                )
             };
             method_names.insert(
                 (
@@ -1727,8 +1746,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 (c.name.clone(), format!("__get_{}", prop)),
                 scoped_method_name(
                     class_prefix,
+                    c.id,
                     mangle_class_name,
                     &format!("__get_{}", f.name),
+                    disambiguate,
                 ),
             );
         }
@@ -1737,8 +1758,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 (c.name.clone(), format!("__set_{}", prop)),
                 scoped_method_name(
                     class_prefix,
+                    c.id,
                     mangle_class_name,
                     &format!("__set_{}", f.name),
+                    disambiguate,
                 ),
             );
         }
@@ -1768,18 +1791,19 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             continue;
         }
         let src = &ic.source_prefix;
-
+        // Imported classes are EXPORTED from their source module, so their name
+        // is unique there and the source mangled their methods with the id-less
+        // form (`disambiguate = false` — exported classes never collide). The
+        // consumer can't reliably recover the source's HIR id from import
+        // metadata anyway, so reconstruct the same id-less symbol here. (The
+        // source's `source_class_id` is unused for symbol mangling for exactly
+        // this reason; it's still used for `instanceof` / id-stamping above.)
         for (method_idx, method_name) in ic.method_names.iter().enumerate() {
             // The source module emitted its methods as
             // `perry_method_<source_prefix>__<class>__<method>`.
             // Use the canonical class name (ic.name) for the symbol
             // since that's how the source module mangled it.
-            let llvm_fn = format!(
-                "perry_method_{}__{}__{}",
-                sanitize(src),
-                sanitize_member(&ic.name),
-                sanitize_member(method_name),
-            );
+            let llvm_fn = scoped_method_name(&sanitize(src), 0, &ic.name, method_name, false);
             method_names
                 .entry((effective_name.to_string(), method_name.clone()))
                 .or_insert_with(|| llvm_fn.clone());
@@ -1819,8 +1843,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let inner_fn_name = format!("get_{}", prop);
             let llvm_fn = scoped_method_name(
                 &sanitize(src),
+                0,
                 &ic.name,
                 &format!("__get_{}", inner_fn_name),
+                false,
             );
             method_names
                 .entry((effective_name.to_string(), format!("__get_{}", prop)))
@@ -1835,8 +1861,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let inner_fn_name = format!("set_{}", prop);
             let llvm_fn = scoped_method_name(
                 &sanitize(src),
+                0,
                 &ic.name,
                 &format!("__set_{}", inner_fn_name),
+                false,
             );
             method_names
                 .entry((effective_name.to_string(), format!("__set_{}", prop)))

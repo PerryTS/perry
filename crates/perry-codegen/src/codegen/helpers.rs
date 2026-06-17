@@ -261,21 +261,72 @@ pub(super) fn collect_return_class(
     }
 }
 
-/// Mangle a class method name into an LLVM symbol, scoped by module
-/// prefix and class name.
+/// Mangle a class method name into an LLVM symbol, scoped by module prefix and
+/// class name, optionally disambiguated by the unique HIR class id.
 ///
-/// `perry_method_<modprefix>__<class>__<method>`.
+/// * `disambiguate == false` →  `perry_method_<modprefix>__<class>__<method>`
+///   (the historical, id-less form). Used for the overwhelming common case: a
+///   class whose name is unique within its module. This form is also the ABI a
+///   cross-module consumer reconstructs from import metadata (the consumer
+///   can't always recover the source's HIR id), so EXPORTED classes — which are
+///   always name-unique — must use it for symbols to resolve at link time.
+///
+/// * `disambiguate == true` →  `perry_method_<modprefix>__<class>__c<id>__<method>`,
+///   mirroring [`scoped_static_method_name`]. Reserved for the minified-bundle
+///   pathology where two DISTINCT classes share a short name (`class j` reused
+///   across scopes). Without the `c<id>` infix their methods mangle to the SAME
+///   symbol (`perry_method_<mod>__j__getElementsByTagName`) and clang rejects
+///   the module with `invalid redefinition of function`. The HIR class id is
+///   unique per class, so the infix guarantees distinct symbols. Such
+///   duplicate-named classes are necessarily non-exported (a module can't
+///   export the same name twice), so the disambiguated form never needs to be
+///   reconstructed cross-module.
+///
+/// Dispatch through the runtime VTABLE_REGISTRY (`js_register_class_method`) is
+/// pointer-based and keyed by class id, so the symbol string only needs to be
+/// unique — it is never parsed. Both branches must be chosen IDENTICALLY at the
+/// definition site, every reference site, and the vtable-registration site for
+/// a given class, or the symbols desync and the linker fails.
 pub(super) fn scoped_method_name(
     module_prefix: &str,
+    class_id: u32,
     class_name: &str,
     method_name: &str,
+    disambiguate: bool,
 ) -> String {
-    format!(
-        "perry_method_{}__{}__{}",
-        module_prefix,
-        sanitize_member(class_name),
-        sanitize_member(method_name)
-    )
+    if disambiguate {
+        format!(
+            "perry_method_{}__{}__c{}__{}",
+            module_prefix,
+            sanitize_member(class_name),
+            class_id,
+            sanitize_member(method_name)
+        )
+    } else {
+        format!(
+            "perry_method_{}__{}__{}",
+            module_prefix,
+            sanitize_member(class_name),
+            sanitize_member(method_name)
+        )
+    }
+}
+
+/// Names that appear on MORE THAN ONE class in this module. Methods of a class
+/// whose name is in this set must be mangled with the disambiguating class-id
+/// infix (see [`scoped_method_name`]); every other class keeps the id-less,
+/// cross-module-stable form. Computed once per `compile_module`.
+pub(super) fn duplicate_class_names(
+    classes: &[perry_hir::Class],
+) -> std::collections::HashSet<String> {
+    let mut seen: HashMap<&str, u32> = HashMap::new();
+    for c in classes {
+        *seen.entry(c.name.as_str()).or_insert(0) += 1;
+    }
+    seen.into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(name, _)| name.to_string())
+        .collect()
 }
 
 /// Sanitize a name for use in an LLVM symbol — replace anything that isn't

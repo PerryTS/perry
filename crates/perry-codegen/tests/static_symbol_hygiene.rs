@@ -219,6 +219,11 @@ fn static_and_instance_methods_with_same_name_keep_distinct_symbols() {
     )
     .unwrap();
 
+    // The class name `x` is UNIQUE in this module, so its instance method keeps
+    // the id-less, cross-module-stable symbol (`perry_method_…__x__lex`). Only
+    // duplicate-named classes get the disambiguating `c<id>` infix on instance
+    // methods. Static methods always carry the id (`perry_static_…__x__c11__`),
+    // which is internal to the module and never reconstructed cross-module.
     assert_eq!(
         count(
             &ir,
@@ -226,11 +231,58 @@ fn static_and_instance_methods_with_same_name_keep_distinct_symbols() {
         ),
         1
     );
+    // The instance method must NOT gain a spurious id infix when its name is
+    // unique (that would break cross-module references to exported classes).
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_method_static_instance_symbol_hygiene_ts__x__c11__lex"
+        ),
+        0
+    );
     assert_eq!(
         count(
             &ir,
             "define double @perry_static_static_instance_symbol_hygiene_ts__x__c11__lex"
         ),
         1
+    );
+}
+
+/// Two distinct classes sharing the minified name `x` (ids 11 and 12) must
+/// emit DISTINCT instance-method symbols — the regression that produced
+/// `invalid redefinition of function 'perry_method_…__j__getElementsByTagName'`
+/// on a 13MB minified bundle. The id infix (`__c11__` vs `__c12__`) is what
+/// keeps them apart.
+#[test]
+fn duplicate_class_instance_methods_use_class_id_in_symbols() {
+    let mut module = duplicate_static_module();
+    module.name = "dup_instance_symbol_hygiene.ts".to_string();
+    module.classes[0].methods.push(instance_method(301, 1.0));
+    module.classes[1].methods.push(instance_method(302, 2.0));
+
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_method_dup_instance_symbol_hygiene_ts__x__c11__lex"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_method_dup_instance_symbol_hygiene_ts__x__c12__lex"
+        ),
+        1
+    );
+    // No id-less form, which would collide across the two classes.
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_method_dup_instance_symbol_hygiene_ts__x__lex"
+        ),
+        0
     );
 }

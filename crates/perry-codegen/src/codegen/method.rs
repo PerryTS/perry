@@ -15,6 +15,34 @@ use crate::types::{LlvmType, DOUBLE, I64};
 use super::helpers::scoped_static_method_name;
 use super::opts::CrossModuleCtx;
 
+/// Replace the `__c<digits>__` class-id segment of a mangled method symbol with
+/// `__c<class_id>__`. Method/static symbols built by `scoped_method_name` /
+/// `scoped_static_method_name` always contain exactly one such segment
+/// (`perry_method_<mod>__<class>__c<id>__<method>`); symbols that don't carry
+/// one (e.g. the standalone constructor `<prefix>__<class>_constructor`) are
+/// returned unchanged. Only the FIRST `__c<digits>__` group is rewritten so a
+/// method whose own name happens to contain a `__c<digits>__` substring is left
+/// intact.
+fn retarget_class_id_in_symbol(symbol: &str, class_id: u32) -> String {
+    // Find `__c` followed by one or more ASCII digits followed by `__`.
+    let bytes = symbol.as_bytes();
+    let mut i = 0usize;
+    while i + 3 < bytes.len() {
+        if &bytes[i..i + 3] == b"__c" {
+            let mut j = i + 3;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            // Require at least one digit AND a closing `__`.
+            if j > i + 3 && j + 1 < bytes.len() && &bytes[j..j + 2] == b"__" {
+                return format!("{}__c{}{}", &symbol[..i], class_id, &symbol[j..]);
+            }
+        }
+        i += 1;
+    }
+    symbol.to_string()
+}
+
 fn node_stream_parent_kind(
     classes: &HashMap<String, &perry_hir::Class>,
     class: &perry_hir::Class,
@@ -65,7 +93,7 @@ pub(super) fn compile_method(
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
 ) -> Result<()> {
-    let llvm_name = methods
+    let registry_name = methods
         .get(&(class.name.clone(), method.name.clone()))
         .cloned()
         .ok_or_else(|| {
@@ -75,6 +103,26 @@ pub(super) fn compile_method(
                 method.name
             )
         })?;
+
+    // Pin the DEFINITION symbol to THIS class's unique HIR id.
+    //
+    // The dispatch registry (`methods`) is keyed by `(class_name, method_name)`,
+    // so two distinct local classes that share a minified name (`class j` reused
+    // across scopes — the 13MB-bundle pattern) collapse to ONE registry entry,
+    // whose `__c<id>__` infix carries only the LAST-seen class's id. But every
+    // class body is emitted here (artifacts.rs iterates `hir.classes`, which
+    // keeps each class with its own id), so without this both `j` bodies would
+    // define the SAME `perry_method_…__c<id>__…` symbol and clang would reject
+    // the module with `invalid redefinition of function`.
+    //
+    // `retarget_class_id_in_symbol` swaps the registry symbol's `__c<regid>__`
+    // segment for `__c<class.id>__`, leaving the class-name and method-name
+    // components (which the registry derived correctly — getters use the inner
+    // `f.name`, imports use the source prefix/name) untouched. Symbols without a
+    // `__c<digits>__` segment — chiefly the constructor (`<prefix>__<class>_
+    // constructor`) — are returned verbatim. For a uniquely-named class
+    // `regid == class.id`, so this is a no-op and the symbol stays byte-stable.
+    let llvm_name = retarget_class_id_in_symbol(&registry_name, class.id);
 
     // Build the param list: (this, arg0, arg1, ...). All are doubles.
     let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
@@ -820,4 +868,51 @@ pub(super) fn compile_static_method(
         llmod.add_raw_global(raw.clone());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod retarget_tests {
+    use super::retarget_class_id_in_symbol;
+
+    #[test]
+    fn rewrites_class_id_segment() {
+        assert_eq!(
+            retarget_class_id_in_symbol("perry_method_cli_js__j__c12__getElementsByTagName", 11),
+            "perry_method_cli_js__j__c12__getElementsByTagName".replace("c12", "c11")
+        );
+        assert_eq!(
+            retarget_class_id_in_symbol("perry_static_mod_ts__x__c12__lex", 7),
+            "perry_static_mod_ts__x__c7__lex"
+        );
+    }
+
+    #[test]
+    fn unique_named_class_is_noop() {
+        let s = "perry_method_mod_ts__Animal__c3__speak";
+        assert_eq!(retarget_class_id_in_symbol(s, 3), s);
+    }
+
+    #[test]
+    fn constructor_symbol_unchanged() {
+        // Standalone constructor carries no `__c<id>__` segment.
+        let s = "constructor_recursion_ts__RecursiveCtor_constructor";
+        assert_eq!(retarget_class_id_in_symbol(s, 99), s);
+    }
+
+    #[test]
+    fn only_first_segment_rewritten() {
+        // A method name that itself contains `__c5__` must not be touched —
+        // only the class-id segment (the first `__c<digits>__`).
+        assert_eq!(
+            retarget_class_id_in_symbol("perry_method_m_ts__C__c2__weird__c5__name", 8),
+            "perry_method_m_ts__C__c8__weird__c5__name"
+        );
+    }
+
+    #[test]
+    fn no_segment_when_not_digits() {
+        // `__catch__` looks superficially close but isn't `__c<digits>__`.
+        let s = "perry_method_m_ts__C__catch__handler";
+        assert_eq!(retarget_class_id_in_symbol(s, 4), s);
+    }
 }

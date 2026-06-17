@@ -1640,6 +1640,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_wrapper_strict,
         &user_fn_display_names,
         &user_fn_source,
+        &super::helpers::duplicate_class_names(&hir.classes),
     );
 
     Ok(())

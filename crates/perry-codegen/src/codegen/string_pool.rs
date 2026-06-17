@@ -6,7 +6,7 @@ use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
-use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
+use super::helpers::{sanitize, scoped_static_method_name};
 
 /// Emit the string pool into the module: byte-array constants, handle
 /// globals, and the `__perry_init_strings_<prefix>` function that
@@ -90,6 +90,13 @@ pub(super) fn emit_string_pool(
     // `js_register_function_source` call in `__perry_init_strings_<prefix>`
     // so `fn.toString()` can reconstruct the source.
     user_fn_source: &[(String, String)],
+    // Class names borne by more than one class in this module (the minified
+    // `class j` reused across scopes). A method/getter/setter of such a class
+    // is mangled with the disambiguating `c<id>` infix; this set must match the
+    // one used at the definition + dispatch-registry sites in `mod.rs` so the
+    // runtime VTABLE_REGISTRY entry points at the symbol that was actually
+    // emitted. See `scoped_method_name`.
+    dup_class_names: &std::collections::HashSet<String>,
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -416,12 +423,14 @@ pub(super) fn emit_string_pool(
             Some(&c) if c != 0 => c,
             _ => continue,
         };
+        let disambiguate = dup_class_names.contains(class_name);
         for method in &class.methods {
-            let llvm_name = format!(
-                "perry_method_{}__{}__{}",
+            let llvm_name = super::helpers::scoped_method_name(
                 module_prefix,
-                sanitize_member(class_name),
-                sanitize_member(&method.name),
+                cid,
+                class_name,
+                &method.name,
+                disambiguate,
             );
             let has_synth_args = method
                 .params
@@ -728,11 +737,12 @@ pub(super) fn emit_string_pool(
                 )
             } else {
                 let inner = format!("__get_{}", getter_fn.name);
-                format!(
-                    "perry_method_{}__{}__{}",
+                super::helpers::scoped_method_name(
                     module_prefix,
-                    sanitize_member(class_name),
-                    sanitize_member(&inner),
+                    cid,
+                    class_name,
+                    &inner,
+                    dup_class_names.contains(class_name),
                 )
             };
             getter_pairs.push((cid, prop.clone(), llvm_name, is_static));
@@ -803,11 +813,12 @@ pub(super) fn emit_string_pool(
                 )
             } else {
                 let inner = format!("__set_{}", setter_fn.name);
-                format!(
-                    "perry_method_{}__{}__{}",
+                super::helpers::scoped_method_name(
                     module_prefix,
-                    sanitize_member(class_name),
-                    sanitize_member(&inner),
+                    cid,
+                    class_name,
+                    &inner,
+                    dup_class_names.contains(class_name),
                 )
             };
             setter_pairs.push((cid, prop.clone(), llvm_name, is_static));
