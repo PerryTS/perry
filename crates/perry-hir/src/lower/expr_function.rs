@@ -234,6 +234,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         let is_rest = is_rest_param(param);
         let param_ty = get_pat_type(param, ctx);
         let param_id = ctx.define_local(param_name.clone(), param_ty.clone());
+        ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,
@@ -606,6 +607,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         }
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), Type::Any);
+        ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,

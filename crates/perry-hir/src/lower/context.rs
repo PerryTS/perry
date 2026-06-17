@@ -1124,6 +1124,22 @@ impl LoweringContext {
             .push((local_name, String::new(), String::new()));
     }
 
+    /// Tombstone a stale native-instance tag for `name` ONLY if one is currently
+    /// live, so a fresh binding (var-decl OR function parameter) of that name
+    /// shadows it. A function PARAMETER named the same as a leaked native
+    /// instance (e.g. a minified `function(e){…}` whose `e` collides with an
+    /// earlier `e = new Response()` in another factory) must NOT route
+    /// `e.<method>` through the stale native dispatch — that folds named reads to
+    /// 0 (the same class as the Fragment `i.exports` wall, but for params: in
+    /// the Next.js app-page bundle superstruct's `enums(e){ e.map(…).join() }`
+    /// saw `e.map`/`e.length`/`e.constructor` all read 0 while `e[0]` and
+    /// `Array.prototype.map.call(e)` worked → `(number).join is not a function`).
+    pub(crate) fn shadow_native_instance_if_present(&mut self, name: &str) {
+        if self.lookup_native_instance(name).is_some() {
+            self.shadow_native_instance(name.to_string());
+        }
+    }
+
     /// #1483: resolve a parameter's declared type name to a perry/ui widget
     /// class that uses handle-based instance dispatch (Canvas, State, ...).
     /// Returns the canonical widget name (e.g. "Canvas") when `type_name`

@@ -241,6 +241,7 @@ fn lower_method_prop(
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+        ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,
@@ -487,6 +488,7 @@ fn lower_accessor_prop(
             let param_type = extract_param_type_with_ctx(pat, Some(ctx));
             let param_default = get_param_default(ctx, pat)?;
             let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+            ctx.shadow_native_instance_if_present(&param_name);
             params.push(Param {
                 id: param_id,
                 name: param_name,
