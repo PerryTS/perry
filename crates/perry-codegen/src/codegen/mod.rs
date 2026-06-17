@@ -1937,8 +1937,37 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut func_signatures: HashMap<u32, (usize, bool, bool, bool)> = HashMap::new();
     let mut func_synthetic_arguments: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
+    // Distinct functions can mangle to the same symbol: minified code reuses
+    // short names (`function A`) across scopes, and perry lambda-lifts nested
+    // functions to module level, so two module functions can share a name — clang
+    // then rejects the duplicate `define perry_fn_<mod>__A`. Disambiguate with a
+    // numeric suffix, keyed by the mangled symbol. Exported functions are
+    // referenced cross-module by their canonical `scoped_fn_name` and are unique
+    // per module, so they reserve that name first and never get suffixed.
+    let mut used_fn_symbols: HashMap<String, u32> = HashMap::new();
     for f in &hir.functions {
-        func_names.insert(f.id, scoped_fn_name(&module_prefix, &f.name));
+        if hir.exported_functions.iter().any(|(exp, _)| exp == &f.name) {
+            used_fn_symbols
+                .entry(scoped_fn_name(&module_prefix, &f.name))
+                .or_insert(1);
+        }
+    }
+    for f in &hir.functions {
+        let base = scoped_fn_name(&module_prefix, &f.name);
+        let is_exported = hir.exported_functions.iter().any(|(exp, _)| exp == &f.name);
+        let sym = if is_exported {
+            base
+        } else {
+            let n = used_fn_symbols.entry(base.clone()).or_insert(0);
+            let s = if *n == 0 {
+                base.clone()
+            } else {
+                format!("{base}__dup{n}")
+            };
+            *n += 1;
+            s
+        };
+        func_names.insert(f.id, sym);
         let has_rest = f.params.iter().any(|p| p.is_rest);
         let synthetic_is_rest = f
             .params
