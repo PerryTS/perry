@@ -222,7 +222,9 @@ pub fn lower_class_decl(
     class_decl: &ast::ClassDecl,
     is_exported: bool,
 ) -> Result<Class> {
-    let name = class_decl.ident.sym.to_string();
+    // Resolve through any active scope-local rename so a disambiguated
+    // duplicate class registers (and self-references) under its unique name.
+    let name = ctx.resolve_class_name(class_decl.ident.sym.as_str());
     validate_legacy_decorator_surface(&class_decl.class, &name)?;
     validate_class_element_early_errors(&class_decl.class, &name)?;
     let class_id = match ctx.lookup_class(&name) {

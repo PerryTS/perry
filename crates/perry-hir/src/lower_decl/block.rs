@@ -669,8 +669,13 @@ pub fn lower_fn_body_block_stmt(
     // module function). Scoped: the previous set is restored on exit so
     // names don't leak across function bodies.
     let saved_forward_class_names = ctx.forward_class_names.clone();
+    let saved_class_renames = ctx.class_renames.clone();
     for stmt in &block.stmts {
         if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            // Disambiguate a distinct same-named class declared in this body so
+            // its references don't bind to a colliding `class X` elsewhere in
+            // the bundled module (see `class_renames`).
+            ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
             ctx.forward_class_names
                 .insert(class_decl.ident.sym.to_string());
         }
@@ -713,10 +718,12 @@ pub fn lower_fn_body_block_stmt(
         Err(err) => {
             ctx.current_strict = parent_strict;
             ctx.forward_class_names = saved_forward_class_names;
+            ctx.class_renames = saved_class_renames;
             return Err(err);
         }
     };
     ctx.forward_class_names = saved_forward_class_names;
+    ctx.class_renames = saved_class_renames;
 
     // Re-register capture snapshots for classes declared in this body at
     // its END. The decl-site `RegisterClassCaptures` runs before later

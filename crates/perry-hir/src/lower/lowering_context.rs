@@ -487,6 +487,16 @@ pub struct LoweringContext {
     /// call dispatched into `Object.create`. Scoped save/restore in
     /// `lower_fn_body_block_stmt`.
     pub(crate) forward_class_names: std::collections::HashSet<String>,
+    /// Scope-local class-name aliases disambiguating distinct same-named classes
+    /// across nested function/factory scopes within ONE module (class refs are
+    /// name-keyed: `Expr::New { class_name }` / `ClassRef(name)`). When a body
+    /// declares `class X` while an outer/prior `class X` is already registered,
+    /// the body's X is renamed `X$<n>` and `X -> X$<n>` recorded so every
+    /// reference in that body binds to the lexically-correct class. Saved/
+    /// restored per body in both `lower_fn_body_block_stmt` and `lower_fn_expr`.
+    pub(crate) class_renames: std::collections::HashMap<String, String>,
+    /// Monotonic suffix source for `class_renames` unique names.
+    pub(crate) next_class_rename_id: u32,
     /// Counter for generating anon-class names (`__AnonShape_N`).
     // #854: initialized in `new` but unread — anon-shape classes are now named
     // by content-addressed FNV hash (see `synthesize_anon_shape_class`), not by

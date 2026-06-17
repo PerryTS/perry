@@ -880,7 +880,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // Try to extract class name from callee
     match callee_expr {
         ast::Expr::Ident(ident) => {
-            let class_name = ident.sym.to_string();
+            // Resolve through any scope-local class rename so `new X` binds to
+            // the lexically-correct (possibly disambiguated) class.
+            let class_name = ctx.resolve_class_name(ident.sym.as_str());
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))

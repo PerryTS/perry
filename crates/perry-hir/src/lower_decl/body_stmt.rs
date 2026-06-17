@@ -266,7 +266,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         }
         ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
             // Class declared inside a function body (e.g., noble-curves' Point class)
-            let class_name = class_decl.ident.sym.to_string();
+            // Resolve through any scope-local rename: a disambiguated duplicate
+            // has a unique name, so it is NOT a real redeclaration and must be
+            // lowered (not skipped) under that unique name.
+            let class_name = ctx.resolve_class_name(class_decl.ident.sym.as_str());
             // Skip if a class with the same name already exists (avoids duplicate definitions
             // when the same class name appears at both module level and function body level)
             let already_exists = ctx.pending_classes.iter().any(|c| c.name == class_name)

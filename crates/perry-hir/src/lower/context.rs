@@ -138,6 +138,8 @@ impl LoweringContext {
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
             forward_class_names: std::collections::HashSet::new(),
+            class_renames: std::collections::HashMap::new(),
+            next_class_rename_id: 0,
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
@@ -380,6 +382,27 @@ impl LoweringContext {
 
     pub(crate) fn lookup_class(&self, name: &str) -> Option<ClassId> {
         self.classes_index.get(name).map(|&idx| self.classes[idx].1)
+    }
+
+    /// Apply any active scope-local class-name alias (see `class_renames`).
+    /// Identity for non-aliased names, so non-colliding classes are unaffected.
+    pub(crate) fn resolve_class_name(&self, name: &str) -> String {
+        self.class_renames
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Register a scope-local rename for `class X` when an outer/prior `class X`
+    /// is already registered (a distinct class that the name-keyed dedup would
+    /// otherwise skip). Returns immediately if no collision or already aliased.
+    /// Call from each body's Phase-1.5 class scan.
+    pub(crate) fn maybe_rename_colliding_class(&mut self, name: &str) {
+        if self.lookup_class(name).is_some() && !self.class_renames.contains_key(name) {
+            let unique = format!("{}${}", name, self.next_class_rename_id);
+            self.next_class_rename_id += 1;
+            self.class_renames.insert(name.to_string(), unique);
+        }
     }
 
     /// Issue #562: look up the `(module, class)` tuple from a class's

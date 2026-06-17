@@ -940,9 +940,15 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // `js_global_get_or_throw_unresolved("X")` → `ReferenceError: X is not
     // defined` (Next.js RSCPathnameNormalizer). Scoped: restored after the body.
     let saved_forward_class_names = ctx.forward_class_names.clone();
+    let saved_class_renames = ctx.class_renames.clone();
     if let Some(ref block) = fn_expr.function.body {
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+                // Disambiguate a distinct same-named class (the cjs/ncc IIFE
+                // shape `(function(e){…class s{…}…})(t)` declares superstruct's
+                // `Struct` = `class s`, which collided with other `class s` in
+                // the bundle and was dedup-skipped). See `class_renames`.
+                ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
                 ctx.forward_class_names
                     .insert(class_decl.ident.sym.to_string());
             }
@@ -1010,6 +1016,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     };
     ctx.current_strict = outer_strict;
     ctx.forward_class_names = saved_forward_class_names;
+    ctx.class_renames = saved_class_renames;
 
     // Prepend destructuring statements to body
     if !destructuring_stmts.is_empty() {
