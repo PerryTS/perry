@@ -675,8 +675,35 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .map(|(_, p, ext, fields)| (fields.clone(), ext.clone(), p.clone()))
     };
 
+    // Distinct source class names can `sanitize()` to the SAME symbol — e.g.
+    // `$X` and `_X` both become `_X` (minified bundles use `$`/`_` heavily).
+    // Two such classes are genuinely different (different shapes), so each needs
+    // its OWN keys-global; emitting `@perry_class_keys_<prefix>__<sanitized>`
+    // twice makes clang reject the IR ("redefinition of global"). Track every
+    // emitted name and disambiguate collisions with a numeric suffix. The
+    // (real-name-keyed) `class_keys_globals_map` stores the unique name, so every
+    // `new ClassName()` site still resolves to the right global.
+    let mut used_class_keys_globals: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    fn unique_global(base: String, used: &mut std::collections::HashSet<String>) -> String {
+        if used.insert(base.clone()) {
+            return base;
+        }
+        let mut n = 1u32;
+        loop {
+            let candidate = format!("{base}_{n}");
+            if used.insert(candidate.clone()) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
     for c in &hir.classes {
-        let global_name = format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name),);
+        let global_name = unique_global(
+            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+            &mut used_class_keys_globals,
+        );
         llmod.add_internal_global(&global_name, I64, "0");
 
         // Build the packed-keys string. Format: each field name
@@ -845,7 +872,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         if class_keys_globals_map.contains_key(&c.name) {
             continue;
         }
-        let global_name = format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name),);
+        let global_name = unique_global(
+            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+            &mut used_class_keys_globals,
+        );
         llmod.add_internal_global(&global_name, I64, "0");
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
         let mut packed_keys = String::new();

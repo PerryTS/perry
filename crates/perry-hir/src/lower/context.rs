@@ -116,6 +116,11 @@ impl LoweringContext {
             classes_index: HashMap::new(),
             imported_functions_index: HashMap::new(),
             builtin_module_aliases_index: HashMap::new(),
+            native_instances_index: HashMap::new(),
+            module_native_instances_index: HashMap::new(),
+            func_return_native_instances_index: HashMap::new(),
+            native_modules_index: HashMap::new(),
+            class_statics_index: HashMap::new(),
             weakref_locals: HashSet::new(),
             finreg_locals: HashSet::new(),
             weakmap_locals: HashSet::new(),
@@ -156,6 +161,7 @@ impl LoweringContext {
             optional_require_try_depth: 0,
             fn_ctor_env: super::fn_ctor_env::FnCtorEnv::default(),
             expr_lower_depth: 0,
+            prelowered_member_receiver: None,
         }
     }
 
@@ -620,23 +626,26 @@ impl LoweringContext {
         static_fields: Vec<String>,
         static_methods: Vec<String>,
     ) {
+        // Forward-scan (first-match-wins): index keeps the FIRST entry per name.
+        let idx = self.class_statics.len();
+        self.class_statics_index
+            .entry(class_name.clone())
+            .or_insert(idx);
         self.class_statics
             .push((class_name, static_fields, static_methods));
     }
 
     pub(crate) fn has_static_field(&self, class_name: &str, field_name: &str) -> bool {
-        self.class_statics
-            .iter()
-            .find(|(cn, _, _)| cn == class_name)
-            .map(|(_, fields, _)| fields.contains(&field_name.to_string()))
+        self.class_statics_index
+            .get(class_name)
+            .map(|&idx| self.class_statics[idx].1.iter().any(|f| f == field_name))
             .unwrap_or(false)
     }
 
     pub(crate) fn has_static_method(&self, class_name: &str, method_name: &str) -> bool {
-        self.class_statics
-            .iter()
-            .find(|(cn, _, _)| cn == class_name)
-            .map(|(_, _, methods)| methods.contains(&method_name.to_string()))
+        self.class_statics_index
+            .get(class_name)
+            .map(|&idx| self.class_statics[idx].2.iter().any(|m| m == method_name))
             .unwrap_or(false)
     }
 
@@ -1040,15 +1049,21 @@ impl LoweringContext {
         module_name: String,
         method_name: Option<String>,
     ) {
+        // Forward-scan (first-match-wins) semantics: only record the FIRST
+        // index for a name so lookups match the old `.iter().find()`.
+        let idx = self.native_modules.len();
+        self.native_modules_index
+            .entry(local_name.clone())
+            .or_insert(idx);
         self.native_modules
             .push((local_name, module_name, method_name));
     }
 
     pub(crate) fn lookup_native_module(&self, name: &str) -> Option<(&str, Option<&str>)> {
-        self.native_modules
-            .iter()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, m, method)| (m.as_str(), method.as_ref().map(|s| s.as_str())))
+        self.native_modules_index.get(name).map(|&idx| {
+            let (_, m, method) = &self.native_modules[idx];
+            (m.as_str(), method.as_ref().map(|s| s.as_str()))
+        })
     }
 
     pub(crate) fn register_builtin_module_alias(
@@ -1103,8 +1118,37 @@ impl LoweringContext {
         if is_compile_package_override(&module_name) {
             return;
         }
+        // Push the new index onto this name's shadow stack (innermost last).
+        let idx = self.native_instances.len();
+        self.native_instances_index
+            .entry(local_name.clone())
+            .or_default()
+            .push(idx);
         self.native_instances
             .push((local_name, module_name, class_name));
+    }
+
+    /// Truncate `native_instances` back to `mark`, keeping the
+    /// `native_instances_index` shadow stacks in sync: every recorded index
+    /// `>= mark` is popped (these belong to bindings whose scope is exiting),
+    /// re-exposing any earlier (outer-scope) binding of the same name. Empty
+    /// stacks are removed to keep the map small. Use this everywhere
+    /// `native_instances.truncate(..)` was previously called directly.
+    pub(crate) fn truncate_native_instances(&mut self, mark: usize) {
+        if self.native_instances.len() <= mark {
+            return;
+        }
+        self.native_instances.truncate(mark);
+        // Drop indices >= mark from each name's shadow stack, re-exposing any
+        // earlier (outer-scope) binding. The map is keyed by distinct
+        // native-instance names (bounded, not proportional to class count), so
+        // this stays cheap.
+        self.native_instances_index.retain(|_, stack| {
+            while stack.last().is_some_and(|&i| i >= mark) {
+                stack.pop();
+            }
+            !stack.is_empty()
+        });
     }
 
     /// #1483: resolve a parameter's declared type name to a perry/ui widget
@@ -1147,10 +1191,17 @@ impl LoweringContext {
         // inner `res` always resolved to the outer `("http",
         // "ServerResponse")` tag and `res.on('data')` misrouted
         // through ServerResponse dispatch instead of IncomingMessage.)
-        self.native_instances
-            .iter()
-            .rev()
-            .find(|(n, _, _)| n == name)
+        //
+        // Indexed (#5271): `native_instances_index[name]` is the shadow stack
+        // of indices for this name, innermost (last) on top — so the top index
+        // is exactly the entry the old `.rev().find()` would have selected.
+        // The `exposes_plain_object_fields` filter is then applied to THAT
+        // entry only (matching `.find().filter()`, which never falls through to
+        // an earlier match when the top one is filtered out).
+        self.native_instances_index
+            .get(name)
+            .and_then(|stack| stack.last())
+            .map(|&idx| &self.native_instances[idx])
             // `node:repl` constructors allocate real heap objects/errors with
             // bound methods; routing them through handle-dispatch native
             // getters turns ordinary fields like `Recoverable.err` into
@@ -1159,11 +1210,11 @@ impl LoweringContext {
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
                 // Check module-level instances (survive scope exits).
-                // Same last-match-wins rule for consistency.
-                self.module_native_instances
-                    .iter()
-                    .rev()
-                    .find(|(n, _, _)| n == name)
+                // Same last-match-wins rule for consistency — the index stores
+                // the LAST pushed entry per name.
+                self.module_native_instances_index
+                    .get(name)
+                    .map(|&idx| &self.module_native_instances[idx])
                     .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
                     .map(|(_, module, class)| (module.as_str(), class.as_str()))
             })
@@ -1173,10 +1224,35 @@ impl LoweringContext {
         &self,
         func_name: &str,
     ) -> Option<(&str, &str)> {
-        self.func_return_native_instances
-            .iter()
-            .find(|(n, _, _)| n == func_name)
-            .map(|(_, module, class)| (module.as_str(), class.as_str()))
+        // Forward-scan (first-match-wins): index keeps the FIRST pushed entry.
+        self.func_return_native_instances_index
+            .get(func_name)
+            .map(|&idx| {
+                let (_, module, class) = &self.func_return_native_instances[idx];
+                (module.as_str(), class.as_str())
+            })
+    }
+
+    /// Push a function-return native instance (push-only, never truncated) and
+    /// update its perf index. `lookup_func_return_native_instance` scanned
+    /// FORWARD (first-match-wins), so the index keeps the FIRST pushed entry.
+    pub(crate) fn push_func_return_native_instance(&mut self, entry: (String, String, String)) {
+        let idx = self.func_return_native_instances.len();
+        self.func_return_native_instances_index
+            .entry(entry.0.clone())
+            .or_insert(idx);
+        self.func_return_native_instances.push(entry);
+    }
+
+    /// Push a module-level native instance (module-scoped, never truncated)
+    /// and update its perf index. `lookup_native_instance`'s fallback arm
+    /// scans these in reverse (last-match-wins), so the index stores the LAST
+    /// pushed entry per name (overwrite).
+    pub(crate) fn push_module_native_instance(&mut self, entry: (String, String, String)) {
+        let idx = self.module_native_instances.len();
+        self.module_native_instances_index
+            .insert(entry.0.clone(), idx);
+        self.module_native_instances.push(entry);
     }
 }
 
@@ -1259,7 +1335,7 @@ impl LoweringContext {
             }
             self.locals.extend(kept);
         }
-        self.native_instances.truncate(mark.1);
+        self.truncate_native_instances(mark.1);
         // Remove index entries for functions being truncated, then restore any
         // earlier entries that were shadowed by the removed ones.
         for i in mark.2..self.functions.len() {

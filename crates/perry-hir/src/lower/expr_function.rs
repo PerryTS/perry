@@ -219,13 +219,6 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         .unwrap_or_default();
     ctx.enter_type_param_scope(&arrow_type_params);
 
-    // Track which locals exist before entering the closure scope
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
-
     // Lower parameters and collect destructuring info
     let mut params = Vec::new();
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
@@ -413,7 +406,11 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // arrows don't leak outer T/U bindings into sibling code.
     ctx.exit_type_param_scope();
 
-    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
+    // The closure's own scope has been popped, so `ctx.locals.id_set()` is now
+    // exactly the enclosing scope's live locals — the membership view capture
+    // analysis needs. (Previously rebuilt per closure from a cloned snapshot.)
+    let (captures, mutable_captures) =
+        compute_closure_captures(ctx, &body, ctx.locals.id_set(), &params);
 
     // Check if this arrow function uses `this` (needs to capture it from enclosing scope)
     let captures_this = closure_uses_this(&body);
@@ -501,11 +498,15 @@ fn lower_named_fn_expr(
     // what the wrapper itself captures and threads through to the inner
     // function.
     let wrapper_scope = ctx.enter_scope();
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
+    // Snapshot the enclosing locals *before* the self-binding is added, so the
+    // wrapper captures them (not the self-binding). Unlike the arrow/fn-expr
+    // paths, capture analysis runs here while the wrapper scope is still open
+    // (the self-binding lives in it), so we can't use `ctx.locals.id_set()` —
+    // it would wrongly include `self_id`. This is a rare path (named function
+    // expressions that recursively self-reference), so an explicit snapshot is
+    // fine.
+    let outer_local_ids: std::collections::HashSet<LocalId> =
+        ctx.locals.iter().map(|(_, id, _)| *id).collect();
     let self_id = ctx.define_local(own_name.clone(), Type::Any);
 
     // Lower the function itself as an anonymous closure. With `self_id`
@@ -533,7 +534,7 @@ fn lower_named_fn_expr(
         },
         Stmt::Return(Some(Expr::LocalGet(self_id))),
     ];
-    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &[]);
+    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_local_ids, &[]);
     ctx.exit_scope(wrapper_scope);
 
     Ok(Expr::Call {
@@ -576,13 +577,6 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // in a class field initializer. Cleared here, restored at the end.
     let saved_field_init = ctx.in_class_field_init;
     ctx.in_class_field_init = false;
-
-    // Track which locals exist before entering the closure scope
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
 
     // Lower parameters and collect destructuring info.
     //
@@ -1038,7 +1032,9 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     ctx.exit_scope(scope_mark);
     ctx.in_class_field_init = saved_field_init;
 
-    let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_locals, &params);
+    // Scope popped: `ctx.locals.id_set()` is now the enclosing scope's locals.
+    let (captures, mutable_captures) =
+        compute_closure_captures(ctx, &body, ctx.locals.id_set(), &params);
 
     // #2076: a named function expression's own ident is its `fn.name`
     // per spec, regardless of the binding identifier it's later assigned
@@ -1081,7 +1077,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
 fn compute_closure_captures(
     ctx: &LoweringContext,
     body: &[Stmt],
-    outer_locals: &[(String, LocalId)],
+    outer_local_ids: &std::collections::HashSet<LocalId>,
     params: &[Param],
 ) -> (Vec<LocalId>, Vec<LocalId>) {
     // Detect captured variables: locals referenced in the body that
@@ -1092,10 +1088,13 @@ fn compute_closure_captures(
         collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
     }
 
-    // Filter to only include outer locals (not parameters or locals
-    // defined within the closure).
-    let outer_local_ids: std::collections::HashSet<LocalId> =
-        outer_locals.iter().map(|(_, id)| *id).collect();
+    // `outer_local_ids` is the membership view of the enclosing scope's
+    // locals, supplied by the caller (the live `ctx.locals.id_set()` once the
+    // closure's own scope has been popped). Previously this was rebuilt into a
+    // fresh `HashSet` from an `&[(String, LocalId)]` snapshot on *every*
+    // closure — O(scope) per closure, i.e. O(n²) over n sibling closures in a
+    // large scope. We only ever need membership tests here, so the caller's
+    // incrementally-maintained set is reused directly.
     let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
 
     // dayjs (issue: format() returned `292278994-08`): local IDs are

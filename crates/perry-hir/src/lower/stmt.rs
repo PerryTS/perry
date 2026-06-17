@@ -327,7 +327,7 @@ pub(crate) fn lower_stmt(
                     if let Some((module, class)) =
                         native_instance_from_return_type(&func.return_type)
                     {
-                        ctx.func_return_native_instances.push((
+                        ctx.push_func_return_native_instance((
                             func.name.clone(),
                             module.to_string(),
                             class.to_string(),
@@ -929,7 +929,7 @@ pub(crate) fn lower_stmt(
                                         module_owned.clone(),
                                         cn.to_string(),
                                     );
-                                    ctx.module_native_instances.push((
+                                    ctx.push_module_native_instance((
                                         name.clone(),
                                         module_owned,
                                         cn.to_string(),
@@ -946,7 +946,7 @@ pub(crate) fn lower_stmt(
                                         module_owned.clone(),
                                         cn.to_string(),
                                     );
-                                    ctx.module_native_instances.push((
+                                    ctx.push_module_native_instance((
                                         name.clone(),
                                         module_owned,
                                         cn.to_string(),
@@ -990,7 +990,7 @@ pub(crate) fn lower_stmt(
                                     "net".to_string(),
                                     "Server".to_string(),
                                 );
-                                ctx.module_native_instances.push((
+                                ctx.push_module_native_instance((
                                     name.clone(),
                                     "net".to_string(),
                                     "Server".to_string(),

@@ -312,6 +312,109 @@ fn test_lower_rejects_deep_logical_chain() {
     assert_too_deep(format!("var a = 0;\nvar x = {};\n", chain.join("||")));
 }
 
+/// #5271: the perf index over `native_instances` must reproduce the old
+/// reverse-scan semantics exactly — innermost (last-registered) binding wins,
+/// and `truncate_native_instances` re-exposes the outer binding when the inner
+/// scope pops. Mirrors the `lookup_native_instance` last-match-wins rule.
+#[test]
+fn test_native_instance_index_shadowing_and_truncation() {
+    let mut ctx = make_ctx();
+    // Outer binding `e` -> events/EventEmitter.
+    ctx.register_native_instance(
+        "e".to_string(),
+        "events".to_string(),
+        "EventEmitter".to_string(),
+    );
+    assert_eq!(
+        ctx.lookup_native_instance("e"),
+        Some(("events", "EventEmitter"))
+    );
+
+    // Enter an inner scope: shadow `e` with a different native type.
+    let mark = ctx.native_instances.len();
+    ctx.register_native_instance(
+        "e".to_string(),
+        "stream".to_string(),
+        "Readable".to_string(),
+    );
+    // Inner (last) binding wins.
+    assert_eq!(
+        ctx.lookup_native_instance("e"),
+        Some(("stream", "Readable"))
+    );
+
+    // Pop the inner scope: the outer binding must be restored.
+    ctx.truncate_native_instances(mark);
+    assert_eq!(
+        ctx.lookup_native_instance("e"),
+        Some(("events", "EventEmitter"))
+    );
+
+    // Pop the outer binding too: no entry remains.
+    ctx.truncate_native_instances(0);
+    assert!(ctx.lookup_native_instance("e").is_none());
+}
+
+/// #5271: module-level native instances (never truncated) keep last-match-wins
+/// via the overwrite index, matching the old reverse scan of the fallback arm.
+#[test]
+fn test_module_native_instance_index_last_wins() {
+    let mut ctx = make_ctx();
+    ctx.push_module_native_instance((
+        "db".to_string(),
+        "mongodb".to_string(),
+        "MongoClient".to_string(),
+    ));
+    assert_eq!(
+        ctx.lookup_native_instance("db"),
+        Some(("mongodb", "MongoClient"))
+    );
+    // A later registration of the same name shadows the earlier one.
+    ctx.push_module_native_instance((
+        "db".to_string(),
+        "mysql2/promise".to_string(),
+        "Pool".to_string(),
+    ));
+    assert_eq!(
+        ctx.lookup_native_instance("db"),
+        Some(("mysql2/promise", "Pool"))
+    );
+}
+
+/// #5271 perf gate (run with `--release --ignored`): time M lookups against a
+/// K-sized registry to show indexed lookups are ~flat in K (O(1)) rather than
+/// O(K) per call. Prints timings; not asserted (machine-dependent) but the
+/// flatness across K is the observable signal. Covers the registries whose
+/// linear scans this change indexed.
+#[test]
+#[ignore]
+fn perf_registry_lookup_is_flat_in_k() {
+    use std::time::Instant;
+    const M: usize = 20_000;
+    for k in [0usize, 2_000, 8_000, 16_000] {
+        let mut ctx = make_ctx();
+        for i in 0..k {
+            ctx.register_class_statics(
+                format!("K{i}"),
+                vec![format!("f{i}")],
+                vec![format!("s{i}")],
+            );
+            ctx.register_native_instance(format!("ni{i}"), "events".into(), "EventEmitter".into());
+            ctx.register_native_module(format!("nm{i}"), "fs".into(), None);
+        }
+        // The hot case the bug targets: the receiver is NOT in the registry, so
+        // the old reverse/forward scan walked the whole Vec and returned None.
+        let t = Instant::now();
+        let mut acc = 0u64;
+        for _ in 0..M {
+            acc += ctx.has_static_method("Missing", "s") as u64;
+            acc += ctx.lookup_native_instance("missing").is_some() as u64;
+            acc += ctx.lookup_native_module("missing").is_some() as u64;
+        }
+        eprintln!("K={k:<6} {M} x3 lookups: {:?}  (acc={acc})", t.elapsed());
+    }
+}
+
 /// A chain comfortably under the ceiling still lowers cleanly — the guard
 /// must not reject ordinary (if large) expressions.
 #[test]
