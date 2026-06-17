@@ -1852,7 +1852,7 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
     assert!(
         records.iter().any(|record| {
             record["expr_kind"] == "NumericArrayIndexSet"
-                && record["consumer"] == "js_array_numeric_set_f64_unboxed"
+                && record["consumer"] == "numeric_array_index_set.raw_f64_store"
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
@@ -1862,7 +1862,7 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
     assert!(
         records.iter().any(|record| {
             record["expr_kind"] == "NumericArrayIndexGet"
-                && record["consumer"] == "js_array_numeric_get_f64_unboxed"
+                && record["consumer"] == "numeric_array_index_get.raw_f64_load"
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")

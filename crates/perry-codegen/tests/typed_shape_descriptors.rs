@@ -443,9 +443,14 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
 
     let ir = ir_for(module);
 
+    // The bounded numeric store is inlined after the guard (no per-element
+    // `js_array_numeric_set_f64_unboxed` helper call): this commit inlines the
+    // guarded raw-f64 payload store directly, and a later commit's loop
+    // set-preguard does the same. The raw-f64 store still happens inline; the
+    // layout-note / barrier invariants below are what this test pins down.
     assert!(
-        ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
-        "bounded numeric array store should route through the raw-f64 payload helper"
+        !ir.contains("call i32 @js_array_numeric_set_f64_unboxed"),
+        "bounded numeric store should inline the raw-f64 payload store (no per-element helper call)"
     );
     assert!(
         ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),

@@ -212,11 +212,15 @@ pub(crate) fn lower_index_set_fast(
     {
         let blk = ctx.block();
         if require_numeric_layout {
-            blk.call(
-                I32,
-                "js_array_numeric_set_f64_unboxed",
-                &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, val_double)],
-            );
+            let (_element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
+            // The numeric-array guard proves the receiver has raw-f64 numeric
+            // layout and the value is numeric; the preceding length check
+            // proves this specific store is in-bounds. Store the numeric
+            // payload directly instead of calling the runtime helper.
+            // GC_STORE_AUDIT(POINTER_FREE): the stored value is a guard-proven
+            // numeric f64 written into a raw-f64 array payload slot — no GC
+            // pointer is stored, so no write barrier is required.
+            blk.store(DOUBLE, val_double, &element_ptr);
         } else {
             let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
             // In-place overwrite of a non-raw-layout (e.g. downgraded `any[]`)
@@ -251,7 +255,7 @@ pub(crate) fn lower_index_set_fast(
         ctx.record_lowered_value_with_access_mode_and_facts(
             "NumericArrayIndexSet",
             Some(local_id),
-            "js_array_numeric_set_f64_unboxed",
+            "numeric_array_index_set.raw_f64_store",
             &stored,
             Some(BoundsState::Guarded {
                 guard_id: "numeric_array_index_set_guard".to_string(),

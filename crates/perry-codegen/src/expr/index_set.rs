@@ -439,11 +439,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let blk = ctx.block();
                                 let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                                 let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                                blk.call(
-                                    I32,
-                                    "js_array_numeric_set_f64_unboxed",
-                                    &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, &val_double)],
-                                );
+                                let idx_i64 = blk.zext(I32, &idx_i32, I64);
+                                let byte_offset = blk.shl(I64, &idx_i64, "3");
+                                let with_header = blk.add(I64, &byte_offset, "8");
+                                let element_addr = blk.add(I64, &arr_handle, &with_header);
+                                let element_ptr = blk.inttoptr(I64, &element_addr);
+                                // GC_STORE_AUDIT(POINTER_FREE): guard-proven
+                                // numeric f64 stored into a raw-f64 array
+                                // payload slot — no GC pointer, no barrier.
+                                blk.store(DOUBLE, &val_double, &element_ptr);
                                 blk.br(&merge_label);
                             }
                             let stored = LoweredValue {
@@ -455,7 +459,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             ctx.record_lowered_value_with_access_mode_and_facts(
                                 "NumericArrayIndexSet",
                                 Some(*arr_id),
-                                "js_array_numeric_set_f64_unboxed",
+                                "numeric_array_index_set.raw_f64_store",
                                 &stored,
                                 Some(BoundsState::Guarded {
                                     guard_id: "numeric_array_index_set_guard".to_string(),

@@ -289,6 +289,11 @@ fn lower_guarded_array_index_get(
     let fast_blk = ctx.block();
     let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
     let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
+    let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
+    let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
+    let with_header = fast_blk.add(I64, &byte_offset, "8");
+    let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+    let element_ptr = fast_blk.inttoptr(I64, &element_addr);
     let fast_val = if require_numeric_layout {
         // The `numeric_array_index_get_guard` on the way into this block already
         // proved: a plain, non-forwarded `Array`, in raw-f64 numeric layout,
@@ -297,19 +302,10 @@ fn lower_guarded_array_index_get(
         // of calling `js_array_numeric_get_f64_unboxed`, whose hot path
         // re-validates exactly those same conditions and then does this load.
         // Raw-f64 arrays are dense (no HOLE slots) and the slot holds a raw f64,
-        // matching the runtime helper's `return *elements_ptr.add(index)`.
-        let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
-        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-        let with_header = fast_blk.add(I64, &byte_offset, "8");
-        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
-        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
+        // matching the runtime helper's `return *elements_ptr.add(index)`. The
+        // `element_ptr` is hoisted above the branch since both arms reuse it.
         fast_blk.load(DOUBLE, &element_ptr)
     } else {
-        let idx_i64 = fast_blk.zext(I32, idx_i32, I64);
-        let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
-        let with_header = fast_blk.add(I64, &byte_offset, "8");
-        let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
-        let element_ptr = fast_blk.inttoptr(I64, &element_addr);
         let fast_raw = fast_blk.load(DOUBLE, &element_ptr);
         // `new Array(n)` slots are TAG_HOLE internally; JavaScript reads expose
         // `undefined`.
@@ -330,7 +326,7 @@ fn lower_guarded_array_index_get(
         ctx.record_lowered_value_with_access_mode_and_facts(
             "NumericArrayIndexGet",
             None,
-            "js_array_numeric_get_f64_unboxed",
+            "numeric_array_index_get.raw_f64_load",
             &fast,
             Some(BoundsState::Guarded {
                 guard_id: "numeric_array_index_get_guard".to_string(),

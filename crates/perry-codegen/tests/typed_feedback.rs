@@ -422,8 +422,8 @@ fn typed_feedback_guards_array_index_specialization() {
     assert!(ir.contains("js_typed_feedback_array_index_set_fallback_boxed"));
     assert!(ir.contains("js_typed_feedback_numeric_array_index_get_guard"));
     assert!(ir.contains("js_typed_feedback_array_index_get_fallback_boxed"));
-    assert!(ir.contains("js_array_numeric_set_f64_unboxed"));
-    assert!(ir.contains("js_array_numeric_get_f64_unboxed"));
+    assert!(!ir.contains("call i32 @js_array_numeric_set_f64_unboxed"));
+    assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
 }
 
 #[test]

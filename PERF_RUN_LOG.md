@@ -44,3 +44,61 @@
   - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only` and the before/after comparison above uses the captured local baseline JSON.
   - Follow-up candidates remain in typed array and numeric array hot paths, but this cycle stopped at the isolated registration-hoist optimization.
 - PR: https://github.com/PerryTS/perry/pull/5295
+
+## 2026-06-17 - Guarded numeric array direct payload access
+
+- Start revision: `8d953ca7ad6f`
+- Branch: `codex/perry-performance-20260617`
+- Worker assignment: single Codex pass in this worktree
+- Benchmark environment: Linux `/usr/bin/time -v`; local `node` cannot execute `.ts` benchmark inputs, so Node columns and correctness comparisons were skipped by the harness
+- Baseline commands:
+  - `cargo build --release`
+  - `./benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-final-e816fc3e4.json`
+  - `./benchmarks/quick.sh`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-multiply-final --quiet`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-multiply-final`
+- Baseline results:
+  - compare quick medians: loop_overhead 74ms/18768KB, fibonacci 261ms/18920KB, math_intensive 69ms/18944KB, nested_loops 956ms/19152KB, factorial 94ms/18896KB
+  - quick: fibonacci 262ms/18MB, math_intensive 55ms/18MB, nested_loops 965ms/18MB, factorial 75ms/18MB, matrix_multiply 1842ms/28MB
+  - direct matrix binary: `matrix_multiply:1778`, `checksum:41079519680`
+  - `perf stat` direct matrix binary: 6,569,183,197 cycles, 30,876,077,204 instructions, 5,501,828,073 branches, 2,178,745 branch-misses, 1.8236s elapsed
+- Selected gap and evidence:
+  - After the registration hoist, `matrix_multiply` was still the slowest `quick.sh` case at 1842ms.
+  - LLVM trace for `benchmarks/suite/16_matrix_multiply.ts` showed hot-path calls to `js_array_numeric_get_f64_unboxed` and `js_array_numeric_set_f64_unboxed` after the existing typed-feedback numeric array guards.
+  - The guards prove a live, non-forwarded array, in-bounds index where required, raw-f64 numeric layout, and numeric set values; the runtime helpers then only repeat checks before loading or storing the raw-f64 payload.
+- Change:
+  - Inlined raw-f64 array element loads/stores in guarded numeric array index get/set lowering after the typed-feedback guard and codegen length checks.
+  - Recorded direct-load/direct-store native proof consumers and taught the verifier to accept them only with the existing consumed raw-f64 layout fact.
+  - Updated typed-feedback, typed-shape, and native-proof tests to expect direct payload access instead of helper calls on the guarded fast paths.
+- Post-change benchmark commands:
+  - `cargo build --release`
+  - `target/release/perry compile --no-cache benchmarks/suite/16_matrix_multiply.ts -o /tmp/perry-matrix-direct-final --trace llvm --quiet`
+  - `for i in 1 2 3 4 5; do /tmp/perry-matrix-direct-final; done`
+  - `perf stat -e cycles,instructions,branches,branch-misses /tmp/perry-matrix-direct-final`
+  - `./benchmarks/compare.sh --quick --runs 3 --warn-only --json-out /tmp/perry-direct-numeric-final-e816fc3e4.json`
+  - `./benchmarks/quick.sh`
+- Post-change results:
+  - traced matrix binary: 1736ms, 1730ms, 1729ms, 1738ms, 1714ms; checksum always `41079519680`
+  - `perf stat` direct matrix binary: 6,337,280,206 cycles, 28,036,164,989 instructions, 4,648,261,291 branches, 488,073 branch-misses, 1.7806s elapsed
+  - compare quick medians: loop_overhead 56ms/19040KB, fibonacci 239ms/18764KB, math_intensive 58ms/18756KB, nested_loops 921ms/18944KB, factorial 89ms/18828KB
+  - quick: fibonacci 264ms/18MB, math_intensive 55ms/18MB, nested_loops 928ms/18MB, factorial 76ms/18MB, matrix_multiply 1745ms/28MB
+- Measured impact:
+  - `16_matrix_multiply` quick: 1842ms -> 1745ms, 5.3% faster
+  - Direct matrix binary instructions: 30.88B -> 28.04B, 9.2% fewer
+  - Direct matrix binary branches: 5.50B -> 4.65B, 15.5% fewer
+  - `10_nested_loops` compare median: 956ms -> 921ms, 3.7% faster
+- Verification:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo test -p perry-codegen --test typed_feedback`
+  - `cargo test -p perry-codegen --test typed_shape_descriptors`
+  - `cargo test -p perry-codegen --test native_proof_regressions artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons`
+  - `cargo test -p perry-codegen native_value::verify::tests`
+  - `cargo build --release`
+  - `PERRY_BIN=target/release/perry python3 tests/test_typed_feedback_runtime_evidence.py`
+  - `tests/test_benchmark_output_verifier.sh`
+  - Trace check confirmed `js_array_numeric_get_f64_unboxed` and `js_array_numeric_set_f64_unboxed` are declared but have no `call` sites in the generated matrix module; raw-f64 `load double` and `store double` operations remain in the guarded paths.
+- Notes:
+  - `benchmarks/baseline.json` is stale for this Linux environment; compare was run with `--warn-only` and the before/after comparison above uses the captured local first-cycle results.
+  - This follow-up is intended as a stacked draft PR on top of the typed-feedback registration-hoist PR.
+- PR: https://github.com/PerryTS/perry/pull/5302
