@@ -95,9 +95,18 @@ console.log(c.slice());
     .expect("write entry");
 
     let stdout = compile_and_run(dir.path(), &entry);
-    assert!(stdout.contains("USERTRIM"), "a.trim() must call the user method (got: {stdout})");
-    assert!(stdout.contains("\n3"), "b.split(1, 2) must call the user method and return 3 (got: {stdout})");
-    assert!(stdout.contains("USERSLICE"), "c.slice() must call the user method (got: {stdout})");
+    assert!(
+        stdout.contains("USERTRIM"),
+        "a.trim() must call the user method (got: {stdout})"
+    );
+    assert!(
+        stdout.contains("\n3"),
+        "b.split(1, 2) must call the user method and return 3 (got: {stdout})"
+    );
+    assert!(
+        stdout.contains("USERSLICE"),
+        "c.slice() must call the user method (got: {stdout})"
+    );
 }
 
 /// The fix must NOT regress genuine string receivers: literals and statically
@@ -124,10 +133,28 @@ console.log(t.trim());
     .expect("write entry");
 
     let stdout = compile_and_run(dir.path(), &entry);
-    assert!(stdout.contains("hi\n"), "string literal trim must work (got: {stdout})");
-    assert!(stdout.contains(r#"["a","b"]"#), "string literal split must work (got: {stdout})");
-    assert!(stdout.contains("hello\n"), "string-typed toLowerCase must work (got: {stdout})");
-    assert!(stdout.contains(r#"["He","","o"]"#), "string-typed split must work (got: {stdout})");
-    assert!(stdout.contains(r#"["X","Y","Z"]"#), "any-typed string split must work (got: {stdout})");
-    assert!(stdout.contains("X,Y,Z"), "any-typed string trim must work (got: {stdout})");
+    assert!(
+        stdout.contains("hi\n"),
+        "string literal trim must work (got: {stdout})"
+    );
+    assert!(
+        stdout.contains(r#"["a","b"]"#),
+        "string literal split must work (got: {stdout})"
+    );
+    assert!(
+        stdout.contains("hello\n"),
+        "string-typed toLowerCase must work (got: {stdout})"
+    );
+    assert!(
+        stdout.contains(r#"["He","","o"]"#),
+        "string-typed split must work (got: {stdout})"
+    );
+    assert!(
+        stdout.contains(r#"["X","Y","Z"]"#),
+        "any-typed string split must work (got: {stdout})"
+    );
+    assert!(
+        stdout.contains("X,Y,Z"),
+        "any-typed string trim must work (got: {stdout})"
+    );
 }
