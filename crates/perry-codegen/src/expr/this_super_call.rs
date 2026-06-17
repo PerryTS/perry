@@ -245,29 +245,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // semantics (Error sets this.message + this.name; streams allocate
                     // a registry handle). Anything else with an extends_expr is a
                     // real runtime-value parent and routes through this dispatch.
-                    let is_builtin_parent_name =
-                        matches!(
-                            parent_name.as_str(),
-                            "Error"
-                                | "TypeError"
-                                | "RangeError"
-                                | "ReferenceError"
-                                | "SyntaxError"
-                                | "URIError"
-                                | "EvalError"
-                                | "AggregateError"
-                                | "Readable"
-                                | "Writable"
-                                | "Duplex"
-                                | "Transform"
-                                | "ReadableStream"
-                                | "WritableStream"
-                                | "TransformStream"
-                                | "Request"
-                                | "Response"
-                                | "Event"
-                                | "CustomEvent"
-                        ) || is_other_builtin_constructor_name(parent_name.as_str());
+                    // The classic node:stream / Web-Streams names are only the
+                    // genuine built-in parents when HIR did NOT capture an
+                    // `extends_expr`. When it did, the parent is a userland
+                    // stream-shim value (e.g. readable-stream's `Transform`,
+                    // winston's `class Logger extends Transform`) whose real
+                    // constructor — which sets `this._readableState`,
+                    // `this._writableState`, `this._transformState` — must run.
+                    // HIR's `is_genuine_node_stream_parent` gate only leaves
+                    // `extends_expr` set for the non-builtin case (the genuine
+                    // node:stream import keeps `native_extends` + no
+                    // `extends_expr`), so deferring to the dynamic dispatch here
+                    // whenever an `extends_expr` exists is safe.
+                    let has_extends_expr = current_class.extends_expr.is_some();
+                    let is_stream_family_name = matches!(
+                        parent_name.as_str(),
+                        "Readable"
+                            | "Writable"
+                            | "Duplex"
+                            | "Transform"
+                            | "ReadableStream"
+                            | "WritableStream"
+                            | "TransformStream"
+                    );
+                    let is_builtin_parent_name = (matches!(
+                        parent_name.as_str(),
+                        "Error"
+                            | "TypeError"
+                            | "RangeError"
+                            | "ReferenceError"
+                            | "SyntaxError"
+                            | "URIError"
+                            | "EvalError"
+                            | "AggregateError"
+                            | "Request"
+                            | "Response"
+                            | "Event"
+                            | "CustomEvent"
+                    ) || (is_stream_family_name
+                        && !has_extends_expr)
+                        || is_other_builtin_constructor_name(parent_name.as_str()))
+                        && !(is_stream_family_name && has_extends_expr);
                     if !is_builtin_parent_name {
                         if let Some(extends_expr) = current_class.extends_expr.as_deref() {
                             // Lower the super-call args first so they get fresh slots

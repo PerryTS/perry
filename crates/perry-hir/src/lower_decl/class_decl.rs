@@ -11,6 +11,39 @@ use crate::lower::{
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
+/// The four classic node:stream base-class names (`Readable`/`Writable`/
+/// `Duplex`/`Transform`). When a class extends a parent with one of these
+/// textual names, perry routes `super()` to the native `js_node_stream_*`
+/// shim (which installs the native stream surface but never sets the
+/// `_readableState`/`_writableState`/`_transformState` objects). That is only
+/// correct when the name actually resolves to the `node:stream` builtin —
+/// i.e. it was imported from `stream`/`node:stream`, in which case the import
+/// machinery registered it as the `stream` native module
+/// (`register_native_module(binding, "stream", Some(name))`, see
+/// `var_decl_sources::register_destructured_stream_ctors` and the import
+/// arms in `lower/module_decl.rs`).
+///
+/// The same textual name can instead be a userland binding from a
+/// stream-shim npm package — `const { Transform } =
+/// require('readable-stream')` in winston's `logger.js`, where
+/// `class Logger extends Transform` then reads `this._readableState.pipes`
+/// directly. Such a binding never registers as the `stream` native module
+/// (readable-stream is not a node builtin), so the package's real constructor
+/// must run instead. Returning `false` here lets the unknown-Ident arm
+/// capture the parent as `extends_expr` and route `super()` through the
+/// dynamic-parent path (`js_register_class_parent_dynamic` + the
+/// `js_fetch_or_value_super` dispatch), which runs the real `Transform`
+/// function body on the subclass instance.
+fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
+    if !matches!(name, "Readable" | "Writable" | "Duplex" | "Transform") {
+        return false;
+    }
+    // Only the genuine `node:stream` builtin import registers these names as
+    // the `stream` native module. Anything else (a userland require/import of
+    // a stream-shim package, or an unbound reference) is not the builtin.
+    matches!(ctx.lookup_native_module(name), Some(("stream", _)))
+}
+
 use super::*;
 
 fn generic_computed_member_key<'a>(
@@ -361,10 +394,16 @@ pub fn lower_class_decl(
                 // native stream methods directly onto `this`, were already
                 // built; this is the missing HIR wiring. Keep in lockstep
                 // with the parallel arm in `lower_class_from_ast` below.
-                "Readable" => Some(("node_stream".to_string(), "Readable".to_string())),
-                "Writable" => Some(("node_stream".to_string(), "Writable".to_string())),
-                "Duplex" => Some(("node_stream".to_string(), "Duplex".to_string())),
-                "Transform" => Some(("node_stream".to_string(), "Transform".to_string())),
+                //
+                // Gate the classic node:stream names on `is_genuine_node_stream_parent`
+                // so a userland stream-shim binding (readable-stream's
+                // `Transform`, winston) falls through to the dynamic
+                // `extends_expr` parent path and runs its real constructor.
+                "Readable" | "Writable" | "Duplex" | "Transform"
+                    if is_genuine_node_stream_parent(ctx, &parent_name) =>
+                {
+                    Some(("node_stream".to_string(), parent_name.clone()))
+                }
                 _ => None,
             };
             if native_parent.is_some() {
@@ -1329,11 +1368,15 @@ pub fn lower_class_from_ast(
                     "TransformStream".to_string(),
                 )),
                 // #1545: classic node:stream base classes — keep in lockstep
-                // with the parallel arm in `lower_class_decl` above.
-                "Readable" => Some(("node_stream".to_string(), "Readable".to_string())),
-                "Writable" => Some(("node_stream".to_string(), "Writable".to_string())),
-                "Duplex" => Some(("node_stream".to_string(), "Duplex".to_string())),
-                "Transform" => Some(("node_stream".to_string(), "Transform".to_string())),
+                // with the parallel arm in `lower_class_decl` above. Gated on
+                // `is_genuine_node_stream_parent` so a userland stream-shim
+                // binding (readable-stream's `Transform`) falls through to the
+                // dynamic `extends_expr` parent path.
+                "Readable" | "Writable" | "Duplex" | "Transform"
+                    if is_genuine_node_stream_parent(ctx, &parent_name) =>
+                {
+                    Some(("node_stream".to_string(), parent_name.clone()))
+                }
                 _ => None,
             };
             if native_parent.is_some() {
