@@ -114,6 +114,46 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // name. The first alias for each spec wins; subsequent aliases of the
     // same spec keep their `const X = <chosen>;` form (handled below).
     let raw_aliases = extract_require_aliases_with_ranges(source);
+
+    // Names this module will declare at MODULE scope as `export const X =
+    // _cjs.X;` (the `named_export_decls` set computed below). Adopting an
+    // alias whose name matches one of these is a self-collision: the wrap
+    // would emit BOTH `import X from '<spec>';` (the adopted alias import) and
+    // `export const X = _cjs.X;` — two module-scope bindings named `X`. HIR's
+    // resolver then binds the IIFE-body reference `X` (e.g. `const { ... } =
+    // X`) to the `export const`, whose value `_cjs.X` is `undefined` until the
+    // IIFE returns. This is the pino `const symbols = require('./lib/symbols')`
+    // + `module.exports.symbols = symbols` shape: the top-level
+    // `const { ...30 syms... } = symbols` destructure read `undefined` and
+    // threw `Cannot convert undefined or null to object` (pino.js:23).
+    //
+    // Refusing adoption keeps the spec on `_req_N`, so the original body line
+    // `const X = require('<spec>')` is NOT blanked, runs inside the IIFE, and
+    // binds an IIFE-LOCAL `X = _req_N` — distinct from the module-scope
+    // `export const X`. The body's `X` references resolve to the local; the
+    // export still surfaces the value. This mirrors how a destructured
+    // `const { ... } = require('<spec>')` spec (levels/constants/tools) already
+    // keeps `_req_N` and works. The collision set deliberately excludes
+    // re-export-via-require names (those become `export { _req_N as X };`, no
+    // module-scope `const X`) and hoisted-class names (already blocked below),
+    // so class-identity adoption (#665) is unaffected.
+    let export_const_collision_names: std::collections::HashSet<String> = {
+        let plain_exports = extract_exports_from_source(source);
+        let mut reexport_names: std::collections::HashSet<String> =
+            extract_named_exports_from_require(source)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect();
+        for (name, _) in extract_object_literal_exports_from_require(source) {
+            reexport_names.insert(name);
+        }
+        plain_exports
+            .into_iter()
+            .filter(|n| !reexport_names.contains(n))
+            .filter(|n| !hoisted_class_names.contains(n))
+            .collect()
+    };
+
     let alias_is_safe = |alias: &str| -> bool {
         if alias.starts_with("_req_") {
             return false;
@@ -122,6 +162,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             return false;
         }
         if hoisted_class_names.iter().any(|c| c == alias) {
+            return false;
+        }
+        // Self-collision with a module-scope `export const <alias> = _cjs.<alias>;`
+        // (see `export_const_collision_names` above) — keep the spec on `_req_N`.
+        if export_const_collision_names.contains(alias) {
             return false;
         }
         // #5006: a reassigned alias (`s = s.filter(...)`) must stay a real

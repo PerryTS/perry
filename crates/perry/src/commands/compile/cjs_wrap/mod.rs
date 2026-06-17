@@ -498,6 +498,59 @@ module.exports = inner;
     }
 
     #[test]
+    fn wrap_does_not_adopt_alias_that_collides_with_named_export() {
+        // Regression: pino.js does `const symbols = require('./lib/symbols')`
+        // AND `module.exports.symbols = symbols`. Adopting the `symbols` alias
+        // as the import local (`import symbols from './lib/symbols';`) collided
+        // with the module-scope `export const symbols = _cjs.symbols;` the wrap
+        // emits for the named export. HIR bound the IIFE-body reference
+        // `const { ... } = symbols` to the `export const` (value `_cjs.symbols`,
+        // `undefined` until the IIFE returns), so the top-level destructure
+        // threw `Cannot convert undefined or null to object` (pino.js:23).
+        //
+        // The fix refuses to adopt an alias whose name is also a plain named
+        // export: the spec stays on `_req_N`, the body's `const symbols =
+        // require(...)` survives as an IIFE-local, and the module-scope
+        // `export const symbols` no longer collides.
+        let src = "const symbols = require('./lib/symbols');\n\
+                   const { aSym, bSym } = symbols;\n\
+                   function build() { return [aSym, bSym]; }\n\
+                   module.exports = build;\n\
+                   module.exports.symbols = symbols;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/index.js"));
+        // Alias NOT adopted — import keeps the `_req_N` placeholder name...
+        assert!(
+            wrapped.contains("import _req_0 from './lib/symbols';"),
+            "expected non-adopted _req_0 import (no `import symbols`), got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("import symbols from './lib/symbols';"),
+            "must NOT adopt the colliding `symbols` alias as the import local, got:\n{}",
+            wrapped
+        );
+        // ...the require dispatches through it...
+        assert!(
+            wrapped.contains("if (specifier === './lib/symbols') return _req_0;"),
+            "expected require dispatch through _req_0, got:\n{}",
+            wrapped
+        );
+        // ...the original `const symbols = require(...)` survives in the IIFE
+        // body (NOT blanked) so the destructure reads the real value...
+        assert!(
+            wrapped.contains("const symbols = require('./lib/symbols');"),
+            "expected the alias declaration to survive as an IIFE-local, got:\n{}",
+            wrapped
+        );
+        // ...and the named export still surfaces.
+        assert!(
+            wrapped.contains("export const symbols = _cjs.symbols;"),
+            "expected the named export to be preserved, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn identifier_is_reassigned_distinguishes_declaration_from_write() {
         use super::extract_requires::identifier_is_reassigned;
         // Pure read-only alias: declaration + member reads only.
