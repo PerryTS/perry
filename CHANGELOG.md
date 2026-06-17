@@ -1,3 +1,46 @@
+## v0.5.1178 — perf(codegen): outline per-new-site inline allocator (smaller IR + faster)
+
+`new ClassName(...)` previously emitted the full object-allocation prologue
+inline at every call site. That bloated the IR (and the resulting binary) and
+slowed codegen/compile. The allocation now calls the outlined runtime helper
+`js_object_alloc_class_inline_keys`, so each new-site shrinks to a single call.
+Complementary to #5304 (which outlined the constructor *call*); this outlines
+the *allocation*. The two touch different regions of `lower_call/new.rs`.
+
+Two supporting changes:
+
+- **Runtime (#4717):** folded the field-slot zero-fill into
+  `js_object_alloc_class_inline_keys`. The allocation moved out of per-site
+  codegen, where callers used to zero-fill `max(field_count, 8)` slots by hand;
+  doing it inside the helper keeps every caller — including the outlined `new C()`
+  path — correct by construction. Without it, a field read-before-write or a GC
+  scan of the still-constructing instance could observe stale recycled arena
+  bytes.
+- Split the `FieldInitMode` enum + `apply_field_initializers_recursive` walker
+  out of `lower_call/new.rs` into a sibling `field_init.rs` (pure move) to keep
+  the file under the 2,000-LOC CI size gate.
+
+## v0.5.1177 — fix(codegen): injective function-symbol names (distinct names that sanitize alike)
+
+Two distinct module-level functions could mangle to the same LLVM symbol, so
+clang rejected the module with "invalid redefinition of function". Two root
+causes, both fixed:
+
+- `scoped_fn_name` used the lossy `sanitize` (every non-`[A-Za-z0-9_]` byte →
+  `_`), so minified names like `$Z5` and `_Z5` both became
+  `perry_fn_<mod>___Z5`. Switched to the injective `sanitize_member` (the same
+  mangler `scoped_static_method_name` already uses); byte-identical for the
+  common `[A-Za-z0-9_]` case. `func_names` is keyed by func id and every call
+  site resolves through it, so changing the mangling stays consistent.
+- Minified code reuses short names (`function A`) across scopes, and perry
+  lambda-lifts nested functions to module level, so two module functions can
+  legitimately share a name. `compile_module` now disambiguates collisions
+  with a `__dupN` suffix keyed by the mangled symbol. Exported functions are
+  referenced cross-module by their canonical `scoped_fn_name`, so they reserve
+  their name first and never get suffixed.
+
+Sibling fix to the per-class class-keys-global disambiguation (5ac457967).
+
 ## v0.5.1176 — fix(runtime): loose equality (`==`) now treats SSO short strings as strings
 
 `js_jsvalue_loose_equals` (the helper behind `assert.equal`/`assert.deepEqual`
