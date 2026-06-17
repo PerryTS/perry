@@ -1,3 +1,34 @@
+## v0.5.1176 — fix(runtime): loose equality (`==`) now treats SSO short strings as strings
+
+`js_jsvalue_loose_equals` (the helper behind `assert.equal`/`assert.deepEqual`
+loose comparison) detected string operands with `is_string()`, which only
+matches heap `STRING_TAG` values and **not** `SHORT_STRING_TAG` SSO-inlined
+strings (length ≤ 5). When both operands were short strings, the function
+matched no arm — not number, not string, not bool — and fell through to
+`return 0`, so `"ab" == "ab"` and loose `assert.equal` on JSON-parsed short
+strings wrongly reported not-equal. The `to_number` coercion helper had the
+same `is_string()` gap, so `"5" == 5` also failed for SSO operands.
+
+Both sites now use `is_any_string()` and decode operands via
+`str_bytes_from_jsvalue` (a stack scratch buffer that handles SSO + heap),
+mirroring the strict-equality (`===`) path, which was already SSO-aware. This
+is a runtime-only change: codegen routes most `==` through other helpers
+(`js_loose_eq`, `js_dynamic_string_equals`), so the user-visible symptom was
+`assert.equal`/`assert.deepEqual` on short strings reporting inequality.
+
+Repro (failed before, passes now, matches `node --experimental-strip-types`):
+
+```ts
+import assert from "node:assert";
+const j: any = JSON.parse('{"k":"ab"}');
+assert.equal(j.k, "ab");                       // was: "Expected values to be loosely equal"
+assert.deepEqual({ x: "ab" }, JSON.parse('{"x":"ab"}'));
+```
+
+Found via an external code audit; verified reproducible before fixing.
+Added `value::equality::loose_eq_sso_tests` (SSO==SSO, SSO==heap, SSO vs
+number, empty-string coercion).
+
 ## v0.5.1175 — fix(http): `IncomingMessage.resume()`/`.pause()` return `this` so `res.resume().on('end', …)` chains (#4975)
 
 Part of the node:http/https behavioral-parity tail (#4975). `Readable.pause()`
