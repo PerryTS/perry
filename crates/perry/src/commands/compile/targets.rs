@@ -85,14 +85,14 @@ pub(super) fn generate_embedded_js_object(
         ));
         c.push_str(&format!(
             "static const size_t PERRY_EMB_PATH_LEN_{idx} = {};\n",
-            specifier.as_bytes().len()
+            specifier.len()
         ));
         c.push_str(&format!(
             "static const char PERRY_EMB_SRC_{idx}[] = {src_lit};\n"
         ));
         c.push_str(&format!(
             "static const size_t PERRY_EMB_SRC_LEN_{idx} = {};\n",
-            module.source.as_bytes().len()
+            module.source.len()
         ));
     }
 
@@ -134,14 +134,14 @@ pub(super) fn generate_embedded_js_object(
         ));
         c.push_str(&format!(
             "static const size_t PERRY_ALIAS_SPEC_LEN_{idx} = {};\n",
-            specifier.as_bytes().len()
+            specifier.len()
         ));
         c.push_str(&format!(
             "static const char PERRY_ALIAS_PATH_{idx}[] = {path_lit};\n"
         ));
         c.push_str(&format!(
             "static const size_t PERRY_ALIAS_PATH_LEN_{idx} = {};\n",
-            path.as_bytes().len()
+            path.len()
         ));
     }
 

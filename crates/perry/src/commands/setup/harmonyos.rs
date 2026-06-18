@@ -1,16 +1,10 @@
-use anyhow::{anyhow, bail, Context, Result};
-use clap::Args;
+use anyhow::{bail, Result};
 use console::style;
 use dialoguer::{Confirm, Input, Password, Select};
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::super::publish::{
-    config_path, is_interactive, load_config, save_config, AndroidSavedConfig, AppleSavedConfig,
-    HarmonyosSavedConfig, PerryConfig,
-};
-
-use super::*;
+use super::super::publish::{config_path, HarmonyosSavedConfig, PerryConfig};
 
 pub fn harmonyos_wizard(saved: &mut PerryConfig) -> Result<()> {
     println!("  {}", style("HarmonyOS Setup").bold());

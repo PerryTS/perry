@@ -1,8 +1,6 @@
 //! Compile command - compiles TypeScript to native executable
 
 use anyhow::{anyhow, Result};
-use clap::Args;
-use perry_hir::{Module as HirModule, ModuleKind};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -741,7 +739,7 @@ pub fn run_with_parse_cache(
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.
     let mut all_type_aliases: std::collections::BTreeMap<String, perry_types::Type> =
         std::collections::BTreeMap::new();
-    for (_path, hir_module) in &ctx.native_modules {
+    for hir_module in ctx.native_modules.values() {
         for ta in &hir_module.type_aliases {
             if ta.type_params.is_empty() {
                 all_type_aliases.insert(ta.name.clone(), ta.ty.clone());
@@ -773,7 +771,7 @@ pub fn run_with_parse_cache(
     // `hir_module.imports` doesn't even mention the source module.
     let mut all_program_type_names: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    for (_path, hir_module) in &ctx.native_modules {
+    for hir_module in ctx.native_modules.values() {
         for class in &hir_module.classes {
             all_program_type_names.insert(class.name.clone());
         }
@@ -1019,9 +1017,7 @@ pub fn run_with_parse_cache(
         BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
-        let exports = all_module_exports
-            .entry(path_str.clone())
-            .or_insert_with(BTreeMap::new);
+        let exports = all_module_exports.entry(path_str.clone()).or_default();
         // Exported functions
         for func in &hir_module.functions {
             if func.is_exported {
@@ -1110,7 +1106,7 @@ pub fn run_with_parse_cache(
                 {
                     all_module_export_origin_names
                         .entry(path_str.clone())
-                        .or_insert_with(BTreeMap::new)
+                        .or_default()
                         .insert(exported.clone(), local.clone());
                 }
             }
@@ -1292,7 +1288,7 @@ pub fn run_with_parse_cache(
         for (module_path, name, origin, origin_name) in new_export_entries {
             all_module_exports
                 .entry(module_path.clone())
-                .or_insert_with(BTreeMap::new)
+                .or_default()
                 .insert(name.clone(), origin);
             // Only record the origin-name entry when it actually differs
             // from the export name (the common identity case is implicit —
@@ -1302,7 +1298,7 @@ pub fn run_with_parse_cache(
             if origin_name != name {
                 all_module_export_origin_names
                     .entry(module_path)
-                    .or_insert_with(BTreeMap::new)
+                    .or_default()
                     .insert(name, origin_name);
             }
         }
@@ -1914,7 +1910,7 @@ pub fn run_with_parse_cache(
     // Set of native-module paths that are dynamic-import targets. We
     // also build a parallel set keyed by Module::name for flatten_exports.
     let mut dyn_target_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for (_path, hir_module) in &ctx.native_modules {
+    for hir_module in ctx.native_modules.values() {
         for import in &hir_module.imports {
             // `is_dynamic` covers dynamic-only synthetic edges;
             // `is_dynamic_target` (#1672) covers a static edge that is
@@ -1974,9 +1970,7 @@ pub fn run_with_parse_cache(
                     .iter()
                     .find(|c| c.name == fe.source_local)
                 {
-                    perry_codegen::NamespaceEntryKind::LocalClass {
-                        class_id: class.id as u32,
-                    }
+                    perry_codegen::NamespaceEntryKind::LocalClass { class_id: class.id }
                 } else if let Some(global) = target_hir
                     .globals
                     .iter()
@@ -2013,9 +2007,7 @@ pub fn run_with_parse_cache(
                     } else if let Some(class) =
                         src.classes.iter().find(|c| c.name == fe.source_local)
                     {
-                        perry_codegen::NamespaceEntryKind::LocalClass {
-                            class_id: class.id as u32,
-                        }
+                        perry_codegen::NamespaceEntryKind::LocalClass { class_id: class.id }
                     } else {
                         perry_codegen::NamespaceEntryKind::ForeignVar {
                             source_prefix: source_prefix.clone(),
@@ -2370,7 +2362,7 @@ pub fn run_with_parse_cache(
                 }
                 for spec in &import.specifiers {
                     if let perry_hir::ImportSpecifier::Namespace { local } = spec {
-                        if !namespace_imports.contains(&local) {
+                        if !namespace_imports.contains(local) {
                             namespace_imports.push(local.clone());
                         }
                     }
@@ -4217,14 +4209,14 @@ pub fn run_with_parse_cache(
                     stored_cache_path: true,
                 });
             }
-            return Ok(NativeObjectArtifact {
+            Ok(NativeObjectArtifact {
                 path: obj_path,
                 bytes: Some(object_code),
                 fingerprint: object_fingerprint,
                 cleanup_after_link: true,
                 reused_cache_path: false,
                 stored_cache_path: false,
-            });
+            })
         })
         .collect();
 

@@ -481,7 +481,7 @@ fn collect_module_one(
         ..Default::default()
     });
     let ast_module_owned: swc_ecma_ast::Module;
-    let ast_module: &swc_ecma_ast::Module = match parse_cache.as_deref_mut() {
+    let ast_module: &swc_ecma_ast::Module = match parse_cache {
         Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
             Ok(m) => m,
             Err(e) => {
@@ -1624,14 +1624,14 @@ fn collect_module_one(
         }
     }
 
-    return Ok(ModuleDiscovery {
+    Ok(ModuleDiscovery {
         finish: Some(PreparedModule {
             canonical,
             module_name,
             hir_module,
         }),
         children: pending,
-    });
+    })
 }
 
 fn collect_module_finish(

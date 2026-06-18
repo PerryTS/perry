@@ -34,8 +34,7 @@ mod tests;
 pub use args::PublishArgs;
 pub(crate) use saved_config::{
     check_beta_consent, config_path, is_interactive, load_config, prompt_input, report_beta_error,
-    save_config, AndroidSavedConfig, AppleSavedConfig, BetaConfig, HarmonyosSavedConfig,
-    IosSavedConfig, PerryConfig,
+    save_config, AndroidSavedConfig, AppleSavedConfig, HarmonyosSavedConfig, PerryConfig,
 };
 pub(crate) use tarball::{create_project_tarball, create_project_tarball_with_excludes};
 

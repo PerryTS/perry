@@ -134,7 +134,6 @@ fn run_extract(args: ExtractArgs, format: OutputFormat) -> Result<()> {
         let mut new_count = 0;
         // #854: `removed_count` was init'd to 0 then unconditionally
         // overwritten — declared without an initial value.
-        let removed_count: usize;
 
         // Add new keys
         for key in &keys {
@@ -154,7 +153,7 @@ fn run_extract(args: ExtractArgs, format: OutputFormat) -> Result<()> {
             .filter(|k| !keys.contains(*k))
             .cloned()
             .collect();
-        removed_count = stale.len();
+        let removed_count: usize = stale.len();
 
         // Write updated file (keep stale keys but report them)
         let json = serde_json::to_string_pretty(&existing)?;
