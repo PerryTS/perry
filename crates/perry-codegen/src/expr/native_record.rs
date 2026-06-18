@@ -71,6 +71,15 @@ pub(crate) fn array_kind_fact(
     native_fact_use("array_kind", local_id, state, detail, reason)
 }
 
+pub(crate) fn effect_fact(
+    local_id: Option<u32>,
+    state: &'static str,
+    detail: &str,
+    reason: Option<MaterializationReason>,
+) -> NativeFactUse {
+    native_fact_use("effect", local_id, state, detail, reason)
+}
+
 pub(super) fn native_fact_uses_for_record(
     local_id: Option<u32>,
     lowered: &LoweredValue,
@@ -123,6 +132,13 @@ pub(super) fn native_fact_uses_for_record(
             local_id,
             "consumed",
             "usize",
+            None,
+        )),
+        NativeRep::I1 => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "i1",
             None,
         )),
         NativeRep::F64 => consumed.push(native_fact_use(

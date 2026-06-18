@@ -2,36 +2,271 @@
 
 ---
 
-## 0. Landed Scope for This Branch
+## 0. Live Acceptance Checklist
 
-This branch landed selected native/region-local type lowering, not a general
-typed function, method, or closure ABI. User function and method entry points
-still use the generic `double`/NaN-box ABI for parameters and returns; closure
-bodies still use `i64 this_closure` plus `double` arguments and return
-`double`. The new native facts are collected for module init, function, method,
-static-method, and closure bodies, then consumed inside those bodies where a
-specific proof exists.
+Status legend:
+
+- `[x]` implemented in this branch with code/test evidence.
+- `[~]` partially implemented; evidence exists for a narrow production path, but
+  the architecture item is not complete.
+- `[ ]` not complete for this branch yet.
+
+| Status | Architecture requirement | Current evidence / remaining work |
+|---|---|---|
+| `[~]` | Lower HIR values into typed SSA/native reps first | Region-local native reps exist for `i32`/`u32`, `i1`, `f64`, buffer views, packed numeric arrays, raw numeric fields, and selected `JsValueBits` consumers. A narrow value-first ordinary-expression path now keeps simple numeric literals, locals, local assignment, and numeric binary ops as `f64`, and simple boolean literals/locals/assignment/comparison/`!` as `i1`, until return/runtime materialization. Broad ordinary expression lowering is still predominantly generic `double` unless a local proof applies. Evidence: `representation_first_numeric_locals_stay_f64_until_abi` and `representation_first_boolean_locals_stay_i1_until_abi`. |
+| `[~]` | Keep `JSValue` as ABI/fallback, not optimizer default | Public ABI remains `double`/NaN-box. First ordinary-function, own-instance-method, and local-closure typed-f64/typed-i1 candidates now keep raw `double`/`i1` clones behind public JSValue wrappers that guard arguments, call the typed clone on success, box/materialize at the ABI edge, and fall back to an internal generic body. Ordinary functions also have a first string passthrough clone shape: the internal clone passes raw `StringHeader*` handles as `i64`, the public wrapper guards/unboxes JS strings, boxes the raw result with `js_nanbox_string`, and falls back to the generic body; same-module direct `FuncRef` calls with proven string args can call that raw clone directly after guards. Local no-capture string closures now use the same closure-aware raw string ABI (`i64 %this_closure, i64 string args... -> i64 string`) behind a public JSValue wrapper and guarded direct local call path. Local typed closure clones now use a closure-aware internal ABI (`i64 %this_closure, typed args...`) and accept immutable typed captures for the conservative numeric/boolean slices. Ordinary functions now also cover a first mixed native predicate shape, `number... -> boolean`, by emitting an internal `i1(double, ...)` clone behind the public wrapper; same-module direct `FuncRef` calls now carry typed parameter reps and can call that clone directly after `f64` guards. Async, string methods/operators, dynamic string calls, string closure captures, escaping/unknown closures, mutable/boxed/`this`/`new.target` captures, inherited/dynamic method bodies beyond public wrapper dispatch, and most functions/methods still use generic ABI. |
+| `[~]` | Use `i64 JSValueBits` internally for boxed values | `JsValueBits` records and selected production consumers exist, including write-barrier child selection, boxed local/parameter/PreallocateBoxes storage as raw `i64` box pointers, `array.push` slot/runtime-helper value selection, and dynamic property/index-set RHS selection before boxing at the store/helper edge, including array runtime-key index setters. `ExpectedNativeRep::JsValueBits` now tries value-first lowering for ordinary native expressions and direct `f64`/proven-`i1`/integer/native-handle/promise-boundary materialization to boxed bits before falling back through `JSValue`. Public boolean parameters in generic bodies still enter as JSValue ABI locals unless a typed clone owns the call path. Closure capture ABI, dynamic property/index helper edges beyond the covered store paths, and many generic expression paths still materialize through `double`. Evidence: `accepts_js_value_bits_materialization_transitions`, `artifact_records_direct_f64_to_js_value_bits_for_write_barrier`, `artifact_records_direct_i1_to_js_value_bits_for_write_barrier`, `artifact_records_write_barrier_child_js_value_bits`, `artifact_records_array_push_value_bits_before_slot_store`, `artifact_records_dynamic_property_set_value_bits_before_helper`, `artifact_records_dynamic_index_set_value_bits_before_helper`, and `artifact_records_array_runtime_key_index_set_value_bits_before_helper`. |
+| `[~]` | Rich TypeFacts/effect/range/escape lattice | Array-kind, array-stability, noalias, effect, unknown-call, alias, aggregate identity exposure, materialization-hazard facts, and a first async/microtask escape fact now feed packed-f64 and cached-length proofs. Loop array-length consumers now emit accepted/rejected effect-fact artifacts, including explicit async/microtask rejection records when an `await` would make cached length or bounded-index lowering unsafe. Object facts, field-sensitive escape/range facts, broader async/microtask summaries, and wider consumer coverage remain incomplete. Evidence: `async_microtask_escape_is_tracked_as_effect_fact`, `loop_length_effect_artifact_records_consumed_preservation_fact`, `async_microtask_effect_blocks_length_and_bounds_proofs_with_artifact_reason`, `aggregate_array_identity_exposure_marks_materialization_hazard`, `indirect_array_alias_from_container_blocks_length_and_bounds_proofs`, `loop_local_array_alias_push_blocks_packed_f64_loop_and_artifacts`, `hir_facts` unit tests, and invalidation regressions in `crates/perry-codegen/tests/native_proof_regressions/invalidation.rs`. |
+| `[~]` | Late boxing only at true dynamic boundaries | Native fast paths reduce boxing in verified regions; straight-line numeric and boolean ordinary-expression slices now materialize `f64`/`i1` only at return/runtime compatibility boundaries. Ordinary bodies still frequently lower to JSValue/`double` early outside those proven slices. |
+| `[~]` | Treat async/generator lowering as allocation lowering | Compiler-private async/generator control locals now avoid generic JSValue boxes for the narrow closure-shared control state: `__gen_state` / `__gen_pending_type` use typed `i32` heap cells, and `__gen_done` / `__gen_executing` use typed boolean heap cells. This preserves closure lifetime/sharing semantics while keeping control reads, writes, and `__gen_state === const` dispatch comparisons in native `i32`/`i1`. Await payloads, `__gen_sent`, pending values, Promise resolution values, async captures, and externally visible async boundaries remain JSValue/generic. Evidence: `compiler_private_async_control_cells_use_primitive_heap_boxes`, `artifact_records_compiler_private_async_control_cells`, `primitive_control_boxes_round_trip_and_reject_foreign_pointers`, `representation_lowering_helpers_have_lto_keepalive_anchors`, and `test_runtime_symbol_guard_roots_async_control_box_helpers`. |
+| `[~]` | Typed internal function/method/closure paths plus generic trampolines | Ordinary functions now have conservative typed-f64 clones for straight-line numeric return bodies, a bounded typed-i1 clone path for fixed-arity boolean-only functions with straight-line boolean return bodies, a first numeric-predicate typed-i1 function shape whose internal clone takes `double` params and returns `i1`, and a first fixed-arity typed-string passthrough clone whose internal clone takes and returns raw string handles as `i64`. Eligible ordinary functions expose the original public symbol as a JSValue trampoline and move the generic implementation to an internal `__generic` body; same-module direct calls can target f64/i1/string clones when their arguments are proven and guarded. Exact own instance methods now use the same public-symbol wrapper shape for the narrower method-eligible boolean/numeric slices: runtime vtables register the public JSValue trampoline, typed clones stay internal, numeric-predicate method clones use `i1(double, ...)` internal signatures, and guarded direct compiled calls jump to the internal generic method body on typed-argument guard failure. Eligible local closures expose the original closure function pointer as a JSValue trampoline, keep the generic closure body under `__generic`, and keep typed clones internal; numeric-predicate closure clones use `i1(i64 closure, double, ...)` internal signatures, and no-capture string passthrough closure clones use `i64(i64 closure, i64 string...)` internal signatures with `js_nanbox_string` only at wrapper/direct-call boundaries. Typed closure clones now always receive `i64 %this_closure`; immutable f64/i1 capture slots are loaded through that handle and converted to native reps before body lowering. String methods, string operators, dynamic string call sites, string captures, mutable captures, boxed captures, `this`/`new.target` captures, dynamic closure values, and escaping/async closure shapes remain generic. Evidence: `typed_string_function_clone_emits_internal_clone_and_guarded_wrapper`, `artifact_records_typed_string_direct_call_selection`, `typed_string_function_clone_rejects_unsupported_string_shapes`, `typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call`, `artifact_records_typed_string_closure_clone_selection`, `typed_string_closure_clone_rejects_any_and_captures`, `typed_string_closure_clone_rejects_dynamic_callee_call_site`, `typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper`, `typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call`, `typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call`, `typed_f64_public_trampoline_dispatches_before_generic_body`, `typed_i1_public_trampoline_dispatches_before_generic_body`, `typed_f64_method_public_trampoline_dispatches_before_generic_body`, `typed_i1_method_public_trampoline_dispatches_before_generic_body`, `typed_f64_function_clone_*`, `typed_i1_function_clone_*`, `typed_f64_method_clone_*`, `typed_i1_method_clone_*`, `typed_f64_closure_clone_*`, and `typed_i1_closure_clone_*` tests in `crates/perry-codegen/tests/native_proof_regressions.rs`. |
+| `[~]` | Packed numeric array lowering/versioning with safe fallback | Guarded packed-f64 loop versioning and typed-feedback/runtime layout gates exist. A first store-bearing shape, `arr[i] = arr[i] + number` / safe numeric RHS, now side-exits to the slow clone on store-guard failure instead of rejoining after boxed fallback. Release symbol guard coverage now roots/asserts the generated typed-feedback array helpers (`packed_f64_array_loop_guard`, numeric get/set guards, boxed fallbacks, numeric push, and companion array feedback helpers) so stale LTO/static archives fail before link. Dynamic fractional index fallback evidence now covers preserving the original runtime key for get/set and not truncating typed-array fractional numeric keys. Local alias mutation, length writes, unknown calls, materialization hazards, and unsafe store-then-read shapes still invalidate or reject the relevant cached-length/bounds/packed-f64 proofs. Broader effect summaries remain incomplete. Evidence: `packed_f64_loop_store_update_versions_with_side_exit`, packed-f64 invalidation regressions, `test_runtime_symbol_guard_roots_typed_feedback_array_helpers`, `typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receivers`, `typed_feedback_boxed_set_fallback_does_not_truncate_fractional_array_like_keys`, `dynamic_fractional_array_index`, and `scripts/check_runtime_symbols.sh target/release/libperry_runtime.a`. |
+| `[~]` | Fixed/unboxed class field layout and direct typed field access | Raw numeric class-field fast paths exist for proven fields. Numeric consumers now use a raw-f64 class-field get path that keeps the guarded fast load as native `f64` and coerces only the boxed runtime fallback before the numeric merge. Raw numeric class-field get/set artifacts now carry explicit exact-declared-receiver, guarded class-id/keys, raw-f64 slot-array, and pointer-free bitmap notes; raw numeric stores also emit `WriteBarrierElided` evidence because the slot is proven non-pointer. Unknown receivers and computed/dynamic-shape class bodies do not claim raw slot access in their source function. General fixed mixed layouts and runtime pointer bitmaps are not complete. Evidence: `typed_feedback_guards_direct_class_field_specialization`, `artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons`, and `raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver`. |
+| `[~]` | Method/effect summaries for scalar replacement across simple method calls | Exact-receiver summaries exist for scalar-replaced class instances whose own method is fixed-arity and synchronous with either a numeric `return` over public numeric `this.field` reads/numeric params/arithmetic, or a boolean comparison predicate over that same numeric subset. This lets `new Point(...).sum()` and `new Point(...).isAbove(n)`-style calls inline against scalar field slots without heap allocation or method dispatch when arguments are proven in the current expression. Public `number`/`Int32` local arguments now use a guarded fast path: the fast branch checks `js_typed_f64_arg_guard`, unboxes with `js_typed_f64_arg_to_raw`, and the fallback materializes the scalar receiver before generic by-ID method dispatch. Unproven `any` arguments stay generic. Mutation/effect summaries, inherited/dynamic methods, field writes, `this` escape, accessors, dynamic property reads, nested/unknown calls, and broader non-numeric methods remain open. Evidence: `scalar_replaced_simple_method_call_inlines_summary_without_dispatch`, `artifact_records_scalar_replaced_method_summary_inline`, `scalar_replaced_boolean_method_predicate_inlines_without_dispatch_or_allocation`, `artifact_records_scalar_replaced_boolean_method_predicate_inline`, `scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_property`, `scalar_method_boolean_predicate_rejects_unproven_numeric_arguments`, and `scalar_method_boolean_predicate_guards_public_numeric_arguments`. |
+| `[~]` | Interned property/method ID dispatch for hot static names | A first compatibility ID layer routes selected generated static-name property get/set, method fallback/apply, typed-feedback method-call, and class-method bind callsites through `*_by_property_id` / `*_by_id` wrappers. The current ID representation is the interned heap `StringHeader` pointer emitted by the StringPool, preserving existing semantics while removing raw byte-pointer/length plumbing from those callsites. Full global numeric IDs, vtable/property maps keyed directly by IDs, dynamic/computed keys, JS bridge calls, and broad specialized paths remain open. Evidence: `static_property_access_on_computed_class_uses_property_id_wrappers`, `static_name_method_fallback_uses_method_id_wrapper`, `static_name_spread_method_fallback_uses_method_id_wrapper`, and `static_name_class_method_value_uses_method_id_bind_wrapper`. |
+| `[~]` | Unified safe string-like lowering | A first `PerryStringRef` resolver normalizes raw interned `StringHeader*` IDs, boxed heap-string IDs, and boxed SSO short-string IDs for the by-ID property/method wrappers. The typed-string function and no-capture local-closure ABIs add a non-throwing string-only guard/unbox pair for JS string arguments and materialize SSO strings only after the guard. These still use raw `StringHeader*` handles for the internal clone, not a full end-to-end `PerryStringRef` value representation; string methods, string captures, string operators, and dynamic/computed lowering sites remain generic. Evidence: `dispatch_id_resolver_accepts_raw_heap_and_sso_string_forms`, `typed_string_arg_guard_is_non_throwing_and_string_only`, `typed_string_function_clone_emits_internal_clone_and_guarded_wrapper`, `artifact_records_typed_string_direct_call_selection`, `typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call`, and `artifact_records_typed_string_closure_clone_selection`. |
+| `[~]` | Key-specialized Map/Set lowering | Runtime Map/Set side tables already index numeric and string-content keys. Codegen now has a first static string-key collection slice: `Map<string, number>.set/has` lowers through `js_map_set_string_number` / `js_map_has_string_key`, `Map<string, V>.get` lowers through `js_map_get_string_key` while preserving boxed `JSValue`/`undefined` miss semantics, and `Set<string>.add/has/delete` lowers through `js_set_add_string` / `js_set_has_string` / `js_set_delete_string` when the receiver type arguments and key/value expression are proven string. The generated-call helpers are rooted for release/LTO and covered by the runtime symbol guard. Numeric/int32 key specialization, unboxed stored values beyond the f64 map-set helper boundary, dynamic receivers, and broader `Record`/dictionary lowering remain generic. Evidence: `map_string_number_set_has_use_string_key_specialization`, `set_string_add_has_delete_use_string_specialization`, `string_number_specialized_helpers_use_string_content_keys`, `test_set_string_specialized_helpers_use_content_keys`, `representation_lowering_helpers_have_lto_keepalive_anchors`, and `test_runtime_symbol_guard_roots_map_set_string_lowering_helpers`. |
+| `[~]` | User-facing `--explain-lowering` report | `perry build/compile --explain-lowering` emits a fresh `.perry-trace/lowering/.../explain-lowering.json` report and text summary from native-rep artifacts. The report now includes explicit reason maps and evidence rows for typed-clone selected/rejected/not-recorded decisions, generic fallbacks, dynamic boundaries, boxes, unboxes/coercions, runtime property gets, direct field loads, bounds kept/eliminated, and barriers emitted/eliminated. Explain-lowering mode requests comprehensive typed-clone rejection records from codegen, including broad clone-family mismatches that default native-rep artifact runs suppress for noise control. A bounded non-clone completeness slice now derives concrete categories for scalar-replaced raw-f64 direct field loads, generic write-barrier child-bit emissions, and checked-native bounds records that lack an explicit `bounds_state`. Other absent non-clone proof is still reported as `not_recorded`. Evidence: `cargo test -p perry lowering_report`, `report_derives_non_clone_reasons_without_explicit_reason_notes`, and `explain_lowering_mode_records_broad_typed_clone_rejection_reasons`. |
+
+## 0.1 Landed Scope for This Branch
+
+This branch landed selected native/region-local type lowering and has begun the
+typed internal ABI work. It is not yet a general typed function, method, or
+closure ABI. Public user function, method, and closure entry points still use
+the generic `double`/NaN-box ABI for parameters and returns. Eligible ordinary
+typed-f64/typed-i1 functions now expose that public ABI through a wrapper under
+the original symbol, with an internal typed clone plus an internal generic body
+fallback. The typed-i1 ordinary-function path includes a first mixed native
+signature for numeric predicates: an internal `i1(double, ...)` clone is called
+from the public JSValue wrapper after numeric guards, and same-module direct
+`FuncRef` calls now carry typed parameter reps so they can guard/unbox `f64`
+arguments and call that clone directly while keeping a generic body fallback.
+A first typed-string ordinary-function path accepts fixed-arity string
+parameters and a string passthrough return; its internal clone takes and returns
+raw `StringHeader*` handles as `i64`, while the public wrapper guards/unboxes
+JS string arguments, boxes the raw result with `js_nanbox_string`, and falls
+back to the internal generic body on guard failure. Same-module direct
+`FuncRef` calls with proven string arguments can guard/unbox and call the raw
+string clone directly, boxing only at the call boundary.
+Eligible own-instance methods use the same shape: the original method
+symbol is a JSValue wrapper registered in runtime vtables, and the generic
+method body moves to an internal `__generic` symbol. A narrow set of direct
+compiled calls may still branch to the same internal typed-f64 or typed-i1
+function/method clones after guards pass, and those direct-call guard failures
+target the generic body instead of re-entering the public wrapper. Eligible
+local closures use the same wrapper/body split: the stored closure function
+pointer remains the original public symbol, the generic closure body moves to
+`__generic`, and internal raw-`double`/`i1` clones are called from the public
+wrapper or guarded direct local closure call sites. Those typed closure clones
+now take `i64 %this_closure` as their first internal parameter and can load
+immutable typed capture slots as native f64/i1 values. The new native facts are
+collected for module init, function, method, static-method, and closure bodies,
+then consumed inside those bodies where a specific proof exists.
 
 Compiler evidence for this branch covers:
 
-- region-local integer facts (`i32`/`u32`) and selected JS-number native reps;
+- region-local integer facts (`i32`/`u32`), boolean facts (`i1`), and selected
+  JS-number native reps;
 - Buffer/Uint8Array `BufferView`/`U8` fast paths with explicit bounds and alias
   proof records;
 - packed-`f64` array loop versioning guarded by typed-feedback/runtime layout
-  checks;
-- raw numeric class-field get/set paths guarded by layout and field facts;
+  checks, including the first safe store-update path whose store-guard failure
+  side-exits/restarts in the slow clone instead of rejoining the raw fast clone;
+- a narrow representation-first ordinary-expression path for simple numeric
+  literals, locals, local assignment, and numeric binary ops, plus simple
+  boolean literals, locals, local assignment, numeric/boolean comparisons, and
+  unary `!`. Existing `lower_expr` callers materialize only when they still
+  need a generic JSValue-compatible result. Evidence:
+  `representation_first_numeric_locals_stay_f64_until_abi` and
+  `representation_first_boolean_locals_stay_i1_until_abi`;
+- array-kind, noalias, length-stability, local-alias mutation, aggregate
+  array-identity exposure, unknown-call, and materialization hazard facts
+  consumed by packed-array and cached-length proofs;
+- raw numeric class-field get/set paths guarded by layout and field facts,
+  including a numeric-consumer get variant that keeps the fast raw `f64` load
+  native and moves `js_number_coerce` into the boxed fallback block before the
+  merge. The artifacts now make the exact declared receiver proof observable
+  with class-id/keys-shape guard notes, raw-f64 slot-array layout notes, and
+  pointer-free bitmap notes. Raw numeric class-field stores also record
+  `write_barrier.elided_raw_f64_class_field`; unknown receivers and
+  computed/dynamic-shape class bodies are covered by negative evidence that
+  they do not claim raw slot access in the source function;
+- a first key-specialized collection lowering slice for statically proven
+  string-key collections. `Map<string, number>.set/has`, `Map<string, V>.get`, and
+  `Set<string>.add/has/delete` lower through string-key runtime helpers when
+  receiver type arguments and key/value expressions are proven string. These
+  helpers preserve content equality across distinct heap-string pointers and
+  are rooted in the release/LTO symbol guard. `Map.get` still returns boxed
+  `JSValue` so missing entries remain `undefined`; numeric/int32 key
+  specialization, dynamic receivers, and broader Map/Set/Record typed storage
+  remain generic;
 - selected native binding descriptors such as scalar numbers, `buffer+len`,
   POD records/views, native handles, and promise boundaries;
-- `JsValueBits` as an internal bit-pattern representation with explicit bitcast
-  transitions at materialization boundaries.
+- `JsValueBits` as an internal bit-pattern representation with boxed local,
+  parameter, and PreallocateBoxes storage now using `i64` box pointers. Native
+  `f64`, proven `i1`, integer, native-handle, and promise-boundary values can
+  materialize directly to boxed bits for `JsValueBits` consumers. Barrier/layout
+  sensitive `array.push` stores now select the pushed value as `i64 JSValueBits`
+  and only bitcast back to the runtime `double` ABI at the array slot or helper
+  edge. Generic static-name property sets, polymorphic index sets, and array
+  runtime-key index sets now do the same for their RHS before calling runtime
+  setter helpers. Unsupported/generic values still fall back through explicit
+  `JSValue` bitcast transitions at compatibility boundaries;
+- a first ordinary-function typed-f64 clone path for conservative straight-line
+  numeric functions. Eligible public symbols now guard JSValue args, unbox to
+  raw `double`, call the typed clone, and fall back to an internal generic body
+  on guard failure. Direct compiled calls keep the same fast typed clone path
+  and call the generic body directly on guard failure.
+- a first ordinary-function typed-i1 clone path for fixed-arity boolean-only
+  functions with straight-line boolean bodies. Public wrappers and direct
+  compiled callers guard exact `TAG_TRUE`/`TAG_FALSE` JSValue inputs, lower them
+  to `i1`, call the internal clone, and box the `i1` result back to a JSValue
+  only at the ABI/call boundary. A first ordinary-function numeric predicate
+  slice also accepts `number`/`Int32` params for boolean numeric comparisons and
+  emits an internal `i1(double, ...)` clone behind the public wrapper. Same-module
+  direct `FuncRef` calls now carry the typed parameter reps, guard/unbox numeric
+  JSValue args to raw `double`, call the mixed clone directly, and fall back to
+  the internal generic body on guard failure. Callee signatures containing `any`
+  or unsupported mixed bodies stay generic. Evidence:
+  `typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper`.
+- a first ordinary-function typed-string clone path for fixed-arity string
+  params and a safe string passthrough return. The internal clone uses raw
+  `StringHeader*` handles as `i64`; the public JSValue wrapper uses
+  `js_typed_string_arg_guard` / `js_typed_string_arg_to_raw`, boxes the raw
+  return with `js_nanbox_string`, and falls back to `__generic` if any guard
+  fails. This is intentionally narrower than full `PerryStringRef` lowering:
+  string methods, string operations, dynamic/computed strings, and
+  non-passthrough returns stay generic. Same-module direct calls with proven
+  string arguments can target the internal clone after guards and fall back to
+  `__generic` without recursing through the public wrapper. Evidence:
+  `typed_string_arg_guard_is_non_throwing_and_string_only`,
+  `typed_string_function_clone_emits_internal_clone_and_guarded_wrapper`, and
+  `artifact_records_typed_string_direct_call_selection`.
+- a first own-instance-method typed-f64 clone path. It accepts only fixed-arity
+  numeric params and numeric
+  returns with a single simple numeric return expression; it rejects `this`,
+  defaults, rest/`arguments`, async/generator/captures, computed methods,
+  accessors, constructors, static methods, `super`, and receiver-sensitive
+  bodies. Runtime vtables register the original public method symbol, which is
+  now a JSValue trampoline for eligible methods; typed clones and generic bodies
+  remain internal.
+- a matching own-instance-method typed-i1 clone path. It accepts fixed-arity
+  boolean-only params for straight-line boolean bodies and a first numeric
+  predicate shape whose `number`/`Int32` params feed boolean numeric
+  comparisons. Public method wrappers and guarded direct call sites carry the
+  typed parameter reps: boolean params use `js_typed_i1_arg_guard` /
+  `js_typed_i1_arg_to_raw`, numeric predicate params use
+  `js_typed_f64_arg_guard` / `js_typed_f64_arg_to_raw`, and the internal clone
+  is emitted as either `i1(i1, ...)` or `i1(double, ...)`. Direct guard failures
+  target the internal generic method body, and the `i1` result boxes only at
+  the ABI/call boundary. `any` params and unsupported mixed bodies stay
+  generic; dynamic/unknown receiver call sites do not use the direct typed clone
+  path, though runtime vtable dispatch may enter the public JSValue method
+  wrapper after normal method resolution. Evidence:
+  `typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call`.
+- a first bounded local-closure typed-f64 clone path for statically-known
+  fixed-arity numeric closures with a single simple numeric return expression.
+  The stored public closure function pointer now guards/unboxes JSValue args,
+  calls the internal typed clone, and falls back to `__generic`; direct local
+  closure calls first pass the existing closure identity/arity guard, then a
+  numeric argument guard, and fall back to `__generic` or `js_closure_callN` at
+  dynamic boundaries. The typed clone uses `i64 %this_closure` and can load
+  immutable numeric captures from closure slots before lowering the body.
+  Mutable/boxed captures, rest/default/`arguments`, async/generator, `this`,
+  `new.target`, and unknown closure values stay generic.
+- a matching bounded local-closure typed-i1 clone path for statically-known
+  fixed-arity boolean closures with a single simple side-effect-free boolean
+  return expression, plus a first numeric predicate closure shape whose
+  `number`/`Int32` params feed boolean numeric comparisons. The stored public
+  closure function pointer now guards/unboxes per typed parameter rep, calls the
+  internal `i1` clone, and boxes the `i1` result at the ABI edge; direct local
+  closure calls first pass the existing closure identity/arity guard, then
+  exact boolean or numeric argument guards, and fall back to `__generic` or
+  `js_closure_callN` at dynamic boundaries. The typed clone uses
+  `i64 %this_closure` and can load immutable boolean/f64 captures from closure
+  slots before lowering the body. Mutable/boxed captures, `any` params,
+  unsupported mixed bodies, rest/default/`arguments`, async/generator, `this`,
+  `new.target`, and unknown closure values stay generic. Evidence:
+  `typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call`.
+- a first bounded local-closure typed-string clone path for statically-known
+  no-capture closures with fixed-arity string params and a safe string
+  passthrough return. The stored public closure function pointer now
+  guards/unboxes JS string args with `js_typed_string_arg_guard` /
+  `js_typed_string_arg_to_raw`, calls an internal raw-`i64 StringHeader*` clone,
+  and boxes with `js_nanbox_string` only at the ABI edge. Direct local closure
+  calls first pass the existing closure identity/arity guard, then the string
+  argument guard, and fall back to `__generic` or `js_closure_callN` at dynamic
+  boundaries. String captures, `any` params, non-passthrough bodies,
+  rest/default/`arguments`, async/generator, `this`, `new.target`, and unknown
+  closure values stay generic. Evidence:
+  `typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call`,
+  `artifact_records_typed_string_closure_clone_selection`, and
+  `typed_string_closure_clone_rejects_any_and_captures`.
+- scalar-replaced method summary paths for exact local receivers and simple
+  numeric `return this.field` arithmetic or boolean comparisons over public
+  numeric `this.field` reads and numeric params, avoiding heap allocation and
+  runtime method dispatch when call arguments are proven numeric in the current
+  expression. Public `number`/`Int32` local arguments now get a guarded scalar
+  inline branch using `js_typed_f64_arg_guard` / `js_typed_f64_arg_to_raw`; guard
+  failure materializes the scalar receiver and dispatches through the generic
+  by-ID method path. Unproven `any` arguments stay generic rather than trusting
+  TypeScript annotations as runtime truth. Evidence:
+  `scalar_method_boolean_predicate_guards_public_numeric_arguments`.
+- static write-barrier elision now leaves native-representation evidence for
+  primitive array-store children and pointer-free raw numeric class-field
+  stores, so reports can distinguish barriers skipped by proof from barriers
+  that were simply not observed. Evidence:
+  `artifact_records_static_write_barrier_elision_for_primitive_array_store` and
+  `artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons`.
+- a first interned static-name dispatch ID layer: generated computed-class
+  property get/set, selected method fallback/apply, and class-method bind
+  sites pass interned StringPool handle IDs to by-ID runtime wrappers instead
+  of raw name bytes/lengths. Those wrappers now resolve raw interned pointers,
+  boxed heap strings, and boxed SSO short strings through a shared
+  `PerryStringRef` helper before entering legacy byte/name dispatch.
+- `perry build/compile --explain-lowering`, which writes a JSON report and
+  prints a summary from fresh native-representation artifacts. The report now
+  classifies artifact-backed reasons for typed-f64 clone selection, generic
+  fallback emission, dynamic fallbacks, boxing/unboxing/coercions, runtime
+  property gets, direct field loads, bounds kept/eliminated, and write-barrier
+  emitted/eliminated decisions. Explain-lowering mode asks codegen to include
+  comprehensive typed-clone rejection reasons, while default native-rep
+  artifact runs continue to suppress high-volume clone-family mismatch records.
+  The current bounded report-completeness slice derives concrete reason
+  categories from existing artifact shape for scalar-replaced raw-f64 field
+  loads, generic write-barrier child-bit emissions, and checked-native bounds
+  records without explicit `bounds_state`. Other non-clone records with no
+  artifact-backed proof still use `not_recorded` rather than inventing proof.
 
 Still follow-up unless separately implemented:
 
-- generic typed function/method/closure clone generation;
-- public generic trampolines that dispatch to typed clones;
-- a closure capture/call ABI redesign;
+- broad typed function/method/closure clone generation beyond the current
+  conservative typed-f64, typed-i1, ordinary-function typed-string, and
+  no-capture local-closure typed-string slices;
+- public generic trampolines beyond the current conservative ordinary-function,
+  own-instance-method, and local-closure typed-f64/typed-i1 candidates, plus
+  the ordinary-function and no-capture local-closure typed-string passthrough
+  candidates;
+- broader closure capture/call ABI coverage for mutable/boxed captures,
+  escaping, dynamic, async, `this`/`new.target`, non-numeric, and mixed
+  closure shapes, including typed string closure captures and non-passthrough
+  string closure bodies;
 - a broad typed object or array ABI beyond the verified fast paths and native
   binding descriptors listed above.
+- broader typed method clones for inherited/dynamic receivers, static methods,
+  receiver-sensitive bodies, non-numeric shapes, and broad effect summaries that
+  allow mutation-safe method inlining beyond the current exact scalar receiver
+  numeric-return/boolean-predicate shapes and guarded public numeric-argument
+  scalar fast path.
+- full `PerryStringRef` value lowering beyond raw `StringHeader*` typed-string
+  function passthroughs, direct same-module string function calls, and static
+  dispatch-ID resolution.
+- direct runtime maps keyed by property/method IDs and migration of remaining
+  static-name specialized paths away from raw bytes where semantics permit.
+- broader codegen-side reason emission for non-clone lowering failures that
+  currently leave no artifact record. The report has a `not_recorded` bucket for
+  these cases, but complete observability still needs eligibility failure facts
+  at more lowering decision sites.
 
 ## 1. Type Lowering Pipeline
 
@@ -126,7 +361,9 @@ can bypass part of the generic NaN-boxing overhead:
 - Inline elements (NaN-boxed `f64`) follow the header in memory.
 - `length` and `capacity` at fixed offsets for inline codegen.
 - Selected packed numeric-array loops can be versioned to guarded raw-`f64`
-  loads/stores; this is not a general typed-array object ABI.
+  loads/stores. Store-bearing versioning is limited to a conservative
+  single-store numeric RHS shape with side-exit/restart on store-guard failure;
+  this is not a general typed-array object ABI.
 
 ### BigInt (`BigIntHeader`)
 
@@ -137,6 +374,11 @@ can bypass part of the generic NaN-boxing overhead:
 
 - `MapHeader` + `SetHeader` with side-table indices: `MAP_INDEX` (numeric keys), `MAP_STRING_INDEX` (FNV-1a content hashes for GC-safe string lookup), `SET_INDEX`.
 - O(1) average lookup; content-based equality for strings.
+- First compiler lowering slice: statically proven `Map<string, number>.set/has`,
+  `Map<string, V>.get`, and `Set<string>.add/has/delete` call string-key helpers
+  directly instead of generic JSValue-key helpers. `Map.get` remains a boxed
+  value boundary for miss semantics; this is not yet a numeric-key,
+  typed-value-table, or `Record<string, V>` specialization.
 
 ### Buffer (`BufferHeader`)
 
@@ -202,7 +444,7 @@ Every allocation is preceded by an 8-byte `GcHeader`: `obj_type` (u8), `gc_flags
 
 ### Closures
 
-`ClosureHeader`: `func_ptr` (usize), `capture_count` (u32, high bit = `CAPTURES_THIS_FLAG`), `type_tag` (`CLOSURE_MAGIC 0x434C_4F53`), variadic `captures[]` (u64 slots). Mutable captures are heap-boxed. Side-tables: `CLOSURE_REST_REGISTRY`, `CLOSURE_ARITY_REGISTRY`, `DISPATCH_CACHE`. Closure bodies may consume region-local native facts, but the closure call/capture ABI is still the generic closure pointer plus boxed `double` argument/return model.
+`ClosureHeader`: `func_ptr` (usize), `capture_count` (u32, high bit = `CAPTURES_THIS_FLAG`), `type_tag` (`CLOSURE_MAGIC 0x434C_4F53`), variadic `captures[]` (u64 slots). Mutable captures are heap-boxed. Side-tables: `CLOSURE_REST_REGISTRY`, `CLOSURE_ARITY_REGISTRY`, `DISPATCH_CACHE`. Public closure dispatch still uses the generic closure pointer plus boxed `double` argument/return model. Eligible typed closure clones now use an internal `i64 this_closure, typed args...` ABI so immutable f64/i1 captures can be loaded as native values before the body is lowered.
 
 ### Async/Await
 
@@ -280,7 +522,15 @@ The current GC uses conservative stack scanning: any bit pattern on the C stack 
 
 ### K. Object Escape Analysis — Limited Scope
 
-Scalar replacement (stack allocation of non-escaping objects) currently fires only when the object is accessed exclusively via field get/set. Any method call defeats it. This means `let p = new Point(x, y); p.toString()` still heap-allocates, unlike Rust/C++/Go which can stack-allocate and dead-code-eliminate the entire loop. [33](#0-32)
+Scalar replacement (stack allocation of non-escaping objects) is still limited
+to direct field get/set plus exact local receiver calls whose own method has a
+conservative read-only summary. Today that summary covers simple numeric
+returns and boolean comparison predicates over public numeric scalar fields.
+Other method calls, including mutation, accessors, dynamic property reads,
+nested/unknown calls, inherited/dynamic methods, and `this`-escaping bodies,
+still heap-allocate. This means `let p = new Point(x, y); p.toString()` still
+heap-allocates, unlike Rust/C++/Go which can stack-allocate and
+dead-code-eliminate the entire loop. [33](#0-32)
 
 ### L. `console.dir` / `console.group*` — Not Implemented
 
@@ -300,13 +550,21 @@ Lone surrogate handling in WTF-8 strings is a known categorical gap. The `STRING
 
 ### P. General Typed Function/Method/Closure ABI — Follow-up
 
-This branch does not implement typed clones or generic trampolines for user
-functions, methods, static methods, or closures. Function and method lowering
-still defines `double` parameters and `double` returns. Closure body lowering
-still defines `i64 this_closure`, then `double` parameters and a `double`
-return. Native fact collection now runs for these bodies, so selected regions
-inside them can use native reps, but call boundaries remain the generic
-JSValue/NaN-box ABI.
+This branch does not implement a general typed ABI or generic trampoline system
+for all user functions, methods, static methods, or closures. It does include
+narrow typed-f64 internal clone slices for ordinary functions, exact own
+instance methods, and local closures when the body is a single simple numeric
+return expression, plus typed-i1 slices for ordinary functions, exact own
+instance methods, and local closures when the body is a single simple boolean
+return expression. The local closure slices also accept immutable typed captures
+in the current f64/i1 body subset. Eligible ordinary functions now get a public
+`double`/NaN-box wrapper under the original symbol plus an internal generic body
+fallback. Eligible own instance methods and local closures now use the same
+public wrapper plus internal `__generic` body split. Ineligible method and
+closure body lowering still defines generic `double` parameters and `double`
+returns, with closures additionally taking `i64 this_closure`. Native fact
+collection now runs for these bodies, so selected regions inside them can use
+native reps, but broad call boundaries remain the generic JSValue/NaN-box ABI.
 
 ---
 
@@ -796,13 +1054,14 @@ The 0 ms results from Rust/C++/Go/Swift are real. Those languages:
 
 The entire loop body is dead code. The benchmark measures nothing.
 
-Perry cannot match this without abandoning its dynamic value model.
+Perry cannot match this generally without abandoning its dynamic value model.
 JavaScript objects are heap-allocated by spec (with limited escape
-analysis available via the v0.5.17 scalar-replacement pass, which
-currently kicks in only when the object is *only ever accessed* via
-field get/set — any method call defeats it). This is an inherent
-cost of compiling a dynamic language: the optimizer has less static
-information to work with.
+analysis available via the scalar-replacement pass). Scalar replacement now
+also admits exact local receiver calls for conservatively summarized read-only
+methods, currently simple numeric returns and boolean comparison predicates
+over public numeric scalar fields; other method calls still force the heap
+fallback. This is an inherent cost of compiling a dynamic language: the
+optimizer has less static information to work with.
 ```
 
 **File:** crates/perry-runtime/src/bigint.rs (L1-13)

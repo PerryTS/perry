@@ -23,8 +23,9 @@ use crate::lower_string_method::{
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 #[allow(unused_imports)]
 use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_definitely_string_expr,
+    is_map_expr, is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    map_static_type_args, receiver_class_name,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -45,6 +46,23 @@ use super::{
     unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction, FlatConstInfo, FnCtx,
     I18nLowerCtx,
 };
+
+fn is_static_string_number_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
+    matches!(
+        map_static_type_args(ctx, map),
+        Some([
+            HirType::String | HirType::StringLiteral(_),
+            HirType::Number | HirType::Int32
+        ])
+    )
+}
+
+fn is_static_string_key_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
+    matches!(
+        map_static_type_args(ctx, map),
+        Some([HirType::String | HirType::StringLiteral(_), _])
+    )
+}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -128,16 +146,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- map.set(key, value) / .get / .has --------
         Expr::MapSet { map, key, value } => {
+            let use_string_number_map =
+                is_static_string_number_map(ctx, map) && is_definitely_string_expr(ctx, key);
             let m_box = lower_expr(ctx, map)?;
             let k_box = lower_expr(ctx, key)?;
             let v_box = lower_expr(ctx, value)?;
             let blk = ctx.block();
             let m_handle = unbox_to_i64(blk, &m_box);
-            let new_handle = blk.call(
-                I64,
-                "js_map_set",
-                &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
-            );
+            let new_handle = if use_string_number_map {
+                let k_handle = unbox_str_handle(blk, &k_box);
+                blk.call(
+                    I64,
+                    "js_map_set_string_number",
+                    &[(I64, &m_handle), (I64, &k_handle), (DOUBLE, &v_box)],
+                )
+            } else {
+                blk.call(
+                    I64,
+                    "js_map_set",
+                    &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
+                )
+            };
             // map.set returns the (possibly-realloc'd) map. Re-NaN-box
             // and return. The caller may need to write this back to a
             // local; that's the caller's problem if Map is held in a
@@ -145,18 +174,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &new_handle))
         }
         Expr::MapGet { map, key } => {
+            let use_string_key_map =
+                is_static_string_key_map(ctx, map) && is_definitely_string_expr(ctx, key);
             let m_box = lower_expr(ctx, map)?;
             let k_box = lower_expr(ctx, key)?;
             let blk = ctx.block();
             let m_handle = unbox_to_i64(blk, &m_box);
-            Ok(blk.call(DOUBLE, "js_map_get", &[(I64, &m_handle), (DOUBLE, &k_box)]))
+            if use_string_key_map {
+                let k_handle = unbox_str_handle(blk, &k_box);
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_map_get_string_key",
+                    &[(I64, &m_handle), (I64, &k_handle)],
+                ))
+            } else {
+                Ok(blk.call(DOUBLE, "js_map_get", &[(I64, &m_handle), (DOUBLE, &k_box)]))
+            }
         }
         Expr::MapHas { map, key } => {
+            let use_string_number_map =
+                is_static_string_number_map(ctx, map) && is_definitely_string_expr(ctx, key);
             let m_box = lower_expr(ctx, map)?;
             let k_box = lower_expr(ctx, key)?;
             let blk = ctx.block();
             let m_handle = unbox_to_i64(blk, &m_box);
-            let i32_v = blk.call(I32, "js_map_has", &[(I64, &m_handle), (DOUBLE, &k_box)]);
+            let i32_v = if use_string_number_map {
+                let k_handle = unbox_str_handle(blk, &k_box);
+                blk.call(
+                    I32,
+                    "js_map_has_string_key",
+                    &[(I64, &m_handle), (I64, &k_handle)],
+                )
+            } else {
+                blk.call(I32, "js_map_has", &[(I64, &m_handle), (DOUBLE, &k_box)])
+            };
             // NaN-tagged boolean for "true"/"false" printing.
             let bit = blk.icmp_ne(I32, &i32_v, "0");
             let tagged = blk.select(

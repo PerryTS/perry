@@ -73,11 +73,50 @@ fn lower_value_for_optional_barrier(
     write_barrier_needed: bool,
 ) -> Result<(String, Option<String>)> {
     if !write_barrier_needed {
-        return Ok((lower_expr(ctx, value)?, None));
+        let value_double = lower_expr(ctx, value)?;
+        let lowered_js = LoweredValue::js_value(value_double.clone());
+        ctx.record_lowered_value_with_access_mode(
+            "WriteBarrierElided",
+            None,
+            "write_barrier.elided_non_pointer_child",
+            &lowered_js,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec!["reason=statically_non_pointer_child".to_string()],
+        );
+        return Ok((value_double, None));
     }
     let value_bits = lower_expr_native(ctx, value, ExpectedNativeRep::JsValueBits)?.value;
     let value_double = ctx.block().bitcast_i64_to_double(&value_bits);
     Ok((value_double, Some(value_bits)))
+}
+
+fn lower_value_for_dynamic_index_set(
+    ctx: &mut FnCtx<'_>,
+    value: &Expr,
+    consumer: &str,
+    boxed_at: &str,
+) -> Result<(String, String)> {
+    let lowered = lower_expr_native(ctx, value, ExpectedNativeRep::JsValueBits)?;
+    let value_bits = lowered.value.clone();
+    let value_double = ctx.block().bitcast_i64_to_double(&value_bits);
+    ctx.record_lowered_value(
+        "IndexSet",
+        None,
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![format!("boxed_at={boxed_at}")],
+    );
+    Ok((value_double, value_bits))
 }
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -187,7 +226,12 @@ fn lower_array_index_set_via_runtime_key(
     let arr_box = lower_expr(ctx, object)?;
     let idx_double = lower_expr(ctx, index)?;
     let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
-    let (val_double, val_bits) = lower_value_for_optional_barrier(ctx, value, value_needs_barrier)?;
+    let (val_double, val_bits) = lower_value_for_dynamic_index_set(
+        ctx,
+        value,
+        "index_set.array_runtime_key_value_bits",
+        "array_runtime_key_set_helper_edge",
+    )?;
     let arr_handle = {
         let blk = ctx.block();
         unbox_to_i64(blk, &arr_box)
@@ -220,7 +264,6 @@ fn lower_array_index_set_via_runtime_key(
     }
     if value_needs_barrier {
         let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
-        let val_bits = val_bits.unwrap_or_else(|| ctx.block().bitcast_double_to_i64(&val_double));
         emit_write_barrier(ctx, &arr_bits, &val_bits);
     }
     Ok(val_double)
@@ -232,6 +275,7 @@ fn lower_packed_f64_loop_index_set(
     idx_i32: &str,
     value: &Expr,
     guard_id: &str,
+    side_exit_label: &str,
 ) -> Result<String> {
     let val_double = lower_expr(ctx, value)?;
     let arr_expr = Expr::LocalGet(arr_id);
@@ -268,32 +312,17 @@ fn lower_packed_f64_loop_index_set(
 
     ctx.current_block = fallback_idx;
     {
-        let fallback_arr_box = lower_expr(ctx, &arr_expr)?;
-        let idx_double = ctx.block().sitofp(I32, idx_i32, DOUBLE);
-        let fallback_box = ctx.block().call(
-            DOUBLE,
-            "js_typed_feedback_array_index_set_fallback_boxed",
-            &[
-                (I64, &feedback_site_id),
-                (DOUBLE, &fallback_arr_box),
-                (DOUBLE, &idx_double),
-                (DOUBLE, &val_double),
-            ],
-        );
-        if let Some(slot) = ctx.locals.get(&arr_id).cloned() {
-            ctx.block().store(DOUBLE, &fallback_box, &slot);
-        }
-        ctx.block().br(&merge_label);
+        ctx.block().br(side_exit_label);
         let fallback = LoweredValue {
             semantic: SemanticKind::JsValue,
             rep: NativeRep::JsValue,
             llvm_ty: DOUBLE,
-            value: fallback_box,
+            value: arr_box.clone(),
         };
         ctx.record_lowered_value_with_access_mode_and_facts(
             "PackedF64LoopStore",
             Some(arr_id),
-            "js_typed_feedback_array_index_set_fallback_boxed",
+            "packed_f64_loop_store_side_exit",
             &fallback,
             Some(BoundsState::Unknown),
             None,
@@ -319,8 +348,8 @@ fn lower_packed_f64_loop_index_set(
             false,
             false,
             vec![
-                "rhs_numeric_guard=dynamic_fallback".to_string(),
-                "array_reloaded_after_store_guard=1".to_string(),
+                "rhs_numeric_guard=side_exit_slow_restart".to_string(),
+                "store_guard_failure=side_exit_slow_restart".to_string(),
             ],
         );
     }
@@ -376,6 +405,7 @@ fn lower_packed_f64_loop_index_set(
             "array_reloaded_after_rhs=1".to_string(),
             "array_reloaded_after_store_guard=1".to_string(),
             "array_reloaded_after_canonicalization=1".to_string(),
+            "store_guard_failure=side_exit_slow_restart".to_string(),
             "index_range=nonnegative_i32".to_string(),
             "length_range=guarded_i32".to_string(),
         ],
@@ -655,6 +685,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &idx_i32,
                                 value.as_ref(),
                                 &fact.guard_id,
+                                &fact.store_side_exit_label,
                             );
                         }
                     }
@@ -993,7 +1024,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             if let Expr::String(literal) = index.as_ref() {
                 let obj_box = lower_expr(ctx, object)?;
-                let val_double = lower_expr(ctx, value)?;
+                let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
+                    ctx,
+                    value,
+                    "index_set.literal_string_value_bits",
+                    "literal_string_index_set_helper_edge",
+                )?;
                 let key_idx = ctx.strings.intern(literal);
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
@@ -1037,7 +1073,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if is_string_expr(ctx, index) {
                 let obj_box = lower_expr(ctx, object)?;
                 let key_box = lower_expr(ctx, index)?;
-                let val_double = lower_expr(ctx, value)?;
+                let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
+                    ctx,
+                    value,
+                    "index_set.string_value_bits",
+                    "string_index_set_helper_edge",
+                )?;
                 let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
                 super::property_set::emit_nullish_write_guard(
                     ctx,
@@ -1082,7 +1123,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // string/numeric dispatch.
             let obj_box = lower_expr(ctx, object)?;
             let idx_box = lower_expr(ctx, index)?;
-            let val_double = lower_expr(ctx, value)?;
+            let (val_double, _val_bits) = lower_value_for_dynamic_index_set(
+                ctx,
+                value,
+                "index_set.dynamic_value_bits",
+                "polymorphic_index_set_helper_edge",
+            )?;
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
             super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset");
             let static_classref =

@@ -691,6 +691,67 @@ pub(crate) struct CrossModuleCtx {
     pub returns_int_functions: std::collections::HashSet<u32>,
     /// Single-argument integer helpers that return the argument coerced to i32.
     pub i32_identity_functions: std::collections::HashSet<u32>,
+    /// User functions that have a generated internal typed-f64 clone. The
+    /// public wrapper keeps the JSValue ABI; direct numeric call sites may call
+    /// the clone.
+    pub typed_f64_functions: std::collections::HashSet<u32>,
+    /// User functions that have a generated internal typed-i1 clone. The public
+    /// wrapper keeps the JSValue ABI; direct call sites may call the clone when
+    /// the caller can prove every argument matches the clone's native
+    /// parameter reps.
+    pub typed_i1_functions: std::collections::HashSet<u32>,
+    /// User functions that have a generated internal typed-string clone. The
+    /// public wrapper keeps the JSValue ABI; the clone passes raw
+    /// `StringHeader*` handles as i64 and boxes only at the boundary.
+    pub typed_string_functions: std::collections::HashSet<u32>,
+    /// Per-function typed-i1 clone parameter reps. This lets same-module direct
+    /// calls target mixed native predicate clones such as
+    /// `i1(double, double)` without routing through the public JSValue wrapper.
+    pub typed_i1_function_param_reps:
+        std::collections::HashMap<u32, Vec<super::typed_abi::TypedParamRep>>,
+    /// Own instance methods that have a generated internal typed-f64 clone.
+    /// Runtime vtables still register only the generic method symbols; direct
+    /// same-module call lowering may select these clones after receiver/method
+    /// and numeric argument guards pass.
+    pub typed_f64_methods: std::collections::HashSet<(String, String)>,
+    /// Own instance methods that have a generated internal typed-i1 clone.
+    /// Runtime vtables still register only the generic method symbols; exact
+    /// own-method direct calls may select these clones after receiver/method
+    /// and per-representation typed argument guards pass.
+    pub typed_i1_methods: std::collections::HashSet<(String, String)>,
+    /// Per-method typed-i1 clone parameter reps. This lets exact same-module
+    /// method calls target mixed native predicate clones such as
+    /// `i1(double, double)` without routing through the public JSValue wrapper.
+    pub typed_i1_method_param_reps:
+        std::collections::HashMap<(String, String), Vec<super::typed_abi::TypedParamRep>>,
+    /// Own instance methods whose body reads raw numeric fields from the exact
+    /// receiver and has a generated `typed_f64_recv` clone. Call sites must
+    /// prove both method identity and every raw-f64 receiver-field layout before
+    /// calling the clone.
+    pub typed_f64_receiver_methods:
+        std::collections::HashMap<(String, String), super::typed_abi::TypedReceiverMethodInfo>,
+    /// Inline closure bodies that have a generated internal typed-f64 clone.
+    /// Only statically-known local closure calls may select these clones after
+    /// closure identity/arity and numeric argument guards pass.
+    pub typed_f64_closures: std::collections::HashSet<u32>,
+    /// Inline closure bodies that have a generated internal typed-i1 clone.
+    /// Only statically-known local closure calls may select these clones after
+    /// closure identity/arity and per-representation argument guards pass.
+    pub typed_i1_closures: std::collections::HashSet<u32>,
+    /// Inline closure bodies that have a generated internal typed-string clone.
+    /// Only statically-known local closure calls may select these clones after
+    /// closure identity/arity and string argument guards pass.
+    pub typed_string_closures: std::collections::HashSet<u32>,
+    /// Per-closure typed-i1 clone parameter reps. This lets direct local
+    /// closure calls target mixed native predicate clones such as
+    /// `i1(i64 closure, double, double)` without routing through the public
+    /// JSValue wrapper.
+    pub typed_i1_closure_param_reps:
+        std::collections::HashMap<u32, Vec<super::typed_abi::TypedParamRep>>,
+    /// Compiler-generated async/generator control locals that can use
+    /// primitive heap cells while preserving closure-shared lifetime.
+    pub compiler_private_async_i32_control_locals: std::collections::HashSet<u32>,
+    pub compiler_private_async_i1_control_locals: std::collections::HashSet<u32>,
     /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
     /// the generic helper path.
     pub disable_buffer_fast_path: bool,

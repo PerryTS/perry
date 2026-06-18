@@ -5,17 +5,250 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context, Result};
-use perry_hir::Function;
+use perry_hir::{Function, Stmt};
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::native_value::{AliasState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource};
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::helpers::shadow_stack_enabled;
 use super::opts::CrossModuleCtx;
+use super::typed_abi::{
+    emit_typed_arg_guard, emit_typed_arg_to_raw, generic_function_body_name, lower_typed_f64_body,
+    lower_typed_i1_body, lower_typed_string_body, typed_f64_function_name, typed_i1_function_name,
+    typed_param_reps_for_params, typed_string_function_name, TypedFunctionTrampolineKind,
+    TypedParamRep,
+};
+
+/// Compile the internal typed-f64 clone for a conservatively eligible user
+/// function. `compile_function` emits both the public JSValue trampoline and
+/// the internal generic fallback body; guarded direct FuncRef sites can still
+/// call this clone directly.
+pub(super) fn compile_typed_f64_function(
+    llmod: &mut LlModule,
+    f: &Function,
+    func_names: &HashMap<u32, String>,
+) -> Result<()> {
+    let generic_name = func_names
+        .get(&f.id)
+        .cloned()
+        .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    let llvm_name = typed_f64_function_name(&generic_name);
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_f64_body(blk, &f.params, &f.body)?
+    };
+    lf.block_mut(0).unwrap().ret(DOUBLE, &value);
+    Ok(())
+}
+
+/// Compile the internal typed-i1 clone for a conservatively eligible user
+/// function. `compile_function` emits both the public JSValue trampoline and
+/// the internal generic fallback body; guarded direct FuncRef sites can still
+/// call this clone directly.
+pub(super) fn compile_typed_i1_function(
+    llmod: &mut LlModule,
+    f: &Function,
+    func_names: &HashMap<u32, String>,
+) -> Result<()> {
+    let generic_name = func_names
+        .get(&f.id)
+        .cloned()
+        .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    let llvm_name = typed_i1_function_name(&generic_name);
+    let param_reps = typed_param_reps_for_params(&f.params)
+        .ok_or_else(|| anyhow!("typed-i1 function '{}' has unsupported parameter", f.name))?;
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .zip(param_reps.iter())
+        .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id)))
+        .collect();
+    let lf = llmod.define_function(&llvm_name, I1, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_i1_body(blk, &f.params, &f.body)?
+    };
+    lf.block_mut(0).unwrap().ret(I1, &value);
+    Ok(())
+}
+
+/// Compile the internal typed-string clone for a conservatively eligible user
+/// function. The clone passes raw `StringHeader*` handles as i64 and leaves
+/// boxing to the public JSValue trampoline.
+pub(super) fn compile_typed_string_function(
+    llmod: &mut LlModule,
+    f: &Function,
+    func_names: &HashMap<u32, String>,
+) -> Result<()> {
+    let generic_name = func_names
+        .get(&f.id)
+        .cloned()
+        .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    let llvm_name = typed_string_function_name(&generic_name);
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (I64, format!("%arg{}", p.id)))
+        .collect();
+    let lf = llmod.define_function(&llvm_name, I64, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_string_body(blk, &f.params, &f.body)?
+    };
+    lf.block_mut(0).unwrap().ret(I64, &value);
+    Ok(())
+}
+
+fn emit_typed_public_trampoline_fast_value(
+    blk: &mut crate::block::LlBlock,
+    kind: TypedFunctionTrampolineKind,
+    typed_name: &str,
+    arg_names: &[String],
+    arg_reps: &[TypedParamRep],
+) -> String {
+    match kind {
+        TypedFunctionTrampolineKind::F64 => {
+            let mut raw_args = Vec::with_capacity(arg_names.len());
+            for arg in arg_names {
+                raw_args.push(blk.call(
+                    DOUBLE,
+                    "js_typed_f64_arg_to_raw",
+                    &[(DOUBLE, arg.as_str())],
+                ));
+            }
+            let typed_args: Vec<(LlvmType, &str)> =
+                raw_args.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+            blk.call(DOUBLE, typed_name, &typed_args)
+        }
+        TypedFunctionTrampolineKind::I1 => {
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .collect();
+            let typed_args: Vec<(LlvmType, &str)> = raw_args
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str()))
+                .collect();
+            let typed_i1 = blk.call(I1, typed_name, &typed_args);
+            let typed_i32 = blk.zext(I1, &typed_i1, I32);
+            crate::expr::i32_bool_to_nanbox(blk, &typed_i32)
+        }
+        TypedFunctionTrampolineKind::StringRef => {
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .collect();
+            let typed_args: Vec<(LlvmType, &str)> =
+                raw_args.iter().map(|arg| (I64, arg.as_str())).collect();
+            let raw_string = blk.call(I64, typed_name, &typed_args);
+            blk.call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)])
+        }
+    }
+}
+
+fn emit_public_typed_function_trampoline(
+    llmod: &mut LlModule,
+    f: &Function,
+    public_name: &str,
+    generic_body_name: &str,
+    kind: TypedFunctionTrampolineKind,
+) {
+    let typed_name = match kind {
+        TypedFunctionTrampolineKind::F64 => typed_f64_function_name(public_name),
+        TypedFunctionTrampolineKind::I1 => typed_i1_function_name(public_name),
+        TypedFunctionTrampolineKind::StringRef => typed_string_function_name(public_name),
+    };
+    let arg_reps = match kind {
+        TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; f.params.len()],
+        TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(&f.params)
+            .unwrap_or_else(|| vec![TypedParamRep::I1; f.params.len()]),
+        TypedFunctionTrampolineKind::StringRef => vec![TypedParamRep::StringRef; f.params.len()],
+    };
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let arg_names: Vec<String> = f.params.iter().map(|p| format!("%arg{}", p.id)).collect();
+    let wf = llmod.define_function(public_name, DOUBLE, params);
+    let _ = wf.create_block("entry");
+
+    let mut guard: Option<String> = None;
+    {
+        let blk = wf.block_mut(0).unwrap();
+        for (arg, rep) in arg_names.iter().zip(arg_reps.iter()) {
+            let ok = emit_typed_arg_guard(blk, *rep, arg);
+            guard = Some(match guard {
+                Some(prev) => blk.and(I1, &prev, &ok),
+                None => ok,
+            });
+        }
+    }
+
+    let Some(guard) = guard else {
+        let value = emit_typed_public_trampoline_fast_value(
+            wf.block_mut(0).unwrap(),
+            kind,
+            &typed_name,
+            &arg_names,
+            &arg_reps,
+        );
+        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
+        return;
+    };
+
+    let fast_idx = wf.num_blocks();
+    let fast_label = wf.create_block("typed_public.fast").label.clone();
+    let fallback_idx = wf.num_blocks();
+    let fallback_label = wf.create_block("typed_public.fallback").label.clone();
+    wf.block_mut(0)
+        .unwrap()
+        .cond_br(&guard, &fast_label, &fallback_label);
+
+    let fast_value = emit_typed_public_trampoline_fast_value(
+        wf.block_mut(fast_idx).unwrap(),
+        kind,
+        &typed_name,
+        &arg_names,
+        &arg_reps,
+    );
+    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
+
+    let call_args: Vec<(LlvmType, &str)> =
+        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+    let fallback_value =
+        wf.block_mut(fallback_idx)
+            .unwrap()
+            .call(DOUBLE, generic_body_name, &call_args);
+    wf.block_mut(fallback_idx)
+        .unwrap()
+        .ret(DOUBLE, &fallback_value);
+}
 
 /// Compile a single user function into the module.
 pub(super) fn compile_function(
@@ -36,11 +269,17 @@ pub(super) fn compile_function(
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
+    typed_public_trampoline: Option<TypedFunctionTrampolineKind>,
 ) -> Result<()> {
-    let llvm_name = func_names
+    let public_llvm_name = func_names
         .get(&f.id)
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    let llvm_name = if typed_public_trampoline.is_some() {
+        generic_function_body_name(&public_llvm_name)
+    } else {
+        public_llvm_name.clone()
+    };
 
     // Phase A assumes all user-function params are `double`. Parameter
     // registers are named `%arg{LocalId}` so the body can store them into
@@ -54,6 +293,9 @@ pub(super) fn compile_function(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    if typed_public_trampoline.is_some() {
+        lf.linkage = "internal".to_string();
+    }
 
     // Gen-GC Phase A sub-phase 3a: opt-in shadow-frame emission
     // for user functions. Pointer-typed param + local slots are
@@ -195,6 +437,10 @@ pub(super) fn compile_function(
         func_returns_class: &cross_module.func_returns_class,
         boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
+        compiler_private_async_i32_control_locals: &cross_module
+            .compiler_private_async_i32_control_locals,
+        compiler_private_async_i1_control_locals: &cross_module
+            .compiler_private_async_i1_control_locals,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
@@ -229,6 +475,7 @@ pub(super) fn compile_function(
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
         i18n: &cross_module.i18n,
@@ -256,6 +503,16 @@ pub(super) fn compile_function(
         clamp_u8_functions: &cross_module.clamp_u8_functions,
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
+        typed_f64_functions: &cross_module.typed_f64_functions,
+        typed_string_functions: &cross_module.typed_string_functions,
+        typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
+        typed_f64_methods: &cross_module.typed_f64_methods,
+        typed_i1_methods: &cross_module.typed_i1_methods,
+        typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
+        typed_f64_closures: &cross_module.typed_f64_closures,
+        typed_i1_closures: &cross_module.typed_i1_closures,
+        typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
+        typed_string_closures: &cross_module.typed_string_closures,
         was_unrolled: f.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
@@ -280,7 +537,7 @@ pub(super) fn compile_function(
         buffer_alias_base,
     };
 
-    let wrapper_name = format!("__perry_wrap_{}", llvm_name);
+    let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
     super::arguments::materialize_arguments_object(
         &mut ctx,
         &f.params,
@@ -393,6 +650,9 @@ pub(super) fn compile_function(
     }
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
+    }
+    if let Some(kind) = typed_public_trampoline {
+        emit_public_typed_function_trampoline(llmod, f, &public_llvm_name, &llvm_name, kind);
     }
     Ok(())
 }

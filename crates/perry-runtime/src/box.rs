@@ -9,11 +9,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static BOX_GET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
 static BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static I32_BOX_GET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static I32_BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static BOOL_BOX_GET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
+static BOOL_BOX_SET_NULL_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// A box is simply a heap-allocated f64
 #[repr(C)]
 pub struct Box {
     pub value: f64,
+}
+
+#[repr(C, align(8))]
+pub struct I32Box {
+    pub value: i32,
+}
+
+#[repr(C, align(8))]
+pub struct BoolBox {
+    pub value: bool,
 }
 
 thread_local! {
@@ -38,6 +52,16 @@ thread_local! {
             128 * 1024,
             crate::fast_hash::PtrHasher,
         ));
+    pub(crate) static I32_BOX_REGISTRY: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::with_capacity_and_hasher(
+            16 * 1024,
+            crate::fast_hash::PtrHasher,
+        ));
+    pub(crate) static BOOL_BOX_REGISTRY: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        std::cell::RefCell::new(std::collections::HashSet::with_capacity_and_hasher(
+            16 * 1024,
+            crate::fast_hash::PtrHasher,
+        ));
 }
 
 /// Allocate a new box with an initial value
@@ -57,6 +81,44 @@ pub extern "C" fn js_box_alloc(initial_value: f64) -> *mut Box {
         }
         (*ptr).value = initial_value;
         BOX_REGISTRY.with(|r| {
+            r.borrow_mut().insert(ptr as usize);
+        });
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_i32_box_alloc(initial_value: i32) -> *mut I32Box {
+    unsafe {
+        let layout = Layout::new::<I32Box>();
+        let ptr = alloc(layout) as *mut I32Box;
+        if ptr.is_null() {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!("[PERRY WARN] js_i32_box_alloc: allocation failed — returning null");
+            }
+            return std::ptr::null_mut();
+        }
+        (*ptr).value = initial_value;
+        I32_BOX_REGISTRY.with(|r| {
+            r.borrow_mut().insert(ptr as usize);
+        });
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
+    unsafe {
+        let layout = Layout::new::<BoolBox>();
+        let ptr = alloc(layout) as *mut BoolBox;
+        if ptr.is_null() {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                eprintln!("[PERRY WARN] js_bool_box_alloc: allocation failed — returning null");
+            }
+            return std::ptr::null_mut();
+        }
+        (*ptr).value = initial_value != 0;
+        BOOL_BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
         ptr
@@ -132,6 +194,44 @@ pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_i32_box_get(ptr: *mut I32Box) -> i32 {
+    unsafe {
+        if !is_registered_i32_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = I32_BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_i32_box_get: invalid box pointer {:p} #{}",
+                        ptr, count
+                    );
+                }
+            }
+            return 0;
+        }
+        (*ptr).value
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_bool_box_get(ptr: *mut BoolBox) -> i32 {
+    unsafe {
+        if !is_registered_bool_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = BOOL_BOX_GET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_bool_box_get: invalid box pointer {:p} #{}",
+                        ptr, count
+                    );
+                }
+            }
+            return 0;
+        }
+        i32::from((*ptr).value)
+    }
+}
+
 /// Set the value in a box
 ///
 /// Robust against bogus pointers: in addition to the null check, we
@@ -166,6 +266,44 @@ pub extern "C" fn js_box_set(ptr: *mut Box, value: f64) {
         }
         (*ptr).value = value;
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_i32_box_set(ptr: *mut I32Box, value: i32) {
+    unsafe {
+        if !is_registered_i32_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = I32_BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_i32_box_set: invalid box pointer {:p} #{} (value: {})",
+                        ptr, count, value
+                    );
+                }
+            }
+            return;
+        }
+        (*ptr).value = value;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_bool_box_set(ptr: *mut BoolBox, value: i32) {
+    unsafe {
+        if !is_registered_bool_box_ptr(ptr) {
+            if std::env::var_os("PERRY_DEBUG").is_some() {
+                let count = BOOL_BOX_SET_NULL_COUNT.fetch_add(1, Ordering::Relaxed);
+                if count < 3 {
+                    eprintln!(
+                        "[PERRY WARN] js_bool_box_set: invalid box pointer {:p} #{} (value: {})",
+                        ptr, count, value
+                    );
+                }
+            }
+            return;
+        }
+        (*ptr).value = value != 0;
     }
 }
 
@@ -224,9 +362,40 @@ fn is_registered_box_ptr(ptr: *mut Box) -> bool {
     BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
 }
 
+#[inline]
+fn is_registered_i32_box_ptr(ptr: *mut I32Box) -> bool {
+    if !is_plausible_box_ptr(ptr.cast::<Box>()) {
+        return false;
+    }
+    I32_BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+}
+
+#[inline]
+fn is_registered_bool_box_ptr(ptr: *mut BoolBox) -> bool {
+    if !is_plausible_box_ptr(ptr.cast::<Box>()) {
+        return false;
+    }
+    BOOL_BOX_REGISTRY.with(|r| r.borrow().contains(&(ptr as usize)))
+}
+
+#[used]
+static KEEP_JS_I32_BOX_ALLOC: extern "C" fn(i32) -> *mut I32Box = js_i32_box_alloc;
+#[used]
+static KEEP_JS_I32_BOX_GET: extern "C" fn(*mut I32Box) -> i32 = js_i32_box_get;
+#[used]
+static KEEP_JS_I32_BOX_SET: extern "C" fn(*mut I32Box, i32) = js_i32_box_set;
+#[used]
+static KEEP_JS_BOOL_BOX_ALLOC: extern "C" fn(i32) -> *mut BoolBox = js_bool_box_alloc;
+#[used]
+static KEEP_JS_BOOL_BOX_GET: extern "C" fn(*mut BoolBox) -> i32 = js_bool_box_get;
+#[used]
+static KEEP_JS_BOOL_BOX_SET: extern "C" fn(*mut BoolBox, i32) = js_bool_box_set;
+
 #[cfg(test)]
 pub(crate) fn test_clear_box_registry() {
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+    I32_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+    BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -270,5 +439,26 @@ mod tests {
         assert_eq!(js_box_get(b), 3.5);
         js_box_set(b, 42.0);
         assert_eq!(js_box_get(b), 42.0);
+    }
+
+    #[test]
+    fn primitive_control_boxes_round_trip_and_reject_foreign_pointers() {
+        test_clear_box_registry();
+        let i32_box = js_i32_box_alloc(7);
+        assert!(is_registered_i32_box_ptr(i32_box));
+        assert_eq!(js_i32_box_get(i32_box), 7);
+        js_i32_box_set(i32_box, -3);
+        assert_eq!(js_i32_box_get(i32_box), -3);
+
+        let bool_box = js_bool_box_alloc(0);
+        assert!(is_registered_bool_box_ptr(bool_box));
+        assert_eq!(js_bool_box_get(bool_box), 0);
+        js_bool_box_set(bool_box, 1);
+        assert_eq!(js_bool_box_get(bool_box), 1);
+
+        let ordinary_box = js_box_alloc(1.0);
+        assert_eq!(js_i32_box_get(ordinary_box.cast::<I32Box>()), 0);
+        js_i32_box_set(ordinary_box.cast::<I32Box>(), 99);
+        assert_eq!(js_box_get(ordinary_box), 1.0);
     }
 }

@@ -1877,6 +1877,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // Lets `typeof obj.method === "function"` and `let f = obj.method; f(args)`
     // dispatch through CLASS_VTABLE_REGISTRY instead of returning undefined.
     module.declare_function("js_class_method_bind", DOUBLE, &[DOUBLE, I64, I64]);
+    module.declare_function("js_class_method_bind_by_id", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_class_prototype_method_value", DOUBLE, &[DOUBLE, DOUBLE]);
     // #519: read the implicit `this` thread-local set by
     // `js_native_call_method`'s field-scan dispatch when invoking a

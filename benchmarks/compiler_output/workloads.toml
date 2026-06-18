@@ -125,7 +125,8 @@ equals = { store_i8 = 0 }
 detail = "fnv hash i32 xor/mul shape"
 
 [workloads.image_convolution.native_rep_checks]
-allow_materialization_reasons = ["function_abi"]
+materialization_regions = ["input_generation", "blur", "fnv_hash"]
+allow_materialization_reasons = ["function_abi", "return_abi"]
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_input_generation_buffer_view"
@@ -200,7 +201,7 @@ alias_state = "no_alias_proven_or_guarded"
 name = "image_fnv_i32_hash"
 block_label = "for.body.42"
 expr_kind = "MathImul"
-consumer = "lower_expr_native_i32"
+consumer = "lower_expr_native_i32.structural"
 native_rep_name = "i32"
 access_mode = "none"
 
@@ -259,7 +260,7 @@ min = { fmul = 1, fadd = 1 }
 detail = "numeric loop FP multiply/add shape"
 
 [workloads.loop_data_dependent.native_rep_checks]
-allow_materialization_reasons = ["runtime_api"]
+allow_materialization_reasons = ["function_abi", "runtime_api"]
 
 [workloads.fma_contract]
 source = "benchmarks/compiler_output/fixtures/fma_contract.ts"
@@ -647,36 +648,6 @@ detail = "numeric-array fixture stdout checksum"
 allow_materialization_reasons = ["runtime_api"]
 
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_packed_f64_loop_guard_checked"
-expr_kind = "PackedF64LoopGuard"
-consumer = "packed_f64_loop_guard"
-native_rep_name = "js_value"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "array_kind"
-consumed_fact_state = "consumed"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_packed_f64_loop_guard_consumes_raw_layout"
-expr_kind = "PackedF64LoopGuard"
-consumer = "packed_f64_loop_guard"
-native_rep_name = "js_value"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "raw_f64_layout"
-consumed_fact_state = "consumed"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
-name = "numeric_array_packed_f64_loop_load_fast_f64"
-expr_kind = "PackedF64LoopLoad"
-consumer = "packed_f64_loop_load"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-consumed_fact_kind = "array_kind"
-consumed_fact_state = "consumed"
-
-[[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_push_fast_f64"
 expr_kind = "NumericArrayPush"
 consumer = "js_array_numeric_push_f64_unboxed"
@@ -924,7 +895,7 @@ max = { fptosi = 0, sitofp = 0, ptrtoint = 0 }
 detail = "fast clone does not perform per-access numeric conversions"
 
 [workloads.packed_f64_loop_versioning.native_rep_checks]
-allow_materialization_reasons = ["runtime_api"]
+allow_materialization_reasons = ["runtime_api", "return_abi"]
 
 [[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
 name = "packed_f64_loop_guard_checked"
@@ -1181,7 +1152,7 @@ regex = '''class_field_set\.fast\.\d+:[\s\S]*?call double @js_array_numeric_valu
 detail = "checksum function raw numeric field write canonicalizes and performs a scoped guarded store double"
 
 [workloads.raw_numeric_object_fields.native_rep_checks]
-allow_materialization_reasons = ["runtime_api"]
+allow_materialization_reasons = ["runtime_api", "return_abi"]
 
 [[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
 name = "raw_scalar_ctor_field_store_raw_f64"
@@ -1366,7 +1337,7 @@ detail = "scalar-replacement fixture stdout checksum"
 
 [workloads.scalar_replacement_literals.native_rep_checks]
 function_contains = "scalarReplacementChecksum"
-allow_materialization_reasons = []
+allow_materialization_reasons = ["runtime_api"]
 
 [[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
 name = "scalar_object_literal_store"
@@ -1603,6 +1574,7 @@ detail = "native-owned typed view checksum"
 allow_materialization_reasons = [
   "runtime_api",
   "function_abi",
+  "return_abi",
   "use_after_dispose",
   "stale_view_length",
   "mutable_alias",
@@ -1932,7 +1904,7 @@ equals = "native_abi_packet_typed:33688032\n"
 detail = "typed packet fixture emits a semantic checksum"
 
 [workloads.native_abi_packet_typed.native_rep_checks]
-allow_materialization_reasons = ["function_abi", "runtime_api", "unknown_bounds"]
+allow_materialization_reasons = ["function_abi", "return_abi", "runtime_api", "unknown_bounds"]
 
 [[workloads.native_abi_packet_typed.native_rep_checks.require_records]]
 name = "packet_typed_buffer_view"

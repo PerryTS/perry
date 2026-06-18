@@ -13,8 +13,6 @@ use std::path::PathBuf;
 use perry_hir::{Module as HirModule, ModuleKind};
 use serde::{Deserialize, Serialize};
 
-use crate::OutputFormat;
-
 /// Result of a successful compilation
 pub struct CompileResult {
     pub output_path: PathBuf,
@@ -246,6 +244,15 @@ pub struct CompileArgs {
     /// benchmarking the helper fallback against the native fast path.
     #[arg(long)]
     pub disable_buffer_fast_path: bool,
+
+    /// Emit a user-facing type-lowering evidence report for this build.
+    /// The report aggregates native-representation artifacts into counts for
+    /// boxed/materialized values, coercions, JSValueBits/native reps, direct
+    /// field loads, dynamic fallbacks, scalar replacements, bounds evidence,
+    /// and typed clone/fallback decisions. Implies native-region verification
+    /// and disables build/object cache reuse so the report reflects this run.
+    #[arg(long)]
+    pub explain_lowering: bool,
 
     /// #504 — emit `<binary>.attest.json` next to the compiled
     /// executable. The sidecar carries SHA-256 of the binary +

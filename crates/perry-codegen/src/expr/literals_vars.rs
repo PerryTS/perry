@@ -442,8 +442,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.boxed_vars.contains(id) {
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
-                    let box_dbl = blk.load(DOUBLE, &slot);
-                    let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+                    let box_ptr = blk.load(I64, &slot);
                     return Ok(blk.call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]));
                 }
             }
@@ -619,8 +618,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // the store (ctx.locals doesn't have the global's slot).
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
-                    let box_dbl = blk.load(DOUBLE, &slot);
-                    let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+                    let box_ptr = blk.load(I64, &slot);
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &v)]);
                 }
             } else if let Some(slot) = ctx.locals.get(id).cloned() {
@@ -744,8 +742,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id) {
                 if let Some(slot) = ctx.locals.get(id).cloned() {
                     let blk = ctx.block();
-                    let box_dbl = blk.load(DOUBLE, &slot);
-                    let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+                    let box_ptr = blk.load(I64, &slot);
                     let old = blk.call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]);
                     let old = coerce_old(blk, &old);
                     let new = step_new(blk, &old);

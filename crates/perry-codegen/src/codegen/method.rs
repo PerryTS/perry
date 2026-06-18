@@ -10,10 +10,178 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
 
 use super::helpers::scoped_static_method_name;
 use super::opts::CrossModuleCtx;
+use super::typed_abi::{
+    emit_typed_arg_guard, emit_typed_arg_to_raw, generic_method_body_name, lower_typed_f64_body,
+    lower_typed_f64_receiver_body, lower_typed_i1_body, typed_f64_method_name,
+    typed_f64_receiver_method_name, typed_i1_method_name, typed_param_reps_for_params,
+    TypedFunctionTrampolineKind, TypedParamRep, TypedReceiverMethodInfo,
+};
+
+fn emit_typed_method_trampoline_fast_value(
+    blk: &mut crate::block::LlBlock,
+    kind: TypedFunctionTrampolineKind,
+    typed_name: &str,
+    arg_names: &[String],
+    arg_reps: &[TypedParamRep],
+) -> String {
+    match kind {
+        TypedFunctionTrampolineKind::F64 => {
+            let mut raw_args = Vec::with_capacity(arg_names.len());
+            for arg in arg_names {
+                raw_args.push(blk.call(
+                    DOUBLE,
+                    "js_typed_f64_arg_to_raw",
+                    &[(DOUBLE, arg.as_str())],
+                ));
+            }
+            let typed_args: Vec<(LlvmType, &str)> =
+                raw_args.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+            blk.call(DOUBLE, typed_name, &typed_args)
+        }
+        TypedFunctionTrampolineKind::I1 => {
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .collect();
+            let typed_args: Vec<(LlvmType, &str)> = raw_args
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str()))
+                .collect();
+            let typed_i1 = blk.call(I1, typed_name, &typed_args);
+            let typed_i32 = blk.zext(I1, &typed_i1, I32);
+            crate::expr::i32_bool_to_nanbox(blk, &typed_i32)
+        }
+        TypedFunctionTrampolineKind::StringRef => {
+            unreachable!("typed-string method trampolines are not emitted")
+        }
+    }
+}
+
+fn emit_public_typed_method_trampoline(
+    llmod: &mut LlModule,
+    method: &Function,
+    public_name: &str,
+    generic_body_name: &str,
+    kind: TypedFunctionTrampolineKind,
+) {
+    let typed_name = match kind {
+        TypedFunctionTrampolineKind::F64 => typed_f64_method_name(public_name),
+        TypedFunctionTrampolineKind::I1 => typed_i1_method_name(public_name),
+        TypedFunctionTrampolineKind::StringRef => {
+            unreachable!("typed-string method trampolines are not emitted")
+        }
+    };
+    let arg_reps = match kind {
+        TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; method.params.len()],
+        TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(&method.params)
+            .unwrap_or_else(|| vec![TypedParamRep::I1; method.params.len()]),
+        TypedFunctionTrampolineKind::StringRef => {
+            unreachable!("typed-string method trampolines are not emitted")
+        }
+    };
+    let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
+    params.push((DOUBLE, "%this_arg".to_string()));
+    for p in &method.params {
+        params.push((DOUBLE, format!("%arg{}", p.id)));
+    }
+    let arg_names: Vec<String> = method
+        .params
+        .iter()
+        .map(|p| format!("%arg{}", p.id))
+        .collect();
+    let wf = llmod.define_function(public_name, DOUBLE, params);
+    let _ = wf.create_block("entry");
+
+    let mut guard: Option<String> = None;
+    {
+        let blk = wf.block_mut(0).unwrap();
+        for (arg, rep) in arg_names.iter().zip(arg_reps.iter()) {
+            let ok = emit_typed_arg_guard(blk, *rep, arg);
+            guard = Some(match guard {
+                Some(prev) => blk.and(I1, &prev, &ok),
+                None => ok,
+            });
+        }
+    }
+
+    let Some(guard) = guard else {
+        let value = emit_typed_method_trampoline_fast_value(
+            wf.block_mut(0).unwrap(),
+            kind,
+            &typed_name,
+            &arg_names,
+            &arg_reps,
+        );
+        wf.block_mut(0).unwrap().ret(DOUBLE, &value);
+        return;
+    };
+
+    let fast_idx = wf.num_blocks();
+    let fast_label = wf.create_block("typed_method_public.fast").label.clone();
+    let fallback_idx = wf.num_blocks();
+    let fallback_label = wf
+        .create_block("typed_method_public.fallback")
+        .label
+        .clone();
+    wf.block_mut(0)
+        .unwrap()
+        .cond_br(&guard, &fast_label, &fallback_label);
+
+    let fast_value = emit_typed_method_trampoline_fast_value(
+        wf.block_mut(fast_idx).unwrap(),
+        kind,
+        &typed_name,
+        &arg_names,
+        &arg_reps,
+    );
+    wf.block_mut(fast_idx).unwrap().ret(DOUBLE, &fast_value);
+
+    let mut call_args: Vec<(LlvmType, &str)> = Vec::with_capacity(arg_names.len() + 1);
+    call_args.push((DOUBLE, "%this_arg"));
+    for arg in &arg_names {
+        call_args.push((DOUBLE, arg.as_str()));
+    }
+    let fallback_value =
+        wf.block_mut(fallback_idx)
+            .unwrap()
+            .call(DOUBLE, generic_body_name, &call_args);
+    wf.block_mut(fallback_idx)
+        .unwrap()
+        .ret(DOUBLE, &fallback_value);
+}
+
+fn emit_public_generic_method_forwarder(
+    llmod: &mut LlModule,
+    method: &Function,
+    public_name: &str,
+    generic_body_name: &str,
+) {
+    let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
+    params.push((DOUBLE, "%this_arg".to_string()));
+    for p in &method.params {
+        params.push((DOUBLE, format!("%arg{}", p.id)));
+    }
+    let wf = llmod.define_function(public_name, DOUBLE, params);
+    let _ = wf.create_block("entry");
+    let mut arg_names: Vec<String> = Vec::with_capacity(method.params.len() + 1);
+    arg_names.push("%this_arg".to_string());
+    for p in &method.params {
+        arg_names.push(format!("%arg{}", p.id));
+    }
+    let call_args: Vec<(LlvmType, &str)> =
+        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+    let value = wf
+        .block_mut(0)
+        .unwrap()
+        .call(DOUBLE, generic_body_name, &call_args);
+    wf.block_mut(0).unwrap().ret(DOUBLE, &value);
+}
 
 fn node_stream_parent_kind(
     classes: &HashMap<String, &perry_hir::Class>,
@@ -64,8 +232,10 @@ pub(super) fn compile_method(
     module_boxed_vars: &std::collections::HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
+    typed_public_trampoline: Option<TypedFunctionTrampolineKind>,
+    force_generic_body: bool,
 ) -> Result<()> {
-    let llvm_name = methods
+    let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
         .cloned()
         .ok_or_else(|| {
@@ -75,6 +245,11 @@ pub(super) fn compile_method(
                 method.name
             )
         })?;
+    let llvm_name = if typed_public_trampoline.is_some() || force_generic_body {
+        generic_method_body_name(&public_llvm_name)
+    } else {
+        public_llvm_name.clone()
+    };
 
     // Build the param list: (this, arg0, arg1, ...). All are doubles.
     let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
@@ -86,6 +261,9 @@ pub(super) fn compile_method(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    if typed_public_trampoline.is_some() || force_generic_body {
+        lf.linkage = "internal".to_string();
+    }
     let _ = lf.create_block("entry");
 
     let mut method_boxed_vars = module_boxed_vars.clone();
@@ -182,6 +360,10 @@ pub(super) fn compile_method(
         func_returns_class: &cross_module.func_returns_class,
         boxed_vars: method_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
+        compiler_private_async_i32_control_locals: &cross_module
+            .compiler_private_async_i32_control_locals,
+        compiler_private_async_i1_control_locals: &cross_module
+            .compiler_private_async_i1_control_locals,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
@@ -216,6 +398,7 @@ pub(super) fn compile_method(
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
         i18n: &cross_module.i18n,
@@ -243,6 +426,16 @@ pub(super) fn compile_method(
         clamp_u8_functions: &cross_module.clamp_u8_functions,
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
+        typed_f64_functions: &cross_module.typed_f64_functions,
+        typed_string_functions: &cross_module.typed_string_functions,
+        typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
+        typed_f64_methods: &cross_module.typed_f64_methods,
+        typed_i1_methods: &cross_module.typed_i1_methods,
+        typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
+        typed_f64_closures: &cross_module.typed_f64_closures,
+        typed_i1_closures: &cross_module.typed_i1_closures,
+        typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
+        typed_string_closures: &cross_module.typed_string_closures,
         was_unrolled: method.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
@@ -540,6 +733,136 @@ pub(super) fn compile_method(
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
     }
+    if let Some(kind) = typed_public_trampoline {
+        emit_public_typed_method_trampoline(llmod, method, &public_llvm_name, &llvm_name, kind);
+    } else if force_generic_body {
+        emit_public_generic_method_forwarder(llmod, method, &public_llvm_name, &llvm_name);
+    }
+    Ok(())
+}
+
+/// Compile the internal typed-f64 clone for a conservatively eligible instance
+/// method. The public/generic method body keeps the usual
+/// `double(this, args...) -> double` ABI and remains the only symbol registered
+/// in runtime vtables.
+pub(super) fn compile_typed_f64_method(
+    llmod: &mut LlModule,
+    class: &perry_hir::Class,
+    method: &Function,
+    methods: &HashMap<(String, String), String>,
+) -> Result<()> {
+    let generic_name = methods
+        .get(&(class.name.clone(), method.name.clone()))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "method '{}::{}' missing from registry",
+                class.name,
+                method.name
+            )
+        })?;
+    let llvm_name = typed_f64_method_name(&generic_name);
+    let params: Vec<(LlvmType, String)> = method
+        .params
+        .iter()
+        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .collect();
+    let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_f64_body(blk, &method.params, &method.body)?
+    };
+    lf.block_mut(0).unwrap().ret(DOUBLE, &value);
+    Ok(())
+}
+
+/// Compile the internal typed-f64 receiver clone for an exact own instance
+/// method. The clone takes a raw receiver handle (`i64`) plus raw numeric
+/// method arguments; callers must compose the method-direct guard with raw-f64
+/// class-field guards for every receiver field before entering it.
+pub(super) fn compile_typed_f64_receiver_method(
+    llmod: &mut LlModule,
+    class: &perry_hir::Class,
+    method: &Function,
+    methods: &HashMap<(String, String), String>,
+    receiver: &TypedReceiverMethodInfo,
+) -> Result<()> {
+    let generic_name = methods
+        .get(&(class.name.clone(), method.name.clone()))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "method '{}::{}' missing from registry",
+                class.name,
+                method.name
+            )
+        })?;
+    let llvm_name = typed_f64_receiver_method_name(&generic_name);
+    let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
+    params.push((I64, "%this_obj".to_string()));
+    for p in &method.params {
+        params.push((DOUBLE, format!("%arg{}", p.id)));
+    }
+    let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_f64_receiver_body(blk, &method.params, &method.body, receiver)?
+    };
+    lf.block_mut(0).unwrap().ret(DOUBLE, &value);
+    Ok(())
+}
+
+/// Compile the internal typed-i1 clone for a conservatively eligible instance
+/// method. Runtime vtables still register only the generic method symbol; this
+/// clone is only called from guarded exact own-method sites.
+pub(super) fn compile_typed_i1_method(
+    llmod: &mut LlModule,
+    class: &perry_hir::Class,
+    method: &Function,
+    methods: &HashMap<(String, String), String>,
+) -> Result<()> {
+    let generic_name = methods
+        .get(&(class.name.clone(), method.name.clone()))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "method '{}::{}' missing from registry",
+                class.name,
+                method.name
+            )
+        })?;
+    let llvm_name = typed_i1_method_name(&generic_name);
+    let param_reps = typed_param_reps_for_params(&method.params).ok_or_else(|| {
+        anyhow!(
+            "typed-i1 method '{}::{}' has unsupported parameter",
+            class.name,
+            method.name
+        )
+    })?;
+    let params: Vec<(LlvmType, String)> = method
+        .params
+        .iter()
+        .zip(param_reps.iter())
+        .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id)))
+        .collect();
+    let lf = llmod.define_function(&llvm_name, I1, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_i1_body(blk, &method.params, &method.body)?
+    };
+    lf.block_mut(0).unwrap().ret(I1, &value);
     Ok(())
 }
 
@@ -695,6 +1018,10 @@ pub(super) fn compile_static_method(
         func_returns_class: &cross_module.func_returns_class,
         boxed_vars: static_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
+        compiler_private_async_i32_control_locals: &cross_module
+            .compiler_private_async_i32_control_locals,
+        compiler_private_async_i1_control_locals: &cross_module
+            .compiler_private_async_i1_control_locals,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
@@ -729,6 +1056,7 @@ pub(super) fn compile_static_method(
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
         i18n: &cross_module.i18n,
@@ -756,6 +1084,16 @@ pub(super) fn compile_static_method(
         clamp_u8_functions: &cross_module.clamp_u8_functions,
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
+        typed_f64_functions: &cross_module.typed_f64_functions,
+        typed_string_functions: &cross_module.typed_string_functions,
+        typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
+        typed_f64_methods: &cross_module.typed_f64_methods,
+        typed_i1_methods: &cross_module.typed_i1_methods,
+        typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
+        typed_f64_closures: &cross_module.typed_f64_closures,
+        typed_i1_closures: &cross_module.typed_i1_closures,
+        typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
+        typed_string_closures: &cross_module.typed_string_closures,
         was_unrolled: f.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),

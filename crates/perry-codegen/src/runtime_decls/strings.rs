@@ -319,8 +319,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // as void-return for LLVM purposes.
     module.declare_function("js_throw_error_with_code", VOID, &[PTR, I64, PTR, I64, I32]);
     module.declare_function("js_map_set", I64, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_map_set_string_number", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_map_get", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_map_get_string_key", DOUBLE, &[I64, I64]);
     module.declare_function("js_map_has", I32, &[I64, DOUBLE]);
+    module.declare_function("js_map_has_string_key", I32, &[I64, I64]);
     module.declare_function("js_map_delete", I32, &[I64, DOUBLE]);
     module.declare_function("js_object_keys", I64, &[I64]);
     module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
@@ -517,8 +520,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_number_coerce", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_to_number", DOUBLE, &[DOUBLE]);
     module.declare_function("js_set_add", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_add_string", I64, &[I64, I64]);
     module.declare_function("js_set_has", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_has_string", I32, &[I64, I64]);
     module.declare_function("js_set_delete", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_delete_string", I32, &[I64, I64]);
     module.declare_function("js_set_size", I32, &[I64]);
     // #2872: ES2024 Set composition methods.
     module.declare_function("js_set_union", I64, &[I64, DOUBLE]);
@@ -859,6 +865,12 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_box_alloc", I64, &[DOUBLE]);
     module.declare_function("js_box_get", DOUBLE, &[I64]);
     module.declare_function("js_box_set", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_i32_box_alloc", I64, &[I32]);
+    module.declare_function("js_i32_box_get", I32, &[I64]);
+    module.declare_function("js_i32_box_set", VOID, &[I64, I32]);
+    module.declare_function("js_bool_box_alloc", I64, &[I32]);
+    module.declare_function("js_bool_box_get", I32, &[I64]);
+    module.declare_function("js_bool_box_set", VOID, &[I64, I32]);
     module.declare_function("js_arguments_object_alloc", I64, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_arguments_object_map_index", VOID, &[I64, I32, I64]);
     module.declare_function("js_array_like_to_array", I64, &[DOUBLE]);

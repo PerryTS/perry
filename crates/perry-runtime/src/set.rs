@@ -465,6 +465,11 @@ fn is_string_like(bits: u64) -> bool {
     }
 }
 
+#[inline]
+fn boxed_heap_string_value(value: *const StringHeader) -> f64 {
+    f64::from_bits(crate::value::STRING_TAG | ((value as u64) & crate::value::POINTER_MASK))
+}
+
 /// Check if two JSValues are equal (for set element comparison).
 /// Handles STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), SHORT_STRING_TAG (0x7FF9 SSO),
 /// raw pointers, and cross-tag combinations.
@@ -660,11 +665,74 @@ pub extern "C" fn js_set_add(set: *mut SetHeader, value: f64) -> *mut SetHeader 
     }
 }
 
+#[no_mangle]
+pub extern "C" fn js_set_add_string(
+    set: *mut SetHeader,
+    value: *const StringHeader,
+) -> *mut SetHeader {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return set;
+    }
+    let value = boxed_heap_string_value(value);
+    unsafe {
+        let idx = find_value_index(set, value);
+
+        if idx >= 0 {
+            return set;
+        }
+
+        let grew = ensure_capacity(set);
+        let size = (*set).size;
+        let elements = elements_ptr_mut(set);
+        if grew && size > 0 {
+            crate::gc::runtime_dirty_external_slot_span(
+                set as usize,
+                elements as usize,
+                size as usize,
+            );
+        }
+
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set append stores through the shared external-slot helper.
+        crate::gc::runtime_store_external_jsvalue_slot(
+            set as usize,
+            elements.add(size as usize) as usize,
+            value.to_bits(),
+        );
+
+        SET_INDEX.with(|idx| {
+            let mut idx = idx.borrow_mut();
+            if let Some(map) = idx.get_mut(&(set as usize)) {
+                map.insert(JSValueKey(value), size);
+            }
+        });
+
+        (*set).size = size + 1;
+        set
+    }
+}
+
 /// Check if the set has a value
 /// Returns 1 if found, 0 if not found
 #[no_mangle]
 pub extern "C" fn js_set_has(set: *const SetHeader, value: f64) -> i32 {
     let value = normalize_zero(value);
+    unsafe {
+        if find_value_index(set, value) >= 0 {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_has_string(set: *const SetHeader, value: *const StringHeader) -> i32 {
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 0;
+    }
+    let value = boxed_heap_string_value(value);
     unsafe {
         if find_value_index(set, value) >= 0 {
             1
@@ -712,6 +780,31 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         1
     }
 }
+
+#[no_mangle]
+pub extern "C" fn js_set_delete_string(set: *mut SetHeader, value: *const StringHeader) -> i32 {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return 0;
+    }
+    let value = boxed_heap_string_value(value);
+    js_set_delete(set, value)
+}
+
+// Codegen emits these string-key typed lowering helpers directly from
+// generated LLVM IR. Keep roots prevent whole-program LTO/dead-strip from
+// removing the exported symbols when the Rust crate graph has no caller.
+#[used]
+static KEEP_JS_SET_ADD_STRING: extern "C" fn(
+    *mut SetHeader,
+    *const StringHeader,
+) -> *mut SetHeader = js_set_add_string;
+#[used]
+static KEEP_JS_SET_HAS_STRING: extern "C" fn(*const SetHeader, *const StringHeader) -> i32 =
+    js_set_has_string;
+#[used]
+static KEEP_JS_SET_DELETE_STRING: extern "C" fn(*mut SetHeader, *const StringHeader) -> i32 =
+    js_set_delete_string;
 
 /// Clear all elements from the set
 #[no_mangle]
@@ -1472,6 +1565,28 @@ mod tests {
 
         // has() should find by content
         assert_eq!(js_set_has(set, val2), 1);
+    }
+
+    #[test]
+    fn test_set_string_specialized_helpers_use_content_keys() {
+        let s1 = js_string_from_bytes(b"hello".as_ptr(), 5);
+        let s2 = js_string_from_bytes(b"hello".as_ptr(), 5);
+        assert_ne!(s1 as usize, s2 as usize);
+
+        let set = js_set_alloc(4);
+        js_set_add_string(set, s1);
+        assert_eq!(js_set_size(set), 1);
+        assert_eq!(js_set_has_string(set, s2), 1);
+
+        js_set_add_string(set, s2);
+        assert_eq!(
+            js_set_size(set),
+            1,
+            "same-content string values should deduplicate"
+        );
+
+        assert_eq!(js_set_delete_string(set, s2), 1);
+        assert_eq!(js_set_has_string(set, s1), 0);
     }
 
     #[test]

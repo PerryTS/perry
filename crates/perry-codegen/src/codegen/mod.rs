@@ -48,6 +48,7 @@ mod helpers;
 mod method;
 mod opts;
 mod string_pool;
+mod typed_abi;
 
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{default_target_triple, write_barriers_enabled};
@@ -55,9 +56,19 @@ pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
+pub(crate) use typed_abi::{
+    generic_closure_body_name, generic_function_body_name, generic_method_body_name,
+    typed_f64_closure_name, typed_f64_function_name, typed_f64_method_name,
+    typed_f64_receiver_method_info, typed_f64_receiver_method_name, typed_i1_closure_name,
+    typed_i1_function_name, typed_i1_method_name, typed_string_closure_name,
+    typed_string_function_name, TypedParamRep, TypedReceiverMethodInfo,
+};
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
-use function::compile_function;
+use function::{
+    compile_function, compile_typed_f64_function, compile_typed_i1_function,
+    compile_typed_string_function,
+};
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
     sanitize, sanitize_member, scoped_fn_name, scoped_method_name, scoped_static_method_name,
@@ -72,6 +83,38 @@ pub(super) fn spec_function_length(params: &[perry_hir::Param]) -> usize {
         .iter()
         .take_while(|p| !p.is_rest && p.default.is_none())
         .count()
+}
+
+fn should_record_typed_clone_rejection(reason: typed_abi::TypedCloneRejectionReason) -> bool {
+    if std::env::var_os("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS").is_some() {
+        return !matches!(reason, typed_abi::TypedCloneRejectionReason::NotClosure);
+    }
+    !matches!(
+        reason,
+        typed_abi::TypedCloneRejectionReason::NotClosure
+            | typed_abi::TypedCloneRejectionReason::ReturnTypeNotF64
+            | typed_abi::TypedCloneRejectionReason::ReturnTypeNotI1
+            | typed_abi::TypedCloneRejectionReason::ReturnTypeNotString
+            | typed_abi::TypedCloneRejectionReason::NoReceiverField
+    )
+}
+
+fn record_typed_clone_rejection(
+    records: &mut Vec<crate::native_value::NativeRepRecord>,
+    source_function: impl Into<String>,
+    consumer: &'static str,
+    reason: typed_abi::TypedCloneRejectionReason,
+    notes: Vec<String>,
+) {
+    if !should_record_typed_clone_rejection(reason) {
+        return;
+    }
+    records.push(crate::native_value::typed_clone_rejection_record(
+        source_function,
+        consumer,
+        reason.as_str(),
+        notes,
+    ));
 }
 
 pub(crate) fn static_method_registry_key(method_name: &str) -> String {
@@ -1124,7 +1167,195 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .ok()
             .as_deref()
             == Some("1");
-    let cross_module = CrossModuleCtx {
+    let mut typed_clone_rejection_records = Vec::new();
+    let mut typed_f64_functions = std::collections::HashSet::new();
+    let mut typed_i1_functions = std::collections::HashSet::new();
+    let mut typed_string_functions = std::collections::HashSet::new();
+    let mut typed_i1_function_param_reps = std::collections::HashMap::new();
+    for f in &hir.functions {
+        match typed_abi::typed_f64_function_rejection_reason(f) {
+            None => {
+                typed_f64_functions.insert(f.id);
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                f.name.clone(),
+                "typed_f64_function_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_f64_function".to_string(),
+                    format!("function_id={}", f.id),
+                    format!("symbol={}", f.name),
+                ],
+            ),
+        }
+        match typed_abi::typed_i1_function_rejection_reason(f) {
+            None => {
+                typed_i1_functions.insert(f.id);
+                if let Some(reps) = typed_abi::typed_param_reps_for_params(&f.params) {
+                    typed_i1_function_param_reps.insert(f.id, reps);
+                }
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                f.name.clone(),
+                "typed_i1_function_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_i1_function".to_string(),
+                    format!("function_id={}", f.id),
+                    format!("symbol={}", f.name),
+                ],
+            ),
+        }
+        match typed_abi::typed_string_function_rejection_reason(f) {
+            None => {
+                typed_string_functions.insert(f.id);
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                f.name.clone(),
+                "typed_string_function_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_string_function".to_string(),
+                    format!("function_id={}", f.id),
+                    format!("symbol={}", f.name),
+                ],
+            ),
+        }
+    }
+    let mut typed_f64_methods = std::collections::HashSet::new();
+    let mut typed_i1_methods = std::collections::HashSet::new();
+    let mut typed_i1_method_param_reps = std::collections::HashMap::new();
+    let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    for class in &hir.classes {
+        for method in &class.methods {
+            let source_function = format!("{}::{}", class.name, method.name);
+            match typed_abi::typed_f64_method_rejection_reason(method) {
+                None => {
+                    typed_f64_methods.insert((class.name.clone(), method.name.clone()));
+                }
+                Some(reason) => record_typed_clone_rejection(
+                    &mut typed_clone_rejection_records,
+                    source_function.clone(),
+                    "typed_f64_method_clone_decision",
+                    reason,
+                    vec![
+                        "typed_clone_kind=typed_f64_method".to_string(),
+                        format!("class={}", class.name),
+                        format!("method={}", method.name),
+                        format!("function_id={}", method.id),
+                    ],
+                ),
+            }
+            match typed_abi::typed_f64_receiver_method_info(class, method) {
+                Some(info) => {
+                    typed_f64_receiver_methods
+                        .insert((class.name.clone(), method.name.clone()), info);
+                }
+                None => {
+                    if let Some(reason) =
+                        typed_abi::typed_f64_receiver_method_rejection_reason(class, method)
+                    {
+                        record_typed_clone_rejection(
+                            &mut typed_clone_rejection_records,
+                            source_function.clone(),
+                            "typed_f64_receiver_method_clone_decision",
+                            reason,
+                            vec![
+                                "typed_clone_kind=typed_f64_receiver_method".to_string(),
+                                format!("class={}", class.name),
+                                format!("method={}", method.name),
+                                format!("function_id={}", method.id),
+                            ],
+                        );
+                    }
+                }
+            }
+            match typed_abi::typed_i1_method_rejection_reason(method) {
+                None => {
+                    let key = (class.name.clone(), method.name.clone());
+                    typed_i1_methods.insert(key.clone());
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(&method.params) {
+                        typed_i1_method_param_reps.insert(key, reps);
+                    }
+                }
+                Some(reason) => record_typed_clone_rejection(
+                    &mut typed_clone_rejection_records,
+                    source_function.clone(),
+                    "typed_i1_method_clone_decision",
+                    reason,
+                    vec![
+                        "typed_clone_kind=typed_i1_method".to_string(),
+                        format!("class={}", class.name),
+                        format!("method={}", method.name),
+                        format!("function_id={}", method.id),
+                    ],
+                ),
+            }
+        }
+    }
+    let mut compiler_private_async_i32_control_locals = std::collections::HashSet::new();
+    let mut compiler_private_async_i1_control_locals = std::collections::HashSet::new();
+    crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+        &hir.init,
+        &mut compiler_private_async_i32_control_locals,
+        &mut compiler_private_async_i1_control_locals,
+    );
+    for f in &hir.functions {
+        crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+            &f.body,
+            &mut compiler_private_async_i32_control_locals,
+            &mut compiler_private_async_i1_control_locals,
+        );
+    }
+    for c in &hir.classes {
+        for m in &c.methods {
+            crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+                &m.body,
+                &mut compiler_private_async_i32_control_locals,
+                &mut compiler_private_async_i1_control_locals,
+            );
+        }
+        for (_, getter_fn) in &c.getters {
+            crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+                &getter_fn.body,
+                &mut compiler_private_async_i32_control_locals,
+                &mut compiler_private_async_i1_control_locals,
+            );
+        }
+        for (_, setter_fn) in &c.setters {
+            crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+                &setter_fn.body,
+                &mut compiler_private_async_i32_control_locals,
+                &mut compiler_private_async_i1_control_locals,
+            );
+        }
+        if let Some(ctor) = &c.constructor {
+            crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+                &ctor.body,
+                &mut compiler_private_async_i32_control_locals,
+                &mut compiler_private_async_i1_control_locals,
+            );
+        }
+        for sm in &c.static_methods {
+            crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+                &sm.body,
+                &mut compiler_private_async_i32_control_locals,
+                &mut compiler_private_async_i1_control_locals,
+            );
+        }
+        for member in &c.computed_members {
+            crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
+                &member.function.body,
+                &mut compiler_private_async_i32_control_locals,
+                &mut compiler_private_async_i1_control_locals,
+            );
+        }
+    }
+
+    let mut cross_module = CrossModuleCtx {
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_reexport_named_imports: opts.namespace_reexport_named_imports.clone(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
@@ -1215,6 +1446,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .filter(|f| crate::collectors::returns_i32_identity_arg(f))
             .map(|f| f.id)
             .collect(),
+        typed_f64_functions,
+        typed_i1_functions,
+        typed_string_functions,
+        typed_i1_function_param_reps,
+        typed_f64_methods,
+        typed_i1_methods,
+        typed_i1_method_param_reps,
+        typed_f64_receiver_methods,
+        typed_f64_closures: std::collections::HashSet::new(),
+        typed_i1_closures: std::collections::HashSet::new(),
+        typed_string_closures: std::collections::HashSet::new(),
+        typed_i1_closure_param_reps: std::collections::HashMap::new(),
+        compiler_private_async_i32_control_locals,
+        compiler_private_async_i1_control_locals,
         disable_buffer_fast_path,
         flat_const_arrays: {
             // Issue #50: fold module-level `const X: number[][] = [[int, ...], ...]`
@@ -2163,6 +2408,86 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         collect_closures_in_stmts(&hir.init, &mut seen, &mut closures);
     }
+    cross_module.typed_f64_closures.clear();
+    cross_module.typed_i1_closures.clear();
+    cross_module.typed_string_closures.clear();
+    cross_module.typed_i1_closure_param_reps.clear();
+    for (func_id, expr) in &closures {
+        match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &module_local_types) {
+            None => {
+                cross_module.typed_f64_closures.insert(*func_id);
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_f64_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_f64_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_f64_closure_name(&format!(
+                            "perry_closure_{}__{}",
+                            module_prefix, func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
+        match typed_abi::typed_i1_closure_rejection_reason_with_types(expr, &module_local_types) {
+            None => {
+                cross_module.typed_i1_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_i1_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_i1_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_i1_closure_name(&format!(
+                            "perry_closure_{}__{}",
+                            module_prefix, func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
+        match typed_abi::typed_string_closure_rejection_reason_with_types(expr, &module_local_types)
+        {
+            None => {
+                cross_module.typed_string_closures.insert(*func_id);
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_string_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_string_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_string_closure_name(&format!(
+                            "perry_closure_{}__{}",
+                            module_prefix, func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
+    }
 
     // Build closure rest param index: for each closure that has a rest
     // parameter, record its func_id → rest param position. Used by
@@ -2329,11 +2654,101 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
 
+    // From here on, this set means "a typed-f64 clone is present in the
+    // module", not just "the HIR body was eligible." The i64 specializer owns
+    // its public wrapper and may skip the ordinary f64 body entirely, so direct
+    // call lowering must not branch to an unemitted typed-f64 clone.
+    for f in &hir.functions {
+        if i64_specialized.contains(&f.id) && cross_module.typed_f64_functions.contains(&f.id) {
+            record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                f.name.clone(),
+                "typed_f64_function_clone_decision",
+                typed_abi::TypedCloneRejectionReason::I64Specialized,
+                vec![
+                    "typed_clone_kind=typed_f64_function".to_string(),
+                    format!("function_id={}", f.id),
+                    format!(
+                        "symbol={}",
+                        func_names.get(&f.id).map(String::as_str).unwrap_or(&f.name)
+                    ),
+                ],
+            );
+        }
+        if i64_specialized.contains(&f.id) && cross_module.typed_i1_functions.contains(&f.id) {
+            record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                f.name.clone(),
+                "typed_i1_function_clone_decision",
+                typed_abi::TypedCloneRejectionReason::I64Specialized,
+                vec![
+                    "typed_clone_kind=typed_i1_function".to_string(),
+                    format!("function_id={}", f.id),
+                    format!(
+                        "symbol={}",
+                        func_names.get(&f.id).map(String::as_str).unwrap_or(&f.name)
+                    ),
+                ],
+            );
+        }
+    }
+    cross_module
+        .typed_f64_functions
+        .retain(|id| !i64_specialized.contains(id));
+    cross_module
+        .typed_i1_functions
+        .retain(|id| !i64_specialized.contains(id));
+    cross_module
+        .typed_i1_function_param_reps
+        .retain(|id, _| !i64_specialized.contains(id));
+
+    // Emit internal typed-f64 clones before their public/generic wrappers. The
+    // public wrapper keeps the JSValue ABI; it and direct proven numeric call
+    // sites can call the internal clone.
+    for f in &hir.functions {
+        if !cross_module.typed_f64_functions.contains(&f.id) {
+            continue;
+        }
+        compile_typed_f64_function(&mut llmod, f, &func_names)
+            .with_context(|| format!("lowering typed-f64 clone for function '{}'", f.name))?;
+    }
+
+    // Emit internal typed-i1 clones before their public/generic wrappers. The
+    // public wrapper keeps the JSValue ABI; it and direct proven boolean call
+    // sites guard and unbox into this clone, then re-box at the ABI boundary.
+    for f in &hir.functions {
+        if !cross_module.typed_i1_functions.contains(&f.id) {
+            continue;
+        }
+        compile_typed_i1_function(&mut llmod, f, &func_names)
+            .with_context(|| format!("lowering typed-i1 clone for function '{}'", f.name))?;
+    }
+
+    // Emit internal typed-string clones before their public/generic wrappers.
+    // The clone keeps raw string handles in SSA and boxes only when returning
+    // through the public JSValue ABI.
+    for f in &hir.functions {
+        if !cross_module.typed_string_functions.contains(&f.id) {
+            continue;
+        }
+        compile_typed_string_function(&mut llmod, f, &func_names)
+            .with_context(|| format!("lowering typed-string clone for function '{}'", f.name))?;
+    }
+
     // Lower each user function into the module (skip i64-specialized ones).
     for f in &hir.functions {
         if i64_specialized.contains(&f.id) {
             continue;
         }
+        let typed_public_trampoline = if cross_module.typed_f64_functions.contains(&f.id) {
+            Some(typed_abi::TypedFunctionTrampolineKind::F64)
+        } else if cross_module.typed_i1_functions.contains(&f.id) {
+            Some(typed_abi::TypedFunctionTrampolineKind::I1)
+        } else if cross_module.typed_string_functions.contains(&f.id) {
+            Some(typed_abi::TypedFunctionTrampolineKind::StringRef)
+        } else {
+            None
+        };
         compile_function(
             &mut llmod,
             f,
@@ -2352,6 +2767,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &module_boxed_vars,
             &closure_rest_params,
             &cross_module,
+            typed_public_trampoline,
         )
         .with_context(|| format!("lowering function '{}'", f.name))?;
     }
@@ -2496,6 +2912,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // metadata definition (issue #71).
     let total_buffer_scopes = llmod.buffer_alias_counter;
     emit_buffer_alias_metadata(&mut llmod, total_buffer_scopes);
+    llmod
+        .native_rep_records
+        .extend(typed_clone_rejection_records);
 
     let verify_native_regions = opts.verify_native_regions
         || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");

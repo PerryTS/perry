@@ -2,13 +2,16 @@
 
 use super::*;
 
-use crate::expr::{emit_root_nanbox_store_on_block, lower_expr_with_expected_type};
+use crate::expr::{
+    box_i1_for_compat_shadow, emit_root_nanbox_store_on_block, lower_expr_value,
+    lower_expr_with_expected_type,
+};
 use crate::native_value::{
     AliasState, BufferAccessMode, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
     LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
     PodLocal, SemanticKind,
 };
-use crate::types::{DOUBLE, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 /// #5271: does `init` provably evaluate to a plain object literal? Two
 /// shapes reach codegen: a data-only literal stays `Expr::Object`, while a
@@ -824,15 +827,26 @@ pub(crate) fn lower_let(
         if ctx.prealloc_boxes.contains(&id) {
             ctx.local_types.insert(id, refined_ty.clone());
             if let Some(init_expr) = init {
-                let init_val = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                 let slot_clone = ctx.locals[&id].clone();
                 let blk = ctx.block();
-                let box_dbl = blk.load(DOUBLE, &slot_clone);
-                let bptr = blk.bitcast_double_to_i64(&box_dbl);
-                blk.call_void(
-                    "js_box_set",
-                    &[(crate::types::I64, &bptr), (DOUBLE, &init_val)],
-                );
+                let bptr = blk.load(I64, &slot_clone);
+                if crate::expr::is_compiler_private_async_i32_control_local(ctx, id) {
+                    let init_i32 = crate::expr::lower_i32_control_store_value(ctx, init_expr)?;
+                    ctx.block()
+                        .call_void("js_i32_box_set", &[(I64, &bptr), (I32, &init_i32)]);
+                } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, id) {
+                    let init_i1 = crate::expr::lower_i1_control_store_value(ctx, init_expr)?;
+                    let init_i32 = ctx.block().zext(I1, &init_i1, I32);
+                    ctx.block()
+                        .call_void("js_bool_box_set", &[(I64, &bptr), (I32, &init_i32)]);
+                } else {
+                    let init_val =
+                        lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                    ctx.block().call_void(
+                        "js_box_set",
+                        &[(crate::types::I64, &bptr), (DOUBLE, &init_val)],
+                    );
+                }
             }
             return Ok(());
         }
@@ -843,7 +857,7 @@ pub(crate) fn lower_let(
         // Slot must live in the entry block — closures from sibling
         // branches may capture this id later, and an alloca placed
         // here would not dominate those branches' loads.
-        let slot = ctx.func.alloca_entry(DOUBLE);
+        let slot = ctx.func.alloca_entry(I64);
         // perry#4926 (source bug behind the #4898 SIGBUS): the alloca
         // dominates every use, but the store of the box pointer below
         // only runs when this `Let` executes. A boxed read/write on a
@@ -856,9 +870,10 @@ pub(crate) fn lower_let(
         // block (mirroring the non-boxed path) so skipped-init paths
         // read a defined non-pointer sentinel that the runtime rejects
         // deterministically.
-        ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
-        let box_as_double = ctx.block().bitcast_i64_to_double(&box_ptr);
-        ctx.block().store(DOUBLE, &box_as_double, &slot);
+        let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
+        ctx.func.entry_allocas_push_store(I64, &undef_bits, &slot);
+        ctx.block().store(I64, &box_ptr, &slot);
+        super::record_boxed_slot_js_value_bits(ctx, id, &box_ptr, "boxed_let.box_ptr_slot");
         // Step 2: register BEFORE lowering init.
         ctx.locals.insert(id, slot);
         ctx.local_types.insert(id, refined_ty.clone());
@@ -870,8 +885,7 @@ pub(crate) fn lower_let(
             // js_box_set the real init value.
             let slot_clone = ctx.locals[&id].clone();
             let blk = ctx.block();
-            let box_dbl = blk.load(DOUBLE, &slot_clone);
-            let bptr = blk.bitcast_double_to_i64(&box_dbl);
+            let bptr = blk.load(I64, &slot_clone);
             blk.call_void(
                 "js_box_set",
                 &[(crate::types::I64, &bptr), (DOUBLE, &init_val)],
@@ -967,6 +981,16 @@ pub(crate) fn lower_let(
         ctx.func.entry_allocas_push_store(I32, "0", &i32_slot);
         ctx.i32_counter_slots.insert(id, i32_slot);
     }
+    if init.is_some()
+        && matches!(refined_ty, perry_types::Type::Boolean)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && !ctx.i1_local_slots.contains_key(&id)
+    {
+        let i1_slot = ctx.func.alloca_entry(I1);
+        ctx.func.entry_allocas_push_store(I1, "false", &i1_slot);
+        ctx.i1_local_slots.insert(id, i1_slot);
+    }
     // Issue #50 follow-up: when this local is a row alias of a
     // flat-const 2D int array, `try_lower_flat_const_index_get` will
     // intercept every `LocalGet(this).at(j)` access at lowering time
@@ -1027,33 +1051,162 @@ pub(crate) fn lower_let(
             false
         };
         let v = if !used_i32_init {
-            let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
-            // String aliasing fix: `let y = x` (init is `LocalGet`
-            // of a string-typed local) shares the same heap
-            // pointer between `y` and `x`. A later
-            // `x = x + suffix` would otherwise see refcount==1
-            // and mutate the string in-place via
-            // `js_string_append`'s fast path, also corrupting
-            // `y`. Mark the underlying string as shared so the
-            // next append allocates fresh. Pre-fix this didn't
-            // surface in practice; the v0.5.667 finally-inline
-            // pass (issue #536) introduced exactly this aliasing
-            // shape via its `let __finally_ret_<id> = X` hoist
-            // and `test_edge_error_handling`'s `finallyReturn`
-            // started returning `start-try-finally` instead of
-            // `start-try`.
-            if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
-                    let blk = ctx.block();
-                    let s_ptr = blk.call(
-                        crate::types::I64,
-                        "js_get_string_pointer_unified",
-                        &[(DOUBLE, &v)],
+            let native_init = if matches!(
+                refined_ty,
+                perry_types::Type::Number | perry_types::Type::Int32
+            ) || (matches!(refined_ty, perry_types::Type::Boolean)
+                && ctx.i1_local_slots.contains_key(&id))
+            {
+                lower_expr_value(ctx, init_expr)?
+            } else {
+                None
+            };
+            let v = if let Some(lowered) = native_init {
+                if matches!(lowered.rep, NativeRep::F64) {
+                    ctx.block().store(DOUBLE, &lowered.value, &slot);
+                    ctx.record_lowered_value(
+                        "Let",
+                        Some(id),
+                        "ordinary_expr_value.let_init_f64",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![format!("local={name}")],
                     );
-                    blk.call_void("js_string_addref", &[(crate::types::I64, &s_ptr)]);
+                    lowered.value
+                } else if matches!(lowered.rep, NativeRep::I32) {
+                    let v = ctx.block().sitofp(I32, &lowered.value, DOUBLE);
+                    ctx.block().store(DOUBLE, &v, &slot);
+                    ctx.record_lowered_value(
+                        "Let",
+                        Some(id),
+                        "ordinary_expr_value.let_init_i32",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![format!("local={name}")],
+                    );
+                    v
+                } else if matches!(lowered.rep, NativeRep::U32 | NativeRep::BufferLen) {
+                    let v = ctx.block().uitofp(I32, &lowered.value, DOUBLE);
+                    ctx.block().store(DOUBLE, &v, &slot);
+                    ctx.record_lowered_value(
+                        "Let",
+                        Some(id),
+                        "ordinary_expr_value.let_init_u32",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![format!("local={name}")],
+                    );
+                    v
+                } else if matches!(lowered.rep, NativeRep::U8) {
+                    let widened = ctx.block().zext(I8, &lowered.value, I32);
+                    let v = ctx.block().uitofp(I32, &widened, DOUBLE);
+                    ctx.block().store(DOUBLE, &v, &slot);
+                    ctx.record_lowered_value(
+                        "Let",
+                        Some(id),
+                        "ordinary_expr_value.let_init_u8",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![format!("local={name}")],
+                    );
+                    v
+                } else if matches!(lowered.rep, NativeRep::I1) {
+                    if let Some(i1_slot) = ctx.i1_local_slots.get(&id).cloned() {
+                        ctx.block().store(I1, &lowered.value, &i1_slot);
+                    }
+                    let shadow = box_i1_for_compat_shadow(ctx, &lowered.value);
+                    ctx.block().store(DOUBLE, &shadow, &slot);
+                    ctx.record_lowered_value(
+                        "Let",
+                        Some(id),
+                        "ordinary_expr_value.let_init_i1",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![format!("local={name}")],
+                    );
+                    shadow
+                } else {
+                    ctx.i1_local_slots.remove(&id);
+                    let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                    // String aliasing fix: `let y = x` (init is `LocalGet`
+                    // of a string-typed local) shares the same heap
+                    // pointer between `y` and `x`. A later
+                    // `x = x + suffix` would otherwise see refcount==1
+                    // and mutate the string in-place via
+                    // `js_string_append`'s fast path, also corrupting
+                    // `y`. Mark the underlying string as shared so the
+                    // next append allocates fresh. Pre-fix this didn't
+                    // surface in practice; the v0.5.667 finally-inline
+                    // pass (issue #536) introduced exactly this aliasing
+                    // shape via its `let __finally_ret_<id> = X` hoist
+                    // and `test_edge_error_handling`'s `finallyReturn`
+                    // started returning `start-try-finally` instead of
+                    // `start-try`.
+                    if let perry_hir::Expr::LocalGet(src_id) = init_expr {
+                        if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
+                            let blk = ctx.block();
+                            let s_ptr = blk.call(
+                                crate::types::I64,
+                                "js_get_string_pointer_unified",
+                                &[(DOUBLE, &v)],
+                            );
+                            blk.call_void("js_string_addref", &[(crate::types::I64, &s_ptr)]);
+                        }
+                    }
+                    ctx.block().store(DOUBLE, &v, &slot);
+                    v
                 }
-            }
-            ctx.block().store(DOUBLE, &v, &slot);
+            } else {
+                ctx.i1_local_slots.remove(&id);
+                let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                // String aliasing fix: `let y = x` (init is `LocalGet`
+                // of a string-typed local) shares the same heap
+                // pointer between `y` and `x`. A later
+                // `x = x + suffix` would otherwise see refcount==1
+                // and mutate the string in-place via
+                // `js_string_append`'s fast path, also corrupting
+                // `y`. Mark the underlying string as shared so the
+                // next append allocates fresh. Pre-fix this didn't
+                // surface in practice; the v0.5.667 finally-inline
+                // pass (issue #536) introduced exactly this aliasing
+                // shape via its `let __finally_ret_<id> = X` hoist
+                // and `test_edge_error_handling`'s `finallyReturn`
+                // started returning `start-try-finally` instead of
+                // `start-try`.
+                if let perry_hir::Expr::LocalGet(src_id) = init_expr {
+                    if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
+                        let blk = ctx.block();
+                        let s_ptr = blk.call(
+                            crate::types::I64,
+                            "js_get_string_pointer_unified",
+                            &[(DOUBLE, &v)],
+                        );
+                        blk.call_void("js_string_addref", &[(crate::types::I64, &s_ptr)]);
+                    }
+                }
+                ctx.block().store(DOUBLE, &v, &slot);
+                v
+            };
             if !mutable {
                 if let perry_hir::Expr::NativePodView {
                     count, view_type, ..

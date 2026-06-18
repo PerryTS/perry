@@ -1328,6 +1328,162 @@ pub(crate) fn collect_let_types_in_stmts(
     }
 }
 
+pub(crate) fn collect_compiler_private_async_control_locals_in_stmts(
+    stmts: &[perry_hir::Stmt],
+    i32_out: &mut HashSet<u32>,
+    i1_out: &mut HashSet<u32>,
+) {
+    let mut preallocated = HashSet::new();
+    collect_prealloc_box_ids_in_stmts(stmts, &mut preallocated);
+    collect_compiler_private_async_control_locals_in_stmts_inner(
+        stmts,
+        &preallocated,
+        i32_out,
+        i1_out,
+    );
+}
+
+fn collect_compiler_private_async_control_locals_in_stmts_inner(
+    stmts: &[perry_hir::Stmt],
+    preallocated: &HashSet<u32>,
+    i32_out: &mut HashSet<u32>,
+    i1_out: &mut HashSet<u32>,
+) {
+    use perry_hir::Stmt;
+    for s in stmts {
+        match s {
+            Stmt::Let { id, name, ty, .. } => {
+                if preallocated.contains(id) {
+                    match (name.as_str(), ty) {
+                        (
+                            "__gen_state" | "__gen_pending_type",
+                            perry_types::Type::Number | perry_types::Type::Int32,
+                        ) => {
+                            i32_out.insert(*id);
+                        }
+                        ("__gen_done" | "__gen_executing", perry_types::Type::Boolean) => {
+                            i1_out.insert(*id);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_compiler_private_async_control_locals_in_stmts_inner(
+                    then_branch,
+                    preallocated,
+                    i32_out,
+                    i1_out,
+                );
+                if let Some(eb) = else_branch {
+                    collect_compiler_private_async_control_locals_in_stmts_inner(
+                        eb,
+                        preallocated,
+                        i32_out,
+                        i1_out,
+                    );
+                }
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init_stmt) = init {
+                    collect_compiler_private_async_control_locals_in_stmts_inner(
+                        std::slice::from_ref(init_stmt.as_ref()),
+                        preallocated,
+                        i32_out,
+                        i1_out,
+                    );
+                }
+                collect_compiler_private_async_control_locals_in_stmts_inner(
+                    body,
+                    preallocated,
+                    i32_out,
+                    i1_out,
+                );
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_compiler_private_async_control_locals_in_stmts_inner(
+                    body,
+                    preallocated,
+                    i32_out,
+                    i1_out,
+                );
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_compiler_private_async_control_locals_in_stmts_inner(
+                    body,
+                    preallocated,
+                    i32_out,
+                    i1_out,
+                );
+                if let Some(c) = catch {
+                    collect_compiler_private_async_control_locals_in_stmts_inner(
+                        &c.body,
+                        preallocated,
+                        i32_out,
+                        i1_out,
+                    );
+                }
+                if let Some(f) = finally {
+                    collect_compiler_private_async_control_locals_in_stmts_inner(
+                        f,
+                        preallocated,
+                        i32_out,
+                        i1_out,
+                    );
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_compiler_private_async_control_locals_in_stmts_inner(
+                        &case.body,
+                        preallocated,
+                        i32_out,
+                        i1_out,
+                    );
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_compiler_private_async_control_locals_in_stmts_inner(
+                    std::slice::from_ref(body.as_ref()),
+                    preallocated,
+                    i32_out,
+                    i1_out,
+                );
+            }
+            _ => {}
+        }
+        if let Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Let { init: Some(e), .. } = s {
+            collect_compiler_private_async_control_locals_in_expr(e, i32_out, i1_out);
+        }
+    }
+}
+
+fn collect_compiler_private_async_control_locals_in_expr(
+    expr: &perry_hir::Expr,
+    i32_out: &mut HashSet<u32>,
+    i1_out: &mut HashSet<u32>,
+) {
+    use perry_hir::Expr;
+    match expr {
+        Expr::Closure { body, .. } => {
+            collect_compiler_private_async_control_locals_in_stmts(body, i32_out, i1_out);
+        }
+        _ => {
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                collect_compiler_private_async_control_locals_in_expr(child, i32_out, i1_out);
+            });
+        }
+    }
+}
+
 fn collect_closure_let_types_in_expr(
     expr: &perry_hir::Expr,
     out: &mut HashMap<u32, perry_types::Type>,

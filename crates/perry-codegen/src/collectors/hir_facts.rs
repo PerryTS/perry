@@ -1,4 +1,4 @@
-use perry_hir::{Expr, Stmt};
+use perry_hir::{ArrayElement, Expr, Stmt};
 use std::collections::{HashMap, HashSet};
 
 /// Native specialization facts collected once per lowered HIR region.
@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) struct TypeFacts {
     pub representation: RepresentationFacts,
     pub arrays: ArrayFacts,
+    pub effect: EffectFacts,
     pub integer_range: IntegerRangeFacts,
     pub bounds: BoundsFacts,
     pub alias_noalias: AliasNoAliasFacts,
@@ -47,6 +48,15 @@ pub(crate) enum ArrayKindFact {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ArrayFacts {
     pub local_kinds: HashMap<u32, ArrayKindFact>,
+    pub length_stable_locals: HashSet<u32>,
+    pub noalias_locals: HashSet<u32>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EffectFacts {
+    pub unknown_call_escape: bool,
+    pub async_microtask_escape: bool,
+    pub array_length_mutation_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -119,6 +129,29 @@ impl TypeFacts {
 
     pub(crate) fn proves_packed_f64_array(&self, local_id: u32) -> bool {
         self.array_kind(local_id) == ArrayKindFact::PackedF64
+            && self.proves_noalias_array(local_id)
+            && self.proves_array_length_stable(local_id)
+            && !self.has_materialization_hazard(local_id)
+    }
+
+    pub(crate) fn proves_array_length_stable(&self, local_id: u32) -> bool {
+        self.arrays.length_stable_locals.contains(&local_id)
+    }
+
+    pub(crate) fn proves_noalias_array(&self, local_id: u32) -> bool {
+        self.arrays.noalias_locals.contains(&local_id)
+    }
+
+    pub(crate) fn array_length_mutation_locals(&self) -> &HashSet<u32> {
+        &self.effect.array_length_mutation_locals
+    }
+
+    pub(crate) fn has_unknown_call_escape(&self) -> bool {
+        self.effect.unknown_call_escape
+    }
+
+    pub(crate) fn has_async_microtask_escape(&self) -> bool {
+        self.effect.async_microtask_escape
     }
 
     pub(crate) fn index_used_locals(&self) -> &HashSet<u32> {
@@ -232,7 +265,7 @@ pub(crate) fn collect_type_facts(
         arg_dependent_clamp_fn_ids,
     );
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
-    let array_facts = collect_array_facts(stmts);
+    let (array_facts, effect_facts, materialization_hazards) = collect_array_facts(stmts);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
@@ -263,6 +296,7 @@ pub(crate) fn collect_type_facts(
             unsigned_i32_locals,
         },
         arrays: array_facts,
+        effect: effect_facts,
         integer_range: IntegerRangeFacts {
             index_used_locals,
             strictly_i32_bounded_locals,
@@ -288,12 +322,14 @@ pub(crate) fn collect_type_facts(
         shape_stability: ShapeStabilityFacts {
             scalar_replaceable_object_locals,
         },
-        materialization_hazards: MaterializationHazardFacts::default(),
+        materialization_hazards,
     };
     debug_assert!(graph
         .range_seed_locals()
         .is_superset(graph.integer_locals()));
-    debug_assert!(graph.materialization_hazard_locals().is_empty());
+    debug_assert!(graph.arrays.length_stable_locals.iter().all(|id| {
+        !graph.has_materialization_hazard(*id) && !graph.array_length_mutation_locals().contains(id)
+    }));
     graph
 }
 
@@ -440,14 +476,31 @@ fn is_fresh_uint8array_length_literal(expr: &Expr) -> bool {
     }
 }
 
-fn collect_array_facts(stmts: &[Stmt]) -> ArrayFacts {
-    let mut facts = ArrayFacts::default();
-    collect_array_facts_in_stmts(stmts, &mut facts.local_kinds);
-    facts
+fn collect_array_facts(stmts: &[Stmt]) -> (ArrayFacts, EffectFacts, MaterializationHazardFacts) {
+    let mut collector = ArrayFactCollector::default();
+    collector.collect_stmts(stmts);
+    collector.finish()
 }
 
-fn collect_array_facts_in_stmts(stmts: &[Stmt], kinds: &mut HashMap<u32, ArrayKindFact>) {
-    for stmt in stmts {
+#[derive(Default)]
+struct ArrayFactCollector {
+    local_kinds: HashMap<u32, ArrayKindFact>,
+    aliases: HashMap<u32, u32>,
+    aliased_locals: HashSet<u32>,
+    length_mutation_locals: HashSet<u32>,
+    materialization_hazard_locals: HashSet<u32>,
+    unknown_call_escape: bool,
+    async_microtask_escape: bool,
+}
+
+impl ArrayFactCollector {
+    fn collect_stmts(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            self.collect_stmt(stmt);
+        }
+    }
+
+    fn collect_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Let { id, ty, init, .. } => {
                 let declared_kind = array_kind_from_declared_type(ty);
@@ -456,29 +509,33 @@ fn collect_array_facts_in_stmts(stmts: &[Stmt], kinds: &mut HashMap<u32, ArrayKi
                         .as_ref()
                         .map(array_kind_from_initializer)
                         .unwrap_or(ArrayKindFact::Unknown);
-                    kinds.insert(*id, meet_array_kind(declared_kind, init_kind));
+                    self.local_kinds
+                        .insert(*id, meet_array_kind(declared_kind, init_kind));
                 }
                 if let Some(init) = init {
-                    collect_array_facts_in_expr(init, kinds);
+                    self.collect_expr(init);
+                    self.record_local_alias_write(*id, init);
+                } else {
+                    self.aliases.remove(id);
                 }
             }
             Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-                collect_array_facts_in_expr(expr, kinds);
+                self.collect_expr(expr);
             }
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                collect_array_facts_in_expr(condition, kinds);
-                collect_array_facts_in_stmts(then_branch, kinds);
+                self.collect_expr(condition);
+                self.collect_stmts(then_branch);
                 if let Some(else_branch) = else_branch {
-                    collect_array_facts_in_stmts(else_branch, kinds);
+                    self.collect_stmts(else_branch);
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                collect_array_facts_in_expr(condition, kinds);
-                collect_array_facts_in_stmts(body, kinds);
+                self.collect_expr(condition);
+                self.collect_stmts(body);
             }
             Stmt::For {
                 init,
@@ -487,44 +544,42 @@ fn collect_array_facts_in_stmts(stmts: &[Stmt], kinds: &mut HashMap<u32, ArrayKi
                 body,
             } => {
                 if let Some(init) = init {
-                    collect_array_facts_in_stmts(std::slice::from_ref(init.as_ref()), kinds);
+                    self.collect_stmt(init.as_ref());
                 }
                 if let Some(condition) = condition {
-                    collect_array_facts_in_expr(condition, kinds);
+                    self.collect_expr(condition);
                 }
                 if let Some(update) = update {
-                    collect_array_facts_in_expr(update, kinds);
+                    self.collect_expr(update);
                 }
-                collect_array_facts_in_stmts(body, kinds);
+                self.collect_stmts(body);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                collect_array_facts_in_stmts(body, kinds);
+                self.collect_stmts(body);
                 if let Some(catch) = catch {
-                    collect_array_facts_in_stmts(&catch.body, kinds);
+                    self.collect_stmts(&catch.body);
                 }
                 if let Some(finally) = finally {
-                    collect_array_facts_in_stmts(finally, kinds);
+                    self.collect_stmts(finally);
                 }
             }
             Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                collect_array_facts_in_expr(discriminant, kinds);
+                self.collect_expr(discriminant);
                 for case in cases {
                     if let Some(test) = &case.test {
-                        collect_array_facts_in_expr(test, kinds);
+                        self.collect_expr(test);
                     }
-                    collect_array_facts_in_stmts(&case.body, kinds);
+                    self.collect_stmts(&case.body);
                 }
             }
-            Stmt::Labeled { body, .. } => {
-                collect_array_facts_in_stmts(std::slice::from_ref(body.as_ref()), kinds);
-            }
+            Stmt::Labeled { body, .. } => self.collect_stmt(body.as_ref()),
             Stmt::Return(None)
             | Stmt::Break
             | Stmt::Continue
@@ -533,144 +588,457 @@ fn collect_array_facts_in_stmts(stmts: &[Stmt], kinds: &mut HashMap<u32, ArrayKi
             | Stmt::PreallocateBoxes(_) => {}
         }
     }
-}
 
-fn collect_array_facts_in_expr(expr: &Expr, kinds: &mut HashMap<u32, ArrayKindFact>) {
-    match expr {
-        Expr::ArrayPush { array_id, value } => {
-            let value_kind = if expr_is_numeric_shaped(value) {
-                ArrayKindFact::PackedF64
-            } else {
-                ArrayKindFact::PackedValue
-            };
-            update_array_kind(kinds, *array_id, value_kind);
-            collect_array_facts_in_expr(value, kinds);
-        }
-        Expr::ArrayPushSpread { array_id, source } => {
-            update_array_kind(kinds, *array_id, ArrayKindFact::Unknown);
-            collect_array_facts_in_expr(source, kinds);
-        }
-        Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
-            update_array_kind(kinds, *id, ArrayKindFact::HoleyValue);
-        }
-        Expr::ArrayUnshift { array_id, value } => {
-            update_array_kind(kinds, *array_id, ArrayKindFact::Unknown);
-            collect_array_facts_in_expr(value, kinds);
-        }
-        Expr::ArraySplice {
-            array_id,
-            start,
-            delete_count,
-            items,
-        } => {
-            update_array_kind(kinds, *array_id, ArrayKindFact::Unknown);
-            collect_array_facts_in_expr(start, kinds);
-            if let Some(delete_count) = delete_count {
-                collect_array_facts_in_expr(delete_count, kinds);
-            }
-            for item in items {
-                collect_array_facts_in_expr(item, kinds);
-            }
-        }
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => {
-            if let Expr::LocalGet(id) = object.as_ref() {
+    fn collect_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::ArrayPush { array_id, value } => {
                 let value_kind = if expr_is_numeric_shaped(value) {
                     ArrayKindFact::PackedF64
                 } else {
                     ArrayKindFact::PackedValue
                 };
-                update_array_kind(kinds, *id, value_kind);
+                self.mark_array_length_mutation(*array_id, value_kind);
+                self.collect_expr(value);
             }
-            collect_array_facts_in_expr(object, kinds);
-            collect_array_facts_in_expr(index, kinds);
-            collect_array_facts_in_expr(value, kinds);
-        }
-        Expr::LocalSet(id, value) => {
-            if kinds.contains_key(id) {
-                update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+            Expr::ArrayPushSpread { array_id, source } => {
+                self.mark_array_length_mutation(*array_id, ArrayKindFact::Unknown);
+                self.collect_expr(source);
             }
-            collect_array_facts_in_expr(value, kinds);
-        }
-        Expr::ObjectFreeze(target)
-        | Expr::ObjectSeal(target)
-        | Expr::ObjectPreventExtensions(target) => {
-            invalidate_array_kind_target(kinds, target);
-            collect_array_facts_in_expr(target, kinds);
-        }
-        Expr::ObjectDefineProperty(target, key, descriptor)
-        | Expr::ReflectDefineProperty {
-            target,
-            key,
-            descriptor,
-        } => {
-            invalidate_array_kind_target(kinds, target);
-            collect_array_facts_in_expr(target, kinds);
-            collect_array_facts_in_expr(key, kinds);
-            collect_array_facts_in_expr(descriptor, kinds);
-        }
-        Expr::ObjectDefineProperties(target, descriptors) => {
-            invalidate_array_kind_target(kinds, target);
-            collect_array_facts_in_expr(target, kinds);
-            collect_array_facts_in_expr(descriptors, kinds);
-        }
-        Expr::ObjectSetPrototypeOf(target, proto) => {
-            invalidate_array_kind_target(kinds, target);
-            collect_array_facts_in_expr(target, kinds);
-            collect_array_facts_in_expr(proto, kinds);
-        }
-        Expr::Call { callee, args, .. } => {
-            collect_array_facts_in_expr(callee, kinds);
-            for arg in args {
-                if let Expr::LocalGet(id) = arg {
-                    if kinds.contains_key(id) {
-                        update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+            Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
+                self.mark_array_length_mutation(*id, ArrayKindFact::HoleyValue);
+            }
+            Expr::ArrayUnshift { array_id, value } => {
+                self.mark_array_length_mutation(*array_id, ArrayKindFact::Unknown);
+                self.collect_expr(value);
+            }
+            Expr::ArraySplice {
+                array_id,
+                start,
+                delete_count,
+                items,
+            } => {
+                self.mark_array_length_mutation(*array_id, ArrayKindFact::Unknown);
+                self.collect_expr(start);
+                if let Some(delete_count) = delete_count {
+                    self.collect_expr(delete_count);
+                }
+                for item in items {
+                    self.collect_expr(item);
+                }
+            }
+            Expr::Array(elements) => {
+                for element in elements {
+                    self.mark_array_identity_exposure(element);
+                    self.collect_expr(element);
+                }
+            }
+            Expr::ArraySpread(elements) => {
+                for element in elements {
+                    match element {
+                        ArrayElement::Expr(expr) => {
+                            self.mark_array_identity_exposure(expr);
+                            self.collect_expr(expr);
+                        }
+                        ArrayElement::Spread(expr) => {
+                            self.collect_expr(expr);
+                        }
+                        ArrayElement::Hole => {}
                     }
                 }
-                collect_array_facts_in_expr(arg, kinds);
             }
-        }
-        Expr::CallSpread { callee, args, .. } => {
-            collect_array_facts_in_expr(callee, kinds);
-            for arg in args {
-                let inner = match arg {
-                    perry_hir::CallArg::Expr(expr) | perry_hir::CallArg::Spread(expr) => expr,
-                };
-                if let Expr::LocalGet(id) = inner {
-                    if kinds.contains_key(id) {
-                        update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+            Expr::Object(fields) => {
+                for (_, value) in fields {
+                    self.mark_array_identity_exposure(value);
+                    self.collect_expr(value);
+                }
+            }
+            Expr::ObjectSpread { parts } => {
+                for (key, value) in parts {
+                    if key.is_some() {
+                        self.mark_array_identity_exposure(value);
+                    }
+                    self.collect_expr(value);
+                }
+            }
+            Expr::ArrayCopyWithin {
+                array_id,
+                target,
+                start,
+                end,
+            } => {
+                self.mark_array_materialization_hazard(*array_id);
+                self.update_array_kind_for_local(*array_id, ArrayKindFact::Unknown);
+                self.collect_expr(target);
+                self.collect_expr(start);
+                if let Some(end) = end {
+                    self.collect_expr(end);
+                }
+            }
+            Expr::IndexSet {
+                object,
+                index,
+                value,
+            } => {
+                if let Expr::LocalGet(id) = object.as_ref() {
+                    let value_kind = if expr_is_numeric_shaped(value) {
+                        ArrayKindFact::PackedF64
+                    } else {
+                        ArrayKindFact::PackedValue
+                    };
+                    self.mark_array_length_mutation(*id, value_kind);
+                }
+                self.collect_expr(object);
+                self.collect_expr(index);
+                self.collect_expr(value);
+            }
+            Expr::IndexUpdate { object, index, .. } => {
+                if let Expr::LocalGet(id) = object.as_ref() {
+                    self.mark_array_length_mutation(*id, ArrayKindFact::Unknown);
+                }
+                self.collect_expr(object);
+                self.collect_expr(index);
+            }
+            Expr::LocalSet(id, value) => {
+                if self.tracked_array_root(*id).is_some() {
+                    self.mark_array_materialization_hazard(*id);
+                    self.update_array_kind_for_local(*id, ArrayKindFact::Unknown);
+                }
+                self.collect_expr(value);
+                self.record_local_alias_write(*id, value);
+            }
+            Expr::PropertySet {
+                object,
+                property,
+                value,
+            } => {
+                if let Expr::LocalGet(id) = object.as_ref() {
+                    if property == "length" {
+                        self.mark_array_length_mutation(*id, ArrayKindFact::Unknown);
+                    } else {
+                        self.mark_array_materialization_hazard(*id);
                     }
                 }
-                collect_array_facts_in_expr(inner, kinds);
+                self.collect_expr(object);
+                self.collect_expr(value);
+            }
+            Expr::PropertyUpdate { object, .. } => {
+                if let Expr::LocalGet(id) = object.as_ref() {
+                    self.mark_array_materialization_hazard(*id);
+                }
+                self.collect_expr(object);
+            }
+            Expr::ObjectFreeze(target)
+            | Expr::ObjectSeal(target)
+            | Expr::ObjectPreventExtensions(target) => {
+                self.mark_array_target_materialization_hazard(target);
+                self.collect_expr(target);
+            }
+            Expr::ObjectDefineProperty(target, key, descriptor)
+            | Expr::ReflectDefineProperty {
+                target,
+                key,
+                descriptor,
+            } => {
+                self.mark_array_target_materialization_hazard(target);
+                self.collect_expr(target);
+                self.collect_expr(key);
+                self.collect_expr(descriptor);
+            }
+            Expr::ObjectDefineProperties(target, descriptors) => {
+                self.mark_array_target_materialization_hazard(target);
+                self.collect_expr(target);
+                self.collect_expr(descriptors);
+            }
+            Expr::ObjectSetPrototypeOf(target, proto)
+            | Expr::ReflectSetPrototypeOf { target, proto } => {
+                self.mark_array_target_materialization_hazard(target);
+                self.collect_expr(target);
+                self.collect_expr(proto);
+            }
+            Expr::ObjectAssign { target, sources } => {
+                self.mark_array_target_materialization_hazard(target);
+                self.collect_expr(target);
+                for source in sources {
+                    self.collect_expr(source);
+                }
+            }
+            Expr::ArraySort { array, comparator } => {
+                self.mark_array_target_materialization_hazard(array);
+                self.mark_unknown_call_escape();
+                self.collect_expr(array);
+                self.collect_expr(comparator);
+            }
+            Expr::ArrayForEach { array, callback }
+            | Expr::ArrayMap { array, callback }
+            | Expr::ArrayFilter { array, callback }
+            | Expr::ArrayFind { array, callback }
+            | Expr::ArrayFindIndex { array, callback }
+            | Expr::ArrayFindLast { array, callback }
+            | Expr::ArrayFindLastIndex { array, callback }
+            | Expr::ArraySome { array, callback }
+            | Expr::ArrayEvery { array, callback }
+            | Expr::ArrayFlatMap { array, callback }
+            | Expr::ArrayReduce {
+                array,
+                callback,
+                initial: _,
+            }
+            | Expr::ArrayReduceRight {
+                array,
+                callback,
+                initial: _,
+            } => {
+                self.mark_unknown_call_escape();
+                self.collect_expr(array);
+                self.collect_expr(callback);
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    if !std::ptr::eq(child, array.as_ref())
+                        && !std::ptr::eq(child, callback.as_ref())
+                    {
+                        self.collect_expr(child);
+                    }
+                });
+            }
+            Expr::ArrayReverseValue { receiver }
+            | Expr::ArrayCopyWithinValue {
+                receiver,
+                target: _,
+                start: _,
+                end: _,
+            } => {
+                self.mark_array_target_materialization_hazard(receiver);
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    self.collect_expr(child);
+                });
+            }
+            Expr::Call { callee, args, .. } => {
+                self.mark_unknown_call_escape();
+                self.collect_expr(callee);
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
+            Expr::CallSpread { callee, args, .. } => {
+                self.mark_unknown_call_escape();
+                self.collect_expr(callee);
+                for arg in args {
+                    let inner = match arg {
+                        perry_hir::CallArg::Expr(expr) | perry_hir::CallArg::Spread(expr) => expr,
+                    };
+                    self.collect_expr(inner);
+                }
+            }
+            Expr::NativeMethodCall { object, args, .. } => {
+                self.mark_unknown_call_escape();
+                if let Some(object) = object {
+                    self.collect_expr(object);
+                }
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
+            Expr::NewDynamic { callee, args, .. } => {
+                self.mark_unknown_call_escape();
+                self.collect_expr(callee);
+                for arg in args {
+                    self.collect_expr(arg);
+                }
+            }
+            Expr::NewDynamicSpread { callee, args, .. } => {
+                self.mark_unknown_call_escape();
+                self.collect_expr(callee);
+                for arg in args {
+                    let inner = match arg {
+                        perry_hir::CallArg::Expr(expr) | perry_hir::CallArg::Spread(expr) => expr,
+                    };
+                    self.collect_expr(inner);
+                }
+            }
+            Expr::Await(operand)
+            | Expr::Yield {
+                value: Some(operand),
+                ..
+            }
+            | Expr::QueueMicrotask(operand) => {
+                self.mark_async_microtask_escape();
+                self.collect_expr(operand);
+            }
+            Expr::Closure { .. } => {
+                self.mark_unknown_call_escape();
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    self.collect_expr(child);
+                });
+            }
+            _ => {
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    self.collect_expr(child);
+                });
             }
         }
-        Expr::Closure { .. } => {
-            for kind in kinds.values_mut() {
-                *kind = ArrayKindFact::Unknown;
+    }
+
+    fn finish(mut self) -> (ArrayFacts, EffectFacts, MaterializationHazardFacts) {
+        let aliases = self.aliases.clone();
+        for (alias, root) in aliases {
+            if self.materialization_hazard_locals.contains(&root)
+                || self.materialization_hazard_locals.contains(&alias)
+            {
+                self.materialization_hazard_locals.insert(root);
+                self.materialization_hazard_locals.insert(alias);
+            }
+            if self.length_mutation_locals.contains(&root)
+                || self.length_mutation_locals.contains(&alias)
+            {
+                self.length_mutation_locals.insert(root);
+                self.length_mutation_locals.insert(alias);
+            }
+            self.aliased_locals.insert(root);
+            self.aliased_locals.insert(alias);
+        }
+
+        let length_stable_locals = self
+            .local_kinds
+            .keys()
+            .copied()
+            .filter(|id| {
+                !self.length_mutation_locals.contains(id)
+                    && !self.materialization_hazard_locals.contains(id)
+            })
+            .collect();
+        let noalias_locals = self
+            .local_kinds
+            .keys()
+            .copied()
+            .filter(|id| !self.aliased_locals.contains(id))
+            .collect();
+
+        (
+            ArrayFacts {
+                local_kinds: self.local_kinds,
+                length_stable_locals,
+                noalias_locals,
+            },
+            EffectFacts {
+                unknown_call_escape: self.unknown_call_escape,
+                async_microtask_escape: self.async_microtask_escape,
+                array_length_mutation_locals: self.length_mutation_locals,
+            },
+            MaterializationHazardFacts {
+                initially_known_hazard_locals: self.materialization_hazard_locals,
+            },
+        )
+    }
+
+    fn record_local_alias_write(&mut self, target_id: u32, value: &Expr) {
+        if let Expr::LocalGet(source_id) = value {
+            let source_root = self.array_alias_root(*source_id);
+            if self.local_kinds.contains_key(&source_root)
+                || self.local_kinds.contains_key(&target_id)
+            {
+                if source_root != target_id {
+                    self.aliases.insert(target_id, source_root);
+                    self.aliased_locals.insert(source_root);
+                    self.aliased_locals.insert(target_id);
+                }
+                return;
             }
         }
-        _ => {
-            perry_hir::walker::walk_expr_children(expr, &mut |child| {
-                collect_array_facts_in_expr(child, kinds);
-            });
+        self.aliases.remove(&target_id);
+    }
+
+    fn array_alias_root(&self, mut id: u32) -> u32 {
+        let mut seen = HashSet::new();
+        while let Some(next) = self.aliases.get(&id).copied() {
+            if !seen.insert(id) {
+                break;
+            }
+            id = next;
+        }
+        id
+    }
+
+    fn tracked_array_root(&self, id: u32) -> Option<u32> {
+        let root = self.array_alias_root(id);
+        if self.local_kinds.contains_key(&root) {
+            Some(root)
+        } else if self.local_kinds.contains_key(&id) {
+            Some(id)
+        } else {
+            None
         }
     }
-}
 
-fn invalidate_array_kind_target(kinds: &mut HashMap<u32, ArrayKindFact>, target: &Expr) {
-    if let Expr::LocalGet(id) = target {
-        if kinds.contains_key(id) {
-            update_array_kind(kinds, *id, ArrayKindFact::Unknown);
+    fn mark_array_length_mutation(&mut self, id: u32, observed: ArrayKindFact) {
+        if let Some(root) = self.tracked_array_root(id) {
+            self.length_mutation_locals.insert(root);
+            self.length_mutation_locals.insert(id);
+            self.update_array_kind_for_local(root, observed);
+            if id != root {
+                self.update_array_kind_for_local(id, observed);
+            }
         }
     }
-}
 
-fn update_array_kind(kinds: &mut HashMap<u32, ArrayKindFact>, id: u32, observed: ArrayKindFact) {
-    if let Some(kind) = kinds.get_mut(&id) {
-        *kind = meet_array_kind(*kind, observed);
+    fn mark_array_materialization_hazard(&mut self, id: u32) {
+        if let Some(root) = self.tracked_array_root(id) {
+            self.materialization_hazard_locals.insert(root);
+            self.materialization_hazard_locals.insert(id);
+        }
+    }
+
+    fn mark_array_target_materialization_hazard(&mut self, target: &Expr) {
+        if let Expr::LocalGet(id) = target {
+            self.mark_array_materialization_hazard(*id);
+            self.update_array_kind_for_local(*id, ArrayKindFact::Unknown);
+        }
+    }
+
+    fn mark_array_identity_exposure(&mut self, expr: &Expr) {
+        match expr {
+            Expr::LocalGet(id) => {
+                self.mark_array_materialization_hazard(*id);
+            }
+            Expr::LocalSet(_, value) => self.mark_array_identity_exposure(value),
+            Expr::Sequence(exprs) => {
+                if let Some(last) = exprs.last() {
+                    self.mark_array_identity_exposure(last);
+                }
+            }
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.mark_array_identity_exposure(then_expr);
+                self.mark_array_identity_exposure(else_expr);
+            }
+            _ => {}
+        }
+    }
+
+    fn mark_unknown_call_escape(&mut self) {
+        self.unknown_call_escape = true;
+        let ids: Vec<u32> = self.local_kinds.keys().copied().collect();
+        for id in ids {
+            self.mark_array_materialization_hazard(id);
+            self.update_array_kind_for_local(id, ArrayKindFact::Unknown);
+        }
+    }
+
+    fn mark_async_microtask_escape(&mut self) {
+        self.async_microtask_escape = true;
+        self.mark_unknown_call_escape();
+    }
+
+    fn update_array_kind_for_local(&mut self, id: u32, observed: ArrayKindFact) {
+        if let Some(root) = self.tracked_array_root(id) {
+            if let Some(kind) = self.local_kinds.get_mut(&root) {
+                *kind = meet_array_kind(*kind, observed);
+            }
+        }
+        if let Some(kind) = self.local_kinds.get_mut(&id) {
+            *kind = meet_array_kind(*kind, observed);
+        }
     }
 }
 
@@ -796,6 +1164,37 @@ mod tests {
             ty: Type::Number,
             mutable: true,
             init: Some(init),
+        }
+    }
+
+    fn number_array_let(id: u32, values: &[i64]) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("a{}", id),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: true,
+            init: Some(Expr::Array(
+                values.iter().copied().map(Expr::Integer).collect(),
+            )),
+        }
+    }
+
+    fn alias_let(id: u32, source_id: u32) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("alias{}", id),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::LocalGet(source_id)),
+        }
+    }
+
+    fn dynamic_call() -> Expr {
+        Expr::Call {
+            callee: Box::new(Expr::LocalGet(99)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
         }
     }
 
@@ -950,6 +1349,156 @@ mod tests {
         assert!(graph.scalar_replaceable_object_locals().contains(&3));
         assert!(graph.proves_scalar_replacement(3));
         assert!(!graph.has_materialization_hazard(3));
+    }
+
+    #[test]
+    fn numeric_array_literal_gets_noalias_length_stable_packed_f64_proof() {
+        let graph = collect_hir_facts(
+            &[number_array_let(1, &[1, 2, 3])],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(graph.array_kind(1), ArrayKindFact::PackedF64);
+        assert!(graph.proves_noalias_array(1));
+        assert!(graph.proves_array_length_stable(1));
+        assert!(!graph.has_materialization_hazard(1));
+        assert!(graph.proves_packed_f64_array(1));
+    }
+
+    #[test]
+    fn array_alias_and_grow_mutation_invalidate_packed_f64_proof() {
+        let graph = collect_hir_facts(
+            &[
+                number_array_let(1, &[1, 2, 3]),
+                alias_let(2, 1),
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: 2,
+                    value: Box::new(Expr::Integer(4)),
+                }),
+            ],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(graph.array_length_mutation_locals().contains(&1));
+        assert!(!graph.has_materialization_hazard(1));
+        assert!(!graph.proves_noalias_array(1));
+        assert!(!graph.proves_array_length_stable(1));
+        assert!(!graph.proves_packed_f64_array(1));
+    }
+
+    #[test]
+    fn non_mutating_array_alias_drops_noalias_but_not_length_stability() {
+        let graph = collect_hir_facts(
+            &[number_array_let(1, &[1, 2, 3]), alias_let(2, 1)],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(graph.array_kind(1), ArrayKindFact::PackedF64);
+        assert!(!graph.proves_noalias_array(1));
+        assert!(graph.proves_array_length_stable(1));
+        assert!(!graph.has_materialization_hazard(1));
+        assert!(!graph.proves_packed_f64_array(1));
+    }
+
+    #[test]
+    fn alias_index_set_invalidates_root_array_length_stability() {
+        let graph = collect_hir_facts(
+            &[
+                number_array_let(1, &[1, 2, 3]),
+                alias_let(2, 1),
+                Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(2)),
+                    index: Box::new(Expr::Integer(0)),
+                    value: Box::new(Expr::Integer(9)),
+                }),
+            ],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(graph.array_length_mutation_locals().contains(&1));
+        assert!(graph.array_length_mutation_locals().contains(&2));
+        assert!(!graph.proves_array_length_stable(1));
+        assert!(!graph.has_materialization_hazard(1));
+        assert!(!graph.proves_packed_f64_array(1));
+    }
+
+    #[test]
+    fn direct_array_index_set_invalidates_length_stability_not_materialization() {
+        let graph = collect_hir_facts(
+            &[
+                number_array_let(1, &[1, 2, 3]),
+                Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::Integer(0)),
+                    value: Box::new(Expr::Integer(9)),
+                }),
+            ],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(graph.array_length_mutation_locals().contains(&1));
+        assert!(!graph.proves_array_length_stable(1));
+        assert!(!graph.has_materialization_hazard(1));
+        assert!(!graph.proves_packed_f64_array(1));
+    }
+
+    #[test]
+    fn aggregate_array_identity_exposure_marks_materialization_hazard() {
+        let graph = collect_hir_facts(
+            &[
+                number_array_let(1, &[1, 2, 3]),
+                Stmt::Let {
+                    id: 2,
+                    name: "box".to_string(),
+                    ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
+                    mutable: false,
+                    init: Some(Expr::Array(vec![Expr::LocalGet(1)])),
+                },
+            ],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(graph.has_materialization_hazard(1));
+        assert!(!graph.proves_array_length_stable(1));
+        assert!(!graph.proves_packed_f64_array(1));
+    }
+
+    #[test]
+    fn unknown_call_escape_marks_array_materialization_hazard() {
+        let graph = collect_hir_facts(
+            &[number_array_let(1, &[1, 2, 3]), Stmt::Expr(dynamic_call())],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(graph.has_unknown_call_escape());
+        assert!(graph.has_materialization_hazard(1));
+        assert!(!graph.proves_array_length_stable(1));
+        assert!(!graph.proves_packed_f64_array(1));
+    }
+
+    #[test]
+    fn async_microtask_escape_is_tracked_as_effect_fact() {
+        let graph = collect_hir_facts(
+            &[
+                number_array_let(1, &[1, 2, 3]),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))),
+            ],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert!(graph.has_async_microtask_escape());
+        assert!(graph.has_unknown_call_escape());
+        assert!(graph.has_materialization_hazard(1));
+        assert!(!graph.proves_array_length_stable(1));
+        assert!(!graph.proves_packed_f64_array(1));
     }
 
     // Regression: a mutable `let __d = undefined` seed (the shape the

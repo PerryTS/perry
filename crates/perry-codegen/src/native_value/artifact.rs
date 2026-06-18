@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::types::LlvmType;
+use crate::types::{LlvmType, DOUBLE};
 
 use super::buffer::{
     AliasState, BoundsState, BufferAccessFacts, BufferAccessMode, NativeOwnedViewFact,
@@ -44,6 +44,7 @@ pub(crate) enum NativeAbiTransitionOp {
     PointerBox,
     NativeHandleBox,
     PromiseBox,
+    BoolToJsValue,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -281,6 +282,52 @@ pub(crate) struct NativeRepRecord {
     pub notes: Vec<String>,
 }
 
+pub(crate) fn typed_clone_rejection_record(
+    source_function: impl Into<String>,
+    consumer: impl Into<String>,
+    reason: impl Into<String>,
+    mut notes: Vec<String>,
+) -> NativeRepRecord {
+    let source_function = source_function.into();
+    let consumer = consumer.into();
+    let reason = reason.into();
+    notes.insert(0, format!("typed_clone_rejected={reason}"));
+    NativeRepRecord {
+        function: source_function.clone(),
+        block_label: "typed_clone_decision".to_string(),
+        region_id: None,
+        source_function,
+        lowering_block: "typed_clone_decision".to_string(),
+        local_id: None,
+        expr_kind: "TypedCloneDecision".to_string(),
+        source_key: None,
+        semantic: SemanticKind::JsValue,
+        native_rep: NativeRep::JsValue,
+        native_rep_name: NativeRep::JsValue.name().to_string(),
+        llvm_ty: DOUBLE,
+        llvm_value: "0.0".to_string(),
+        consumer,
+        bounds_state: None,
+        alias_state: None,
+        access_mode: None,
+        buffer_access: None,
+        native_owned_view: None,
+        materialization_reason: None,
+        fallback_reason: None,
+        native_value_state: NativeValueState::RegionLocal,
+        native_abi_transition: None,
+        scalar_conversion: None,
+        native_abi_type: None,
+        pod_layout: None,
+        pod_record_view: None,
+        consumed_facts: Vec::new(),
+        rejected_facts: Vec::new(),
+        emitted_inbounds: false,
+        emitted_noalias: false,
+        notes,
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct NativeRepArtifact<'a> {
     schema_version: u32,
@@ -305,6 +352,7 @@ struct NativeRepSummary {
     rejected_fact_count: usize,
     raw_f64_layout_fact_counts: BTreeMap<String, usize>,
     js_value_bits_count: usize,
+    write_barrier_elided_count: usize,
     native_owned_view_count: usize,
     pod_layout_count: usize,
     pod_record_count: usize,
@@ -330,6 +378,7 @@ impl NativeRepSummary {
             ("invalidated".to_string(), 0),
         ]);
         let mut js_value_bits_count = 0;
+        let mut write_barrier_elided_count = 0;
         let mut native_owned_view_count = 0;
         let mut pod_layout_count = 0;
         let mut pod_record_count = 0;
@@ -341,6 +390,9 @@ impl NativeRepSummary {
                 .or_insert(0) += 1;
             if matches!(record.native_rep, NativeRep::JsValueBits) {
                 js_value_bits_count += 1;
+            }
+            if record.expr_kind == "WriteBarrierElided" {
+                write_barrier_elided_count += 1;
             }
             if record.materialization_reason.is_some() {
                 materialization_count += 1;
@@ -377,6 +429,7 @@ impl NativeRepSummary {
                     NativeAbiTransitionOp::PointerBox => "pointer_box",
                     NativeAbiTransitionOp::NativeHandleBox => "native_handle_box",
                     NativeAbiTransitionOp::PromiseBox => "promise_box",
+                    NativeAbiTransitionOp::BoolToJsValue => "bool_to_js_value",
                 };
                 *native_abi_transition_op_counts
                     .entry(op_name.to_string())
@@ -443,6 +496,7 @@ impl NativeRepSummary {
             rejected_fact_count,
             raw_f64_layout_fact_counts,
             js_value_bits_count,
+            write_barrier_elided_count,
             native_owned_view_count,
             pod_layout_count,
             pod_record_count,
@@ -496,7 +550,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 12,
+        schema_version: 14,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

@@ -10,7 +10,7 @@ use super::buffer::{AliasState, BoundsState, BufferAccessMode};
 use super::materialize::MaterializationReason;
 use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
-use crate::types::{DOUBLE, F32, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
 
 pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<()> {
     let mut errors = Vec::new();
@@ -298,13 +298,16 @@ fn validate_js_value_bits_record(record: &NativeRepRecord, errors: &mut Vec<Stri
             .as_ref()
             .or(record.scalar_conversion.as_ref());
         if !transition.is_some_and(|conversion| {
-            conversion.from_native_rep == NativeRep::JsValue.name()
-                && conversion.to_native_rep == NativeRep::JsValueBits.name()
-                && conversion.op == NativeAbiTransitionOp::JsValueToBits
-                && !conversion.lossy
+            valid_native_abi_transition(
+                conversion.from_native_rep.as_str(),
+                conversion.to_native_rep.as_str(),
+                &conversion.op,
+                conversion.lossy,
+                &record.native_rep,
+            )
         }) {
             errors.push(format!(
-                "{} materialized js_value_bits record must carry js_value_to_bits transition",
+                "{} materialized js_value_bits record must carry a valid native-to-bits transition",
                 prefix()
             ));
         }
@@ -624,7 +627,8 @@ fn validate_native_abi_type_record(
                 NativeRep::NativeHandle | NativeRep::JsValue
             )
         }
-        "bool" | "i32" => matches!(&record.native_rep, NativeRep::I32),
+        "bool" => matches!(&record.native_rep, NativeRep::I1 | NativeRep::I32),
+        "i32" => matches!(&record.native_rep, NativeRep::I32),
         "i64" => matches!(&record.native_rep, NativeRep::I64),
         "u32" => matches!(&record.native_rep, NativeRep::U32),
         "u64" => matches!(&record.native_rep, NativeRep::U64),
@@ -881,6 +885,7 @@ fn validate_pod_view_span_pairs(records: &[NativeRepRecord], errors: &mut Vec<St
 fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
     Some(match rep {
         NativeRep::JsValue | NativeRep::F64 => DOUBLE,
+        NativeRep::I1 => I1,
         NativeRep::F32 => F32,
         NativeRep::JsValueBits
         | NativeRep::I64
@@ -1045,10 +1050,29 @@ fn valid_native_abi_transition(
     record_rep: &NativeRep,
 ) -> bool {
     if to == NativeRep::JsValueBits.name() {
-        return matches!(record_rep, NativeRep::JsValueBits)
-            && from == NativeRep::JsValue.name()
-            && matches!(op, NativeAbiTransitionOp::JsValueToBits)
-            && !lossy;
+        if !matches!(record_rep, NativeRep::JsValueBits) {
+            return false;
+        }
+        return match op {
+            NativeAbiTransitionOp::None => from == "f64" && !lossy,
+            NativeAbiTransitionOp::JsValueToBits => from == "js_value" && !lossy,
+            NativeAbiTransitionOp::BitsToJsValue => false,
+            NativeAbiTransitionOp::SignedIntToFloat => {
+                matches!(from, "i32" | "i64") && lossy == (from == "i64")
+            }
+            NativeAbiTransitionOp::UnsignedIntToFloat => {
+                matches!(
+                    from,
+                    "u8" | "u32" | "u64" | "usize" | "buffer_len" | "handle_id"
+                ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
+            }
+            NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
+            NativeAbiTransitionOp::PointerBox | NativeAbiTransitionOp::NativeHandleBox => {
+                from == "native_handle" && !lossy
+            }
+            NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
+            NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
+        };
     }
     if to != NativeRep::JsValue.name() {
         return false;
@@ -1073,6 +1097,7 @@ fn valid_native_abi_transition(
         NativeAbiTransitionOp::PointerBox => from == "native_handle" && !lossy,
         NativeAbiTransitionOp::NativeHandleBox => from == "native_handle" && !lossy,
         NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
+        NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
     }
 }
 
@@ -1956,21 +1981,32 @@ mod tests {
 
     #[test]
     fn accepts_js_value_bits_materialization_transitions() {
-        let mut to_bits = record();
-        to_bits.semantic = SemanticKind::JsValue;
-        to_bits.native_rep = NativeRep::JsValueBits;
-        to_bits.native_rep_name = "js_value_bits".to_string();
-        to_bits.llvm_ty = I64;
-        to_bits.llvm_value = "%bits".to_string();
-        to_bits.native_value_state = NativeValueState::Materialized;
-        to_bits.materialization_reason = Some(MaterializationReason::FunctionAbi);
-        to_bits.native_abi_transition = Some(NativeAbiTransitionRecord {
-            from_native_rep: "js_value".to_string(),
-            to_native_rep: "js_value_bits".to_string(),
-            op: NativeAbiTransitionOp::JsValueToBits,
-            reason: MaterializationReason::FunctionAbi,
-            lossy: false,
-        });
+        fn bits_transition(from: &str, op: NativeAbiTransitionOp, lossy: bool) -> NativeRepRecord {
+            let mut to_bits = record();
+            to_bits.semantic = SemanticKind::JsValue;
+            to_bits.native_rep = NativeRep::JsValueBits;
+            to_bits.native_rep_name = "js_value_bits".to_string();
+            to_bits.llvm_ty = I64;
+            to_bits.llvm_value = "%bits".to_string();
+            to_bits.native_value_state = NativeValueState::Materialized;
+            to_bits.materialization_reason = Some(MaterializationReason::FunctionAbi);
+            to_bits.native_abi_transition = Some(NativeAbiTransitionRecord {
+                from_native_rep: from.to_string(),
+                to_native_rep: "js_value_bits".to_string(),
+                op,
+                reason: MaterializationReason::FunctionAbi,
+                lossy,
+            });
+            to_bits
+        }
+
+        let to_bits = bits_transition("js_value", NativeAbiTransitionOp::JsValueToBits, false);
+        let f64_to_bits = bits_transition("f64", NativeAbiTransitionOp::None, false);
+        let i1_to_bits = bits_transition("i1", NativeAbiTransitionOp::BoolToJsValue, false);
+        let i32_to_bits = bits_transition("i32", NativeAbiTransitionOp::SignedIntToFloat, false);
+        let i64_to_bits = bits_transition("i64", NativeAbiTransitionOp::SignedIntToFloat, true);
+        let native_handle_to_bits =
+            bits_transition("native_handle", NativeAbiTransitionOp::PointerBox, false);
 
         let mut to_js_value = record();
         to_js_value.semantic = SemanticKind::JsValue;
@@ -1988,7 +2024,16 @@ mod tests {
             lossy: false,
         });
 
-        assert!(verify_native_rep_records(&[to_bits, to_js_value]).is_ok());
+        assert!(verify_native_rep_records(&[
+            to_bits,
+            f64_to_bits,
+            i1_to_bits,
+            i32_to_bits,
+            i64_to_bits,
+            native_handle_to_bits,
+            to_js_value,
+        ])
+        .is_ok());
     }
 
     #[test]

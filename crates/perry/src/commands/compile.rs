@@ -35,6 +35,7 @@ mod init_order;
 mod library_search;
 mod link;
 mod lock_scan;
+mod lowering_report;
 mod object_cache;
 mod optimized_libs;
 mod parse_cache;
@@ -448,6 +449,13 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
+    let explain_lowering = if args.explain_lowering {
+        Some(lowering_report::ExplainLoweringRun::prepare(
+            &ctx.cache_root,
+        )?)
+    } else {
+        None
+    };
     // #5247: propagate `--debug-symbols` so `collect_modules` records the
     // CJS-wrap source mapping needed to render original-source line numbers.
     ctx.debug_symbols = args.debug_symbols;
@@ -1817,6 +1825,7 @@ pub fn run_with_parse_cache(
     // Key derivation: `compute_object_cache_key(opts, source_hash, perry_version)`.
     let cache_env_disabled = std::env::var("PERRY_NO_CACHE").ok().as_deref() == Some("1");
     let verify_native_regions = args.verify_native_regions
+        || args.explain_lowering
         || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");
     let disable_buffer_fast_path = args.disable_buffer_fast_path
         || std::env::var("PERRY_DISABLE_BUFFER_FAST_PATH")
@@ -4425,6 +4434,10 @@ pub fn run_with_parse_cache(
             eprintln!("runtime (and may crash if actually invoked).");
             eprintln!();
         }
+    }
+
+    if let Some(explain_lowering) = explain_lowering.as_ref() {
+        explain_lowering.emit(format)?;
     }
 
     // #835 + #846: fold the codegen-side FFI provenance registry into

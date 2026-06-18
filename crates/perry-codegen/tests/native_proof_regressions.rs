@@ -1,7 +1,8 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::{
-    monomorphize_module, BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module,
-    ModuleInitKind, Param, Stmt, UpdateOp,
+    monomorphize_module, ArgumentsObjectMeta, BinaryOp, CallArg, Class, ClassComputedMember,
+    ClassComputedMemberKind, ClassField, CompareOp, Expr, Function, LogicalOp, Module,
+    ModuleInitKind, Param, Stmt, UnaryOp, UpdateOp,
 };
 use perry_types::{ObjectType, PropertyInfo, Type, TypeParam};
 
@@ -138,6 +139,14 @@ fn compile_artifact_json_for_module_with_opts(
     module: Module,
     opts: CompileOptions,
 ) -> serde_json::Value {
+    compile_artifact_json_for_module_with_opts_and_clone_rejections(module, opts, false)
+}
+
+fn compile_artifact_json_for_module_with_opts_and_clone_rejections(
+    module: Module,
+    opts: CompileOptions,
+    all_typed_clone_rejections: bool,
+) -> serde_json::Value {
     let name = module.name.clone();
     let _guard = ARTIFACT_ENV_LOCK.lock().unwrap();
     let dir = std::env::temp_dir().join(format!(
@@ -150,8 +159,15 @@ fn compile_artifact_json_for_module_with_opts(
 
     let old_reps = std::env::var_os("PERRY_NATIVE_REPS");
     let old_reps_dir = std::env::var_os("PERRY_NATIVE_REPS_DIR");
+    let old_all_typed_clone_rejections =
+        std::env::var_os("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS");
     std::env::set_var("PERRY_NATIVE_REPS", "1");
     std::env::set_var("PERRY_NATIVE_REPS_DIR", &dir);
+    if all_typed_clone_rejections {
+        std::env::set_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS", "1");
+    } else {
+        std::env::remove_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS");
+    }
 
     let compile_result = compile_module(&module, opts);
 
@@ -162,6 +178,10 @@ fn compile_artifact_json_for_module_with_opts(
     match old_reps_dir {
         Some(value) => std::env::set_var("PERRY_NATIVE_REPS_DIR", value),
         None => std::env::remove_var("PERRY_NATIVE_REPS_DIR"),
+    }
+    match old_all_typed_clone_rejections {
+        Some(value) => std::env::set_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS", value),
+        None => std::env::remove_var("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS"),
     }
 
     compile_result.unwrap();
@@ -231,6 +251,32 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
     }
+}
+
+fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
+    let mut class = class(id, name, fields);
+    class.computed_members.push(ClassComputedMember {
+        key_expr: Expr::String("dynamicKey".to_string()),
+        function: Function {
+            id: id + 10_000,
+            name: "__computed_dummy".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Number,
+            body: vec![Stmt::Return(Some(int(0)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        },
+        is_static: false,
+        kind: ClassComputedMemberKind::Method,
+    });
+    class
 }
 
 fn local(id: u32) -> Expr {
@@ -328,6 +374,20 @@ fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
         ty: Type::Number,
         mutable,
         init: Some(init),
+    }
+}
+
+fn map_type(key: Type, value: Type) -> Type {
+    Type::Generic {
+        base: "Map".to_string(),
+        type_args: vec![key, value],
+    }
+}
+
+fn set_type(value: Type) -> Type {
+    Type::Generic {
+        base: "Set".to_string(),
+        type_args: vec![value],
     }
 }
 
@@ -622,7 +682,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 12);
+    assert_eq!(artifact["schema_version"], 14);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -655,7 +715,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 12);
+    assert_eq!(artifact["schema_version"], 14);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -701,7 +761,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 12);
+    assert_eq!(artifact["schema_version"], 14);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -895,6 +955,28 @@ fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
     let start = ir
         .find(&needle)
         .unwrap_or_else(|| panic!("function `{}` not found in IR:\n{}", symbol, ir));
+    let rest = &ir[start..];
+    let end = rest.find("\n}\n").map(|idx| idx + 3).unwrap_or(rest.len());
+    &rest[..end]
+}
+
+fn defined_function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
+    let needle = format!("@{}(", symbol);
+    let mut search_start = 0;
+    let start = loop {
+        let Some(rel_pos) = ir[search_start..].find(&needle) else {
+            panic!("function `{}` definition not found in IR:\n{}", symbol, ir);
+        };
+        let symbol_pos = search_start + rel_pos;
+        let line_start = ir[..symbol_pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+        if ir[line_start..symbol_pos]
+            .trim_start()
+            .starts_with("define ")
+        {
+            break line_start;
+        }
+        search_start = symbol_pos + needle.len();
+    };
     let rest = &ir[start..];
     let end = rest.find("\n}\n").map(|idx| idx + 3).unwrap_or(rest.len());
     &rest[..end]
@@ -1176,7 +1258,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 12);
+    assert_eq!(artifact["schema_version"], 14);
     assert!(
         artifact["records"]
             .as_array()
@@ -1402,7 +1484,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 12);
+    assert_eq!(artifact["schema_version"], 14);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -1453,7 +1535,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 12);
+    assert_eq!(artifact["schema_version"], 14);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -1504,6 +1586,233 @@ fn artifact_records_buffer_length_as_buffer_len_and_unsigned_materialization() {
 }
 
 #[test]
+fn representation_first_numeric_locals_stay_f64_until_abi() {
+    let add_total = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(local(1)),
+        right: Box::new(number(2.25)),
+    };
+    let scaled = Expr::Binary {
+        op: BinaryOp::Mul,
+        left: Box::new(local(1)),
+        right: Box::new(number(3.0)),
+    };
+    let returned = Expr::Binary {
+        op: BinaryOp::Sub,
+        left: Box::new(local(2)),
+        right: Box::new(number(0.75)),
+    };
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "total".to_string(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(number(1.5)),
+        },
+        Stmt::Expr(Expr::LocalSet(1, Box::new(add_total))),
+        Stmt::Let {
+            id: 2,
+            name: "scaled".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(scaled),
+        },
+        Stmt::Return(Some(returned)),
+    ];
+
+    let artifact = compile_artifact_json("representation_first_numeric_locals.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Let"
+                && record["consumer"] == "ordinary_expr_value.let_init_f64"
+                && record["local_id"] == 1
+                && record["native_rep_name"] == "f64"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected numeric let init to stay region-local f64:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "LocalSet"
+                && record["consumer"] == "ordinary_expr_value.local_set_f64"
+                && record["local_id"] == 1
+                && record["native_rep_name"] == "f64"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected numeric local assignment to stay region-local f64:\n{artifact:#}"
+    );
+    let binary_f64_count = records
+        .iter()
+        .filter(|record| {
+            record["expr_kind"] == "Binary"
+                && record["consumer"] == "ordinary_expr_value.numeric_binary_f64"
+                && record["native_rep_name"] == "f64"
+                && record["native_value_state"] == "region_local"
+        })
+        .count();
+    assert!(
+        binary_f64_count >= 3,
+        "expected binary ops to stay region-local f64:\n{artifact:#}"
+    );
+    let materialized: Vec<_> = records
+        .iter()
+        .filter(|record| record["native_value_state"] == "materialized")
+        .collect();
+    assert_eq!(
+        materialized.len(),
+        1,
+        "numeric locals should materialize only at the return ABI boundary:\n{artifact:#}"
+    );
+    let return_materialization = materialized[0];
+    assert_eq!(return_materialization["consumer"], "materialize_js_value");
+    assert_eq!(
+        return_materialization["materialization_reason"],
+        "return_abi"
+    );
+    assert_eq!(
+        return_materialization["native_abi_transition"]["from_native_rep"],
+        "f64"
+    );
+    assert_eq!(
+        return_materialization["native_abi_transition"]["to_native_rep"],
+        "js_value"
+    );
+}
+
+#[test]
+fn representation_first_boolean_locals_stay_i1_until_abi() {
+    let not_flag = Expr::Unary {
+        op: UnaryOp::Not,
+        operand: Box::new(local(1)),
+    };
+    let numeric_cmp = Expr::Compare {
+        op: CompareOp::Lt,
+        left: Box::new(number(1.0)),
+        right: Box::new(number(2.0)),
+    };
+    let bool_cmp = Expr::Compare {
+        op: CompareOp::Eq,
+        left: Box::new(local(1)),
+        right: Box::new(Expr::Bool(false)),
+    };
+    let returned = Expr::Unary {
+        op: UnaryOp::Not,
+        operand: Box::new(local(3)),
+    };
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "flag".to_string(),
+            ty: Type::Boolean,
+            mutable: true,
+            init: Some(Expr::Bool(true)),
+        },
+        Stmt::Expr(Expr::LocalSet(1, Box::new(not_flag))),
+        Stmt::Let {
+            id: 2,
+            name: "cmp".to_string(),
+            ty: Type::Boolean,
+            mutable: false,
+            init: Some(numeric_cmp),
+        },
+        Stmt::Let {
+            id: 3,
+            name: "same".to_string(),
+            ty: Type::Boolean,
+            mutable: false,
+            init: Some(bool_cmp),
+        },
+        Stmt::Return(Some(returned)),
+    ];
+
+    let artifact = compile_artifact_json_for_module(module_with_classes_and_params(
+        "representation_first_boolean_locals.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        body,
+    ));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Let"
+                && record["consumer"] == "ordinary_expr_value.let_init_i1"
+                && record["local_id"] == 1
+                && record["native_rep_name"] == "i1"
+                && record["llvm_ty"] == "i1"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected boolean let init to stay region-local i1:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "LocalSet"
+                && record["consumer"] == "ordinary_expr_value.local_set_i1"
+                && record["local_id"] == 1
+                && record["native_rep_name"] == "i1"
+                && record["llvm_ty"] == "i1"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected boolean local assignment to stay region-local i1:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Compare"
+                && record["consumer"] == "ordinary_expr_value.numeric_compare_i1"
+                && record["native_rep_name"] == "i1"
+                && record["llvm_ty"] == "i1"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected numeric comparison to produce region-local i1:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Compare"
+                && record["consumer"] == "ordinary_expr_value.boolean_compare_i1"
+                && record["native_rep_name"] == "i1"
+                && record["llvm_ty"] == "i1"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected boolean comparison to consume and produce region-local i1:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Unary"
+                && record["consumer"] == "ordinary_expr_value.boolean_not_i1"
+                && record["native_rep_name"] == "i1"
+                && record["llvm_ty"] == "i1"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected boolean not to stay region-local i1:\n{artifact:#}"
+    );
+    let materialized: Vec<_> = records
+        .iter()
+        .filter(|record| record["native_value_state"] == "materialized")
+        .collect();
+    assert_eq!(
+        materialized.len(),
+        1,
+        "boolean locals should materialize only at the return ABI boundary:\n{artifact:#}"
+    );
+    let return_materialization = materialized[0];
+    assert_eq!(return_materialization["consumer"], "materialize_js_value");
+    assert_eq!(
+        return_materialization["materialization_reason"],
+        "return_abi"
+    );
+    assert_eq!(
+        return_materialization["native_abi_transition"]["from_native_rep"],
+        "i1"
+    );
+    assert_eq!(
+        return_materialization["native_abi_transition"]["op"],
+        "bool_to_js_value"
+    );
+}
+
+#[test]
 fn artifact_records_uint8array_buffer_alloc_length_as_native_buffer_len() {
     let body = vec![
         Stmt::Let {
@@ -1545,6 +1854,12 @@ fn record_has_raw_f64_layout_fact(record: &serde_json::Value, list: &str, state:
             .iter()
             .any(|fact| fact["kind"] == "raw_f64_layout" && fact["state"] == state)
     })
+}
+
+fn record_has_note(record: &serde_json::Value, expected: &str) -> bool {
+    record["notes"]
+        .as_array()
+        .is_some_and(|notes| notes.iter().any(|note| note.as_str() == Some(expected)))
 }
 
 #[test]
@@ -2118,6 +2433,306 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
 }
 
 #[test]
+fn packed_f64_loop_store_update_versions_with_side_exit() {
+    let module = module_with_classes_and_params(
+        "packed_f64_store_update_side_exit.ts",
+        Vec::new(),
+        vec![param(2, "delta", Type::Number)],
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![1, 2, 3]),
+            for_loop(
+                4,
+                length(1),
+                vec![array_set(
+                    1,
+                    local(4),
+                    add(index_get(1, local(4)), local(2)),
+                )],
+            ),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "safe store-update loop should get a packed-f64 loop guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_f64_fast") && ir.contains("for.packed_f64_slow"),
+        "safe store-update loop should emit fast and slow clones:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "fast store should keep a runtime numeric/layout store guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_array_numeric_value_to_raw_f64"),
+        "fast store should canonicalize numeric values before raw f64 storage:\n{ir}"
+    );
+
+    let fallback_start = ir
+        .find("\npacked_f64_loop_store.fallback.")
+        .map(|pos| pos + 1)
+        .expect("expected packed-f64 store fallback block");
+    let fallback_tail = &ir[fallback_start..];
+    let fallback_end = fallback_tail
+        .find("\n\n")
+        .map(|offset| fallback_start + offset)
+        .unwrap_or(ir.len());
+    let fallback_block = &ir[fallback_start..fallback_end];
+    assert!(
+        fallback_block.contains("br label %packed_f64.loop.slow.preheader."),
+        "packed store guard failure must side-exit to the slow clone preheader:\n{fallback_block}\n\n{ir}"
+    );
+    assert!(
+        !fallback_block.contains("js_typed_feedback_array_index_set_fallback_boxed"),
+        "packed fast clone must not perform a boxed fallback before side-exiting:\n{fallback_block}\n\n{ir}"
+    );
+    let slow_start = ir
+        .find("for.packed_f64_slow")
+        .expect("expected packed-f64 slow clone");
+    assert!(
+        ir[slow_start..].contains("call double @js_typed_feedback_array_index_set_fallback_boxed"),
+        "packed store side exit must preserve the generic boxed fallback in the slow clone:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedF64LoopLoad"
+                && record["consumer"] == "packed_f64_loop_load"
+                && record["access_mode"] == "checked_native"
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+        }),
+        "RHS arr[i] should use a packed raw-f64 loop load:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedF64LoopStore"
+                && record["consumer"] == "packed_f64_loop_store"
+                && record["access_mode"] == "checked_native"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "store_guard_failure=side_exit_slow_restart")
+                })
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+        }),
+        "expected checked packed raw-f64 loop store record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedF64LoopStore"
+                && record["consumer"] == "packed_f64_loop_store_side_exit"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record["fallback_reason"] == "runtime_api"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "store_guard_failure=side_exit_slow_restart")
+                })
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
+        }),
+        "expected packed store side-exit fallback evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn map_string_number_set_has_use_string_key_specialization() {
+    let module = module_with_classes_and_params(
+        "map_string_number_specialization.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::Number),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Number),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::If {
+                condition: Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                },
+                then_branch: vec![Stmt::Return(Some(Expr::MapGet {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }))],
+                else_branch: Some(vec![Stmt::Return(Some(Expr::Number(0.0)))]),
+            },
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_number_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_number"),
+        "Map<string, number>.set should lower through the string-key/f64 helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_map_has_string_key"),
+        "Map<string, number>.has should lower through the string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call double @js_map_get_string_key"),
+        "Map<string, number>.get should lower through the string-key helper while keeping boxed miss semantics:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set("),
+        "specialized map.set path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call double @js_map_get("),
+        "specialized map.get path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_map_has("),
+        "specialized map.has path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_string_add_has_delete_use_string_specialization() {
+    let module = module_with_classes_and_params(
+        "set_string_specialization.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::String),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_string_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add_string"),
+        "Set<string>.add should lower through the string helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has_string"),
+        "Set<string>.has should lower through the string helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete_string"),
+        "Set<string>.delete should lower through the string helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add("),
+        "specialized set.add path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has("),
+        "specialized set.has path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete("),
+        "specialized set.delete path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn packed_f64_loop_rejects_nonnumeric_store_then_later_read() {
+    let module = module_with_classes_and_params(
+        "packed_f64_nonnumeric_store_then_read.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![1, 2, 3]),
+            for_loop(
+                4,
+                length(1),
+                vec![
+                    array_set(1, local(4), Expr::String("x".to_string())),
+                    Stmt::Expr(index_get(1, local(4))),
+                ],
+            ),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "nonnumeric store before a later read must not get a packed-f64 clone:\n{ir}"
+    );
+    assert!(
+        !ir.contains("for.packed_f64_fast"),
+        "nonnumeric store/read body must not be emitted under the packed-f64 fast clone:\n{ir}"
+    );
+    assert!(
+        ir.contains("call void @js_array_note_numeric_write"),
+        "nonnumeric store into a numeric array must invalidate the raw-f64 layout:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+        "later numeric-array read should be guarded independently after the layout-changing store:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            matches!(
+                record["expr_kind"].as_str(),
+                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+            )
+        }),
+        "nonnumeric store/read loop should not record packed-f64 loop facts:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NumericArrayIndexGet"
+                && record["consumer"] == "js_array_numeric_get_f64_unboxed"
+                && record["access_mode"] == "checked_native"
+        }),
+        "later read should use its own guarded numeric-array get, not a packed-loop raw load:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
     let module = module_with_classes_and_params(
         "packed_f64_store_fallback_then_read.ts",
@@ -2145,11 +2760,11 @@ fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
     let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
     assert!(
         !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
-        "store-bearing loops must not get a packed-f64 clone whose store fallback can invalidate later raw loads:\n{ir}"
+        "store-then-read loops must not get a packed-f64 clone whose store fallback could invalidate later raw loads:\n{ir}"
     );
     assert!(
         !ir.contains("for.packed_f64_fast"),
-        "store-bearing loop body must not be emitted under the packed-f64 fast clone:\n{ir}"
+        "unsafe store-then-read loop body must not be emitted under the packed-f64 fast clone:\n{ir}"
     );
     assert!(
         ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
@@ -2247,6 +2862,4106 @@ fn artifact_records_write_barrier_child_js_value_bits() {
 }
 
 #[test]
+fn artifact_records_array_push_value_bits_before_slot_store() {
+    let module = module_with_classes_and_params(
+        "artifact_array_push_slot_js_value_bits.ts",
+        Vec::new(),
+        vec![
+            param(1, "xs", Type::Array(Box::new(Type::Any))),
+            param(2, "value", Type::Any),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::ArrayPush {
+                array_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ArrayPush"
+                && record["consumer"] == "array_push.slot_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["access_mode"].is_null()
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str()
+                            == Some("boxed_at=array_push_slot_or_runtime_helper_edge")
+                    })
+                })
+        }),
+        "expected array.push slot store to consume js_value_bits before boxing at the helper edge:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "lower_expr_native_js_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["native_abi_type"].is_null()
+        }),
+        "expected array.push value to be selected through the js_value_bits native lowering lane:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_dynamic_property_set_value_bits_before_helper() {
+    let module = module_with_classes_and_params(
+        "artifact_property_set_slot_js_value_bits.ts",
+        Vec::new(),
+        vec![param(1, "obj", Type::Any), param(2, "value", Type::Any)],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(1)),
+                property: "field".to_string(),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PropertySet"
+                && record["consumer"] == "property_set.dynamic_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["native_value_state"] == "region_local"
+                && record["access_mode"].is_null()
+                && record_has_note(record, "boxed_at=dynamic_property_set_helper_edge")
+        }),
+        "expected dynamic property-set RHS to stay as js_value_bits before the helper edge:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_dynamic_index_set_value_bits_before_helper() {
+    let module = module_with_classes_and_params(
+        "artifact_index_set_slot_js_value_bits.ts",
+        Vec::new(),
+        vec![
+            param(1, "obj", Type::Any),
+            param(2, "key", Type::Any),
+            param(3, "value", Type::Any),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(1)),
+                index: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "IndexSet"
+                && record["consumer"] == "index_set.dynamic_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["native_value_state"] == "region_local"
+                && record["access_mode"].is_null()
+                && record_has_note(record, "boxed_at=polymorphic_index_set_helper_edge")
+        }),
+        "expected dynamic index-set RHS to stay as js_value_bits before the polymorphic helper edge:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_array_runtime_key_index_set_value_bits_before_helper() {
+    let module = module_with_classes_and_params(
+        "artifact_array_runtime_key_index_set_js_value_bits.ts",
+        Vec::new(),
+        vec![
+            param(1, "xs", Type::Array(Box::new(Type::Any))),
+            param(2, "key", Type::Number),
+            param(3, "value", Type::Any),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(1)),
+                index: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "IndexSet"
+                && record["consumer"] == "index_set.array_runtime_key_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["native_value_state"] == "region_local"
+                && record_has_note(record, "boxed_at=array_runtime_key_set_helper_edge")
+        }),
+        "expected array runtime-key index-set RHS to stay as js_value_bits before the helper edge:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_direct_f64_to_js_value_bits_for_write_barrier() {
+    let module = module_with_classes_and_params(
+        "artifact_write_barrier_f64_to_js_value_bits.ts",
+        Vec::new(),
+        vec![
+            param(1, "xs", Type::Array(Box::new(Type::Any))),
+            param(2, "key", Type::String),
+            param(3, "value", Type::Number),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(1)),
+                index: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_js_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["native_abi_transition"]["from_native_rep"] == "f64"
+                && record["native_abi_transition"]["to_native_rep"] == "js_value_bits"
+                && record["native_abi_transition"]["op"] == "none"
+                && record["native_abi_transition"]["lossy"] == false
+        }),
+        "expected direct f64 -> js_value_bits materialization for write barrier:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "write_barrier.child_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected write barrier to consume js_value_bits:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_direct_i1_to_js_value_bits_for_write_barrier() {
+    let module = module_with_classes_and_params(
+        "artifact_write_barrier_i1_to_js_value_bits.ts",
+        Vec::new(),
+        vec![
+            param(1, "xs", Type::Array(Box::new(Type::Any))),
+            param(2, "key", Type::String),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 3,
+                name: "value".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::Bool(true)),
+            },
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(1)),
+                index: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_js_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["native_abi_transition"]["from_native_rep"] == "i1"
+                && record["native_abi_transition"]["to_native_rep"] == "js_value_bits"
+                && record["native_abi_transition"]["op"] == "bool_to_js_value"
+                && record["native_abi_transition"]["lossy"] == false
+        }),
+        "expected direct i1 -> js_value_bits materialization for write barrier:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "write_barrier.child_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["native_value_state"] == "region_local"
+        }),
+        "expected write barrier to consume js_value_bits:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_static_write_barrier_elision_for_primitive_array_store() {
+    let module = module_with_classes_and_params(
+        "artifact_write_barrier_elided_primitive.ts",
+        Vec::new(),
+        vec![
+            param(1, "xs", Type::Array(Box::new(Type::Any))),
+            param(2, "key", Type::String),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(local(1)),
+                index: Box::new(local(2)),
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "WriteBarrierElided"
+                && record["consumer"] == "write_barrier.elided_non_pointer_child"
+                && record["native_rep_name"] == "js_value"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note.as_str() == Some("reason=statically_non_pointer_child"))
+                })
+        }),
+        "expected static primitive write-barrier elision record:\n{artifact:#}"
+    );
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "WriteBarrier"
+                && record["consumer"] == "write_barrier.child_bits"
+        }),
+        "primitive child store should not emit a write-barrier child-bits record:\n{artifact:#}"
+    );
+    assert_eq!(
+        artifact["summary"]["write_barrier_elided_count"]
+            .as_u64()
+            .unwrap_or(0),
+        1,
+        "expected write-barrier elision summary count:\n{artifact:#}"
+    );
+}
+
+fn boxed_local_capture_module(name: &str) -> Module {
+    module(
+        name,
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "cell".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Array(Vec::new())),
+            },
+            Stmt::Let {
+                id: 11,
+                name: "writer".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 30,
+                    params: Vec::new(),
+                    return_type: Type::Any,
+                    body: vec![
+                        Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Array(Vec::new())))),
+                        Stmt::Return(Some(local(10))),
+                    ],
+                    captures: vec![10],
+                    mutable_captures: vec![10],
+                    captures_this: false,
+                    captures_new_target: false,
+                    enclosing_class: None,
+                    is_arrow: false,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                }),
+            },
+            Stmt::Return(Some(local(11))),
+        ],
+    )
+}
+
+fn boxed_param_capture_module(name: &str) -> Module {
+    module_with_classes_and_params(
+        name,
+        Vec::new(),
+        vec![
+            param(20, "cell", Type::Any),
+            Param {
+                id: 22,
+                name: "arguments".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: true,
+                arguments_object: Some(ArgumentsObjectMeta {
+                    strict: false,
+                    simple_parameters: true,
+                    mapped_parameter_ids: vec![(0, 20)],
+                    restricted_callee: false,
+                }),
+            },
+        ],
+        Type::Any,
+        vec![Stmt::Return(Some(local(22)))],
+    )
+}
+
+#[test]
+fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
+    let module = boxed_local_capture_module("boxed_local_js_value_bits_ir.ts");
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let box_alloc = ir
+        .find("call i64 @js_box_alloc")
+        .expect("fixture should allocate a mutable-capture box");
+    let first_array_alloc = ir[box_alloc..]
+        .find("call i64 @js_array_alloc")
+        .map(|offset| box_alloc + offset)
+        .expect("fixture should lower the initializer after storing the box pointer");
+    let slot_init = &ir[box_alloc..first_array_alloc];
+
+    assert!(
+        slot_init.contains("store i64 "),
+        "box pointer slot should be stored as i64 before helper edges:\n{slot_init}\n\n{ir}"
+    );
+    assert!(
+        !slot_init.contains("store double "),
+        "box pointer slot init must not materialize as a double store:\n{slot_init}\n\n{ir}"
+    );
+    assert!(
+        !slot_init.contains("bitcast i64"),
+        "box pointer slot init should not bitcast to double before storage:\n{slot_init}\n\n{ir}"
+    );
+    assert!(
+        ir.contains(" = alloca i64"),
+        "boxed local should allocate an i64 slot:\n{ir}"
+    );
+    assert!(
+        ir.contains(" = load i64, ptr "),
+        "boxed local reads should load the box pointer as i64:\n{ir}"
+    );
+    assert!(
+        ir.contains("call void @js_box_set(i64 ") && ir.contains("call double @js_box_get(i64 "),
+        "runtime box helpers should remain i64-pointer helper edges:\n{ir}"
+    );
+    assert!(
+        ir.contains("bitcast i64 ")
+            && (ir.contains("call void @js_closure_set_capture_f64")
+                || ir.contains("call i64 @js_closure_alloc_with_captures_singleton")),
+        "closure capture ABI should bitcast only at the double capture-helper edge:\n{ir}"
+    );
+}
+
+#[test]
+fn boxed_param_slot_uses_i64_js_value_bits_until_helper_edges() {
+    let module = boxed_param_capture_module("boxed_param_js_value_bits_ir.ts");
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let box_alloc = ir
+        .find("call i64 @js_box_alloc(double %arg20)")
+        .expect("fixture should allocate a mutable-capture param box");
+    let store_i64 = ir[box_alloc..]
+        .find("store i64 ")
+        .map(|offset| box_alloc + offset)
+        .expect("fixture should store the param box pointer as i64");
+    let param_slot = &ir[box_alloc..store_i64];
+
+    assert!(
+        ir[..box_alloc].contains(" = alloca i64"),
+        "boxed param should allocate an i64 slot before js_box_alloc:\n{ir}"
+    );
+    assert!(
+        !param_slot.contains("store double ") && !param_slot.contains("bitcast i64"),
+        "boxed param slot setup must not materialize the box pointer as double:\n{param_slot}\n\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_boxed_local_slot_as_js_value_bits() {
+    let artifact = compile_artifact_json_for_module(boxed_local_capture_module(
+        "artifact_boxed_local_bits.ts",
+    ));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "BoxedLocalSlot"
+                && record["consumer"] == "boxed_let.box_ptr_slot"
+                && record["local_id"] == 10
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["native_value_state"] == "region_local"
+                && record["materialization_reason"].is_null()
+                && record["native_abi_type"].is_null()
+        }),
+        "expected boxed local slot js_value_bits artifact record:\n{artifact:#}"
+    );
+    assert!(
+        artifact["summary"]["js_value_bits_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "expected boxed local slot to contribute to js_value_bits summary:\n{artifact:#}"
+    );
+}
+
+fn compiler_private_async_control_body() -> Vec<Stmt> {
+    vec![
+        Stmt::PreallocateBoxes(vec![10, 11, 12]),
+        Stmt::Let {
+            id: 10,
+            name: "__gen_state".to_string(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Number(0.0)),
+        },
+        Stmt::Let {
+            id: 11,
+            name: "__gen_done".to_string(),
+            ty: Type::Boolean,
+            mutable: true,
+            init: Some(Expr::Bool(false)),
+        },
+        Stmt::Let {
+            id: 12,
+            name: "__gen_executing".to_string(),
+            ty: Type::Boolean,
+            mutable: true,
+            init: Some(Expr::Bool(false)),
+        },
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(10)),
+                right: Box::new(Expr::Number(0.0)),
+            },
+            then_branch: vec![
+                Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Number(1.0)))),
+                Stmt::Expr(Expr::LocalSet(11, Box::new(Expr::Bool(true)))),
+            ],
+            else_branch: None,
+        },
+        Stmt::If {
+            condition: Expr::LocalGet(11),
+            then_branch: vec![Stmt::Expr(Expr::LocalSet(12, Box::new(Expr::Bool(true))))],
+            else_branch: None,
+        },
+        Stmt::Return(Some(Expr::Number(0.0))),
+    ]
+}
+
+#[test]
+fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
+    let ir = compile_ir(
+        "compiler_private_async_control_cells.ts",
+        compiler_private_async_control_body(),
+    );
+
+    for symbol in [
+        "call i64 @js_i32_box_alloc",
+        "call i32 @js_i32_box_get",
+        "call void @js_i32_box_set",
+        "call i64 @js_bool_box_alloc",
+        "call i32 @js_bool_box_get",
+        "call void @js_bool_box_set",
+    ] {
+        assert!(
+            ir.contains(symbol),
+            "expected compiler-private control lowering to emit {symbol}:\n{ir}"
+        );
+    }
+    assert!(
+        ir.contains("icmp eq i32"),
+        "__gen_state constant comparisons should stay as i32 compares:\n{ir}"
+    );
+    for generic_box_call in [
+        "call i64 @js_box_alloc",
+        "call double @js_box_get",
+        "call void @js_box_set",
+    ] {
+        assert!(
+            !ir.contains(generic_box_call),
+            "compiler-private control cells must not use generic JSValue boxes ({generic_box_call}):\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_compiler_private_async_control_cells() {
+    let artifact = compile_artifact_json(
+        "artifact_compiler_private_async_control_cells.ts",
+        compiler_private_async_control_body(),
+    );
+    let records = artifact["records"].as_array().unwrap();
+    for (local_id, consumer, native_rep, llvm_ty) in [
+        (10, "primitive_i32_control_cell", "js_value_bits", "i64"),
+        (11, "primitive_i1_control_cell", "js_value_bits", "i64"),
+        (12, "primitive_i1_control_cell", "js_value_bits", "i64"),
+        (
+            10,
+            "compiler_private_async_control.local_set_i32",
+            "i32",
+            "i32",
+        ),
+        (11, "compiler_private_async_control.local_i1", "i1", "i1"),
+        (
+            12,
+            "compiler_private_async_control.local_set_i1",
+            "i1",
+            "i1",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["local_id"] == local_id
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == native_rep
+                    && record["llvm_ty"] == llvm_ty
+            }),
+            "expected async control artifact record {consumer}/{native_rep}/{llvm_ty} for local {local_id}:\n{artifact:#}"
+        );
+    }
+    assert!(
+        records.iter().any(|record| {
+            record["local_id"] == 10
+                && record["consumer"] == "compiler_private_async_control.i32_compare"
+                && record["native_rep_name"] == "i1"
+                && record["llvm_ty"] == "i1"
+        }),
+        "expected __gen_state comparison artifact to stay native i1:\n{artifact:#}"
+    );
+}
+
+fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
+    let add_param_ty = if use_any_param {
+        Type::Any
+    } else {
+        Type::Number
+    };
+    Module {
+        name: "typed_f64_function_abi.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![
+            Function {
+                id: 1,
+                name: "add".to_string(),
+                type_params: Vec::new(),
+                params: vec![
+                    param(1, "a", add_param_ty.clone()),
+                    param(2, "b", Type::Number),
+                ],
+                return_type: Type::Number,
+                body: vec![
+                    Stmt::Let {
+                        id: 5,
+                        name: "denom".to_string(),
+                        ty: Type::Number,
+                        mutable: false,
+                        init: Some(Expr::Binary {
+                            op: BinaryOp::Add,
+                            left: Box::new(local(2)),
+                            right: Box::new(number(0.5)),
+                        }),
+                    },
+                    Stmt::Return(Some(Expr::Binary {
+                        op: BinaryOp::Div,
+                        left: Box::new(local(1)),
+                        right: Box::new(local(5)),
+                    })),
+                ],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+            Function {
+                id: 2,
+                name: "caller".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(3, "x", Type::Number), param(4, "y", Type::Number)],
+                return_type: Type::Number,
+                body: vec![Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![local(3), local(4)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+        ],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
+    }
+}
+
+fn typed_f64_i64_specialized_collision_module() -> Module {
+    let mut module = typed_f64_clone_test_module(false);
+    module.functions[0].body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(local(1)),
+        right: Box::new(local(2)),
+    }))];
+    module
+}
+
+fn typed_f64_rejected_signature_module(case: &str) -> Module {
+    let mut module = typed_f64_clone_test_module(false);
+    match case {
+        "any" => module.functions[0].params[0].ty = Type::Any,
+        "mixed" => module.functions[0].params[1].ty = Type::Boolean,
+        other => panic!("unknown typed-f64 negative signature fixture: {other}"),
+    }
+    module
+}
+
+fn typed_i1_clone_test_module() -> Module {
+    typed_i1_clone_test_module_named("typed_i1_function_abi.ts")
+}
+
+fn typed_i1_clone_test_module_named(name: &str) -> Module {
+    Module {
+        name: name.to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![
+            Function {
+                id: 1,
+                name: "both".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(1, "a", Type::Boolean), param(2, "b", Type::Boolean)],
+                return_type: Type::Boolean,
+                body: vec![
+                    Stmt::Let {
+                        id: 5,
+                        name: "not_b".to_string(),
+                        ty: Type::Boolean,
+                        mutable: false,
+                        init: Some(Expr::Unary {
+                            op: perry_hir::UnaryOp::Not,
+                            operand: Box::new(local(2)),
+                        }),
+                    },
+                    Stmt::Return(Some(Expr::Logical {
+                        op: LogicalOp::And,
+                        left: Box::new(local(1)),
+                        right: Box::new(local(5)),
+                    })),
+                ],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+            Function {
+                id: 2,
+                name: "caller".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(3, "x", Type::Boolean), param(4, "y", Type::Boolean)],
+                return_type: Type::Boolean,
+                body: vec![Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![local(3), local(4)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+        ],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
+    }
+}
+
+fn typed_i1_rejected_signature_module(case: &str) -> Module {
+    let mut module = typed_i1_clone_test_module();
+    match case {
+        "any" => module.functions[0].params[0].ty = Type::Any,
+        "mixed" => module.functions[0].params[1].ty = Type::Number,
+        other => panic!("unknown typed-i1 negative signature fixture: {other}"),
+    }
+    module
+}
+
+fn typed_string_clone_test_module(case: &str) -> Module {
+    let mut module = Module {
+        name: "typed_string_function_abi.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![
+            Function {
+                id: 1,
+                name: "id".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(1, "s", Type::String)],
+                return_type: Type::String,
+                body: vec![
+                    Stmt::Let {
+                        id: 5,
+                        name: "copy".to_string(),
+                        ty: Type::String,
+                        mutable: false,
+                        init: Some(local(1)),
+                    },
+                    Stmt::Return(Some(local(5))),
+                ],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+            Function {
+                id: 2,
+                name: "caller".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(2, "x", Type::String)],
+                return_type: Type::String,
+                body: vec![Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![local(2)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+        ],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
+    };
+    match case {
+        "positive" => {}
+        "any_param" => module.functions[0].params[0].ty = Type::Any,
+        "number_param" => module.functions[0].params[0].ty = Type::Number,
+        "default_param" => {
+            module.functions[0].params[0].default = Some(Expr::String("fallback".to_string()))
+        }
+        "rest_param" => module.functions[0].params[0].is_rest = true,
+        "concat_body" => {
+            module.functions[0].body = vec![Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(1)),
+                right: Box::new(local(1)),
+            }))];
+        }
+        other => panic!("unknown typed-string fixture case: {other}"),
+    }
+    module
+}
+
+fn typed_i1_mixed_callsite_module() -> Module {
+    let mut module = typed_i1_clone_test_module();
+    module.functions[1].params[0].ty = Type::Any;
+    module
+}
+
+fn typed_i1_numeric_predicate_module() -> Module {
+    Module {
+        name: "typed_i1_numeric_predicate.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![
+            Function {
+                id: 1,
+                name: "above".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(1, "a", Type::Number), param(2, "b", Type::Number)],
+                return_type: Type::Boolean,
+                body: vec![
+                    Stmt::Let {
+                        id: 5,
+                        name: "delta".to_string(),
+                        ty: Type::Number,
+                        mutable: false,
+                        init: Some(Expr::Binary {
+                            op: BinaryOp::Sub,
+                            left: Box::new(local(1)),
+                            right: Box::new(local(2)),
+                        }),
+                    },
+                    Stmt::Return(Some(Expr::Compare {
+                        op: CompareOp::Gt,
+                        left: Box::new(local(5)),
+                        right: Box::new(number(0.0)),
+                    })),
+                ],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+            Function {
+                id: 2,
+                name: "caller".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(3, "x", Type::Number), param(4, "y", Type::Number)],
+                return_type: Type::Boolean,
+                body: vec![Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![local(3), local(4)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+        ],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
+    }
+}
+
+fn typed_f64_method_clone_module() -> Module {
+    let mut calc = class(201, "Calc", Vec::new());
+    calc.methods.push(Function {
+        id: 200,
+        name: "mix".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(21, "a", Type::Number), param(22, "b", Type::Number)],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: 25,
+                name: "denom".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(local(22)),
+                    right: Box::new(number(0.5)),
+                }),
+            },
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Div,
+                left: Box::new(local(21)),
+                right: Box::new(local(25)),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    module_with_classes_and_params(
+        "typed_f64_method_abi.ts",
+        vec![calc],
+        vec![
+            param(1, "receiver", Type::Named("Calc".to_string())),
+            param(2, "x", Type::Number),
+            param(3, "y", Type::Number),
+        ],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "mix".to_string(),
+            }),
+            args: vec![local(2), local(3)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn typed_f64_method_negative_module(case: &str) -> Module {
+    let mut calc = class(202, "Calc", vec![class_field("x", Type::Number)]);
+    let mut params = vec![param(21, "a", Type::Number), param(22, "b", Type::Number)];
+    let mut body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(local(21)),
+        right: Box::new(local(22)),
+    }))];
+    match case {
+        "this" => {
+            body = vec![Stmt::Return(Some(Expr::This))];
+        }
+        "default" => {
+            params[0].default = Some(number(1.0));
+        }
+        "rest" => {
+            params[1].is_rest = true;
+        }
+        "any" => {
+            params[0].ty = Type::Any;
+        }
+        other => panic!("unknown negative typed-f64 method fixture: {other}"),
+    }
+    calc.methods.push(Function {
+        id: 201,
+        name: "mix".to_string(),
+        type_params: Vec::new(),
+        params,
+        return_type: Type::Number,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    module_with_classes_and_params(
+        &format!("typed_f64_method_reject_{case}.ts"),
+        vec![calc],
+        vec![
+            param(1, "receiver", Type::Named("Calc".to_string())),
+            param(2, "x", Type::Number),
+            param(3, "y", Type::Number),
+        ],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "mix".to_string(),
+            }),
+            args: vec![local(2), local(3)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn this_field(name: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::This),
+        property: name.to_string(),
+    }
+}
+
+fn typed_f64_receiver_method_function(id: u32, body: Vec<Stmt>) -> Function {
+    Function {
+        id,
+        name: "score".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(21, "scale", Type::Number)],
+        return_type: Type::Number,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }
+}
+
+fn typed_f64_receiver_method_positive_module() -> Module {
+    let mut point = class(
+        211,
+        "Point",
+        vec![
+            class_field("x", Type::Number),
+            class_field("y", Type::Number),
+        ],
+    );
+    point.methods.push(typed_f64_receiver_method_function(
+        2110,
+        vec![
+            Stmt::Let {
+                id: 25,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(this_field("x")),
+                    right: Box::new(this_field("y")),
+                }),
+            },
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(local(25)),
+                right: Box::new(local(21)),
+            })),
+        ],
+    ));
+
+    module_with_classes_and_params(
+        "typed_f64_receiver_method.ts",
+        vec![point],
+        vec![
+            param(1, "receiver", Type::Named("Point".to_string())),
+            param(2, "scale", Type::Number),
+        ],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+            }),
+            args: vec![local(2)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
+    let mut point = class(
+        212,
+        "Point",
+        vec![class_field(
+            "x",
+            if case == "non_numeric_field" {
+                Type::String
+            } else {
+                Type::Number
+            },
+        )],
+    );
+    let mut receiver_ty = Type::Named("Point".to_string());
+    let mut method_body = vec![Stmt::Return(Some(this_field("x")))];
+
+    match case {
+        "this_escape" => {
+            method_body = vec![Stmt::Return(Some(Expr::This))];
+        }
+        "field_mutation" => {
+            method_body = vec![
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::This),
+                    property: "x".to_string(),
+                    value: Box::new(number(1.0)),
+                }),
+                Stmt::Return(Some(this_field("x"))),
+            ];
+        }
+        "nested_call" => {
+            method_body = vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "other".to_string(),
+                }),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))];
+        }
+        "computed_member" => {
+            point = class_with_computed_member(212, "Point", vec![class_field("x", Type::Number)]);
+        }
+        "accessor" => {
+            point.getters.push((
+                "x".to_string(),
+                Function {
+                    id: 2121,
+                    name: "__get_x".to_string(),
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: Type::Number,
+                    body: vec![Stmt::Return(Some(number(1.0)))],
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                    is_exported: false,
+                    captures: Vec::new(),
+                    decorators: Vec::new(),
+                    was_plain_async: false,
+                    was_unrolled: false,
+                },
+            ));
+        }
+        "dynamic_receiver" => {
+            receiver_ty = Type::Any;
+        }
+        "inherited_receiver" => {
+            let mut base = class(212, "BasePoint", vec![class_field("x", Type::Number)]);
+            base.methods
+                .push(typed_f64_receiver_method_function(2120, method_body));
+            let mut child = class(213, "Point", Vec::new());
+            child.extends_name = Some("BasePoint".to_string());
+            return module_with_classes_and_params(
+                "typed_f64_receiver_method_reject_inherited_receiver.ts",
+                vec![base, child],
+                vec![
+                    param(1, "receiver", Type::Named("Point".to_string())),
+                    param(2, "scale", Type::Number),
+                ],
+                Type::Number,
+                vec![Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(local(1)),
+                        property: "score".to_string(),
+                    }),
+                    args: vec![local(2)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }))],
+            );
+        }
+        "non_numeric_field" => {}
+        other => panic!("unknown negative typed-f64 receiver method fixture: {other}"),
+    }
+
+    point
+        .methods
+        .push(typed_f64_receiver_method_function(2120, method_body));
+    module_with_classes_and_params(
+        &format!("typed_f64_receiver_method_reject_{case}.ts"),
+        vec![point],
+        vec![
+            param(1, "receiver", receiver_ty),
+            param(2, "scale", Type::Number),
+        ],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+            }),
+            args: vec![local(2)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn typed_f64_closure_clone_module(case: &str) -> Module {
+    let mut params = vec![param(31, "a", Type::Number), param(32, "b", Type::Number)];
+    let mut prefix = Vec::new();
+    let mut captures = Vec::new();
+    let mut mutable_captures = Vec::new();
+    let mut body_expr = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(local(31)),
+        right: Box::new(local(32)),
+    };
+    match case {
+        "eligible" => {}
+        "any" => {
+            params[0].ty = Type::Any;
+        }
+        "capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "scale".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(number(1.5)),
+            });
+            captures.push(30);
+            body_expr = Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(body_expr),
+                right: Box::new(local(30)),
+            };
+        }
+        "mutable_capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "scale".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(number(1.5)),
+            });
+            captures.push(30);
+            mutable_captures.push(30);
+            body_expr = Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(body_expr),
+                right: Box::new(local(30)),
+            };
+        }
+        other => panic!("unknown typed-f64 closure fixture: {other}"),
+    }
+
+    let mut body = prefix;
+    body.extend([
+        Stmt::Let {
+            id: 10,
+            name: "adder".to_string(),
+            ty: Type::Function(perry_types::FunctionType {
+                params: vec![
+                    ("a".to_string(), Type::Number, false),
+                    ("b".to_string(), Type::Number, false),
+                ],
+                return_type: Box::new(Type::Number),
+                is_async: false,
+                is_generator: false,
+            }),
+            mutable: false,
+            init: Some(Expr::Closure {
+                func_id: 300,
+                params,
+                return_type: Type::Number,
+                body: vec![
+                    Stmt::Let {
+                        id: 33,
+                        name: "sum".to_string(),
+                        ty: Type::Number,
+                        mutable: false,
+                        init: Some(body_expr),
+                    },
+                    Stmt::Return(Some(Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(local(33)),
+                        right: Box::new(number(2.0)),
+                    })),
+                ],
+                captures,
+                mutable_captures,
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(local(10)),
+            args: vec![number(2.0), number(3.0)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ]);
+
+    module("typed_f64_closure_abi.ts", body)
+}
+
+fn typed_i1_method_clone_module(case: &str) -> Module {
+    let mut switch = class(203, "Switch", Vec::new());
+    let mut params = vec![param(21, "a", Type::Boolean), param(22, "b", Type::Boolean)];
+    let mut receiver_ty = Type::Named("Switch".to_string());
+    match case {
+        "eligible" => {}
+        "any" => {
+            params[0].ty = Type::Any;
+        }
+        "mixed" => {
+            params[1].ty = Type::Number;
+        }
+        "dynamic" => {
+            receiver_ty = Type::Any;
+        }
+        other => panic!("unknown typed-i1 method fixture: {other}"),
+    }
+    switch.methods.push(Function {
+        id: 210,
+        name: "check".to_string(),
+        type_params: Vec::new(),
+        params,
+        return_type: Type::Boolean,
+        body: vec![
+            Stmt::Let {
+                id: 25,
+                name: "not_b".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::Unary {
+                    op: perry_hir::UnaryOp::Not,
+                    operand: Box::new(local(22)),
+                }),
+            },
+            Stmt::Return(Some(Expr::Logical {
+                op: LogicalOp::Or,
+                left: Box::new(local(21)),
+                right: Box::new(local(25)),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    module_with_classes_and_params(
+        &format!("typed_i1_method_{case}.ts"),
+        vec![switch],
+        vec![
+            param(1, "receiver", receiver_ty),
+            param(2, "x", Type::Boolean),
+            param(3, "y", Type::Boolean),
+        ],
+        Type::Boolean,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "check".to_string(),
+            }),
+            args: vec![local(2), local(3)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn typed_i1_numeric_predicate_method_module() -> Module {
+    let mut meter = class(204, "Meter", Vec::new());
+    meter.methods.push(Function {
+        id: 220,
+        name: "above".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(21, "a", Type::Number), param(22, "b", Type::Number)],
+        return_type: Type::Boolean,
+        body: vec![
+            Stmt::Let {
+                id: 25,
+                name: "delta".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Sub,
+                    left: Box::new(local(21)),
+                    right: Box::new(local(22)),
+                }),
+            },
+            Stmt::Return(Some(Expr::Compare {
+                op: CompareOp::Gt,
+                left: Box::new(local(25)),
+                right: Box::new(number(0.0)),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    module_with_classes_and_params(
+        "typed_i1_numeric_method.ts",
+        vec![meter],
+        vec![
+            param(1, "receiver", Type::Named("Meter".to_string())),
+            param(2, "x", Type::Number),
+            param(3, "y", Type::Number),
+        ],
+        Type::Boolean,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "above".to_string(),
+            }),
+            args: vec![local(2), local(3)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn typed_i1_closure_clone_module(case: &str) -> Module {
+    let mut params = vec![param(31, "a", Type::Boolean), param(32, "b", Type::Boolean)];
+    let mut prefix = Vec::new();
+    let mut captures = Vec::new();
+    let mut mutable_captures = Vec::new();
+    let mut call_args = vec![Expr::Bool(true), Expr::Bool(false)];
+    let mut local_ty = Type::Function(perry_types::FunctionType {
+        params: vec![
+            ("a".to_string(), Type::Boolean, false),
+            ("b".to_string(), Type::Boolean, false),
+        ],
+        return_type: Box::new(Type::Boolean),
+        is_async: false,
+        is_generator: false,
+    });
+    let mut body_expr = Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(local(31)),
+        right: Box::new(Expr::Unary {
+            op: perry_hir::UnaryOp::Not,
+            operand: Box::new(local(32)),
+        }),
+    };
+    match case {
+        "eligible" => {}
+        "any" => {
+            params[0].ty = Type::Any;
+        }
+        "mixed" => {
+            params[1].ty = Type::Number;
+        }
+        "numeric_predicate" => {
+            params = vec![param(31, "a", Type::Number), param(32, "b", Type::Number)];
+            local_ty = Type::Function(perry_types::FunctionType {
+                params: vec![
+                    ("a".to_string(), Type::Number, false),
+                    ("b".to_string(), Type::Number, false),
+                ],
+                return_type: Box::new(Type::Boolean),
+                is_async: false,
+                is_generator: false,
+            });
+            body_expr = Expr::Compare {
+                op: CompareOp::Gt,
+                left: Box::new(Expr::Binary {
+                    op: BinaryOp::Sub,
+                    left: Box::new(local(31)),
+                    right: Box::new(local(32)),
+                }),
+                right: Box::new(number(0.0)),
+            };
+            call_args = vec![number(7.0), number(3.0)];
+        }
+        "capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "enabled".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::Bool(true)),
+            });
+            captures.push(30);
+            body_expr = Expr::Logical {
+                op: LogicalOp::And,
+                left: Box::new(body_expr),
+                right: Box::new(local(30)),
+            };
+        }
+        "mutable_capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "enabled".to_string(),
+                ty: Type::Boolean,
+                mutable: true,
+                init: Some(Expr::Bool(true)),
+            });
+            captures.push(30);
+            mutable_captures.push(30);
+            body_expr = Expr::Logical {
+                op: LogicalOp::And,
+                left: Box::new(body_expr),
+                right: Box::new(local(30)),
+            };
+        }
+        "dynamic" => {
+            local_ty = Type::Any;
+        }
+        other => panic!("unknown typed-i1 closure fixture: {other}"),
+    }
+
+    let mut body = prefix;
+    body.extend([
+        Stmt::Let {
+            id: 10,
+            name: "pred".to_string(),
+            ty: local_ty,
+            mutable: false,
+            init: Some(Expr::Closure {
+                func_id: 301,
+                params,
+                return_type: Type::Boolean,
+                body: vec![
+                    Stmt::Let {
+                        id: 33,
+                        name: "pred_base".to_string(),
+                        ty: Type::Boolean,
+                        mutable: false,
+                        init: Some(body_expr),
+                    },
+                    Stmt::Return(Some(local(33))),
+                ],
+                captures,
+                mutable_captures,
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(local(10)),
+            args: call_args,
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ]);
+
+    module_with_classes_and_params(
+        &format!("typed_i1_closure_{case}.ts"),
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        body,
+    )
+}
+
+fn typed_string_closure_clone_module(case: &str) -> Module {
+    let mut params = vec![param(31, "s", Type::String)];
+    let mut prefix = Vec::new();
+    let mut captures = Vec::new();
+    let mut mutable_captures = Vec::new();
+    let mut local_ty = Type::Function(perry_types::FunctionType {
+        params: vec![("s".to_string(), Type::String, false)],
+        return_type: Box::new(Type::String),
+        is_async: false,
+        is_generator: false,
+    });
+    let mut body_expr = local(31);
+    match case {
+        "eligible" => {}
+        "any" => {
+            params[0].ty = Type::Any;
+        }
+        "capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "captured".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(Expr::String("captured".to_string())),
+            });
+            captures.push(30);
+            body_expr = local(30);
+        }
+        "mutable_capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "captured".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String("captured".to_string())),
+            });
+            captures.push(30);
+            mutable_captures.push(30);
+            body_expr = local(30);
+        }
+        "dynamic" => {
+            local_ty = Type::Any;
+        }
+        other => panic!("unknown typed-string closure fixture: {other}"),
+    }
+
+    let mut body = prefix;
+    body.extend([
+        Stmt::Let {
+            id: 10,
+            name: "id".to_string(),
+            ty: local_ty,
+            mutable: false,
+            init: Some(Expr::Closure {
+                func_id: 302,
+                params,
+                return_type: Type::String,
+                body: vec![
+                    Stmt::Let {
+                        id: 33,
+                        name: "copy".to_string(),
+                        ty: Type::String,
+                        mutable: false,
+                        init: Some(body_expr),
+                    },
+                    Stmt::Return(Some(local(33))),
+                ],
+                captures,
+                mutable_captures,
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(local(10)),
+            args: vec![Expr::String("input".to_string())],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ]);
+
+    module_with_classes_and_params(
+        &format!("typed_string_closure_{case}.ts"),
+        Vec::new(),
+        Vec::new(),
+        Type::String,
+        body,
+    )
+}
+
+fn scalar_method_summary_module() -> Module {
+    let mut point = class(
+        101,
+        "Point",
+        vec![
+            class_field("x", Type::Number),
+            class_field("y", Type::Number),
+        ],
+    );
+    point.constructor = Some(Function {
+        id: 100,
+        name: "Point_constructor".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(10, "x", Type::Number), param(11, "y", Type::Number)],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "x".to_string(),
+                value: Box::new(local(10)),
+            }),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "y".to_string(),
+                value: Box::new(local(11)),
+            }),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    point.methods.push(Function {
+        id: 101,
+        name: "sum".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::This),
+                property: "x".to_string(),
+            }),
+            right: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::This),
+                property: "y".to_string(),
+            }),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    module_with_classes_and_params(
+        "scalar_method_summary.ts",
+        vec![point],
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 20,
+                name: "p".to_string(),
+                ty: Type::Named("Point".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Point".to_string(),
+                    args: vec![number(1.25), number(2.75)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(local(20)),
+                    property: "sum".to_string(),
+                }),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            })),
+        ],
+    )
+}
+
+fn scalar_method_shadowed_by_field_module() -> Module {
+    let mut module = scalar_method_summary_module();
+    module.name = "scalar_method_shadowed_by_field.ts".to_string();
+    module.classes[0]
+        .fields
+        .push(class_field("sum", Type::Number));
+    module
+}
+
+fn scalar_predicate_method_body(field: &str) -> Expr {
+    Expr::Compare {
+        op: CompareOp::Gt,
+        left: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: field.to_string(),
+        }),
+        right: Box::new(local(12)),
+    }
+}
+
+fn scalar_method_boolean_predicate_module() -> Module {
+    let mut module = scalar_method_summary_module();
+    module.name = "scalar_method_boolean_predicate.ts".to_string();
+    module.functions[0].return_type = Type::Boolean;
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 20,
+            name: "p".to_string(),
+            ty: Type::Named("Point".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Point".to_string(),
+                args: vec![number(4.0), number(2.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(20)),
+                property: "isAbove".to_string(),
+            }),
+            args: vec![number(3.0)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ];
+    module.classes[0].methods.clear();
+    module.classes[0].methods.push(Function {
+        id: 102,
+        name: "isAbove".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(12, "limit", Type::Number)],
+        return_type: Type::Boolean,
+        body: vec![Stmt::Return(Some(scalar_predicate_method_body("x")))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    module
+}
+
+fn scalar_method_boolean_public_numeric_arg_module(case: &str, arg_ty: Type) -> Module {
+    let mut module = scalar_method_boolean_predicate_module();
+    module.name = format!("scalar_method_boolean_guarded_{case}_arg.ts");
+    module.functions[0].params = vec![param(70, "limit", arg_ty)];
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 20,
+            name: "p".to_string(),
+            ty: Type::Named("Point".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Point".to_string(),
+                args: vec![number(4.0), number(2.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(20)),
+                property: "isAbove".to_string(),
+            }),
+            args: vec![local(70)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ];
+    module
+}
+
+fn scalar_method_boolean_negative_module(case: &str) -> Module {
+    let mut module = scalar_method_boolean_predicate_module();
+    module.name = format!("scalar_method_boolean_reject_{case}.ts");
+    let method_idx = module.classes[0]
+        .methods
+        .iter()
+        .position(|method| method.name == "isAbove")
+        .unwrap();
+    match case {
+        "mutation" => {
+            module.classes[0].methods[method_idx].body = vec![
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::This),
+                    property: "x".to_string(),
+                    value: Box::new(local(12)),
+                }),
+                Stmt::Return(Some(scalar_predicate_method_body("x"))),
+            ];
+        }
+        "unknown_call" => {
+            module.classes[0].methods.push(Function {
+                id: 103,
+                name: "readX".to_string(),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: Type::Number,
+                body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "x".to_string(),
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            });
+            module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
+                op: CompareOp::Gt,
+                left: Box::new(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "readX".to_string(),
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+                right: Box::new(local(12)),
+            }))];
+        }
+        "accessor" => {
+            module.classes[0].getters.push((
+                "score".to_string(),
+                Function {
+                    id: 104,
+                    name: "get_score".to_string(),
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: Type::Number,
+                    body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "x".to_string(),
+                    }))],
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                    is_exported: false,
+                    captures: Vec::new(),
+                    decorators: Vec::new(),
+                    was_plain_async: false,
+                    was_unrolled: false,
+                },
+            ));
+            module.classes[0].methods[method_idx].body =
+                vec![Stmt::Return(Some(scalar_predicate_method_body("score")))];
+        }
+        "dynamic_property" => {
+            module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
+                op: CompareOp::Gt,
+                left: Box::new(Expr::IndexGet {
+                    object: Box::new(Expr::This),
+                    index: Box::new(Expr::String("x".to_string())),
+                }),
+                right: Box::new(local(12)),
+            }))];
+        }
+        "computed_member_collision" => {
+            module.classes[0]
+                .computed_members
+                .push(ClassComputedMember {
+                    key_expr: Expr::String("isAbove".to_string()),
+                    function: Function {
+                        id: 105,
+                        name: "__computed_isAbove".to_string(),
+                        type_params: Vec::new(),
+                        params: Vec::new(),
+                        return_type: Type::Number,
+                        body: vec![Stmt::Return(Some(number(1.0)))],
+                        is_async: false,
+                        is_generator: false,
+                        is_strict: false,
+                        is_exported: false,
+                        captures: Vec::new(),
+                        decorators: Vec::new(),
+                        was_plain_async: false,
+                        was_unrolled: false,
+                    },
+                    is_static: false,
+                    kind: ClassComputedMemberKind::Method,
+                });
+        }
+        "inherited_field_shadow" => {
+            let base = class(99, "BasePoint", vec![class_field("isAbove", Type::Number)]);
+            module.classes[0].extends_name = Some("BasePoint".to_string());
+            module.classes.insert(0, base);
+        }
+        "any_arg" => {
+            module.functions[0].params = vec![param(70, "limit", Type::Any)];
+            module.functions[0].body = vec![
+                Stmt::Let {
+                    id: 20,
+                    name: "p".to_string(),
+                    ty: Type::Named("Point".to_string()),
+                    mutable: false,
+                    init: Some(Expr::New {
+                        class_name: "Point".to_string(),
+                        args: vec![number(4.0), number(2.0)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                },
+                Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(local(20)),
+                        property: "isAbove".to_string(),
+                    }),
+                    args: vec![local(70)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                })),
+            ];
+        }
+        other => panic!("unknown scalar method predicate negative fixture: {other}"),
+    }
+    module
+}
+
+fn artifact_has_scalar_method_inline(artifact: &serde_json::Value, method: &str) -> bool {
+    let method_note = format!("method={method}");
+    artifact["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note.as_str() == Some(method_note.as_str()))
+                        && notes.iter().any(|note| note == "receiver=scalar_replaced")
+                })
+        })
+}
+
+#[test]
+fn typed_f64_function_clone_emits_internal_clone_and_guarded_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_clone_test_module(false), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_fn_typed_f64_function_abi_ts__add";
+    let typed = "perry_fn_typed_f64_function_abi_ts__add__typed_f64";
+    let generic_body = "perry_fn_typed_f64_function_abi_ts__add__generic";
+    assert!(
+        ir.contains(&format!("define internal double @{typed}")),
+        "{ir}"
+    );
+    assert!(ir.contains(&format!("define double @{public}")), "{ir}");
+    assert!(
+        ir.contains(&format!("define internal double @{generic_body}")),
+        "{ir}"
+    );
+    assert!(ir.contains("call i32 @js_typed_f64_arg_guard"), "{ir}");
+    assert!(ir.contains("call double @js_typed_f64_arg_to_raw"), "{ir}");
+    assert!(ir.contains(&format!("call double @{typed}")), "{ir}");
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(")),
+        "generic body fallback should remain present:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_f64_public_trampoline_dispatches_before_generic_body() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_clone_test_module(false), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_fn_typed_f64_function_abi_ts__add";
+    let typed = "perry_fn_typed_f64_function_abi_ts__add__typed_f64";
+    let generic_body = "perry_fn_typed_f64_function_abi_ts__add__generic";
+    let wrapper_ir = function_ir_section(&ir, public);
+
+    assert!(
+        ir.contains(&format!("define internal double @{generic_body}")),
+        "typed function should keep a separate generic body:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && wrapper_ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "public wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
+    );
+    let typed_call = wrapper_ir
+        .find(&format!("call double @{typed}("))
+        .unwrap_or_else(|| panic!("public wrapper should call typed clone:\n{wrapper_ir}"));
+    let fallback_call = wrapper_ir
+        .find(&format!("call double @{generic_body}("))
+        .unwrap_or_else(|| {
+            panic!("public wrapper should call generic body fallback:\n{wrapper_ir}")
+        });
+    assert!(
+        typed_call < fallback_call,
+        "public wrapper should dispatch to typed clone before the generic body fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        !wrapper_ir.contains(&format!("call double @{public}(")),
+        "public wrapper must not recursively call itself:\n{wrapper_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_f64_clone_test_module(false));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_f64_func_ref_call"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("typed_clone={typed}"))
+                                && text.contains(&format!("generic_body={generic_body}"))
+                        })
+                    })
+                })
+        }),
+        "expected direct-call artifact to record generic body fallback:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_f64_function_clone_does_not_call_unemitted_i64_specialized_clone() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_i64_specialized_collision_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        ir.contains("define i64 @perry_fn_typed_f64_function_abi_ts__add_i64"),
+        "fixture should exercise the existing i64 specializer:\n{ir}"
+    );
+    assert!(
+        !ir.contains("__typed_f64"),
+        "i64-specialized functions must not select a missing typed-f64 clone:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_string_function_clone_emits_internal_clone_and_guarded_wrapper() {
+    let ir = String::from_utf8(
+        compile_module(&typed_string_clone_test_module("positive"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_fn_typed_string_function_abi_ts__id";
+    let typed = "perry_fn_typed_string_function_abi_ts__id__typed_string";
+    let generic_body = "perry_fn_typed_string_function_abi_ts__id__generic";
+    let caller = "perry_fn_typed_string_function_abi_ts__caller";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let caller_ir = function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!("define internal i64 @{typed}(i64 %arg1)")),
+        "typed string clone should use raw i64 StringHeader handles:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("define double @{public}(double %arg1)")),
+        "public JSValue ABI wrapper must remain emitted:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{generic_body}(double %arg1)"
+        )),
+        "generic JSValue ABI body must remain emitted separately:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_string_arg_guard"),
+        "public wrapper should guard string JSValue args:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i64 @js_typed_string_arg_to_raw"),
+        "public wrapper should unbox string args to raw handles:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains(&format!("call i64 @{typed}(i64 ")),
+        "public wrapper should call the raw string clone:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call double @js_nanbox_string(i64 "),
+        "typed string result should box at the public ABI boundary:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "string-guard failure should keep a generic body fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("typed_string_call.fast")
+            && caller_ir.contains("typed_string_call.fallback")
+            && caller_ir.contains("call i32 @js_typed_string_arg_guard")
+            && caller_ir.contains("call i64 @js_typed_string_arg_to_raw")
+            && caller_ir.contains(&format!("call i64 @{typed}(i64 "))
+            && caller_ir.contains("call double @js_nanbox_string(i64 "),
+        "same-module direct string call should guard/unbox, call the raw clone, and box at the call boundary:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(double ")),
+        "direct string-call guard failure should target the internal generic body:\n{caller_ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call double @{public}(double ")),
+        "direct string-call guard failure must not recurse through the public wrapper:\n{caller_ir}"
+    );
+}
+
+#[test]
+fn typed_string_function_clone_rejects_unsupported_string_shapes() {
+    for case in [
+        "any_param",
+        "number_param",
+        "default_param",
+        "rest_param",
+        "concat_body",
+    ] {
+        let ir = String::from_utf8(
+            compile_module(&typed_string_clone_test_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_string") && !ir.contains("__generic"),
+            "{case} must stay on the ordinary JSValue ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_typed_string_direct_call_selection() {
+    let artifact = compile_artifact_json_for_module(typed_string_clone_test_module("positive"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_string_func_ref_call"
+                && record["native_rep_name"] == "js_value"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_fn_typed_string_function_abi_ts__id__typed_string",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "generic_body=perry_fn_typed_string_function_abi_ts__id__generic",
+                            )
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=string(i64, ...)->string")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-string direct-call artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_f64_function_clone_rejects_any_and_mixed_parameter_signatures() {
+    for case in ["any", "mixed"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_f64_rejected_signature_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_f64") && !ir.contains("__generic"),
+            "{case} non-numeric ABI surface must stay generic:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_typed_clone_rejection_reasons() {
+    let artifact = compile_artifact_json_for_module(typed_f64_rejected_signature_module("any"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedCloneDecision"
+                && record["consumer"] == "typed_f64_function_clone_decision"
+                && record["native_rep_name"] == "js_value"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=param_not_f64")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_clone_kind=typed_f64_function")
+                        && notes.iter().any(|note| note == "function_id=1")
+                })
+        }),
+        "expected typed-f64 function rejection artifact:\n{artifact:#}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_i1_method_clone_module("any"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedCloneDecision"
+                && record["consumer"] == "typed_i1_method_clone_decision"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=param_not_i1")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_clone_kind=typed_i1_method")
+                        && notes.iter().any(|note| note == "method=check")
+                })
+        }),
+        "expected typed-i1 method rejection artifact:\n{artifact:#}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_string_clone_test_module("any_param"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedCloneDecision"
+                && record["consumer"] == "typed_string_function_clone_decision"
+                && record["native_rep_name"] == "js_value"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=param_not_string")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_clone_kind=typed_string_function")
+                        && notes.iter().any(|note| note == "function_id=1")
+                })
+        }),
+        "expected typed-string function rejection artifact:\n{artifact:#}"
+    );
+
+    let artifact =
+        compile_artifact_json_for_module(typed_f64_closure_clone_module("mutable_capture"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedCloneDecision"
+                && record["consumer"] == "typed_f64_closure_clone_decision"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=captures")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_clone_kind=typed_f64_closure")
+                        && notes.iter().any(|note| note == "closure_func_id=300")
+                })
+        }),
+        "expected typed-f64 mutable-capture rejection artifact:\n{artifact:#}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_string_closure_clone_module("capture"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "TypedCloneDecision"
+                && record["consumer"] == "typed_string_closure_clone_decision"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=captures")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_clone_kind=typed_string_closure")
+                        && notes.iter().any(|note| note == "closure_func_id=302")
+                })
+        }),
+        "expected typed-string captured-closure rejection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn explain_lowering_mode_records_broad_typed_clone_rejection_reasons() {
+    let default_artifact = compile_artifact_json_for_module(typed_i1_clone_test_module());
+    let default_records = default_artifact["records"].as_array().unwrap();
+    assert!(
+        !default_records.iter().any(|record| {
+            record["expr_kind"] == "TypedCloneDecision"
+                && record["consumer"] == "typed_f64_function_clone_decision"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=return_type_not_f64")
+                })
+        }),
+        "default artifact mode should keep broad clone-family mismatch noise suppressed:\n{default_artifact:#}"
+    );
+
+    let explain_artifact = compile_artifact_json_for_module_with_opts_and_clone_rejections(
+        typed_i1_clone_test_module_named("typed_i1_explain_rejections.ts"),
+        empty_opts(),
+        true,
+    );
+    let explain_records = explain_artifact["records"].as_array().unwrap();
+    assert!(
+        explain_records.iter().any(|record| {
+            record["expr_kind"] == "TypedCloneDecision"
+                && record["consumer"] == "typed_f64_function_clone_decision"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=return_type_not_f64")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_clone_kind=typed_f64_function")
+                })
+        }),
+        "explain-lowering artifact mode should record broad clone rejection reasons:\n{explain_artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_f64_function_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_f64_clone_test_module(false));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_f64_func_ref_call"
+                && record["native_rep_name"] == "f64"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_fn_typed_f64_function_abi_ts__add__typed_f64",
+                            )
+                        })
+                    })
+                })
+        }),
+        "expected typed-f64 clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_function_clone_emits_internal_clone_and_guarded_call() {
+    let ir =
+        String::from_utf8(compile_module(&typed_i1_clone_test_module(), empty_opts()).unwrap())
+            .unwrap();
+    let generic = "perry_fn_typed_i1_function_abi_ts__both";
+    let typed = "perry_fn_typed_i1_function_abi_ts__both__typed_i1";
+    let generic_body = "perry_fn_typed_i1_function_abi_ts__both__generic";
+    assert!(
+        ir.contains(&format!("define internal i1 @{typed}(i1 %arg1, i1 %arg2)")),
+        "typed bool clone should use i1 formal params and i1 return:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{generic}(double %arg1, double %arg2)"
+        )),
+        "public JSValue ABI wrapper must remain emitted:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{generic_body}(double %arg1, double %arg2)"
+        )),
+        "generic JSValue ABI body must remain emitted separately:\n{ir}"
+    );
+    assert!(ir.contains("call i32 @js_typed_i1_arg_guard"), "{ir}");
+    assert!(ir.contains("call i32 @js_typed_i1_arg_to_raw"), "{ir}");
+    assert!(
+        ir.contains(&format!("call i1 @{typed}(i1 ")),
+        "direct bool call should target the typed-i1 clone:\n{ir}"
+    );
+    assert!(
+        ir.contains("zext i1"),
+        "typed-i1 result should be converted for JSValue boxing at the call boundary:\n{ir}"
+    );
+    assert!(
+        ir.contains("9222246136947933188") && ir.contains("9222246136947933187"),
+        "typed-i1 result should box back to TAG_TRUE/TAG_FALSE:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(")),
+        "boolean-guard failure should keep a generic body fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_i1_public_trampoline_dispatches_before_generic_body() {
+    let ir =
+        String::from_utf8(compile_module(&typed_i1_clone_test_module(), empty_opts()).unwrap())
+            .unwrap();
+    let public = "perry_fn_typed_i1_function_abi_ts__both";
+    let typed = "perry_fn_typed_i1_function_abi_ts__both__typed_i1";
+    let generic_body = "perry_fn_typed_i1_function_abi_ts__both__generic";
+    let wrapper_ir = function_ir_section(&ir, public);
+
+    assert!(
+        ir.contains(&format!("define internal double @{generic_body}")),
+        "typed-i1 function should keep a separate generic body:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+        "public wrapper should guard and unbox boolean JSValue args:\n{wrapper_ir}"
+    );
+    let typed_call = wrapper_ir
+        .find(&format!("call i1 @{typed}("))
+        .unwrap_or_else(|| panic!("public wrapper should call typed-i1 clone:\n{wrapper_ir}"));
+    let fallback_call = wrapper_ir
+        .find(&format!("call double @{generic_body}("))
+        .unwrap_or_else(|| {
+            panic!("public wrapper should call generic body fallback:\n{wrapper_ir}")
+        });
+    assert!(
+        typed_call < fallback_call,
+        "public wrapper should dispatch to typed clone before the generic body fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("zext i1")
+            && wrapper_ir.contains("9222246136947933188")
+            && wrapper_ir.contains("9222246136947933187"),
+        "public wrapper should box the typed-i1 result at the ABI edge:\n{wrapper_ir}"
+    );
+    assert!(
+        !wrapper_ir.contains(&format!("call double @{public}(")),
+        "public wrapper must not recursively call itself:\n{wrapper_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_i1_clone_test_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_i1_func_ref_call"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("typed_clone={typed}"))
+                                && text.contains(&format!("generic_body={generic_body}"))
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected direct-call artifact to record generic body fallback:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_i1_function_clone_selection() {
+    let artifact =
+        compile_artifact_json_for_module(typed_i1_clone_test_module_named("typed_i1_artifact.ts"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_i1_func_ref_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_fn_typed_i1_artifact_ts__both__typed_i1",
+                            )
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=i1(i1, ...)->i1")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-i1 clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_function_clone_rejects_any_and_mixed_parameter_signatures() {
+    for case in ["any", "mixed"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_i1_rejected_signature_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_i1") && !ir.contains("__generic"),
+            "{case} boolean ABI surface must stay generic:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_i1_function_clone_rejects_mixed_direct_call_inputs() {
+    let ir =
+        String::from_utf8(compile_module(&typed_i1_mixed_callsite_module(), empty_opts()).unwrap())
+            .unwrap();
+    let generic = "perry_fn_typed_i1_function_abi_ts__both";
+    let typed = "perry_fn_typed_i1_function_abi_ts__both__typed_i1";
+    let caller = "perry_fn_typed_i1_function_abi_ts__caller";
+    let caller_ir = defined_function_ir_section(&ir, caller);
+    assert!(
+        ir.contains(&format!("define internal i1 @{typed}")),
+        "callee should still have an eligible typed-i1 clone:\n{ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call i1 @{typed}(")),
+        "call site with any/mixed inputs must not use the typed-i1 clone:\n{ir}"
+    );
+    assert!(
+        !caller_ir.contains("call i32 @js_typed_i1_arg_guard"),
+        "call site with any/mixed inputs should stay on the generic call path:\n{ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic}(")),
+        "mixed direct call input should retain generic fallback call:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_numeric_predicate_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_fn_typed_i1_numeric_predicate_ts__above";
+    let typed = "perry_fn_typed_i1_numeric_predicate_ts__above__typed_i1";
+    let generic_body = "perry_fn_typed_i1_numeric_predicate_ts__above__generic";
+    let caller = "perry_fn_typed_i1_numeric_predicate_ts__caller";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!(
+            "define internal i1 @{typed}(double %arg1, double %arg2)"
+        )),
+        "numeric predicate clone should use f64 params and i1 return:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains(" fsub ") && typed_ir.contains("fcmp ogt double"),
+        "numeric predicate body should stay in native f64/i1 SSA:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && wrapper_ir.contains("call double @js_typed_f64_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
+        "public wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public wrapper should retain a generic JSValue fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && caller_ir.contains("call double @js_typed_f64_arg_to_raw")
+            && caller_ir.contains(&format!("call i1 @{typed}(double ")),
+        "direct FuncRef lowering should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(")),
+        "direct caller should retain the generic body fallback on guard failure:\n{caller_ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call double @{public}(")),
+        "same-module direct caller should not bounce through the public JSValue wrapper once mixed direct-call metadata exists:\n{caller_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_i1_numeric_predicate_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_i1_func_ref_call"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("typed_clone={typed}"))
+                                && text.contains(&format!("generic_body={generic_body}"))
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=i1(f64, ...)->i1")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected numeric-predicate direct call artifact to record f64 typed signature:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_method_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_method_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_i1_method_eligible_ts__Switch__check";
+    let generic_body = "perry_method_typed_i1_method_eligible_ts__Switch__check__generic";
+    let typed = "perry_method_typed_i1_method_eligible_ts__Switch__check__typed_i1";
+    assert!(
+        ir.contains(&format!(
+            "define internal i1 @{typed}(i1 %arg21, i1 %arg22)"
+        )),
+        "typed method clone should use i1 formal params and i1 return:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{public}(double %this_arg, double %arg21, double %arg22)"
+        )),
+        "public method ABI wrapper must remain emitted:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{generic_body}(double %this_arg, double %arg21, double %arg22)"
+        )),
+        "generic method ABI body must remain emitted separately:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_method_direct_shape_guard"),
+        "{ir}"
+    );
+    assert!(ir.contains("call i32 @js_typed_i1_arg_guard"), "{ir}");
+    assert!(ir.contains("call i32 @js_typed_i1_arg_to_raw"), "{ir}");
+    assert!(
+        ir.contains(&format!("call i1 @{typed}(i1 ")),
+        "typed direct call should target the clone:\n{ir}"
+    );
+    assert!(
+        ir.contains("zext i1"),
+        "typed-i1 method result should be converted for JSValue boxing:\n{ir}"
+    );
+    assert!(
+        ir.contains("9222246136947933188") && ir.contains("9222246136947933187"),
+        "typed-i1 method result should box back to TAG_TRUE/TAG_FALSE:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(")),
+        "boolean-guard failure should keep a generic method fallback:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_native_call_method"),
+        "receiver/method guard failure should keep the dynamic generic fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
+            && !ir.contains(&format!("ptrtoint ptr @{typed}")),
+        "typed clone must not be registered in the runtime vtable:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
+            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        "generic body must not be registered in the runtime vtable:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_i1_method_public_trampoline_dispatches_before_generic_body() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_method_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_i1_method_eligible_ts__Switch__check";
+    let typed = "perry_method_typed_i1_method_eligible_ts__Switch__check__typed_i1";
+    let generic_body = "perry_method_typed_i1_method_eligible_ts__Switch__check__generic";
+    let wrapper_ir = function_ir_section(&ir, public);
+
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+        "public method wrapper should guard and unbox boolean JSValue args:\n{wrapper_ir}"
+    );
+    let typed_call = wrapper_ir
+        .find(&format!("call i1 @{typed}("))
+        .unwrap_or_else(|| panic!("public method wrapper should call typed clone:\n{wrapper_ir}"));
+    let fallback_call = wrapper_ir
+        .find(&format!("call double @{generic_body}("))
+        .unwrap_or_else(|| {
+            panic!("public method wrapper should call generic body fallback:\n{wrapper_ir}")
+        });
+    assert!(
+        typed_call < fallback_call,
+        "public method wrapper should dispatch to typed clone before generic fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        !wrapper_ir.contains(&format!("call double @{public}(")),
+        "public method wrapper must not recursively call itself:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("zext i1")
+            && wrapper_ir.contains("9222246136947933188")
+            && wrapper_ir.contains("9222246136947933187"),
+        "public typed-i1 method wrapper should box the i1 result at the ABI boundary:\n{wrapper_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_i1_method_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_i1_method_clone_module("eligible"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MethodCall"
+                && record["consumer"] == "typed_i1_method_direct_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_method_typed_i1_method_eligible_ts__Switch__check__typed_i1",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "generic_method=perry_method_typed_i1_method_eligible_ts__Switch__check__generic",
+                            )
+                        })
+                    }) && notes.iter().any(|note| note == "method=check")
+                        && notes
+                            .iter()
+                        .any(|note| note == "typed_signature=i1(i1, ...)->i1")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-i1 method clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_numeric_predicate_method_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_i1_numeric_method_ts__Meter__above";
+    let generic_body = "perry_method_typed_i1_numeric_method_ts__Meter__above__generic";
+    let typed = "perry_method_typed_i1_numeric_method_ts__Meter__above__typed_i1";
+    let caller = "perry_fn_typed_i1_numeric_method_ts__probe";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!(
+            "define internal i1 @{typed}(double %arg21, double %arg22)"
+        )),
+        "numeric predicate method clone should use f64 params and i1 return:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains(" fsub ") && typed_ir.contains("fcmp ogt double"),
+        "numeric predicate method body should stay in native f64/i1 SSA:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && wrapper_ir.contains("call double @js_typed_f64_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
+        "public method wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call i32 @js_method_direct_shape_guard")
+            && caller_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && caller_ir.contains("call double @js_typed_f64_arg_to_raw")
+            && caller_ir.contains(&format!("call i1 @{typed}(double ")),
+        "exact direct method call should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(")),
+        "direct method call should retain generic body fallback on typed guard failure:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains("call double @js_native_call_method"),
+        "receiver/method guard failure should keep the dynamic generic fallback:\n{caller_ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call double @{public}(")),
+        "exact same-module direct method call should not bounce through the public JSValue wrapper:\n{caller_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_i1_numeric_predicate_method_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MethodCall"
+                && record["consumer"] == "typed_i1_method_direct_call"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("typed_clone={typed}"))
+                        })
+                    }) && notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("generic_method={generic_body}"))
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=i1(f64, ...)->i1")
+                        && notes.iter().any(|note| note == "method=above")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected numeric-predicate method direct call artifact to record f64 typed signature:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_method_clone_rejects_any_and_mixed_parameter_signatures() {
+    for case in ["any", "mixed"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_i1_method_clone_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_i1"),
+            "{case} method must stay on the generic method ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_i1_method_clone_rejects_dynamic_receiver_call_site() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_method_clone_module("dynamic"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_i1_method_dynamic_ts__Switch__check";
+    let typed = "perry_method_typed_i1_method_dynamic_ts__Switch__check__typed_i1";
+    assert!(
+        ir.contains(&format!("define internal i1 @{typed}")),
+        "eligible method should still have an internal typed-i1 clone:\n{ir}"
+    );
+    let wrapper_ir = function_ir_section(&ir, public);
+    let non_wrapper_ir = ir.replace(wrapper_ir, "");
+    assert!(
+        wrapper_ir.contains(&format!("call i1 @{typed}(")),
+        "dynamic dispatch should be able to reach the public typed method wrapper:\n{wrapper_ir}"
+    );
+    assert!(
+        !non_wrapper_ir.contains(&format!("call i1 @{typed}(")),
+        "dynamic receiver call must not use the direct typed-i1 method clone path:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_native_call_method"),
+        "dynamic receiver call should dispatch through the generic method fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir =
+        String::from_utf8(compile_module(&typed_f64_method_clone_module(), empty_opts()).unwrap())
+            .unwrap();
+    let public = "perry_method_typed_f64_method_abi_ts__Calc__mix";
+    let generic_body = "perry_method_typed_f64_method_abi_ts__Calc__mix__generic";
+    let typed = "perry_method_typed_f64_method_abi_ts__Calc__mix__typed_f64";
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{typed}(double %arg21, double %arg22)"
+        )),
+        "typed method clone should use only f64 formal params and f64 return:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{public}(double %this_arg, double %arg21, double %arg22)"
+        )),
+        "public method ABI wrapper must remain emitted:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{generic_body}(double %this_arg, double %arg21, double %arg22)"
+        )),
+        "generic method ABI body must remain emitted separately:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_method_direct_shape_guard"),
+        "{ir}"
+    );
+    assert!(ir.contains("call i32 @js_typed_f64_arg_guard"), "{ir}");
+    assert!(ir.contains("call double @js_typed_f64_arg_to_raw"), "{ir}");
+    assert!(
+        ir.contains(&format!("call double @{typed}(double ")),
+        "typed direct call should target the clone:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(")),
+        "numeric-guard failure should keep a generic method fallback:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_native_call_method"),
+        "receiver/method guard failure should keep the dynamic generic fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
+            && !ir.contains(&format!("ptrtoint ptr @{typed}")),
+        "typed clone must not be registered in the runtime vtable:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
+            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        "generic body must not be registered in the runtime vtable:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_f64_method_public_trampoline_dispatches_before_generic_body() {
+    let ir =
+        String::from_utf8(compile_module(&typed_f64_method_clone_module(), empty_opts()).unwrap())
+            .unwrap();
+    let public = "perry_method_typed_f64_method_abi_ts__Calc__mix";
+    let typed = "perry_method_typed_f64_method_abi_ts__Calc__mix__typed_f64";
+    let generic_body = "perry_method_typed_f64_method_abi_ts__Calc__mix__generic";
+    let wrapper_ir = function_ir_section(&ir, public);
+
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && wrapper_ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "public method wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
+    );
+    let typed_call = wrapper_ir
+        .find(&format!("call double @{typed}("))
+        .unwrap_or_else(|| panic!("public method wrapper should call typed clone:\n{wrapper_ir}"));
+    let fallback_call = wrapper_ir
+        .find(&format!("call double @{generic_body}("))
+        .unwrap_or_else(|| {
+            panic!("public method wrapper should call generic body fallback:\n{wrapper_ir}")
+        });
+    assert!(
+        typed_call < fallback_call,
+        "public method wrapper should dispatch to typed clone before generic fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        !wrapper_ir.contains(&format!("call double @{public}(")),
+        "public method wrapper must not recursively call itself:\n{wrapper_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_f64_method_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_f64_method_clone_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MethodCall"
+                && record["consumer"] == "typed_f64_method_direct_call"
+                && record["native_rep_name"] == "f64"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_method_typed_f64_method_abi_ts__Calc__mix__typed_f64",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "generic_method=perry_method_typed_f64_method_abi_ts__Calc__mix__generic",
+                            )
+                        })
+                    }) && notes.iter().any(|note| note == "method=mix")
+                })
+        }),
+        "expected typed-f64 method clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_f64_method_clone_rejects_this_default_rest_and_any() {
+    for case in ["this", "default", "rest", "any"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_f64_method_negative_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_f64"),
+            "{case} method must stay on the generic method ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_receiver_method_positive_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_f64_receiver_method_ts__Point__score";
+    let generic_body = "perry_method_typed_f64_receiver_method_ts__Point__score__generic";
+    let typed = "perry_method_typed_f64_receiver_method_ts__Point__score__typed_f64_recv";
+    let caller = "perry_fn_typed_f64_receiver_method_ts__probe";
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{typed}(i64 %this_obj, double %arg21)"
+        )),
+        "receiver method clone should take a raw receiver handle plus raw f64 args:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{public}(double %this_arg, double %arg21)"
+        )),
+        "public method ABI must stay boxed:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains("inttoptr i64 %this_obj to ptr")
+            && typed_ir.contains("getelementptr i8, ptr")
+            && typed_ir.matches("load double").count() >= 2
+            && typed_ir.contains(" fadd ")
+            && typed_ir.contains(" fmul "),
+        "typed receiver clone should raw-load receiver fields and stay in f64 SSA:\n{typed_ir}"
+    );
+    let method_guard = caller_ir
+        .find("call i32 @js_typed_feedback_method_direct_call_guard")
+        .unwrap_or_else(|| panic!("caller should use the full method-direct guard:\n{caller_ir}"));
+    let field_guard = caller_ir
+        .find("call i32 @js_typed_feedback_class_field_get_guard")
+        .unwrap_or_else(|| panic!("caller should guard raw-f64 receiver fields:\n{caller_ir}"));
+    let typed_call = caller_ir
+        .find(&format!("call double @{typed}(i64 "))
+        .unwrap_or_else(|| panic!("caller should call the receiver clone:\n{caller_ir}"));
+    assert!(
+        method_guard < field_guard && field_guard < typed_call,
+        "receiver clone must run only after method-direct and raw-f64 field guards:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(")),
+        "receiver field or numeric arg guard failure should call the generic method body:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains("call double @js_native_call_method_by_id"),
+        "method-direct guard failure should retain dynamic method fallback:\n{caller_ir}"
+    );
+    assert!(
+        !ir.contains(&format!("define internal double @{}__typed_f64(", public)),
+        "field-reading receiver methods should not use the receiver-less typed method ABI:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_f64_receiver_method_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_f64_receiver_method_positive_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MethodCall"
+                && record["consumer"] == "typed_f64_receiver_method_direct_call"
+                && record["native_rep_name"] == "f64"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_method_typed_f64_receiver_method_ts__Point__score__typed_f64_recv",
+                            )
+                        })
+                    }) && notes.iter().any(|note| note == "receiver_arg=i64")
+                        && notes
+                            .iter()
+                            .any(|note| note == "raw_f64_field_guard=required")
+                })
+        }),
+        "expected typed-f64 receiver method clone artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_f64_receiver_method_clone_rejects_unsafe_cases() {
+    for case in [
+        "this_escape",
+        "field_mutation",
+        "nested_call",
+        "non_numeric_field",
+        "computed_member",
+        "accessor",
+    ] {
+        let ir = String::from_utf8(
+            compile_module(
+                &typed_f64_receiver_method_negative_module(case),
+                empty_opts(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_f64_recv"),
+            "{case} receiver method must not get a raw receiver clone:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_f64_receiver_method_clone_rejects_inherited_and_dynamic_call_sites() {
+    for case in ["inherited_receiver", "dynamic_receiver"] {
+        let ir = String::from_utf8(
+            compile_module(
+                &typed_f64_receiver_method_negative_module(case),
+                empty_opts(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let caller = format!("perry_fn_typed_f64_receiver_method_reject_{case}_ts__probe");
+        let caller_ir = defined_function_ir_section(&ir, &caller);
+        assert!(
+            !caller_ir.contains("__typed_f64_recv"),
+            "{case} call site must not use the raw receiver clone:\n{caller_ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_closure_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_closure_typed_f64_closure_abi_ts__300";
+    let generic_body = "perry_closure_typed_f64_closure_abi_ts__300__generic";
+    let typed = "perry_closure_typed_f64_closure_abi_ts__300__typed_f64";
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{typed}(i64 %this_closure, double %arg31, double %arg32)"
+        )),
+        "typed closure clone should carry the closure handle plus f64 formal params and f64 return:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("define double @{public}(i64 %this_closure"))
+            && ir.contains(&format!(
+                "define internal double @{generic_body}(i64 %this_closure"
+            )),
+        "typed closure should expose a public wrapper and keep an internal generic body:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "call i64 @js_closure_alloc_singleton(ptr @{public}"
+        )),
+        "closure allocation must keep storing the public wrapper pointer:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"),
+        "{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && wrapper_ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "public closure wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{typed}(i64 ")),
+        "typed direct closure call should target the clone:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "numeric-guard failure should target the internal generic closure body:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("call double @{public}(i64 ")),
+        "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_closure_call2"),
+        "closure identity/arity guard failure should keep runtime dispatch fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_f64_closure_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_f64_closure_clone_module("eligible"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ClosureCall"
+                && record["consumer"] == "typed_f64_closure_direct_call"
+                && record["native_rep_name"] == "f64"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_closure_typed_f64_closure_abi_ts__300__typed_f64",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note == "generic_closure=perry_closure_typed_f64_closure_abi_ts__300__generic"
+                    }) && notes.iter().any(|note| note == "closure_func_id=300")
+                })
+        }),
+        "expected typed-f64 closure clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_closure_clone_module("capture"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let typed = "perry_closure_typed_f64_closure_abi_ts__300__typed_f64";
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    assert!(
+        typed_ir.contains("call double @js_closure_get_capture_f64(i64 %this_closure, i32 0)")
+            && typed_ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "typed-f64 captured closure should load immutable numeric capture through the closure handle:\n{typed_ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{typed}(i64 ")),
+        "typed direct call should pass the closure handle to the captured clone:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_f64_closure_clone_rejects_any_parameter_and_mutable_capture() {
+    for case in ["any", "mutable_capture"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_f64_closure_clone_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_f64"),
+            "{case} closure must stay on the generic closure ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_closure_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_closure_typed_i1_closure_eligible_ts__301";
+    let generic_body = "perry_closure_typed_i1_closure_eligible_ts__301__generic";
+    let typed = "perry_closure_typed_i1_closure_eligible_ts__301__typed_i1";
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!(
+            "define internal i1 @{typed}(i64 %this_closure, i1 %arg31, i1 %arg32)"
+        )),
+        "typed closure clone should carry the closure handle plus i1 formal params and i1 return:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("define double @{public}(i64 %this_closure"))
+            && ir.contains(&format!(
+                "define internal double @{generic_body}(i64 %this_closure"
+            )),
+        "typed closure should expose a public wrapper and keep an internal generic body:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "call i64 @js_closure_alloc_singleton(ptr @{public}"
+        )),
+        "closure allocation must keep storing the public wrapper pointer:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"),
+        "{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+        "public closure wrapper should guard and unbox boolean JSValue args:\n{wrapper_ir}"
+    );
+    assert!(
+        ir.contains(&format!("call i1 @{typed}(i64 ")),
+        "typed direct closure call should target the clone:\n{ir}"
+    );
+    assert!(
+        ir.contains("zext i1"),
+        "typed-i1 closure result should be converted for JSValue boxing:\n{ir}"
+    );
+    assert!(
+        ir.contains("9222246136947933188") && ir.contains("9222246136947933187"),
+        "typed-i1 closure result should box back to TAG_TRUE/TAG_FALSE:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "boolean-guard failure should target the internal generic closure body:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("call double @{public}(i64 ")),
+        "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_closure_call2"),
+        "closure identity/arity guard failure should keep runtime dispatch fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_i1_closure_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_i1_closure_clone_module("eligible"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ClosureCall"
+                && record["consumer"] == "typed_i1_closure_direct_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_closure_typed_i1_closure_eligible_ts__301__typed_i1",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note == "generic_closure=perry_closure_typed_i1_closure_eligible_ts__301__generic"
+                    }) && notes.iter().any(|note| note == "closure_func_id=301")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_signature=i1(i64 closure, i1, ...)->i1")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-i1 closure clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(
+            &typed_i1_closure_clone_module("numeric_predicate"),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let public = "perry_closure_typed_i1_closure_numeric_predicate_ts__301";
+    let generic_body = "perry_closure_typed_i1_closure_numeric_predicate_ts__301__generic";
+    let typed = "perry_closure_typed_i1_closure_numeric_predicate_ts__301__typed_i1";
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!(
+            "define internal i1 @{typed}(i64 %this_closure, double %arg31, double %arg32)"
+        )),
+        "numeric-predicate typed closure clone should use f64 params and i1 return:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && wrapper_ir.contains("call double @js_typed_f64_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i1 @{typed}(i64 %this_closure")),
+        "public closure wrapper should guard/unbox numeric JSValue args and call the typed clone:\n{wrapper_ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call i1 @{typed}(i64 "))
+            && ir.contains("call i32 @js_typed_f64_arg_guard")
+            && ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "direct local closure call should guard/unbox numeric args and call the typed clone:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "numeric-guard failure should target the internal generic closure body:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("call double @{public}(i64 ")),
+        "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
+    );
+
+    let artifact =
+        compile_artifact_json_for_module(typed_i1_closure_clone_module("numeric_predicate"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ClosureCall"
+                && record["consumer"] == "typed_i1_closure_direct_call"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_closure_typed_i1_closure_numeric_predicate_ts__301__typed_i1",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note == "generic_closure=perry_closure_typed_i1_closure_numeric_predicate_ts__301__generic"
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=i1(i64 closure, f64, ...)->i1")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected numeric-predicate typed-i1 closure direct-call artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_closure_clone_accepts_immutable_boolean_capture() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_closure_clone_module("capture"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let typed = "perry_closure_typed_i1_closure_capture_ts__301__typed_i1";
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    assert!(
+        typed_ir.contains("call double @js_closure_get_capture_f64(i64 %this_closure, i32 0)")
+            && typed_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
+        "typed-i1 captured closure should load immutable boolean capture through the closure handle:\n{typed_ir}"
+    );
+    assert!(
+        ir.contains(&format!("call i1 @{typed}(i64 ")),
+        "typed direct call should pass the closure handle to the captured clone:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_i1_closure_clone_rejects_any_mixed_and_mutable_capture() {
+    for case in ["any", "mixed", "mutable_capture"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_i1_closure_clone_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_i1"),
+            "{case} closure must stay on the generic closure ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_i1_closure_clone_rejects_dynamic_callee_call_site() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_closure_clone_module("dynamic"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let caller = "perry_fn_typed_i1_closure_dynamic_ts__probe";
+    let public = "perry_closure_typed_i1_closure_dynamic_ts__301";
+    let generic_body = "perry_closure_typed_i1_closure_dynamic_ts__301__generic";
+    let typed = "perry_closure_typed_i1_closure_dynamic_ts__301__typed_i1";
+    let caller_ir = function_ir_section(&ir, caller);
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!("define internal i1 @{typed}(i64 %this_closure")),
+        "eligible closure should still have an internal typed-i1 clone:\n{ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call i1 @{typed}("))
+            && !caller_ir.contains("call i32 @js_typed_i1_arg_guard"),
+        "dynamic closure callee must not direct-call the typed-i1 clone:\n{caller_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && wrapper_ir.contains(&format!("call i1 @{typed}("))
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "dynamic runtime dispatch should enter the public closure wrapper, which owns typed guards:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call double @js_closure_call2"),
+        "dynamic closure callee should dispatch through the generic closure fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_string_closure_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_closure_typed_string_closure_eligible_ts__302";
+    let generic_body = "perry_closure_typed_string_closure_eligible_ts__302__generic";
+    let typed = "perry_closure_typed_string_closure_eligible_ts__302__typed_string";
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!(
+            "define internal i64 @{typed}(i64 %this_closure, i64 %arg31)"
+        )),
+        "typed string closure clone should carry the closure handle plus raw string handles:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("define double @{public}(i64 %this_closure"))
+            && ir.contains(&format!(
+                "define internal double @{generic_body}(i64 %this_closure"
+            )),
+        "typed string closure should expose a public wrapper and keep an internal generic body:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "call i64 @js_closure_alloc_singleton(ptr @{public}"
+        )),
+        "closure allocation must keep storing the public wrapper pointer:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_string_arg_guard")
+            && wrapper_ir.contains("call i64 @js_typed_string_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i64 @{typed}(i64 %this_closure"))
+            && wrapper_ir.contains("call double @js_nanbox_string"),
+        "public closure wrapper should guard/unbox string JSValue args, call the raw clone, and box at the boundary:\n{wrapper_ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("closure_direct.typed_string")
+            && ir.contains("call i32 @js_typed_string_arg_guard")
+            && ir.contains("call i64 @js_typed_string_arg_to_raw")
+            && ir.contains(&format!("call i64 @{typed}(i64 "))
+            && ir.contains("call double @js_nanbox_string"),
+        "direct local closure call should guard/unbox string args and call the raw clone:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "string-guard failure should target the internal generic closure body:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("call double @{public}(i64 ")),
+        "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_closure_call1"),
+        "closure identity/arity guard failure should keep runtime dispatch fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_string_closure_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_string_closure_clone_module("eligible"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ClosureCall"
+                && record["consumer"] == "typed_string_closure_direct_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_closure_typed_string_closure_eligible_ts__302__typed_string",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note == "generic_closure=perry_closure_typed_string_closure_eligible_ts__302__generic"
+                    }) && notes.iter().any(|note| note == "closure_func_id=302")
+                        && notes.iter().any(|note| {
+                            note == "typed_signature=string(i64 closure, string)->string"
+                        })
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-string closure clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_string_closure_clone_rejects_any_and_captures() {
+    for case in ["any", "capture", "mutable_capture"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_string_closure_clone_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_string"),
+            "{case} closure must stay on the generic closure ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_string_closure_clone_rejects_dynamic_callee_call_site() {
+    let ir = String::from_utf8(
+        compile_module(&typed_string_closure_clone_module("dynamic"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let caller = "perry_fn_typed_string_closure_dynamic_ts__probe";
+    let public = "perry_closure_typed_string_closure_dynamic_ts__302";
+    let generic_body = "perry_closure_typed_string_closure_dynamic_ts__302__generic";
+    let typed = "perry_closure_typed_string_closure_dynamic_ts__302__typed_string";
+    let caller_ir = function_ir_section(&ir, caller);
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!("define internal i64 @{typed}(i64 %this_closure")),
+        "eligible closure should still have an internal typed-string clone:\n{ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call i64 @{typed}("))
+            && !caller_ir.contains("call i32 @js_typed_string_arg_guard"),
+        "dynamic closure callee must not direct-call the typed-string clone:\n{caller_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_string_arg_guard")
+            && wrapper_ir.contains(&format!("call i64 @{typed}("))
+            && wrapper_ir.contains("call double @js_nanbox_string")
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "dynamic runtime dispatch should enter the public closure wrapper, which owns typed string guards:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call double @js_closure_call1"),
+        "dynamic closure callee should dispatch through the generic closure fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn scalar_replaced_simple_method_call_inlines_summary_without_dispatch() {
+    let ir =
+        String::from_utf8(compile_module(&scalar_method_summary_module(), empty_opts()).unwrap())
+            .unwrap();
+    assert!(
+        !ir.contains("call double @js_native_call_method"),
+        "scalar-replaced summarized method call should not dispatch dynamically:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @perry_method_scalar_method_summary_ts__Point_sum"),
+        "scalar-replaced summarized method call should inline the method body:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_scalar_replaced_method_summary_inline() {
+    let artifact = compile_artifact_json_for_module(scalar_method_summary_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record["local_id"] == 20
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| note == "class=Point")
+                        && notes.iter().any(|note| note == "method=sum")
+                        && notes.iter().any(|note| note == "receiver=scalar_replaced")
+                })
+        }),
+        "expected scalar method summary inline artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_summary_rejects_own_property_shadow() {
+    let artifact = compile_artifact_json_for_module(scalar_method_shadowed_by_field_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+        }),
+        "own data property shadowing the method must block scalar method inlining:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_replaced_boolean_method_predicate_inlines_without_dispatch_or_allocation() {
+    let ir = String::from_utf8(
+        compile_module(&scalar_method_boolean_predicate_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !ir.contains("call double @js_native_call_method"),
+        "scalar-replaced boolean predicate should not dispatch dynamically:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @perry_method_scalar_method_boolean_predicate_ts__Point_isAbove"),
+        "scalar-replaced boolean predicate should inline the method body:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_object_alloc"),
+        "scalar-replaced boolean predicate receiver should not heap-allocate:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call ptr @js_inline_arena_slow_alloc"),
+        "scalar-replaced boolean predicate receiver should not use inline heap allocation:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_scalar_replaced_boolean_method_predicate_inline() {
+    let artifact = compile_artifact_json_for_module(scalar_method_boolean_predicate_module());
+    assert!(
+        artifact_has_scalar_method_inline(&artifact, "isAbove"),
+        "expected scalar boolean method predicate summary inline artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_property() {
+    for case in [
+        "mutation",
+        "unknown_call",
+        "accessor",
+        "dynamic_property",
+        "computed_member_collision",
+        "inherited_field_shadow",
+    ] {
+        let module = scalar_method_boolean_negative_module(case);
+        let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+        assert!(
+            ir.contains("call double @js_native_call_method"),
+            "{case} must keep dynamic method dispatch fallback:\n{ir}"
+        );
+        assert!(
+            ir.contains("call i64 @js_object_alloc"),
+            "{case} must keep heap allocation fallback for the receiver:\n{ir}"
+        );
+
+        let artifact = compile_artifact_json_for_module(module);
+        assert!(
+            !artifact_has_scalar_method_inline(&artifact, "isAbove"),
+            "{case} must not record a scalar method summary inline:\n{artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn scalar_method_boolean_predicate_rejects_unproven_numeric_arguments() {
+    let module = scalar_method_boolean_negative_module("any_arg");
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call double @js_native_call_method_by_id"),
+        "any arg must keep generic method dispatch:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i64 @js_object_alloc"),
+        "any arg fallback must materialize the scalar receiver before dispatch:\n{ir}"
+    );
+    assert!(
+        !ir.contains("scalar_method_arg_guard.fast"),
+        "any arg must not use the guarded scalar inline path:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        !artifact_has_scalar_method_inline(&artifact, "isAbove"),
+        "any arg must not record a scalar method summary inline:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
+    for (case, arg_ty) in [("number", Type::Number), ("int32", Type::Int32)] {
+        let module = scalar_method_boolean_public_numeric_arg_module(case, arg_ty);
+        let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+        assert!(
+            ir.contains("scalar_method_arg_guard.fast")
+                && ir.contains("scalar_method_arg_guard.fallback")
+                && ir.contains("call i32 @js_typed_f64_arg_guard")
+                && ir.contains("call double @js_typed_f64_arg_to_raw"),
+            "{case} public numeric arg should guard/unbox before scalar inline:\n{ir}"
+        );
+        assert!(
+            ir.contains("call double @js_native_call_method_by_id"),
+            "{case} public numeric arg should keep a generic fallback:\n{ir}"
+        );
+        let materialize = ir
+            .find("call i64 @js_object_alloc")
+            .unwrap_or_else(|| panic!("{case} fallback should materialize receiver:\n{ir}"));
+        let dispatch = ir
+            .find("call double @js_native_call_method_by_id")
+            .unwrap_or_else(|| panic!("{case} fallback should dispatch generically:\n{ir}"));
+        assert!(
+            materialize < dispatch,
+            "{case} fallback must materialize before generic dispatch:\n{ir}"
+        );
+
+        let artifact = compile_artifact_json_for_module(module);
+        assert!(
+            artifact_has_scalar_method_inline(&artifact, "isAbove"),
+            "{case} public numeric arg should still record scalar inline fast path:\n{artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn static_property_access_on_computed_class_uses_property_id_wrappers() {
+    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let module = module_with_classes_and_params(
+        "property_id_static_access.ts",
+        vec![dynamic],
+        vec![
+            param(1, "obj", Type::Named("DynamicShape".to_string())),
+            param(2, "value", Type::Number),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call void @js_object_set_field_by_property_id"),
+        "computed-member class static property stores should use property-id ABI:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_object_get_field_by_property_id_f64"),
+        "computed-member class static property reads should use property-id ABI:\n{ir}"
+    );
+}
+
+#[test]
+fn static_name_method_fallback_uses_method_id_wrapper() {
+    let module = module_with_classes_and_params(
+        "method_id_static_name_fallback.ts",
+        Vec::new(),
+        vec![param(1, "obj", Type::Any), param(2, "arg", Type::Number)],
+        Type::Number,
+        vec![Stmt::Return(Some(call(
+            Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+            },
+            vec![local(2)],
+        )))],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_typed_feedback_native_call_method_by_id"),
+        "static-name dynamic method fallback should use typed-feedback method-id ABI:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_typed_feedback_native_call_method(i64"),
+        "static-name dynamic method fallback should not pass raw name bytes:\n{ir}"
+    );
+}
+
+#[test]
+fn static_name_spread_method_fallback_uses_method_id_wrapper() {
+    let module = module_with_classes_and_params(
+        "method_id_spread_static_name_fallback.ts",
+        Vec::new(),
+        vec![
+            param(1, "obj", Type::Any),
+            param(2, "args", Type::Array(Box::new(Type::Any))),
+        ],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::CallSpread {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+            }),
+            args: vec![CallArg::Spread(local(2))],
+            type_args: Vec::new(),
+        }))],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_native_call_method_apply_by_id"),
+        "static-name spread fallback should use method-id apply ABI:\n{ir}"
+    );
+}
+
+#[test]
+fn static_name_class_method_value_uses_method_id_bind_wrapper() {
+    let mut calc = class(209, "Calc", Vec::new());
+    calc.methods.push(Function {
+        id: 2090,
+        name: "score".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(number(1.0)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let module = module_with_classes_and_params(
+        "method_id_class_method_value.ts",
+        vec![calc],
+        vec![param(1, "obj", Type::Named("Calc".to_string()))],
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(local(1)),
+            property: "score".to_string(),
+        }))],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call double @js_class_method_bind_by_id"),
+        "static-name class method value reads should use method-id bind ABI:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_class_method_bind(double"),
+        "static-name class method value reads should not pass raw name bytes:\n{ir}"
+    );
+}
+
+#[test]
 fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons() {
     let point = class(101, "Point", vec![class_field("x", Type::Number)]);
     let module = module_with_classes_and_params(
@@ -2276,8 +6991,14 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+                && record_has_note(
+                    record,
+                    "receiver_proof=declared_named_receiver_guarded_exact_class"
+                )
+                && record_has_note(record, "field_layout=raw_f64_slot_array")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
         }),
-        "expected raw numeric class field f64 store record:\n{artifact:#}"
+        "expected raw numeric class field f64 store record with exact receiver proof:\n{artifact:#}"
     );
     assert!(
         records.iter().any(|record| {
@@ -2286,8 +7007,24 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
                 && record["native_rep_name"] == "f64"
                 && record["access_mode"] == "checked_native"
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+                && record_has_note(
+                    record,
+                    "receiver_proof=declared_named_receiver_guarded_exact_class",
+                )
+                && record_has_note(record, "field_layout=raw_f64_slot_array")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
         }),
-        "expected raw numeric class field f64 load record:\n{artifact:#}"
+        "expected raw numeric class field f64 load record with exact receiver proof:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "WriteBarrierElided"
+                && record["consumer"] == "write_barrier.elided_raw_f64_class_field"
+                && record["native_rep_name"] == "f64"
+                && record_has_note(record, "reason=raw_f64_class_field_pointer_free")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
+        }),
+        "expected pointer-free raw numeric class field store to record barrier elision:\n{artifact:#}"
     );
     assert!(
         records.iter().any(|record| {
@@ -2306,6 +7043,70 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
             >= 2,
         "expected raw-f64 layout consumed summary:\n{artifact:#}"
     );
+    assert!(
+        artifact["summary"]["write_barrier_elided_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1,
+        "expected raw numeric class-field barrier elision summary:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
+    let dynamic_receiver_module = module_with_classes_and_params(
+        "artifact_raw_numeric_class_field_unknown_receiver.ts",
+        vec![class(102, "Point", vec![class_field("x", Type::Number)])],
+        vec![param(1, "p", Type::Any)],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(1)),
+                property: "x".to_string(),
+                value: Box::new(number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "x".to_string(),
+            })),
+        ],
+    );
+    let computed_shape_module = module_with_classes_and_params(
+        "artifact_raw_numeric_class_field_computed_shape.ts",
+        vec![class_with_computed_member(
+            103,
+            "Point",
+            vec![class_field("x", Type::Number)],
+        )],
+        vec![param(1, "p", Type::Named("Point".to_string()))],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(1)),
+                property: "x".to_string(),
+                value: Box::new(number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "x".to_string(),
+            })),
+        ],
+    );
+
+    for module in [dynamic_receiver_module, computed_shape_module] {
+        let artifact = compile_artifact_json_for_module(module);
+        let records = artifact["records"].as_array().unwrap();
+        assert!(
+            !records.iter().any(|record| {
+                record["source_function"] == "probe"
+                    && (record["consumer"] == "class_field_set.raw_f64_store"
+                        || record["consumer"] == "class_field_get.raw_f64_load"
+                        || record["consumer"] == "class_field_get.raw_f64_number_context"
+                        || record["consumer"] == "write_barrier.elided_raw_f64_class_field")
+            }),
+            "unknown/dynamic-shape receivers must not claim raw class-field access or pointer-free barrier elision:\n{artifact:#}"
+        );
+    }
 }
 
 #[path = "native_proof_regressions/invalidation.rs"]

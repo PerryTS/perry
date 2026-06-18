@@ -364,6 +364,10 @@ pub extern "C" fn js_typed_feedback_maybe_dump_trace() {
 #[rustfmt::skip]
 mod keep_typed_feedback {
     use super::*;
+    use crate::typed_feedback::guards::{
+        js_typed_feedback_native_call_method_apply_by_id,
+        js_typed_feedback_native_call_method_by_id,
+    };
     #[used] static K00: extern "C" fn(u64, u32, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize, *const u8, usize) = js_typed_feedback_register_site;
     #[used] static K01: extern "C" fn(u64) = js_typed_feedback_record_guard_pass;
     #[used] static K02: extern "C" fn(u64) = js_typed_feedback_record_guard_fail;
@@ -392,6 +396,7 @@ mod keep_typed_feedback {
     #[used] static K25: extern "C" fn(u64, i64, f64, f64) = js_typed_feedback_object_set_index_polymorphic;
     #[used] static K26: extern "C" fn(u64, *mut ObjectHeader, u32, *const crate::StringHeader, f64) = js_typed_feedback_object_set_unboxed_f64_field;
     #[used] static K27: extern "C" fn(u64, f64) -> f64 = js_typed_feedback_observe_helper_return;
-    #[cfg(feature = "diagnostics")]
     #[used] static K28: extern "C" fn() = js_typed_feedback_maybe_dump_trace;
+    #[used] static K29: unsafe extern "C" fn(u64, f64, i64, *const f64, usize) -> f64 = js_typed_feedback_native_call_method_by_id;
+    #[used] static K30: unsafe extern "C" fn(u64, f64, i64, i64) -> f64 = js_typed_feedback_native_call_method_apply_by_id;
 }

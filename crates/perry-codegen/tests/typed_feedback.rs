@@ -296,13 +296,24 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
     assert!(ir.contains("class_field_set.fast"));
     assert!(ir.contains("class_field_set.fallback"));
-    assert!(ir.contains("class_field_get.fast"));
-    assert!(ir.contains("class_field_get.fallback"));
+    assert!(ir.contains("class_field_get_number.fast"));
+    assert!(ir.contains("class_field_get_number.fallback"));
     assert!(ir.contains("store double"));
     assert!(!ir.contains("call void @js_gc_note_slot_layout"));
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call void @js_object_set_field_by_name"));
     assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
+    let fallback_pos = ir
+        .find("class_field_get_number.fallback")
+        .expect("raw numeric class-field consumer should keep fallback block");
+    let merge_pos = ir[fallback_pos..]
+        .find("class_field_get_number.merge")
+        .map(|pos| fallback_pos + pos)
+        .expect("raw numeric class-field consumer should keep merge block");
+    assert!(
+        ir[fallback_pos..merge_pos].contains("call double @js_number_coerce"),
+        "class-field raw fallback must be coerced before the numeric merge:\n{ir}"
+    );
     assert!(
         ir.contains("call double @js_number_coerce"),
         "class-field raw fallback must be coerced at numeric consumers:\n{ir}"

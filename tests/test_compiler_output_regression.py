@@ -341,7 +341,7 @@ def image_native_records():
             block="for.body.42",
             rep="i32",
             expr_kind="MathImul",
-            consumer="lower_expr_native_i32",
+            consumer="lower_expr_native_i32.structural",
         ),
     ]
 
@@ -1175,6 +1175,85 @@ idxset.bounded_numeric_merge.5:
             self.assertIn(symbol, guard)
         self.assertIn("nm -s", guard)
 
+    def test_runtime_symbol_guard_roots_representation_lowering_helpers(self):
+        guard = (REPO_ROOT / "scripts" / "check_runtime_symbols.sh").read_text(
+            encoding="utf-8"
+        )
+        for symbol in (
+            "js_typed_feedback_maybe_dump_trace",
+            "js_typed_f64_arg_guard",
+            "js_typed_f64_arg_to_raw",
+            "js_typed_i1_arg_guard",
+            "js_typed_i1_arg_to_raw",
+            "js_typed_string_arg_guard",
+            "js_typed_string_arg_to_raw",
+            "js_object_get_field_by_property_id_f64",
+            "js_object_set_field_by_property_id",
+            "js_native_call_method_by_id",
+            "js_native_call_method_apply_by_id",
+            "js_class_method_bind_by_id",
+            "js_method_direct_shape_guard",
+            "js_typed_feedback_class_field_get_guard",
+            "js_typed_feedback_class_field_set_guard",
+            "js_typed_feedback_method_direct_call_guard",
+            "js_typed_feedback_closure_direct_call_guard",
+            "js_typed_feedback_native_call_method_by_id",
+            "js_typed_feedback_native_call_method_apply_by_id",
+        ):
+            self.assertIn(symbol, guard)
+
+    def test_runtime_symbol_guard_roots_typed_feedback_array_helpers(self):
+        guard = (REPO_ROOT / "scripts" / "check_runtime_symbols.sh").read_text(
+            encoding="utf-8"
+        )
+        for symbol in (
+            "js_typed_feedback_array_get_f64",
+            "js_typed_feedback_plain_array_index_get_guard",
+            "js_typed_feedback_numeric_array_index_get_guard",
+            "js_typed_feedback_packed_f64_array_loop_guard",
+            "js_typed_feedback_array_index_get_fallback_boxed",
+            "js_typed_feedback_array_set_f64",
+            "js_typed_feedback_array_set_f64_extend",
+            "js_typed_feedback_plain_array_index_set_guard",
+            "js_typed_feedback_numeric_array_index_set_guard",
+            "js_typed_feedback_numeric_array_push_guard",
+            "js_typed_feedback_array_index_set_fallback_boxed",
+            "js_typed_feedback_observe_array_element",
+            "js_typed_feedback_array_set_string_key",
+            "js_typed_feedback_array_set_index_or_string",
+            "js_typed_feedback_object_set_index_polymorphic",
+            "js_typed_feedback_object_set_unboxed_f64_field",
+        ):
+            self.assertIn(symbol, guard)
+
+    def test_runtime_symbol_guard_roots_map_set_string_lowering_helpers(self):
+        guard = (REPO_ROOT / "scripts" / "check_runtime_symbols.sh").read_text(
+            encoding="utf-8"
+        )
+        for symbol in (
+            "js_map_set_string_number",
+            "js_map_get_string_key",
+            "js_map_has_string_key",
+            "js_set_add_string",
+            "js_set_has_string",
+            "js_set_delete_string",
+        ):
+            self.assertIn(symbol, guard)
+
+    def test_runtime_symbol_guard_roots_async_control_box_helpers(self):
+        guard = (REPO_ROOT / "scripts" / "check_runtime_symbols.sh").read_text(
+            encoding="utf-8"
+        )
+        for symbol in (
+            "js_i32_box_alloc",
+            "js_i32_box_get",
+            "js_i32_box_set",
+            "js_bool_box_alloc",
+            "js_bool_box_get",
+            "js_bool_box_set",
+        ):
+            self.assertIn(symbol, guard)
+
     def test_workload_spec_rejects_missing_required_fields(self):
         with self.assertRaises(HARNESS.HarnessError):
             HARNESS.validate_workload_spec(
@@ -1721,7 +1800,7 @@ idxset.bounded_numeric_merge.5:
                             consumer="scalar_object_field_store",
                             access_mode=None,
                             source_function="scalarReplacementChecksum",
-                            materialization_reason="runtime_api",
+                            materialization_reason="return_abi",
                         )
                     ]
                 }
@@ -1733,6 +1812,87 @@ idxset.bounded_numeric_merge.5:
                 "native_reps_no_unexpected_materialization_reasons" in error
                 for error in report["errors"]
             )
+        )
+
+    def test_scoped_materialization_checks_ignore_out_of_region_records(self):
+        workloads = {
+            "scoped_materialization": {
+                "native_rep_checks": {
+                    "materialization_regions": ["input_generation"],
+                    "allow_materialization_reasons": [],
+                },
+                "named_regions": [
+                    {
+                        "name": "input_generation",
+                        "selectors": [{"label_prefix_any": ["for.body.20"]}],
+                    }
+                ],
+            }
+        }
+        report = HARNESS.verify_artifacts(
+            workload="scoped_materialization",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            workloads=workloads,
+            native_reps=[
+                {
+                    "records": [
+                        native_record(
+                            block="entry.0",
+                            rep="js_value",
+                            materialization_reason="runtime_api",
+                        )
+                    ]
+                }
+            ],
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_scoped_materialization_checks_reject_in_region_records(self):
+        workloads = {
+            "scoped_materialization": {
+                "native_rep_checks": {
+                    "materialization_regions": ["input_generation"],
+                    "allow_materialization_reasons": [],
+                },
+                "named_regions": [
+                    {
+                        "name": "input_generation",
+                        "selectors": [{"label_prefix_any": ["for.body.20"]}],
+                    }
+                ],
+            }
+        }
+        report = HARNESS.verify_artifacts(
+            workload="scoped_materialization",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={"vectorized_count": 0, "missed_count": 0, "analysis_count": 0},
+            workloads=workloads,
+            native_reps=[
+                {
+                    "records": [
+                        native_record(
+                            block="for.body.20",
+                            rep="js_value",
+                            materialization_reason="runtime_api",
+                        )
+                    ]
+                }
+            ],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any(
+                "native_reps_no_unexpected_materialization_reasons" in error
+                for error in report["errors"]
+            ),
+            report["errors"],
         )
 
     def h1_alias_negative_records(self, length_records, mutated_records=None):

@@ -51,6 +51,7 @@ mod new;
 mod new_helpers;
 mod options;
 mod property_get;
+mod scalar_method;
 mod ui_styling;
 mod ui_tables;
 mod web_storage;
@@ -179,6 +180,14 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
 
     // Cross-module function call via ExternFuncRef.
     if let Some(v) = extern_func::try_lower_extern_func_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+
+    // Scalar-replaced exact receiver method summaries, e.g.
+    // `let p = new Point(x, y); p.sum()` where `sum` is proven to only read
+    // numeric `this` fields. Must run before generic property-get method
+    // dispatch, which requires a heap receiver.
+    if let Some(v) = scalar_method::try_lower_scalar_replaced_method_call(ctx, callee, args)? {
         return Ok(v);
     }
 

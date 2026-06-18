@@ -23,8 +23,9 @@ use crate::lower_string_method::{
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 #[allow(unused_imports)]
 use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_definitely_string_expr,
+    is_map_expr, is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    receiver_class_name, set_static_type_args,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -77,6 +78,13 @@ fn number_coerce_operand_is_already_primitive_number(ctx: &FnCtx<'_>, operand: &
         },
         _ => false,
     }
+}
+
+fn is_static_string_set(ctx: &FnCtx<'_>, set: &Expr) -> bool {
+    matches!(
+        set_static_type_args(ctx, set),
+        Some([HirType::String | HirType::StringLiteral(_)])
+    )
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -275,11 +283,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- set.add(value) — updates the local in place --------
         Expr::SetAdd { set_id, value } => {
+            let set_expr = Expr::LocalGet(*set_id);
+            let use_string_set =
+                is_static_string_set(ctx, &set_expr) && is_definitely_string_expr(ctx, value);
             let v = lower_expr(ctx, value)?;
-            let set_box = lower_expr(ctx, &Expr::LocalGet(*set_id))?;
+            let set_box = lower_expr(ctx, &set_expr)?;
             let blk = ctx.block();
             let set_handle = unbox_to_i64(blk, &set_box);
-            let new_handle = blk.call(I64, "js_set_add", &[(I64, &set_handle), (DOUBLE, &v)]);
+            let new_handle = if use_string_set {
+                let value_handle = unbox_str_handle(blk, &v);
+                blk.call(
+                    I64,
+                    "js_set_add_string",
+                    &[(I64, &set_handle), (I64, &value_handle)],
+                )
+            } else {
+                blk.call(I64, "js_set_add", &[(I64, &set_handle), (DOUBLE, &v)])
+            };
             let new_box = nanbox_pointer_inline(blk, &new_handle);
             // Write back to the storage so subsequent reads see the
             // possibly-realloc'd pointer.
@@ -305,11 +325,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- set.has(value) -> boolean --------
         Expr::SetHas { set, value } => {
+            let use_string_set =
+                is_static_string_set(ctx, set) && is_definitely_string_expr(ctx, value);
             let s_box = lower_expr(ctx, set)?;
             let v_box = lower_expr(ctx, value)?;
             let blk = ctx.block();
             let s_handle = unbox_to_i64(blk, &s_box);
-            let i32_v = blk.call(I32, "js_set_has", &[(I64, &s_handle), (DOUBLE, &v_box)]);
+            let i32_v = if use_string_set {
+                let value_handle = unbox_str_handle(blk, &v_box);
+                blk.call(
+                    I32,
+                    "js_set_has_string",
+                    &[(I64, &s_handle), (I64, &value_handle)],
+                )
+            } else {
+                blk.call(I32, "js_set_has", &[(I64, &s_handle), (DOUBLE, &v_box)])
+            };
             let bit = blk.icmp_ne(I32, &i32_v, "0");
             let tagged = blk.select(
                 crate::types::I1,
@@ -323,11 +354,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- set.delete(value) -> boolean --------
         Expr::SetDelete { set, value } => {
+            let use_string_set =
+                is_static_string_set(ctx, set) && is_definitely_string_expr(ctx, value);
             let s_box = lower_expr(ctx, set)?;
             let v_box = lower_expr(ctx, value)?;
             let blk = ctx.block();
             let s_handle = unbox_to_i64(blk, &s_box);
-            let i32_v = blk.call(I32, "js_set_delete", &[(I64, &s_handle), (DOUBLE, &v_box)]);
+            let i32_v = if use_string_set {
+                let value_handle = unbox_str_handle(blk, &v_box);
+                blk.call(
+                    I32,
+                    "js_set_delete_string",
+                    &[(I64, &s_handle), (I64, &value_handle)],
+                )
+            } else {
+                blk.call(I32, "js_set_delete", &[(I64, &s_handle), (DOUBLE, &v_box)])
+            };
             let bit = blk.icmp_ne(I32, &i32_v, "0");
             let tagged = blk.select(
                 crate::types::I1,

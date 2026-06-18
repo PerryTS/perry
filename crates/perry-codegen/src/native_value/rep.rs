@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::types::{LlvmType, DOUBLE, F32, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, F32, I1, I32, I64, I8, PTR};
 
 use super::buffer::{AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewRep};
 
@@ -36,6 +36,9 @@ pub(crate) enum NativeRep {
     U64,
     /// Native `usize` on Perry's supported 64-bit native runtime targets.
     USize,
+    /// Native boolean carried as an LLVM `i1`. JS-visible boundaries must
+    /// materialize this as TAG_TRUE/TAG_FALSE rather than as a numeric 0/1.
+    I1,
     F64,
     /// Native/storage-only 32-bit float. It may be region-local, but JS-visible
     /// number boundaries must materialize through an explicit `fpext`.
@@ -84,6 +87,7 @@ impl NativeRep {
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::USize => "usize",
+            Self::I1 => "i1",
             Self::F64 => "f64",
             Self::F32 => "f32",
             Self::U8 => "u8",
@@ -109,6 +113,7 @@ pub(crate) enum ExpectedNativeRep {
     U32,
     U64,
     USize,
+    I1,
     F64,
     F32,
     BufferLen,
@@ -162,6 +167,10 @@ impl LoweredValue {
 
     pub(crate) fn usize(value: impl Into<String>) -> Self {
         Self::new(SemanticKind::JsNumber, NativeRep::USize, I64, value)
+    }
+
+    pub(crate) fn i1(value: impl Into<String>) -> Self {
+        Self::new(SemanticKind::JsValue, NativeRep::I1, I1, value)
     }
 
     pub(crate) fn u8(value: impl Into<String>) -> Self {
@@ -247,6 +256,7 @@ impl LoweredValue {
                 | (ExpectedNativeRep::U32, NativeRep::U32)
                 | (ExpectedNativeRep::U64, NativeRep::U64)
                 | (ExpectedNativeRep::USize, NativeRep::USize)
+                | (ExpectedNativeRep::I1, NativeRep::I1)
                 | (ExpectedNativeRep::F64, NativeRep::F64)
                 | (ExpectedNativeRep::F32, NativeRep::F32)
                 | (ExpectedNativeRep::BufferLen, NativeRep::BufferLen)

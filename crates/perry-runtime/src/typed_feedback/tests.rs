@@ -930,6 +930,24 @@ fn typed_feedback_numeric_array_push_guard_rejects_mutability_restricted_arrays(
     assert_eq!(site.fallback_calls, 0);
 }
 
+fn assert_lto_keepalive_anchor(src: &str, static_name: &str, signature: &str, target: &str) {
+    let static_pos = src
+        .find(static_name)
+        .unwrap_or_else(|| panic!("missing keepalive static {static_name} for {target}"));
+    let start = static_pos.saturating_sub(32);
+    let end = (static_pos + 512).min(src.len());
+    let window = &src[start..end];
+    assert!(
+        window.contains("#[used]"),
+        "keepalive static {static_name} for {target} is not #[used]"
+    );
+    assert!(
+        window.contains(signature),
+        "missing keepalive signature for {target}"
+    );
+    assert!(window.contains(target), "missing keepalive target {target}");
+}
+
 #[test]
 fn numeric_array_helpers_have_lto_keepalive_anchors() {
     let header = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/array/header.rs"));
@@ -942,50 +960,262 @@ fn numeric_array_helpers_have_lto_keepalive_anchors() {
         "/src/array/push_pop.rs"
     ));
 
-    for (src, signature, target) in [
+    for (src, static_name, signature, target) in [
         (
             header,
+            "KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64",
             "static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern \"C\" fn(f64) -> f64",
             "js_array_numeric_value_to_raw_f64",
         ),
         (
             header,
+            "KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT",
             "static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern \"C\" fn(*mut ArrayHeader) -> i32",
             "js_array_mark_numeric_f64_layout",
         ),
         (
             header,
+            "KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT",
             "static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern \"C\" fn(*mut ArrayHeader)",
             "js_array_clear_numeric_layout",
         ),
         (
             header,
+            "KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE",
             "static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern \"C\" fn(*mut ArrayHeader, u64)",
             "js_array_note_numeric_write",
         ),
         (
             header,
+            "KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT",
             "static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern \"C\" fn(*const ArrayHeader) -> i32",
             "js_array_is_numeric_f64_layout",
         ),
         (
             indexing,
+            "KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED",
             "static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern \"C\" fn(*mut ArrayHeader, u32) -> f64",
             "js_array_numeric_get_f64_unboxed",
         ),
         (
             indexing,
+            "KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED",
             "static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern \"C\" fn(*mut ArrayHeader, u32, f64) -> i32",
             "js_array_numeric_set_f64_unboxed",
         ),
         (
             push_pop,
+            "KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED",
             "static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern \"C\" fn(",
             "js_array_numeric_push_f64_unboxed",
         ),
     ] {
-        assert!(src.contains(signature), "missing signature for {target}");
-        assert!(src.contains(target), "missing keepalive target {target}");
+        assert_lto_keepalive_anchor(src, static_name, signature, target);
+    }
+}
+
+#[test]
+fn representation_lowering_helpers_have_lto_keepalive_anchors() {
+    let native_abi = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_abi.rs"));
+    let native_module = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/object/native_module.rs"
+    ));
+    let guards = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/typed_feedback/guards.rs"
+    ));
+    let trace = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/typed_feedback/trace.rs"
+    ));
+    let map = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/map.rs"));
+    let set = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/set.rs"));
+    let boxes = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/box.rs"));
+
+    for (src, static_name, signature, target) in [
+        (
+            native_abi,
+            "KEEP_JS_TYPED_F64_ARG_GUARD",
+            "static KEEP_JS_TYPED_F64_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_f64_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_F64_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_F64_ARG_TO_RAW: extern \"C\" fn(f64) -> f64",
+            "js_typed_f64_arg_to_raw",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I1_ARG_GUARD",
+            "static KEEP_JS_TYPED_I1_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_i1_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I1_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_I1_ARG_TO_RAW: extern \"C\" fn(f64) -> i32",
+            "js_typed_i1_arg_to_raw",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_STRING_ARG_GUARD",
+            "static KEEP_JS_TYPED_STRING_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_string_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_STRING_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_STRING_ARG_TO_RAW: extern \"C\" fn(f64) -> i64",
+            "js_typed_string_arg_to_raw",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_OBJECT_GET_FIELD_BY_PROPERTY_ID_F64",
+            "static KEEP_JS_OBJECT_GET_FIELD_BY_PROPERTY_ID_F64: extern \"C\" fn(*const ObjectHeader, i64) -> f64",
+            "js_object_get_field_by_property_id_f64",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_OBJECT_SET_FIELD_BY_PROPERTY_ID",
+            "static KEEP_JS_OBJECT_SET_FIELD_BY_PROPERTY_ID: extern \"C\" fn(*mut ObjectHeader, i64, f64)",
+            "js_object_set_field_by_property_id",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_NATIVE_CALL_METHOD_BY_ID",
+            "static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern \"C\" fn(f64, i64, *const f64, usize) -> f64",
+            "js_native_call_method_by_id",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID",
+            "static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern \"C\" fn(f64, i64, i64) -> f64",
+            "js_native_call_method_apply_by_id",
+        ),
+        (
+            native_module,
+            "KEEP_CLASS_METHOD_BIND_BY_ID",
+            "static KEEP_CLASS_METHOD_BIND_BY_ID: extern \"C\" fn(f64, i64) -> f64",
+            "js_class_method_bind_by_id",
+        ),
+        (
+            guards,
+            "static G0",
+            "static G0: extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32",
+            "js_typed_feedback_class_field_get_guard",
+        ),
+        (
+            guards,
+            "static G1",
+            "static G1: extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32",
+            "js_typed_feedback_class_field_set_guard",
+        ),
+        (
+            guards,
+            "static G2",
+            "static G2: unsafe extern \"C\" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32",
+            "js_typed_feedback_method_direct_call_guard",
+        ),
+        (
+            guards,
+            "static G3",
+            "static G3: extern \"C\" fn(u64, f64, *const u8, u32, u32) -> i32",
+            "js_typed_feedback_closure_direct_call_guard",
+        ),
+        (
+            guards,
+            "static G4",
+            "static G4: unsafe extern \"C\" fn(f64, u32, *const ArrayHeader) -> i32",
+            "js_method_direct_shape_guard",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_NUMBER",
+            "static KEEP_JS_MAP_SET_STRING_NUMBER: extern \"C\" fn(",
+            "js_map_set_string_number",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_HAS_STRING_KEY",
+            "static KEEP_JS_MAP_HAS_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> i32",
+            "js_map_has_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_GET_STRING_KEY",
+            "static KEEP_JS_MAP_GET_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> f64",
+            "js_map_get_string_key",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_STRING",
+            "static KEEP_JS_SET_ADD_STRING: extern \"C\" fn(",
+            "js_set_add_string",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_STRING",
+            "static KEEP_JS_SET_HAS_STRING: extern \"C\" fn(*const SetHeader, *const StringHeader) -> i32",
+            "js_set_has_string",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_STRING",
+            "static KEEP_JS_SET_DELETE_STRING: extern \"C\" fn(*mut SetHeader, *const StringHeader) -> i32",
+            "js_set_delete_string",
+        ),
+        (
+            boxes,
+            "KEEP_JS_I32_BOX_ALLOC",
+            "static KEEP_JS_I32_BOX_ALLOC: extern \"C\" fn(i32) -> *mut I32Box",
+            "js_i32_box_alloc",
+        ),
+        (
+            boxes,
+            "KEEP_JS_I32_BOX_GET",
+            "static KEEP_JS_I32_BOX_GET: extern \"C\" fn(*mut I32Box) -> i32",
+            "js_i32_box_get",
+        ),
+        (
+            boxes,
+            "KEEP_JS_I32_BOX_SET",
+            "static KEEP_JS_I32_BOX_SET: extern \"C\" fn(*mut I32Box, i32)",
+            "js_i32_box_set",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOOL_BOX_ALLOC",
+            "static KEEP_JS_BOOL_BOX_ALLOC: extern \"C\" fn(i32) -> *mut BoolBox",
+            "js_bool_box_alloc",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOOL_BOX_GET",
+            "static KEEP_JS_BOOL_BOX_GET: extern \"C\" fn(*mut BoolBox) -> i32",
+            "js_bool_box_get",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOOL_BOX_SET",
+            "static KEEP_JS_BOOL_BOX_SET: extern \"C\" fn(*mut BoolBox, i32)",
+            "js_bool_box_set",
+        ),
+        (
+            trace,
+            "static K29",
+            "static K29: unsafe extern \"C\" fn(u64, f64, i64, *const f64, usize) -> f64",
+            "js_typed_feedback_native_call_method_by_id",
+        ),
+        (
+            trace,
+            "static K30",
+            "static K30: unsafe extern \"C\" fn(u64, f64, i64, i64) -> f64",
+            "js_typed_feedback_native_call_method_apply_by_id",
+        ),
+    ] {
+        assert_lto_keepalive_anchor(src, static_name, signature, target);
     }
 }
 

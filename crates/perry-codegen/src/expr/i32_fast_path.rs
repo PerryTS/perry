@@ -6,7 +6,7 @@ use perry_hir::{BinaryOp, Expr};
 
 use super::{lower_expr, unbox_to_i64, FlatConstInfo, FnCtx};
 use crate::native_value::{
-    materialize_js_value_bits, ExpectedNativeRep, LoweredValue, MaterializationReason,
+    materialize_js_value_bits, ExpectedNativeRep, LoweredValue, MaterializationReason, NativeRep,
 };
 use crate::type_analysis::{expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr};
 use crate::types::{DOUBLE, F32, I32, I64};
@@ -367,6 +367,7 @@ pub(crate) fn lower_expr_native(
         ExpectedNativeRep::U32 => lower_expr_native_u32(ctx, e),
         ExpectedNativeRep::U64 => lower_expr_native_u64(ctx, e),
         ExpectedNativeRep::USize => lower_expr_native_usize(ctx, e),
+        ExpectedNativeRep::I1 => lower_expr_native_i1(ctx, e),
         ExpectedNativeRep::F64 => lower_expr_native_f64(ctx, e),
         ExpectedNativeRep::F32 => lower_expr_native_f32(ctx, e),
         ExpectedNativeRep::BufferLen => lower_expr_native_buffer_len(ctx, e),
@@ -402,6 +403,10 @@ fn usize_lowered(value: String) -> LoweredValue {
     LoweredValue::usize(value)
 }
 
+fn i1_lowered(value: String) -> LoweredValue {
+    LoweredValue::i1(value)
+}
+
 fn f64_lowered(value: String) -> LoweredValue {
     LoweredValue::f64(value)
 }
@@ -425,7 +430,11 @@ fn js_value_bits_lowered(value: String) -> LoweredValue {
 fn native_expr_kind(e: &Expr) -> &'static str {
     match e {
         Expr::Integer(_) => "Integer",
+        Expr::Bool(_) => "Bool",
         Expr::LocalGet(_) => "LocalGet",
+        Expr::Compare { .. } => "Compare",
+        Expr::Unary { .. } => "Unary",
+        Expr::BooleanCoerce(_) => "BooleanCoerce",
         Expr::MathImul(_, _) => "MathImul",
         Expr::Binary { .. } => "Binary",
         Expr::Call { .. } => "Call",
@@ -435,7 +444,210 @@ fn native_expr_kind(e: &Expr) -> &'static str {
     }
 }
 
+fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
+    let value = match e {
+        Expr::Integer(n) => Some((*n as i32).to_string()),
+        Expr::LocalGet(id) => ctx
+            .i32_counter_slots
+            .get(id)
+            .cloned()
+            .map(|slot| ctx.block().load(I32, &slot)),
+        Expr::MathImul(a, b) => {
+            let l = lower_expr_native_i32(ctx, a)?.value;
+            let r = lower_expr_native_i32(ctx, b)?.value;
+            Some(ctx.block().mul(I32, &l, &r))
+        }
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => {
+            Some(lower_expr_native_i32(ctx, left)?.value)
+        }
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr
+            ) =>
+        {
+            let l = lower_expr_native_i32(ctx, left)?.value;
+            let r = lower_expr_native_i32(ctx, right)?.value;
+            let blk = ctx.block();
+            Some(match op {
+                BinaryOp::Add => blk.add(I32, &l, &r),
+                BinaryOp::Sub => blk.sub(I32, &l, &r),
+                BinaryOp::Mul => blk.mul(I32, &l, &r),
+                BinaryOp::BitAnd => blk.and(I32, &l, &r),
+                BinaryOp::BitOr => blk.or(I32, &l, &r),
+                BinaryOp::BitXor => blk.xor(I32, &l, &r),
+                BinaryOp::Shl => blk.shl(I32, &l, &r),
+                BinaryOp::Shr => blk.ashr(I32, &l, &r),
+                BinaryOp::UShr => blk.lshr(I32, &l, &r),
+                _ => unreachable!(),
+            })
+        }
+        Expr::Call { callee, args, .. } => {
+            let fid = if let Expr::FuncRef(id) = callee.as_ref() {
+                *id
+            } else {
+                0
+            };
+            if ctx.clamp3_functions.contains(&fid) && args.len() == 3 {
+                let v = lower_expr_native_i32(ctx, &args[0])?.value;
+                let lo = lower_expr_native_i32(ctx, &args[1])?.value;
+                let hi = lower_expr_native_i32(ctx, &args[2])?.value;
+                let blk = ctx.block();
+                let r1 = blk.fresh_reg();
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smax.i32(i32 {}, i32 {})",
+                    r1, v, lo
+                ));
+                let r2 = blk.fresh_reg();
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smin.i32(i32 {}, i32 {})",
+                    r2, r1, hi
+                ));
+                Some(r2)
+            } else if ctx.clamp_u8_functions.contains(&fid) && args.len() == 1 {
+                let v = lower_expr_native_i32(ctx, &args[0])?.value;
+                let blk = ctx.block();
+                let r1 = blk.fresh_reg();
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smax.i32(i32 {}, i32 0)",
+                    r1, v
+                ));
+                let r2 = blk.fresh_reg();
+                blk.emit_raw(format!(
+                    "{} = call i32 @llvm.smin.i32(i32 {}, i32 255)",
+                    r2, r1
+                ));
+                Some(r2)
+            } else if ctx.i32_identity_functions.contains(&fid) && args.len() == 1 {
+                Some(lower_expr_native_i32(ctx, &args[0])?.value)
+            } else {
+                None
+            }
+        }
+        Expr::Uint8ArrayGet { array, index } => {
+            Some(super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?.value)
+        }
+        Expr::BufferIndexGet { buffer, index } => {
+            Some(super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?.value)
+        }
+        _ => None,
+    };
+    Ok(value)
+}
+
+fn lower_expr_native_i1(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if let Some(lowered) = crate::expr::lower_expr_value(ctx, e)? {
+        if matches!(lowered.rep, NativeRep::I1) {
+            ctx.record_lowered_value(
+                native_expr_kind(e),
+                None,
+                "lower_expr_native_i1.proven",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+            return Ok(lowered);
+        }
+    }
+    let boxed = lower_expr(ctx, e)?;
+    let value = crate::lower_conditional::lower_truthy(ctx, &boxed, e);
+    let lowered = i1_lowered(value);
+    ctx.record_lowered_value(
+        native_expr_kind(e),
+        None,
+        "lower_expr_native_i1.truthy_fallback",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        Vec::new(),
+    );
+    Ok(lowered)
+}
+
 fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if can_lower_expr_as_i32(
+        e,
+        &ctx.i32_counter_slots,
+        ctx.flat_const_arrays,
+        &ctx.array_row_aliases,
+        ctx.native_facts.integer_locals(),
+        ctx.clamp3_functions,
+        ctx.clamp_u8_functions,
+        ctx.integer_returning_functions,
+        ctx.i32_identity_functions,
+    ) {
+        if let Some(value) = try_lower_expr_native_i32_structural(ctx, e)? {
+            let lowered = i32_lowered(value);
+            ctx.record_lowered_value(
+                native_expr_kind(e),
+                None,
+                "lower_expr_native_i32.structural",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+            return Ok(lowered);
+        }
+    }
+    if let Some(lowered) = crate::expr::lower_expr_value(ctx, e)? {
+        let value = match lowered.rep {
+            NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => Some(lowered.value),
+            NativeRep::U8 | NativeRep::I1 => {
+                Some(ctx.block().zext(lowered.llvm_ty, &lowered.value, I32))
+            }
+            NativeRep::F64 => {
+                if is_known_finite(ctx, e) {
+                    Some(ctx.block().toint32_fast(&lowered.value))
+                } else {
+                    Some(ctx.block().toint32(&lowered.value))
+                }
+            }
+            NativeRep::F32 => {
+                let widened = ctx.block().fpext(F32, &lowered.value, DOUBLE);
+                Some(ctx.block().toint32(&widened))
+            }
+            _ => None,
+        };
+        if let Some(value) = value {
+            let lowered = i32_lowered(value);
+            ctx.record_lowered_value(
+                native_expr_kind(e),
+                None,
+                "lower_expr_native_i32.from_lowered_value",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+            return Ok(lowered);
+        }
+    }
     let value = match e {
         Expr::Integer(n) => (*n as i32).to_string(),
         Expr::LocalGet(id) => {
@@ -564,12 +776,43 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
 }
 
 fn lower_expr_native_js_value_bits(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    let value = lower_expr(ctx, e)?;
-    let bits = materialize_js_value_bits(
-        ctx,
-        LoweredValue::js_value(value),
-        MaterializationReason::FunctionAbi,
-    );
+    let boxed_local_id = match e {
+        Expr::LocalGet(id)
+            if ctx.boxed_vars.contains(id)
+                && !ctx.closure_captures.contains_key(id)
+                && !ctx.module_globals.contains_key(id) =>
+        {
+            Some(*id)
+        }
+        _ => None,
+    };
+    let bits = if let Some(id) = boxed_local_id {
+        if let Some(slot) = ctx.locals.get(&id).cloned() {
+            let box_ptr = ctx.block().load(I64, &slot);
+            let value = ctx.block().call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]);
+            materialize_js_value_bits(
+                ctx,
+                LoweredValue::js_value(value),
+                MaterializationReason::RuntimeApi,
+            )
+        } else {
+            let value = lower_expr(ctx, e)?;
+            materialize_js_value_bits(
+                ctx,
+                LoweredValue::js_value(value),
+                MaterializationReason::FunctionAbi,
+            )
+        }
+    } else if let Some(lowered) = crate::expr::lower_expr_value(ctx, e)? {
+        materialize_js_value_bits(ctx, lowered, MaterializationReason::FunctionAbi)
+    } else {
+        let value = lower_expr(ctx, e)?;
+        materialize_js_value_bits(
+            ctx,
+            LoweredValue::js_value(value),
+            MaterializationReason::FunctionAbi,
+        )
+    };
     let lowered = js_value_bits_lowered(bits);
     ctx.record_lowered_value(
         native_expr_kind(e),
@@ -587,6 +830,36 @@ fn lower_expr_native_js_value_bits(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Lowe
 }
 
 fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if let Some(lowered) = crate::expr::lower_expr_value(ctx, e)? {
+        let value = match lowered.rep {
+            NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => Some(lowered.value),
+            NativeRep::U8 | NativeRep::I1 => {
+                Some(ctx.block().zext(lowered.llvm_ty, &lowered.value, I32))
+            }
+            NativeRep::F64 => Some(ctx.block().toint32(&lowered.value)),
+            NativeRep::F32 => {
+                let widened = ctx.block().fpext(F32, &lowered.value, DOUBLE);
+                Some(ctx.block().toint32(&widened))
+            }
+            _ => None,
+        };
+        if let Some(value) = value {
+            let lowered = u32_lowered(value);
+            ctx.record_lowered_value(
+                native_expr_kind(e),
+                None,
+                "lower_expr_native_u32.from_lowered_value",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                Vec::new(),
+            );
+            return Ok(lowered);
+        }
+    }
     let value = match e {
         Expr::Integer(n) if *n >= 0 && u32::try_from(*n).is_ok() => (*n as u32).to_string(),
         Expr::LocalGet(id) => {
@@ -694,6 +967,24 @@ fn lower_expr_native_usize(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue
 }
 
 fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if let Some(value) =
+        crate::expr::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, e)?
+    {
+        let lowered = f64_lowered(value);
+        ctx.record_lowered_value(
+            native_expr_kind(e),
+            None,
+            "lower_expr_native_f64.class_field_number_context",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            Vec::new(),
+        );
+        return Ok(lowered);
+    }
     let needs_raw_f64_fallback_coercion = expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
         || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e);
     let raw = lower_expr(ctx, e)?;

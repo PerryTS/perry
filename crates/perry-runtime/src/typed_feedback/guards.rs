@@ -650,6 +650,29 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn js_typed_feedback_native_call_method_by_id(
+    site_id: u64,
+    object: f64,
+    method_id: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    js_typed_feedback_native_call_method(
+        site_id,
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_ptr,
+        args_len,
+    )
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
     site_id: u64,
     object: f64,
@@ -690,6 +713,27 @@ pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply(
         record_fallback_call(site_id);
     }
     crate::object::js_native_call_method_apply(object, method_name_ptr, method_name_len, args_array)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_typed_feedback_native_call_method_apply_by_id(
+    site_id: u64,
+    object: f64,
+    method_id: i64,
+    args_array: i64,
+) -> f64 {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    js_typed_feedback_native_call_method_apply(
+        site_id,
+        object,
+        name_ref.ptr as *const i8,
+        name_ref.len,
+        args_array,
+    )
 }
 
 #[no_mangle]

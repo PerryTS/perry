@@ -89,6 +89,7 @@ pub enum Platform {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Compile TypeScript file(s) to native executable
+    #[command(alias = "build")]
     Compile(commands::compile::CompileArgs),
 
     /// Check TypeScript compatibility without compiling
@@ -201,6 +202,7 @@ fn is_legacy_invocation(args: &[String]) -> bool {
             arg.as_str(),
             "compile"
                 | "check"
+                | "build"
                 | "init"
                 | "doctor"
                 | "explain"

@@ -134,8 +134,7 @@ fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<S
     } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {
         if let Some(slot) = ctx.locals.get(&id).cloned() {
             let blk = ctx.block();
-            let box_dbl = blk.load(DOUBLE, &slot);
-            let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+            let box_ptr = blk.load(I64, &slot);
             blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, value)]);
             let value_bits = ctx.block().bitcast_double_to_i64(value);
             emit_write_barrier(ctx, &box_ptr, &value_bits);

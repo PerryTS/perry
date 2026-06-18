@@ -51,6 +51,11 @@ use super::{
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
     if expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
         if let Some(value) =
+            super::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, expr)?
+        {
+            return Ok((value, true));
+        }
+        if let Some(value) =
             super::index_get::lower_numeric_index_get_for_number_context(ctx, expr)?
         {
             return Ok((value, true));

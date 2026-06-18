@@ -134,6 +134,14 @@ fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {
     nanbox_pointer_inline(ctx.block(), &current)
 }
 
+fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<String> {
+    let prev_discard = ctx.discard_expr_value;
+    ctx.discard_expr_value = false;
+    let lowered = lower_expr(ctx, arg);
+    ctx.discard_expr_value = prev_discard;
+    lowered
+}
+
 /// The effective constructor arity for `new <class>(...)`: the class's own
 /// ctor params, else — for a subclass with no own ctor — the closest
 /// ancestor-with-a-ctor's param count (the synthesized default ctor forwards
@@ -377,7 +385,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 )?;
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    lowered_args.push(lower_constructor_arg(ctx, a)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(
@@ -398,7 +406,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             if class_name == "Function" {
                 let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    lowered_args.push(lower_constructor_arg(ctx, a)?);
                 }
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 return Ok(ctx.block().call(
@@ -428,7 +436,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // Lower the args first (constructor params).
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
-        lowered_args.push(lower_expr(ctx, a)?);
+        lowered_args.push(lower_constructor_arg(ctx, a)?);
     }
 
     // Compute total field count including inherited parent fields.

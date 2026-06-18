@@ -214,8 +214,7 @@ fn lower_index_i32_value(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<LoweredVal
     ) {
         lower_expr_native(ctx, index, crate::native_value::ExpectedNativeRep::I32)?.value
     } else {
-        let d = lower_expr(ctx, index)?;
-        ctx.block().fptosi(DOUBLE, &d, I32)
+        lower_expr_native(ctx, index, crate::native_value::ExpectedNativeRep::I32)?.value
     };
     Ok(LoweredValue::i32(value))
 }
@@ -234,8 +233,7 @@ fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
     ) {
         Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
     } else {
-        let v = lower_expr(ctx, value)?;
-        Ok(ctx.block().fptosi(DOUBLE, &v, I32))
+        Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
     }
 }
 

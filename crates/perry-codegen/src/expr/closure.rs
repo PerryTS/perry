@@ -137,9 +137,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         );
                         captured_values.push(v);
                     } else if let Some(slot) = ctx.locals.get(cap_id).cloned() {
-                        // Enclosing function owns the box: slot
-                        // holds the box pointer as a double.
-                        let v = ctx.block().load(DOUBLE, &slot);
+                        // Enclosing function owns the box: slot holds
+                        // the raw box pointer as i64. The closure capture
+                        // helper is still a double ABI, so bitcast only at
+                        // that helper edge.
+                        let box_ptr = ctx.block().load(I64, &slot);
+                        let v = ctx.block().bitcast_i64_to_double(&box_ptr);
                         captured_values.push(v);
                     } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {
                         // Global boxed var (rare).

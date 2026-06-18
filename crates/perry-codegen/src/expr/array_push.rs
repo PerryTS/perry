@@ -22,7 +22,8 @@ use crate::lower_string_method::{
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
-    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+    BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
+    NativeRep, SemanticKind,
 };
 #[allow(unused_imports)]
 use crate::type_analysis::{
@@ -36,14 +37,15 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
     can_lower_expr_as_i32, emit_array_numeric_write_note_on_block,
-    emit_jsvalue_slot_store_on_block, emit_layout_note_slot_on_block,
-    emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
-    emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
+    emit_jsvalue_slot_store_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
+    emit_layout_note_slot_on_block, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_string_literal_global,
+    emit_typed_feedback_register_site, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block,
     expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32, lower_expr_native,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
@@ -64,6 +66,39 @@ fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str) -> String {
     emit_array_handle_length(ctx, &array_handle)
 }
 
+fn lower_array_push_value(
+    ctx: &mut FnCtx<'_>,
+    value: &Expr,
+    layout_note_needed: bool,
+    write_barrier_needed: bool,
+) -> Result<(String, Option<String>)> {
+    if !layout_note_needed && !write_barrier_needed {
+        return Ok((lower_expr(ctx, value)?, None));
+    }
+
+    let lowered = lower_expr_native(ctx, value, ExpectedNativeRep::JsValueBits)?;
+    let value_bits = lowered.value.clone();
+    let value_double = ctx.block().bitcast_i64_to_double(&value_bits);
+    ctx.record_lowered_value_with_access_mode(
+        "ArrayPush",
+        None,
+        "array_push.slot_value_bits",
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![
+            format!("layout_note_needed={}", layout_note_needed as u8),
+            format!("write_barrier_needed={}", write_barrier_needed as u8),
+            "boxed_at=array_push_slot_or_runtime_helper_edge".to_string(),
+        ],
+    );
+    Ok((value_double, Some(value_bits)))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::ArrayPush { array_id, value } => {
@@ -77,7 +112,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let value_is_numeric = is_numeric_expr(ctx, value);
             let require_numeric_layout =
                 value_is_numeric && expr_has_numeric_pointer_free_array_layout(ctx, &array_expr);
-            let v = lower_expr(ctx, value)?;
+            let (v, v_bits) =
+                lower_array_push_value(ctx, value, layout_note_needed, write_barrier_needed)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
 
             if require_numeric_layout
@@ -311,17 +347,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let with_header = blk.add(I64, &byte_offset, "8");
                     let element_addr = blk.add(I64, &arr_handle, &with_header);
                     let element_ptr = blk.inttoptr(I64, &element_addr);
-                    let value_bits = emit_jsvalue_slot_store_on_block(
-                        blk,
-                        &element_ptr,
-                        &v,
-                        &arr_handle,
-                        &length,
-                        layout_note_needed,
-                        &arr_handle,
-                        &element_addr,
-                        write_barrier_needed,
-                    );
+                    let value_bits = if let Some(value_bits) = v_bits.as_deref() {
+                        emit_jsvalue_slot_store_with_value_bits_on_block(
+                            blk,
+                            &element_ptr,
+                            &v,
+                            value_bits,
+                            &arr_handle,
+                            &length,
+                            layout_note_needed,
+                            &arr_handle,
+                            &element_addr,
+                            write_barrier_needed,
+                        )
+                    } else {
+                        emit_jsvalue_slot_store_on_block(
+                            blk,
+                            &element_ptr,
+                            &v,
+                            &arr_handle,
+                            &length,
+                            layout_note_needed,
+                            &arr_handle,
+                            &element_addr,
+                            write_barrier_needed,
+                        )
+                    };
                     if !value_is_numeric {
                         let value_bits =
                             value_bits.unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
@@ -383,8 +434,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
-                    let box_dbl = blk.load(DOUBLE, &slot);
-                    let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+                    let box_ptr = blk.load(I64, &slot);
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 }
                 return Ok(emit_array_handle_length(ctx, &new_handle));
@@ -448,8 +498,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
-                    let box_dbl = blk.load(DOUBLE, &slot);
-                    let box_ptr = blk.bitcast_double_to_i64(&box_dbl);
+                    let box_ptr = blk.load(I64, &slot);
                     blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
                 }
                 return Ok(emit_array_handle_length(ctx, &new_handle));
