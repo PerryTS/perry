@@ -241,6 +241,118 @@ fn typed_feedback_folds_constant_modulo_i64_accumulator_loop() {
 }
 
 #[test]
+fn typed_feedback_folds_constant_add_i64_accumulator_loop() {
+    let ir = ir_for(module(
+        "typed_feedback_constant_accumulator_closed_form.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(10)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(5)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(2)),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+
+    assert!(ir.contains("store i64 25"), "{ir}");
+    assert!(!ir.contains("for.body"), "{ir}");
+    assert!(!ir.contains("asm sideeffect"), "{ir}");
+}
+
+#[test]
+fn typed_feedback_keeps_dynamic_bound_constant_add_loop() {
+    let ir = ir_for(module(
+        "typed_feedback_dynamic_constant_accumulator.ts",
+        vec![param(1, "limit", Type::Number)],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+    let body_start = ir.find("\nfor.body.").expect("for body block");
+    let body_end = ir[body_start..]
+        .find("\nfor.update.")
+        .map(|offset| body_start + offset)
+        .expect("for update block");
+    let body_ir = &ir[body_start..body_end];
+
+    assert!(body_ir.contains("fadd double"), "{body_ir}");
+    assert!(body_ir.contains("store double"), "{body_ir}");
+}
+
+#[test]
 fn typed_feedback_keeps_dynamic_modulo_accumulator_loop() {
     let ir = ir_for(module(
         "typed_feedback_dynamic_modulo_accumulator.ts",
@@ -1228,7 +1340,7 @@ fn i32_for_update_skips_per_iteration_double_counter_store() {
                     Box::new(Expr::Binary {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(2)),
-                        right: Box::new(Expr::Integer(1)),
+                        right: Box::new(Expr::LocalGet(3)),
                     }),
                 ))],
             },

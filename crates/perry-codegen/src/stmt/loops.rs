@@ -74,7 +74,7 @@ struct I64LoopAccumulator {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ModuloAccumulatorClosedForm {
+struct AccumulatorClosedForm {
     acc_local_id: u32,
     counter_local_id: u32,
     final_counter: i64,
@@ -491,10 +491,25 @@ pub(crate) fn lower_for(
     let i64_loop_accumulator =
         prepare_i64_loop_accumulator(ctx, local_bound_classification, update, body);
     if let Some((acc, closed_form)) = i64_loop_accumulator.as_ref().and_then(|acc| {
-        classify_modulo_accumulator_closed_form(ctx, local_bound_classification, update, body, acc)
-            .map(|closed_form| (acc, closed_form))
+        classify_constant_accumulator_closed_form(
+            ctx,
+            local_bound_classification,
+            update,
+            body,
+            acc,
+        )
+        .or_else(|| {
+            classify_modulo_accumulator_closed_form(
+                ctx,
+                local_bound_classification,
+                update,
+                body,
+                acc,
+            )
+        })
+        .map(|closed_form| (acc, closed_form))
     }) {
-        emit_modulo_accumulator_closed_form(ctx, acc, closed_form);
+        emit_accumulator_closed_form(ctx, acc, closed_form);
         if local_bound_counter_i32_was_fresh {
             if let Some((counter_id, _, _)) = local_bound_classification {
                 ctx.i32_counter_slots.remove(&counter_id);
@@ -1189,7 +1204,7 @@ fn classify_modulo_accumulator_closed_form(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
     acc: &I64LoopAccumulator,
-) -> Option<ModuloAccumulatorClosedForm> {
+) -> Option<AccumulatorClosedForm> {
     let (counter_id, bound_id, op) = local_bound_classification?;
     if !matches!(op, perry_hir::CompareOp::Lt)
         || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
@@ -1225,7 +1240,59 @@ fn classify_modulo_accumulator_closed_form(
         return None;
     }
 
-    Some(ModuloAccumulatorClosedForm {
+    Some(AccumulatorClosedForm {
+        acc_local_id: acc.local_id,
+        counter_local_id: counter_id,
+        final_counter,
+        final_acc: final_acc as i64,
+    })
+}
+
+fn classify_constant_accumulator_closed_form(
+    ctx: &FnCtx<'_>,
+    local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    acc: &I64LoopAccumulator,
+) -> Option<AccumulatorClosedForm> {
+    let (counter_id, bound_id, op) = local_bound_classification?;
+    if !matches!(op, perry_hir::CompareOp::Lt)
+        || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+    {
+        return None;
+    }
+
+    let [Stmt::Expr(perry_hir::Expr::LocalSet(acc_id, value))] = body else {
+        return None;
+    };
+    if *acc_id != acc.local_id {
+        return None;
+    }
+    let addend = exact_nonnegative_integer_const(self_add_accumulator_addend(
+        acc.local_id,
+        value.as_ref(),
+    )?)?;
+    let start = *ctx.exact_safe_integer_locals.get(&counter_id)?;
+    let bound = *ctx.exact_safe_integer_locals.get(&bound_id)?;
+    let initial_acc = *ctx.exact_safe_integer_locals.get(&acc.local_id)?;
+    if start < 0 || bound < 0 || initial_acc < 0 {
+        return None;
+    }
+    let final_counter = if start < bound { bound } else { start };
+    i32::try_from(final_counter).ok()?;
+
+    let iterations = if start < bound {
+        (bound as i128).checked_sub(start as i128)?
+    } else {
+        0
+    };
+    let delta = iterations.checked_mul(addend as i128)?;
+    let final_acc = (initial_acc as i128).checked_add(delta)?;
+    if final_acc < 0 || final_acc > MAX_SAFE_INTEGER_I64 as i128 {
+        return None;
+    }
+
+    Some(AccumulatorClosedForm {
         acc_local_id: acc.local_id,
         counter_local_id: counter_id,
         final_counter,
@@ -1269,10 +1336,10 @@ fn modulo_prefix_sum(n: i128, modulus: i128) -> Option<i128> {
     full_sum.checked_add(tail_sum)
 }
 
-fn emit_modulo_accumulator_closed_form(
+fn emit_accumulator_closed_form(
     ctx: &mut FnCtx<'_>,
     acc: &I64LoopAccumulator,
-    closed_form: ModuloAccumulatorClosedForm,
+    closed_form: AccumulatorClosedForm,
 ) {
     ctx.block()
         .store(I64, &closed_form.final_acc.to_string(), &acc.slot);
