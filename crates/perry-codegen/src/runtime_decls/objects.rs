@@ -120,6 +120,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64, DOUBLE],
     );
+    // #5334 lever B: class-field-SET inline cache, FULLY outlined. For oversized
+    // modules the whole diamond (guard + fast store + fallback) collapses to one
+    // call. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // field_index, value, require_raw_f64). Same signature as the set guard.
+    module.declare_function(
+        "js_class_field_set_ic",
+        VOID,
+        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
+    );
     module.declare_function(
         "js_typed_feedback_class_field_get_guard",
         I32,

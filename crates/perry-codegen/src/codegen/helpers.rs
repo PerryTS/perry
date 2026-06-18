@@ -108,6 +108,52 @@ pub(crate) fn write_barriers_enabled() -> bool {
     })
 }
 
+thread_local! {
+    static FULL_OUTLINE_IC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Lever B (#5334) full-outline gate for class-field IC diamonds. Set ONCE per
+/// module at the top of `compile_module` (see [`decide_full_outline_ic`]), read
+/// at each class-field-set lowering. Thread-local — NOT a process-global
+/// `OnceLock` — because codegen runs one module per `compile_module` call and a
+/// process-global would wrongly pin the first module's decision for the rest of
+/// a multi-module build (and across tests). Codegen within a module is
+/// sequential, so a thread-local is safe and avoids threading a flag through all
+/// six `FnCtx` construction sites.
+pub(crate) fn full_outline_ic_enabled() -> bool {
+    FULL_OUTLINE_IC.with(|c| c.get())
+}
+
+pub(crate) fn set_full_outline_ic(enabled: bool) {
+    FULL_OUTLINE_IC.with(|c| c.set(enabled));
+}
+
+/// Decide whether a module is large enough to warrant full-outlining its
+/// class-field IC diamonds (#5334 lever B). Oversized modules are forced to
+/// `clang -O0` (#4880), where the inline diamond's ~15-line-per-site expansion
+/// is never optimized away; collapsing each site to one
+/// `call @js_class_field_set_ic(...)` keeps the IR small enough for clang to
+/// compile at all. Gated on function count — the defining trait of the
+/// pathological minified-bundle case (tens of thousands of functions in one
+/// module); ordinary per-file modules stay on the inline diamond and keep the
+/// hot fast store.
+///
+/// `PERRY_FULL_OUTLINE_IC=1`/`on`/`true` forces ON, `=0`/`off`/`false` forces
+/// OFF; otherwise auto: `function_count >= PERRY_FULL_OUTLINE_IC_MIN_FUNCS`
+/// (default 4000).
+pub(crate) fn decide_full_outline_ic(function_count: usize) -> bool {
+    match std::env::var("PERRY_FULL_OUTLINE_IC").as_deref() {
+        Ok("1") | Ok("on") | Ok("true") => return true,
+        Ok("0") | Ok("off") | Ok("false") => return false,
+        _ => {}
+    }
+    let threshold = std::env::var("PERRY_FULL_OUTLINE_IC_MIN_FUNCS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(4000);
+    function_count >= threshold
+}
+
 pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     // Use the INJECTIVE sanitizer (same as scoped_static_method_name): plain
     // `sanitize` maps every non-`[A-Za-z0-9_]` char to `_`, so distinct minified

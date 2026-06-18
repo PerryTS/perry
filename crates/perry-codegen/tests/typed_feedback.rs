@@ -266,6 +266,11 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
 
 #[test]
 fn typed_feedback_guards_direct_class_field_specialization() {
+    // Serialize against the lever-B test (#5334), which sets the process-global
+    // PERRY_FULL_OUTLINE_IC in this same test binary; pin it off so this test
+    // always observes the inline diamond.
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let point = class(101, "Point", vec![field("x", Type::Number)]);
     let ir = ir_for(module_with_classes(
         "typed_feedback_class_field.ts",
@@ -308,7 +313,57 @@ fn typed_feedback_guards_direct_class_field_specialization() {
 }
 
 #[test]
+fn full_outline_ic_collapses_class_field_set_to_single_call() {
+    // #5334 lever B: when full-outline is enabled (oversized module, or forced
+    // via env), the entire class-field-SET diamond collapses to a single
+    // `js_class_field_set_ic` call — no guard call, no fast/fallback blocks.
+    let build = || {
+        let point = class(101, "Point", vec![field("x", Type::Number)]);
+        module_with_classes(
+            "full_outline_field.ts",
+            vec![point],
+            vec![param(1, "p", Type::Named("Point".to_string()))],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                    value: Box::new(Expr::Number(7.0)),
+                }),
+                Stmt::Return(Some(Expr::Number(0.0))),
+            ],
+        )
+    };
+
+    let _lock = ENV_LOCK.lock().unwrap();
+
+    // Forced ON: one outlined call, no inline diamond.
+    {
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
+        let ir = ir_for(build());
+        assert!(ir.contains("call void @js_class_field_set_ic"));
+        assert!(!ir.contains("class_field_set.fast"));
+        assert!(!ir.contains("class_field_set.fallback"));
+        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_set_guard"));
+    }
+
+    // Forced OFF (the default for normal-sized modules): the inline diamond,
+    // and no full-outline call.
+    {
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
+        let ir = ir_for(build());
+        assert!(!ir.contains("call void @js_class_field_set_ic"));
+        assert!(ir.contains("class_field_set.fast"));
+        assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
+    }
+}
+
+#[test]
 fn typed_feedback_guards_direct_class_method_specialization() {
+    // Serialize against the lever-B test (#5334) and pin full-outline off so the
+    // class's synthesized field-set keeps its inline fallback (asserted below).
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let mut point = class(103, "Point", vec![field("x", Type::Number)]);
     point.methods.push(Function {
         id: 7,
