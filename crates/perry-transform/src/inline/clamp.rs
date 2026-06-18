@@ -1,9 +1,4 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
-use std::collections::{HashMap, HashSet};
-
-use super::*;
+use perry_hir::{Expr, Function, Stmt};
 
 pub fn is_clamp3(f: &Function) -> bool {
     if f.is_async || f.is_generator || f.params.len() != 3 || f.body.len() != 3 {

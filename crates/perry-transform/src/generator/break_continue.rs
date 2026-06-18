@@ -271,28 +271,20 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
                     }
                 }
             }
-            Stmt::While { body, .. } => {
-                if body_contains_yield(body) {
-                    return true;
-                }
+            Stmt::While { body, .. } if body_contains_yield(body) => {
+                return true;
             }
             // A yield buried in a do-while or labeled loop must still be seen
             // by the enclosing construct's linearization (#1824), otherwise it
             // is never split into resume states.
-            Stmt::DoWhile { body, .. } => {
-                if body_contains_yield(body) {
-                    return true;
-                }
+            Stmt::DoWhile { body, .. } if body_contains_yield(body) => {
+                return true;
             }
-            Stmt::Labeled { body, .. } => {
-                if body_contains_yield(std::slice::from_ref(&**body)) {
-                    return true;
-                }
+            Stmt::Labeled { body, .. } if body_contains_yield(std::slice::from_ref(&**body)) => {
+                return true;
             }
-            Stmt::For { body, .. } => {
-                if body_contains_yield(body) {
-                    return true;
-                }
+            Stmt::For { body, .. } if body_contains_yield(body) => {
+                return true;
             }
             Stmt::Try {
                 body,
