@@ -801,6 +801,12 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                                 .is_some_and(|props| props.contains_key(key))
                         }) || super::class_registry::lookup_static_method_in_chain(class_id, key)
                             .is_some()
+                            // A static accessor (`static get x()`) is an own
+                            // property of the constructor — own-only, mirroring
+                            // getOwnPropertyDescriptor (class/definition/
+                            // {getters,setters}-prop-desc `staticX`).
+                            || super::class_registry::class_own_static_accessor_ptrs(class_id, key)
+                                .is_some()
                     }
                 })
                 .unwrap_or(false);
@@ -945,9 +951,10 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // `verifyProperty` → `hasOwnProperty`).
         if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
             if let Some(key) = super::has_own_helpers::str_from_string_header(key_str) {
-                if key == "constructor"
-                    || super::class_registry::class_own_accessor_ptrs(cid, key).is_some()
-                    || super::native_module::class_has_own_method(cid, key)
+                if !super::class_registry::class_is_key_deleted(cid, key)
+                    && (key == "constructor"
+                        || super::class_registry::class_own_accessor_ptrs(cid, key).is_some()
+                        || super::native_module::class_has_own_method(cid, key))
                 {
                     return f64::from_bits(TAG_TRUE);
                 }

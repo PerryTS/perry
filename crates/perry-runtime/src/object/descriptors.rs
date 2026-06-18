@@ -728,7 +728,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         // fields, but they ARE own properties of the prototype.
         if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
             if let Some(ref name) = key_rust {
-                if let Some((g, s)) = super::class_registry::class_own_accessor_ptrs(cid, name) {
+                if super::class_registry::class_is_key_deleted(cid, name) {
+                    // `delete C.prototype.x` recorded the accessor as removed.
+                } else if let Some((g, s)) =
+                    super::class_registry::class_own_accessor_ptrs(cid, name)
+                {
                     return build_accessor_descriptor(
                         super::class_registry::class_accessor_function_value(g, false, name),
                         super::class_registry::class_accessor_function_value(s, true, name),
