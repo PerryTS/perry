@@ -1251,6 +1251,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // bind a bare `require` to a createRequire-backed closure instead of throwing
     // ReferenceError. Takes no base; returns the require closure value.
     module.declare_function("js_module_ambient_require", DOUBLE, &[]);
+    // #5389 Tier 2: synchronous ambient require(spec) resolution — the codegen
+    // fallthrough when a computed require() didn't const-fold to a compiled target.
+    module.declare_function("js_module_ambient_require_apply", DOUBLE, &[DOUBLE]);
     // Non-throwing global read for `typeof <unresolved>` + global read-modify-
     // write for `i++`/`i--` on a sloppy implicit global (#3575).
     module.declare_function("js_global_get_optional", DOUBLE, &[DOUBLE]);

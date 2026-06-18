@@ -1,3 +1,49 @@
+## v0.5.1189 — feat: synchronous computed `require(expr)` resolves compiled package modules — Tier 2 of #5389
+
+Builds on the Tier 1 ambient `require` (v0.5.1183). A **computed** `require(expr)`
+in a compiled external/compilePackages module — where the specifier is not a
+string literal but *does* const-fold to a finite set (ternary of literals, a
+module-`const`, or a directory-anchored template glob) — now resolves
+**synchronously** to the target compiled-module namespace, reusing the exact
+dynamic-`import()` path resolver. Previously every non-literal `require` fell back
+to the ambient closure, which only handles builtins (packages threw
+`ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`).
+
+**Mechanism** — `require(expr)` is the synchronous CJS analog of `import(expr)`,
+so it reuses the whole pipeline with one new bit:
+
+- `crates/perry-hir/src/ir/expr.rs` — new `synchronous: bool` field on
+  `Expr::DynamicImport` (`false` for ESM `import()`, `true` for CJS `require()`).
+- `crates/perry-hir/src/lower/expr_call/intrinsics.rs` — new `try_dynamic_require`:
+  a bare unshadowed `require` with a non-literal arg in an external module lowers
+  to `DynamicImport { synchronous: true }`. Literals stay on the existing
+  `try_require_literal` path; gated to `is_external_module`. Wired into the call
+  dispatch right after `try_require_literal`.
+- `crates/perry/src/commands/compile/collect_modules.rs` — the existing dynamic-
+  import const-folder/globber populates `paths` and registers each target as a
+  dynamic import edge **unchanged**. New: an *unresolved* synchronous node records
+  an empty path set (ambient fallback) instead of the `import()` deferred-reject /
+  strict error.
+- `crates/perry-codegen/src/expr/dyn_extern_i18n.rs` — new `lower_dynamic_require`:
+  emits the same single-/multi-target `js_string_equals` dispatch as `import()`,
+  but returns the namespace value **directly** (no `Promise` wrap) and uses the
+  ambient require (`js_module_ambient_require_apply`, new in
+  `crates/perry-runtime/src/module_require.rs`) as the unresolved / no-match
+  fallthrough (builtin-or-throw) rather than a rejected promise. Namespace
+  construction for the three target kinds (native submodule / native builtin /
+  compiled module) is factored into `namespace_value_for_prefix`.
+
+**Behavior** (external/compilePackages modules): `require(flag ? "./a" : "./b")`,
+`require(SPEC)` (module-const), and `` require(`./plugins/${name}`) `` (glob;
+runtime string must equal the file specifier incl. extension, same contract as
+`import()`) all resolve to the compiled namespaces synchronously. A specifier that
+does not const-fold (`["n","o",…].join("")`) still routes through the Tier 1
+ambient require — builtins resolve, unknown packages throw the descriptive error.
+**Out of scope (by design):** genuinely runtime-computed *package* strings, same
+boundary as dynamic `import()` in an AOT binary. New regression test
+`computed_require_const_folds_to_compiled_package_modules`; dynamic-`import()`
+suite (`module_import_forms`) and the Tier 1 tests stay green.
+
 ## v0.5.1188 — fix(codegen): unknown builtin-namespace member reads as `undefined`, not `0` (#5347)
 
 Reading a property that does not exist on a builtin global namespace object —
@@ -94,6 +140,68 @@ don't trigger Tests today). `test.yml` branches the cargo-test step on
 Trade-off (chosen deliberately, prioritizing a usable per-PR gate): a regression
 only an integration test would catch lands on a PR and is caught by the nightly /
 release-tag full run rather than at PR time.
+
+Three pre-existing CI fragilities on `main` were turning required checks red for
+PRs. Fixed together since all are "make main's CI green again."
+
+### 0. cargo-test never builds the runtime staticlib (latent; surfaced by fix #1)
+
+The `cargo-test` job runs `cargo test -p perry-runtime`, which only builds
+lib/bin/test targets — **not** the `staticlib` crate-type — so
+`libperry_runtime.a` / `libperry_stdlib.a` are never produced by the job and only
+exist when restored from the rust-cache. Integration tests that compile with
+`PERRY_NO_AUTO_OPTIMIZE=1` (e.g. `functional_batch2_regressions`) link the
+prebuilt archive directly, so the moment a PR touches perry-runtime/perry-stdlib
+the cached staticlib is invalidated, cargo never rebuilds it, and those tests fail
+with `Could not find libperry_runtime.a`. Fix #1 below touches perry-runtime and
+hit exactly this. Fix: add an explicit `cargo build -p perry-runtime -p
+perry-stdlib` to the cargo-test job before the integration-test loop so the
+staticlibs exist regardless of cache state.
+
+### 1. dead-stripped runtime symbol breaks cold runtime-only compiles (cargo-test)
+
+`js_array_numeric_value_to_raw_f64` (added by #5291 for representation-aware
+numeric array lowering, `crates/perry-runtime/src/array/header.rs`) is
+`#[no_mangle]` but is only ever called from generated machine code — nothing in
+the runtime crate references it. Without a `#[used]` anchor the linker dead-strips
+it from `libperry_runtime.a`, so any cold `PERRY_NO_AUTO_OPTIMIZE=1` compile of a
+program that triggers that lowering fails at link with `Undefined symbols:
+_js_array_numeric_value_to_raw_f64`. This surfaced as 5 failing
+`functional_batch2_regressions` tests. Fix: add the `#[used]` keepalive anchor
+(same pattern as the auto-optimize keepalives in `error.rs`; see
+project_autoopt_ffi_symbol_link_break). This regression class is normally
+CI-invisible because warm staticlib caches mask it.
+
+### 2. link/mod.rs over the file-size gate (lint)
+
+`crates/perry/src/commands/compile/link/mod.rs` crossed the 2000-line file-size
+gate (2132 lines) after #5400 grew the Windows response-file path, turning the
+`lint` job red for every PR branched off main. Split the single ~1770-line
+`build_and_run_link` orchestrator (the only oversized item) into a sibling
+`link/build_and_run.rs`, leaving mod.rs at 357 lines and the new file at 1785.
+Pure mechanical move (`use super::*`; `build_and_run_link` is now `pub(crate)`,
+re-exported from mod.rs; five compile-module paths became `super::super::…`).
+
+Pure mechanical move, no behavior change:
+
+- The function moved verbatim; `use super::*` pulls in every helper that stays in
+  the parent `link` module (the `NativeBackendLinkMetadata` selection, the
+  `resolve_optional_framework_dir` / `find_project_root_for` /
+  `rewrite_link_with_response_file` / `quote_response_arg` / `response_file_contents`
+  helpers, and the sibling-module re-exports).
+- `build_and_run_link` is now `pub(crate)` (was `pub(super)`) so mod.rs can
+  re-export it to the parent `compile` module via
+  `pub(super) use build_and_run::build_and_run_link;`.
+- The five fully-qualified paths that reached into the `compile` module
+  (`library_search::`, `sandbox_buildrs::`, `optimized_libs::`,
+  `run_lock_verify_for_compile`, `find_perry_workspace_root`) became
+  `super::super::…` from the new two-level-deep module.
+
+All 599 perry bin unit tests pass (including the link `response_file_tests` /
+`native_package_selection_tests` / `optional_framework_dir_tests`); a hello-world
+compile+link round-trips through the moved driver.
+
+## v0.5.1184 — fix: unblock main CI — dead-stripped symbol + cargo-test staticlib + oversized link/mod.rs
 
 Three pre-existing CI fragilities on `main` were turning required checks red for
 PRs. Fixed together since all are "make main's CI green again."

@@ -732,9 +732,11 @@ fn collect_module_one(
             paths,
             arg,
             byte_offset,
+            synchronous,
             ..
         } = expr
         {
+            let synchronous = *synchronous;
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
                 return;
@@ -803,6 +805,18 @@ fn collect_module_one(
                             dynamic_path_sets.push(DynImportOutcome::Resolved(matches));
                             return;
                         }
+                    }
+                    // #5389 Tier 2: a synchronous `require(expr)` whose specifier
+                    // doesn't const-fold (and didn't glob-match above) falls back
+                    // to the Tier-1 ambient createRequire-backed `require` at
+                    // codegen — builtins resolve by string, unknown packages throw
+                    // the descriptive ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE. Leave
+                    // `paths` empty (no `deferred_error`); the empty-paths +
+                    // synchronous codegen arm emits the ambient require. This
+                    // never participates in the strict-dynamic-import hard error.
+                    if synchronous {
+                        dynamic_path_sets.push(DynImportOutcome::Resolved(Vec::new()));
+                        return;
                     }
                     // #5230: a genuinely runtime-computed specifier. This is the
                     // analog of #5206's runtime-unknown eval bucket. Strict mode
