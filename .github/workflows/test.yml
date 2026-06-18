@@ -406,56 +406,6 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
-  # Gap-suite smoke (roadmap I-01)
-  #
-  # AOT-compiles every test-files/test_gap_*.ts and diffs it byte-for-byte
-  # against `node --experimental-strip-types` via scripts/run_gap_tests.sh
-  # (a thin wrapper over run_parity_tests.sh --filter test_gap_, so it reuses
-  # the one normalizer + skip-list). The gap suite is the highest-signal-
-  # per-second test Perry has, and until now it had no committed runner and no
-  # CI gate — a contributor who regressed a single feature got a green build.
-  #
-  # INFORMATIONAL for now (continue-on-error): the first runs surface which gap
-  # tests currently fail on the Linux CI image so they can be triaged into
-  # test-parity/known_failures.json. Once curated + reliably green, drop
-  # `continue-on-error` and add `smoke-parity` to the branch-protection
-  # required checks (staged rollout: informational -> required).
-  # Oracle = node 22, matching the legacy parity job the gap suite is already
-  # green under. Node-version-sensitive output (v8/perf_hooks/process internals)
-  # would otherwise diff against a newer Node and mask real Perry regressions.
-  # (The node-suite regression guard uses node 26 against its frozen baseline —
-  # a different mechanism.)
-  # ---------------------------------------------------------------------------
-  smoke-parity:
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          # Read-only job (build + test); keep the GITHUB_TOKEN out of the
-          # local git config (least privilege — OWASP / CodeRabbit).
-          persist-credentials: false
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          # Match the legacy parity job the gap suite is already green under;
-          # node 26 introduces version-sensitive diffs that aren't Perry bugs.
-          node-version: '22'
-
-      - name: Run gap suite
-        run: ./scripts/run_gap_tests.sh
-
-  # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)
   #
   # `crates/perry/tests/gc_write_barrier_stress.rs` runs compiled binaries
