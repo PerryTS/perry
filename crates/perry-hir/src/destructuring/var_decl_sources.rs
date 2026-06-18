@@ -184,6 +184,15 @@ pub(super) fn register_destructured_stream_ctors(
                     _ => continue,
                 };
                 ctx.register_native_module(binding.clone(), module.clone(), Some(key));
+                // #5364 interaction: the module-level forward-declaration pass
+                // now pre-registers destructuring leaves as module-var locals.
+                // For a native-alias leaf that local is never written (the
+                // runtime destructuring is skipped below), so a bare
+                // `binding` / `typeof binding` read would resolve to that stale
+                // `undefined` local and shadow the native alias. Drop it so the
+                // name resolves to the native table, exactly as the simple-ident
+                // `register_require_namespace_binding` path does.
+                ctx.remove_local_binding(&binding);
                 skip_local_bindings.push(binding);
             }
             return skip_local_bindings;
@@ -224,6 +233,12 @@ pub(super) fn register_destructured_stream_ctors(
         if allowed.contains(&key.as_str()) {
             ctx.register_native_module(binding.clone(), module.clone(), Some(key));
             if module == "net" {
+                // Same #5364 interaction as the generic native branch above:
+                // drop the pre-registered module-var local for skipped leaves
+                // so the name resolves to the native alias, not a stale
+                // `undefined` local. (Stream ctors keep their runtime local and
+                // are not skipped, so they are intentionally left untouched.)
+                ctx.remove_local_binding(&binding);
                 skip_local_bindings.push(binding);
             }
         }

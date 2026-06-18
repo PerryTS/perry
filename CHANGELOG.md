@@ -1,3 +1,36 @@
+## v0.5.1182 — fix(hir): native-builtin require destructuring stranded on a pre-registered module-var slot (#5364 × #5216 merge skew)
+
+`const { createInterface } = require("readline")` (and every destructured
+native/Node-builtin `require`) regressed to `undefined` for the bound leaf on
+`main` after v0.5.1180 — a merge-skew interaction between two independently-green
+PRs:
+
+- **#5216** lowers `const { x } = require("<native>")` by registering each
+  destructured leaf as a *native-module alias* (`register_native_module`) and
+  skipping the runtime local, so `x` / `typeof x` resolves through the static
+  native table — exact `import { x } from "<native>"` parity.
+- **#5364** taught the module-level forward-declaration pass to *pre-register*
+  destructuring leaves as module-var locals (fixing semver's bottom-of-file
+  cyclic `const { safeRe, t } = require('../internal/re')`).
+
+Together, the native-alias leaf now also had a pre-registered module-var local
+that was never written (its runtime destructuring is skipped). A bare `x` read
+resolved to that stale `undefined` local and shadowed the native alias →
+`typeof createInterface === "undefined"`. The `require_native_builtin_lowers_like_namespace_import`
+gap test (correct as written) caught it; each PR was green on its own base, so
+it slipped in only at the merged HEAD and failed the `cargo-test` gate, blocking
+the v0.5.1181 publish.
+
+Fix (`destructuring/var_decl_sources.rs`): in the native-alias branches
+(generic resolvable-native modules + `net`'s skipped factory leaves), drop the
+pre-registered module-var local via `ctx.remove_local_binding(&binding)` — the
+same thing the simple-ident `register_require_namespace_binding` path already
+does — so the leaf resolves to the native table, not a stranded local. The
+relative/file-require path that #5364 targets (`require('../internal/re')`) is
+not a resolvable native specifier, so it never enters these branches and keeps
+#5364's behavior unchanged. Verified: all 6 `module_import_forms` tests pass and
+#5364's `test_cjs_module_destructure_after_class.sh` still passes.
+
 ## v0.5.1181 — fix(perry-ui-windows): migrate to windows / windows-core 0.62 (unblock Windows release publish)
 
 The v0.5.1180 release packaged macOS, Linux and Android, but **published
