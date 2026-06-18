@@ -300,9 +300,8 @@ pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) ->
 
     let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(units.len());
     for (i, unit) in units.iter().enumerate() {
-        let bytes = compile_ll_to_object(unit, target_triple).with_context(|| {
-            format!("codegen unit {}/{} failed to compile", i + 1, units.len())
-        })?;
+        let bytes = compile_ll_to_object(unit, target_triple)
+            .with_context(|| format!("codegen unit {}/{} failed to compile", i + 1, units.len()))?;
         let p = tmp_dir.join(format!("perry_cgu_{}_{}_{}.o", pid, nonce, i));
         fs::write(&p, &bytes)
             .with_context(|| format!("failed to write codegen-unit object {}", p.display()))?;

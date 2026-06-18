@@ -49,7 +49,11 @@ fn promote_global_for_units(line: &str) -> String {
         return line.to_string();
     }
     match line.split_once(" = ") {
-        Some((lhs, rhs)) => format!("{} = linkonce_odr {}", lhs, strip_leading_linkage(rhs.trim_start())),
+        Some((lhs, rhs)) => format!(
+            "{} = linkonce_odr {}",
+            lhs,
+            strip_leading_linkage(rhs.trim_start())
+        ),
         None => line.to_string(),
     }
 }
@@ -521,13 +525,22 @@ mod tests {
         assert_eq!(units.len(), 2, "two functions → two units");
 
         // Each function defined exactly once across all units.
-        let def_f = units.iter().filter(|u| u.contains("define double @perry_fn_m__f(")).count();
-        let def_g = units.iter().filter(|u| u.contains("define double @perry_fn_m__g(")).count();
+        let def_f = units
+            .iter()
+            .filter(|u| u.contains("define double @perry_fn_m__f("))
+            .count();
+        let def_g = units
+            .iter()
+            .filter(|u| u.contains("define double @perry_fn_m__g("))
+            .count();
         assert_eq!(def_f, 1);
         assert_eq!(def_g, 1);
 
         // The unit that DEFINES f (and calls g) must DECLARE g.
-        let u_with_f = units.iter().find(|u| u.contains("define double @perry_fn_m__f(")).unwrap();
+        let u_with_f = units
+            .iter()
+            .find(|u| u.contains("define double @perry_fn_m__f("))
+            .unwrap();
         assert!(u_with_f.contains("declare double @perry_fn_m__g()"));
 
         // Shared globals appear in BOTH units, promoted to linkonce_odr.
@@ -550,7 +563,9 @@ mod tests {
             f.create_block("entry").ret(DOUBLE, "0.0");
         }
         assert_eq!(
-            m.to_ir().matches("define double @perry_method_j__foo(").count(),
+            m.to_ir()
+                .matches("define double @perry_method_j__foo(")
+                .count(),
             1,
             "duplicate symbol must be defined once in to_ir"
         );
@@ -559,7 +574,10 @@ mod tests {
             .iter()
             .map(|u| u.matches("define double @perry_method_j__foo(").count())
             .sum();
-        assert_eq!(defs, 1, "duplicate symbol must be defined once across units");
+        assert_eq!(
+            defs, 1,
+            "duplicate symbol must be defined once across units"
+        );
     }
 
     #[test]

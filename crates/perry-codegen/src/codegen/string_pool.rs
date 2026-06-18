@@ -239,14 +239,21 @@ pub(super) fn emit_string_pool(
         for entry in strings.iter() {
             if count_in_chunk >= strings_per_chunk {
                 if !string_chunk_names.is_empty() {
-                    llmod.function_mut(cur_idx).unwrap().block_mut(0).unwrap().ret_void();
+                    llmod
+                        .function_mut(cur_idx)
+                        .unwrap()
+                        .block_mut(0)
+                        .unwrap()
+                        .ret_void();
                 }
                 let cname = format!(
                     "__perry_init_strings_{}_chunk{}",
                     module_prefix,
                     string_chunk_names.len()
                 );
-                llmod.define_function(&cname, VOID, vec![]).create_block("entry");
+                llmod
+                    .define_function(&cname, VOID, vec![])
+                    .create_block("entry");
                 cur_idx = llmod.function_count() - 1;
                 string_chunk_names.push(cname);
                 count_in_chunk = 0;
@@ -269,7 +276,12 @@ pub(super) fn emit_string_pool(
             count_in_chunk += 1;
         }
         if !string_chunk_names.is_empty() {
-            llmod.function_mut(cur_idx).unwrap().block_mut(0).unwrap().ret_void();
+            llmod
+                .function_mut(cur_idx)
+                .unwrap()
+                .block_mut(0)
+                .unwrap()
+                .ret_void();
         }
     }
 
