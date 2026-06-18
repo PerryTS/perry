@@ -111,3 +111,111 @@ console.log("file:", Local.localValue, Local.localCall("C"));
         "builtin: function\npackage: mini-1 make:B login:A\nfile: local-ok local:C\n"
     );
 }
+
+/// Tier 1 of #5389 (fixes #5373): a bare/computed `require(expr)` inside a
+/// compiled `compilePackages` module must bind to a createRequire-backed closure
+/// instead of throwing `ReferenceError: require is not defined`. Builtins resolve
+/// by string, `typeof require` is "function", a non-builtin package specifier
+/// throws the descriptive ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE (not a
+/// ReferenceError), and a shadowing local `require` still wins.
+#[test]
+fn ambient_require_in_compiled_package_resolves_builtins_without_reference_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "ambient-require-consumer",
+  "type": "module",
+  "perry": {
+    "compilePackages": ["amblib"],
+    "allow": { "compilePackages": ["amblib"] }
+  }
+}"#,
+    )
+    .expect("write consumer package.json");
+
+    let pkg = root.join("node_modules").join("amblib");
+    std::fs::create_dir_all(&pkg).expect("mkdir amblib");
+    std::fs::write(
+        pkg.join("package.json"),
+        r#"{ "name": "amblib", "version": "1.0.0", "main": "index.ts", "types": "index.ts" }"#,
+    )
+    .expect("write amblib package.json");
+    // The computed specifiers are built at runtime so the literal-require
+    // rewrites can't fire — they exercise the ambient closure directly.
+    std::fs::write(
+        pkg.join("index.ts"),
+        r#"
+export function probe(): string {
+  const builtin = ["n", "o", "d", "e", ":", "o", "s"].join("");
+  let viaRequire: string;
+  try {
+    require(builtin);
+    viaRequire = "builtin-ok";
+  } catch (e) {
+    viaRequire = "builtin-threw-" + (e as Error).name;
+  }
+
+  const pkgSpec = ["l", "o", "d", "a", "s", "h"].join("");
+  let viaPackage: string;
+  try {
+    require(pkgSpec);
+    viaPackage = "pkg-ok";
+  } catch (e) {
+    viaPackage = (e as Error).name + ":" + ((e as any).code ?? "(none)");
+  }
+
+  return `typeof=${typeof require} | ${viaRequire} | ${viaPackage}`;
+}
+
+export function shadowed(): string {
+  const require = (id: string) => "shadow:" + id;
+  return require("zzz");
+}
+"#,
+    )
+    .expect("write amblib index");
+
+    let entry = root.join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+import { probe, shadowed } from "amblib";
+console.log(probe());
+console.log(shadowed());
+"#,
+    )
+    .expect("write entry");
+
+    let output = root.join("main_bin");
+    let compile = Command::new(perry_bin())
+        .current_dir(root)
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(
+        stdout,
+        "typeof=function | builtin-ok | Error:ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE\nshadow:zzz\n"
+    );
+}

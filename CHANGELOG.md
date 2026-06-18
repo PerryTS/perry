@@ -1,3 +1,41 @@
+## v0.5.1183 — feat(hir): ambient `require` in compiled compilePackages modules — Tier 1 of #5389 (fixes #5373)
+
+A bare or **computed** `require(expr)` inside a `compilePackages`-compiled module
+threw `ReferenceError: require is not defined`. Only a **literal** `require('pkg')`
+is rewritten to an import at compile time; a non-literal callee fell through the
+HIR ident-read path to `js_global_get_or_throw_unresolved("require")`, and no
+ambient `require` binding was emitted (`require` is absent from
+`is_known_global_identifier_name`). `createRequire(import.meta.url)` from a
+`module` import worked, so the reporter (#5373) had a workaround — but a dynamic
+`require()` should keep working out of the box.
+
+**Tier 1 fix** (Tier 2 — static package/relative resolution for const-foldable
+specifiers — is tracked separately in #5389):
+
+- `crates/perry-hir/src/lower/lower_expr.rs` — in the ident-read fall-through, bind
+  a bare unshadowed `require` to a createRequire-backed closure (new
+  `js_module_ambient_require()` runtime entry) instead of the throwing global read.
+  Reaching this arm means `require` is unshadowed (a local/func/imported/native
+  binding matches an earlier arm). Also fold `typeof require` to `"function"` so the
+  common `typeof require === 'function'` capability guard works.
+- **Gated to `ctx.is_external_module`.** In first-party source the bare-`require`
+  compile error (#668, "use a static import") is deliberate and is left unchanged —
+  verified an ESM entry still reports `typeof require === 'undefined'`.
+- `crates/perry-runtime/src/module_require.rs` — `js_module_ambient_require()`
+  returns the same `make_require(undefined())` closure as `createRequire`, with a
+  `#[used]` keepalive anchor (generated-code-only callee; auto-optimize dead-strip
+  guard). `crates/perry-codegen/src/runtime_decls/strings.rs` declares the extern.
+
+**Behavior now** (external/compilePackages modules only): computed `require(builtin)`
+(e.g. `node:os`) resolves by string; computed `require(package)` throws the
+descriptive `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE` instead of a confusing
+`ReferenceError`; `typeof require === 'function'`; a shadowing local `require`
+still wins. New regression test
+`ambient_require_in_compiled_package_resolves_builtins_without_reference_error` in
+`crates/perry/tests/create_require_package.rs`; existing
+`create_require_package_specifier_reports_unsupported_interop` and the
+`create_require_literal_*` test remain green.
+
 ## v0.5.1182 — fix(hir): native-builtin require destructuring stranded on a pre-registered module-var slot (#5364 × #5216 merge skew)
 
 `const { createInterface } = require("readline")` (and every destructured

@@ -663,6 +663,30 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name,
                 })
+            } else if name == "require" && ctx.is_external_module {
+                // Tier 1 of #5389 (fixes #5373): compiled external /
+                // compilePackages modules carry no ambient CJS `require`
+                // binding, so a bare or computed `require(expr)` would fall
+                // through to the `js_global_get_or_throw_unresolved` arm below
+                // and throw `ReferenceError: require is not defined`. Bind a
+                // bare unshadowed `require` to a real createRequire-backed
+                // closure instead — builtins (`node:os`, …) resolve by string;
+                // package/file specifiers throw the descriptive
+                // ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE. Reaching this arm means
+                // `require` is unshadowed (a local/func/imported/native binding
+                // would have matched an earlier arm). Gated to external modules:
+                // in first-party source the bare-require compile error (#668)
+                // is deliberate and must not regress into a runtime path.
+                Ok(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_module_ambient_require".to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                })
             } else {
                 // GlobalGet(0) is a sentinel: codegen routes by name from the
                 // parent PropertyGet/Call/Member context. Bare uses lower to
@@ -1115,6 +1139,17 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                                 return Ok(Expr::String("function".to_string()));
                             }
                         }
+                    }
+                    // #5373: in compiled external / compilePackages modules a
+                    // bare `require` is bound to a createRequire-backed closure
+                    // (see the ident-read arm), so `typeof require` is
+                    // "function" — matching Node CJS and enabling the common
+                    // `typeof require === 'function'` capability guard. Without
+                    // this, the generic non-throwing fold below reports
+                    // "undefined". Gated to external modules to mirror the
+                    // ident binding exactly.
+                    if n == "require" && ctx.is_external_module && ctx.lookup_local(n).is_none() {
+                        return Ok(Expr::String("function".to_string()));
                     }
                     if ctx.lookup_local(n).is_none()
                         && ctx.lookup_func(n).is_none()
