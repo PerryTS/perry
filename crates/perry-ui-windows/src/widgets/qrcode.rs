@@ -102,9 +102,9 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
                 0,
                 display,
                 display,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -118,7 +118,7 @@ pub fn create(data_ptr: *const u8, size: f64) -> i64 {
                 }
             }
             ensure_subclass(hwnd);
-            let _ = InvalidateRect(hwnd, None, true);
+            let _ = InvalidateRect(Some(hwnd), None, true);
             handle
         }
     }
@@ -150,7 +150,7 @@ pub fn set_data(handle: i64, data_ptr: *const u8) {
         });
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }
@@ -199,7 +199,7 @@ unsafe extern "system" fn qrcode_subclass_proc(
             let _ = GetClientRect(hwnd, &mut rect);
             let white = CreateSolidBrush(COLORREF(0x00_FF_FF_FF));
             FillRect(hdc, &rect, white);
-            let _ = DeleteObject(white);
+            let _ = DeleteObject(white.into());
 
             let handle = super::find_handle_by_hwnd(hwnd);
             if handle > 0 {
@@ -244,5 +244,5 @@ unsafe fn paint_matrix(hdc: windows::Win32::Graphics::Gdi::HDC, rect: &RECT, mat
             }
         }
     }
-    let _ = DeleteObject(black);
+    let _ = DeleteObject(black.into());
 }

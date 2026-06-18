@@ -45,22 +45,22 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
             }
 
             // Create a memory DC and compatible bitmap
-            let hdc_window = GetDC(hwnd);
+            let hdc_window = GetDC(Some(hwnd));
             if hdc_window.is_invalid() {
                 return std::ptr::null_mut();
             }
-            let hdc_mem = CreateCompatibleDC(hdc_window);
+            let hdc_mem = CreateCompatibleDC(Some(hdc_window));
             if hdc_mem.is_invalid() {
-                ReleaseDC(hwnd, hdc_window);
+                ReleaseDC(Some(hwnd), hdc_window);
                 return std::ptr::null_mut();
             }
             let hbm = CreateCompatibleBitmap(hdc_window, width, height);
             if hbm.is_invalid() {
                 DeleteDC(hdc_mem);
-                ReleaseDC(hwnd, hdc_window);
+                ReleaseDC(Some(hwnd), hdc_window);
                 return std::ptr::null_mut();
             }
-            let old_bm = SelectObject(hdc_mem, hbm);
+            let old_bm = SelectObject(hdc_mem, hbm.into());
 
             // Capture the window using PrintWindow (PW_RENDERFULLCONTENT = 2)
             let _ = PrintWindow(hwnd, hdc_mem, PRINT_WINDOW_FLAGS(2));
@@ -95,9 +95,9 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
 
             // Cleanup GDI
             SelectObject(hdc_mem, old_bm);
-            let _ = DeleteObject(hbm);
+            let _ = DeleteObject(hbm.into());
             DeleteDC(hdc_mem);
-            ReleaseDC(hwnd, hdc_window);
+            ReleaseDC(Some(hwnd), hdc_window);
 
             if lines == 0 {
                 return std::ptr::null_mut();

@@ -75,9 +75,9 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
                 // WS_CHILD requires a parent HWND; same pattern as picker/
                 // button/textfield — use the parking window until
                 // layout::relayout() moves the control to its real parent.
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -88,8 +88,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
                 SendMessageW(
                     hwnd,
                     EM_SETCUEBANNER,
-                    WPARAM(0),
-                    LPARAM(wide.as_ptr() as isize),
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
                 );
             }
 

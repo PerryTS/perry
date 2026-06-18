@@ -206,7 +206,7 @@ fn show_popup(trigger_handle: i64) {
             popup_h + 16,
             None,
             None,
-            HINSTANCE::from(hinstance),
+            Some(HINSTANCE::from(hinstance)),
             None,
         );
         let popup = match popup {
@@ -215,7 +215,7 @@ fn show_popup(trigger_handle: i64) {
         };
 
         // Re-parent the content widget into the popup.
-        let _ = SetParent(content_hwnd, popup);
+        let _ = SetParent(content_hwnd, Some(popup));
         let _ = SetWindowPos(content_hwnd, None, 8, 8, popup_w, popup_h, SWP_NOACTIVATE);
 
         let _ = ShowWindow(popup, SW_SHOWNOACTIVATE);
@@ -238,7 +238,7 @@ fn hide_popup(trigger_handle: i64) {
                     // subsequent shows can re-parent cleanly.
                     let content_hwnd = super::get_hwnd(tip.content_handle);
                     if let Some(content) = content_hwnd {
-                        let _ = SetParent(content, super::get_parking_hwnd());
+                        let _ = SetParent(content, Some(super::get_parking_hwnd()));
                     }
                     let _ = DestroyWindow(popup);
                 }
