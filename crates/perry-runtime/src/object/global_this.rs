@@ -6387,6 +6387,57 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 true,
             );
             install_constructor_static(ctor, "hasOwn", object_hasown_thunk as *const u8, 2, false);
+            // `Object` is a function, so reading a non-static member resolves up
+            // its prototype chain (Function.prototype → Object.prototype). In
+            // particular `Object.hasOwnProperty` IS `Object.prototype.hasOwnProperty`
+            // — a callable. immer's `O.hasOwnProperty.call(proto, "constructor")`
+            // (with `const O = Object`) relied on this; without the inherited
+            // methods installed on the reified ctor value the read returned
+            // `undefined` and `.call` threw "Function.prototype.call on a value
+            // that is not a function". Install the Object.prototype methods that
+            // are reachable on the constructor by inheritance.
+            install_constructor_static(
+                ctor,
+                "hasOwnProperty",
+                object_prototype_has_own_property_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "propertyIsEnumerable",
+                object_prototype_property_is_enumerable_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "toString",
+                object_prototype_to_string_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "toLocaleString",
+                object_prototype_to_locale_string_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "valueOf",
+                object_prototype_value_of_thunk as *const u8,
+                0,
+                false,
+            );
         }
         "Array" => {
             install_constructor_static(
