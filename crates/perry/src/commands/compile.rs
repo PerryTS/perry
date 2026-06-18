@@ -451,15 +451,16 @@ pub fn run_with_parse_cache(
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
     // Resolve the on-disk cache directory ONCE, here, before any cache
     // consumer runs. Precedence: `--cache-dir` → `PERRY_CACHE_DIR` →
-    // package.json `perry.cacheDir` → default
-    // `<cache_root>/node_modules/.cache/perry` (the find-cache-dir
-    // convention). `cache_dir_override` reads the env var + package.json
-    // half; the CLI flag wins over both. Relative overrides resolve against
-    // `cache_root`. Computed here because the build-cache probe below runs
-    // before `host_config::apply_pkg_and_toml_config`, so the build cache
-    // must already know the dir. host_config re-resolves `ctx.cache_dir` to
-    // the same value when it parses `perry.cacheDir` alongside its sibling
-    // `perry.*` fields — that pass owns the canonical package.json read.
+    // perry.toml `[perry] cacheDir` → package.json `perry.cacheDir` →
+    // default `<cache_root>/node_modules/.cache/perry` (the find-cache-dir
+    // convention). `cache_dir_override` reads the env + perry.toml +
+    // package.json half; the CLI flag wins over all three. Relative
+    // overrides resolve against `cache_root`. Computed here because the
+    // build-cache probe below runs before
+    // `host_config::apply_pkg_and_toml_config`, so the build cache must
+    // already know the dir. host_config re-resolves `ctx.cache_dir` to the
+    // same value when it parses the config alongside its sibling `perry.*`
+    // fields — that pass owns the canonical read.
     let cache_dir_override = args
         .cache_dir
         .clone()

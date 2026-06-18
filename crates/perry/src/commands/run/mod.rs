@@ -230,7 +230,8 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         debug_symbols: false,
         no_cache: false,
         // `perry run` has no `--cache-dir` flag; the resolver still honors
-        // `PERRY_CACHE_DIR` / package.json `perry.cacheDir`.
+        // `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` / package.json
+        // `perry.cacheDir`.
         cache_dir: None,
         fast_math: false,
         fp_contract: None,

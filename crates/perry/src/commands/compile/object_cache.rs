@@ -62,8 +62,9 @@ fn perry_build_id() -> u64 {
 }
 
 /// Directory holding Perry's on-disk caches for a project. Precedence:
-/// `--cache-dir` → `PERRY_CACHE_DIR` → package.json `perry.cacheDir`
-/// → default `<project_root>/node_modules/.cache/perry` (the find-cache-dir
+/// `--cache-dir` → `PERRY_CACHE_DIR` → perry.toml `[perry] cacheDir` →
+/// package.json `perry.cacheDir` → default
+/// `<project_root>/node_modules/.cache/perry` (the find-cache-dir
 /// convention used by babel-loader / eslint / etc.). Relative overrides
 /// resolve against `project_root`.
 ///
@@ -81,42 +82,90 @@ pub fn resolve_cache_dir(project_root: &Path, override_dir: Option<&Path>) -> Pa
     }
 }
 
-/// Read the project's cache-dir override from the environment and
-/// package.json, applying the non-CLI half of [`resolve_cache_dir`]'s
-/// precedence: `PERRY_CACHE_DIR` env var → package.json `perry.cacheDir`.
-/// Walks up from `project_root` to find the nearest `package.json` so it
-/// behaves like the rest of the compile pipeline's config discovery.
-/// Returns `None` when neither source sets a path, leaving the default.
+/// Choose the cache-dir override from the three non-CLI sources, applying
+/// the non-CLI half of [`resolve_cache_dir`]'s precedence:
+/// `PERRY_CACHE_DIR` env var → perry.toml `[perry] cacheDir` → package.json
+/// `perry.cacheDir`. The first non-empty candidate wins; later (lower-
+/// precedence) candidates are only consulted when the higher ones are absent.
+///
+/// Pure function over the already-read candidate strings, so the precedence
+/// is unit-testable without touching the filesystem or process env. The CLI
+/// flag layers on top of this result in the caller (`--cache-dir` wins over
+/// everything), so it isn't an input here.
+pub fn pick_cache_dir_override(
+    env: Option<&str>,
+    toml: Option<&str>,
+    pkg: Option<&str>,
+) -> Option<PathBuf> {
+    [env, toml, pkg]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Read the project's cache-dir override from the environment, perry.toml,
+/// and package.json, applying the non-CLI half of [`resolve_cache_dir`]'s
+/// precedence: `PERRY_CACHE_DIR` env var → perry.toml `[perry] cacheDir` →
+/// package.json `perry.cacheDir`. Walks up from `project_root` to find the
+/// nearest `perry.toml` / `package.json` so it behaves like the rest of the
+/// compile pipeline's config discovery. Returns `None` when no source sets a
+/// path, leaving the default.
 pub fn cache_dir_override(project_root: &Path) -> Option<PathBuf> {
-    if let Some(env) = std::env::var_os("PERRY_CACHE_DIR") {
-        if !env.is_empty() {
-            return Some(PathBuf::from(env));
+    let env = std::env::var("PERRY_CACHE_DIR").ok();
+    let toml = perry_toml_cache_dir(project_root);
+    let pkg = package_json_cache_dir(project_root);
+    pick_cache_dir_override(env.as_deref(), toml.as_deref(), pkg.as_deref())
+}
+
+/// Read `[perry] cacheDir` from the nearest `perry.toml` walking up from
+/// `project_root`. Returns `None` when no `perry.toml` is found or the key is
+/// absent. Mirrors the perry.toml walk used by the strict-eval config block.
+fn perry_toml_cache_dir(project_root: &Path) -> Option<String> {
+    let mut dir = project_root.to_path_buf();
+    loop {
+        let candidate = dir.join("perry.toml");
+        if candidate.exists() {
+            return fs::read_to_string(&candidate)
+                .ok()
+                .and_then(|s| s.parse::<toml::Table>().ok())
+                .and_then(|table| {
+                    table
+                        .get("perry")
+                        .and_then(|v| v.as_table())
+                        .and_then(|t| t.get("cacheDir"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                });
+        }
+        if !dir.pop() {
+            return None;
         }
     }
+}
+
+/// Read `perry.cacheDir` from the nearest `package.json` walking up from
+/// `project_root`. Returns `None` when no `package.json` is found or the key
+/// is absent.
+fn package_json_cache_dir(project_root: &Path) -> Option<String> {
     let mut dir = project_root.to_path_buf();
     loop {
         let candidate = dir.join("package.json");
         if candidate.exists() {
-            if let Ok(content) = fs::read_to_string(&candidate) {
-                if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(s) = pkg
-                        .get("perry")
+            return fs::read_to_string(&candidate)
+                .ok()
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+                .and_then(|pkg| {
+                    pkg.get("perry")
                         .and_then(|p| p.get("cacheDir"))
                         .and_then(|v| v.as_str())
-                    {
-                        if !s.is_empty() {
-                            return Some(PathBuf::from(s));
-                        }
-                    }
-                }
-            }
-            break;
+                        .map(str::to_string)
+                });
         }
         if !dir.pop() {
-            break;
+            return None;
         }
     }
-    None
 }
 
 /// Streaming djb2 accumulator so multi-part keys don't have to build a
@@ -1690,5 +1739,141 @@ mod object_cache_tests {
         a.store(0x777, b"from-a");
         assert!(b.lookup(0x777).is_none());
         assert_eq!(a.lookup(0x777).as_deref(), Some(b"from-a".as_ref()));
+    }
+
+    // --- cache-dir override precedence ----------------------------------
+    //
+    // Full chain (highest wins): `--cache-dir` CLI flag → `PERRY_CACHE_DIR`
+    // env → perry.toml `[perry] cacheDir` → package.json `perry.cacheDir` →
+    // default. The CLI flag is layered on top by the callers
+    // (`args.cache_dir.or_else(cache_dir_override)`), so the merge tested
+    // here is the non-CLI half: env → perry.toml → package.json.
+    //
+    // `pick_cache_dir_override` is pure over the already-read candidate
+    // strings, so the precedence is checked without filesystem or env races.
+
+    #[test]
+    fn pick_override_env_beats_toml_and_pkg() {
+        // env wins over both lower layers — i.e. `PERRY_CACHE_DIR` overrides
+        // perry.toml, which is the "env beats perry.toml" guarantee.
+        let got = pick_cache_dir_override(Some("/env"), Some("/toml"), Some("/pkg"));
+        assert_eq!(got, Some(PathBuf::from("/env")));
+    }
+
+    #[test]
+    fn pick_override_toml_beats_pkg() {
+        // perry.toml overrides package.json when env is unset.
+        let got = pick_cache_dir_override(None, Some("/toml"), Some("/pkg"));
+        assert_eq!(got, Some(PathBuf::from("/toml")));
+    }
+
+    #[test]
+    fn pick_override_pkg_used_when_only_pkg_set() {
+        let got = pick_cache_dir_override(None, None, Some("/pkg"));
+        assert_eq!(got, Some(PathBuf::from("/pkg")));
+    }
+
+    #[test]
+    fn pick_override_none_when_all_unset() {
+        assert_eq!(pick_cache_dir_override(None, None, None), None);
+    }
+
+    #[test]
+    fn pick_override_skips_empty_higher_layers() {
+        // An empty string is treated as "not set", so a blank env value falls
+        // through to perry.toml and a blank perry.toml falls through to pkg.
+        assert_eq!(
+            pick_cache_dir_override(Some(""), Some("/toml"), Some("/pkg")),
+            Some(PathBuf::from("/toml"))
+        );
+        assert_eq!(
+            pick_cache_dir_override(Some(""), Some(""), Some("/pkg")),
+            Some(PathBuf::from("/pkg"))
+        );
+        assert_eq!(pick_cache_dir_override(Some(""), Some(""), Some("")), None);
+    }
+
+    #[test]
+    fn perry_toml_cache_dir_reads_perry_table() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("perry.toml"),
+            "[perry]\ncacheDir = \"/var/cache/perry\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            perry_toml_cache_dir(dir.path()).as_deref(),
+            Some("/var/cache/perry")
+        );
+    }
+
+    #[test]
+    fn perry_toml_cache_dir_none_when_key_or_file_absent() {
+        // No perry.toml at all.
+        let empty = tempdir().unwrap();
+        assert_eq!(perry_toml_cache_dir(empty.path()), None);
+
+        // perry.toml present but no `[perry] cacheDir` key.
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("perry.toml"), "[perry]\nstrict = true\n").unwrap();
+        assert_eq!(perry_toml_cache_dir(dir.path()), None);
+    }
+
+    #[test]
+    fn perry_toml_cache_dir_walks_up_to_project_root() {
+        // The reader walks up from a nested dir, mirroring how the compile
+        // pipeline discovers config from a subdirectory entry file.
+        let root = tempdir().unwrap();
+        fs::write(
+            root.path().join("perry.toml"),
+            "[perry]\ncacheDir = \".cache\"\n",
+        )
+        .unwrap();
+        let nested = root.path().join("src").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+        assert_eq!(perry_toml_cache_dir(&nested).as_deref(), Some(".cache"));
+    }
+
+    #[test]
+    fn package_json_cache_dir_reads_perry_field() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "perry": { "cacheDir": ".perry-cache" } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            package_json_cache_dir(dir.path()).as_deref(),
+            Some(".perry-cache")
+        );
+    }
+
+    #[test]
+    fn toml_overrides_pkg_via_readers_and_resolver() {
+        // End-to-end (no env, no CLI): with both perry.toml and package.json
+        // present, the chosen override is perry.toml's, and a relative value
+        // resolves against the project root — matching the existing
+        // `resolve_cache_dir_relative_override_resolves_against_project_root`
+        // contract for the new perry.toml layer.
+        let root = tempdir().unwrap();
+        fs::write(
+            root.path().join("perry.toml"),
+            "[perry]\ncacheDir = \"toml-cache\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("package.json"),
+            r#"{ "perry": { "cacheDir": "pkg-cache" } }"#,
+        )
+        .unwrap();
+
+        let toml = perry_toml_cache_dir(root.path());
+        let pkg = package_json_cache_dir(root.path());
+        let chosen = pick_cache_dir_override(None, toml.as_deref(), pkg.as_deref());
+        assert_eq!(chosen.as_deref(), Some(Path::new("toml-cache")));
+
+        // Relative perry.toml value resolves against the project root.
+        let resolved = resolve_cache_dir(root.path(), chosen.as_deref());
+        assert_eq!(resolved, root.path().join("toml-cache"));
     }
 }

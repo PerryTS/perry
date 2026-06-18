@@ -3,7 +3,8 @@
 //! The on-disk object cache lives at
 //! `<cache-dir>/objects/<target>/<key>.o`, where `cache-dir` defaults to
 //! `<project-root>/node_modules/.cache/perry` and can be overridden via
-//! `--cache-dir`, `PERRY_CACHE_DIR`, or package.json `perry.cacheDir`
+//! `--cache-dir`, `PERRY_CACHE_DIR`, perry.toml `[perry] cacheDir`, or
+//! package.json `perry.cacheDir`
 //! (see `commands/compile/object_cache.rs :: resolve_cache_dir`). These
 //! subcommands let users inspect and wipe it without resorting to `rm -rf`,
 //! which matters mostly for discoverability: if a user suspects a stale

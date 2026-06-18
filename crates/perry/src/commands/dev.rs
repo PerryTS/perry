@@ -303,7 +303,8 @@ fn build_once(
         debug_symbols: false,
         no_cache: false,
         // `perry dev` has no `--cache-dir` flag of its own; the resolver
-        // still honors `PERRY_CACHE_DIR` / package.json `perry.cacheDir`.
+        // still honors `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` /
+        // package.json `perry.cacheDir`.
         cache_dir: None,
         fast_math: false,
         fp_contract: None,

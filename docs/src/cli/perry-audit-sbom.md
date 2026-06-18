@@ -70,7 +70,8 @@ capability a dependency reaches surfaces as added lines.
 
 - Reads the manifest from `audit.json` in the resolved cache dir
   (default `<PATH>/node_modules/.cache/perry/audit.json`; honors
-  `--cache-dir` / `PERRY_CACHE_DIR` / `perry.cacheDir`), walking up
+  `--cache-dir` / `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` /
+  package.json `perry.cacheDir`), walking up
   the directory tree if needed (same shape `perry compile` walks up
   to find `package.json`).
 - Default `PATH`: current directory.

@@ -364,8 +364,9 @@ fn print_local_sbom(path_arg: &str, format: OutputFormat) -> Result<()> {
     // `audit.json` — same shape `perry compile` walks up to find
     // `package.json`, so `perry audit --sbom` works from anywhere in the
     // project tree. The cache dir defaults to `node_modules/.cache/perry`
-    // but honors `--cache-dir` / `PERRY_CACHE_DIR` / `perry.cacheDir`, so
-    // resolve it per candidate directory rather than hard-coding a name.
+    // but honors `--cache-dir` / `PERRY_CACHE_DIR` / perry.toml
+    // `[perry] cacheDir` / package.json `perry.cacheDir`, so resolve it per
+    // candidate directory rather than hard-coding a name.
     let manifest_path = {
         let mut dir = root.clone();
         loop {

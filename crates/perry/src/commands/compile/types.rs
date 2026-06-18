@@ -219,8 +219,9 @@ pub struct CompileArgs {
     /// `<project-root>/node_modules/.cache/perry` (the find-cache-dir
     /// convention used by babel-loader / eslint / etc.), so the cache is
     /// auto-ignored along with `node_modules/`. Also settable via the
-    /// `PERRY_CACHE_DIR` env var or `"perry": { "cacheDir": "<path>" }`
-    /// in package.json; this flag wins over both. A relative path resolves
+    /// `PERRY_CACHE_DIR` env var, `[perry] cacheDir` in perry.toml, or
+    /// `"perry": { "cacheDir": "<path>" }` in package.json; precedence is
+    /// CLI flag > env > perry.toml > package.json. A relative path resolves
     /// against the project root. Useful for CI caches, shared build farms,
     /// or read-only project roots.
     #[arg(long)]
@@ -515,8 +516,9 @@ pub struct CompilationContext {
     /// Resolved on-disk cache directory for this build, computed once via
     /// `resolve_cache_dir`. Every on-disk cache (objects, audit.json, build,
     /// link, debug dumps, sandbox profiles) lives directly under this dir.
-    /// Precedence: `--cache-dir` → `PERRY_CACHE_DIR` → package.json
-    /// `perry.cacheDir` → default `<cache_root>/node_modules/.cache/perry`.
+    /// Precedence: `--cache-dir` → `PERRY_CACHE_DIR` → perry.toml
+    /// `[perry] cacheDir` → package.json `perry.cacheDir` → default
+    /// `<cache_root>/node_modules/.cache/perry`.
     pub cache_dir: PathBuf,
     /// External native libraries discovered from package dependencies
     pub native_libraries: Vec<NativeLibraryManifest>,

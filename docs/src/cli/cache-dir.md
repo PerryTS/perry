@@ -10,18 +10,24 @@ the link-cache manifest (`link/`), the behavioral SBOM (`audit.json`),
 sandbox-exec profiles (`buildrs-<pkg>.sandbox`), and HIR miss dumps
 (`debug/`) when `PERRY_CACHE_DEBUG_HIR=1`.
 
-## Three ways to set it
+## Four ways to set it
 
-CLI flag wins over env var, env var wins over package.json:
+Precedence, highest to lowest: CLI flag, then `PERRY_CACHE_DIR`, then
+`perry.toml`, then `package.json`. So `perry.toml` overrides `package.json`,
+and the env var and CLI flag override `perry.toml`:
 
-```bash
-# 1. Per-build CLI flag
+```
+# 1. Per-build CLI flag (wins over everything)
 perry --cache-dir /var/cache/perry myapp.ts
 
 # 2. Per-shell environment
 PERRY_CACHE_DIR=/var/cache/perry perry myapp.ts
 
-# 3. Per-project package.json (most common)
+# 3. Per-project perry.toml, alongside the other [perry] settings
+[perry]
+cacheDir = "/var/cache/perry"
+
+# 4. Per-project package.json (most common)
 {
   "perry": {
     "cacheDir": ".perry-cache"
@@ -30,7 +36,7 @@ PERRY_CACHE_DIR=/var/cache/perry perry myapp.ts
 ```
 
 A relative path resolves against the project root, so two projects that
-both set `"cacheDir": ".cache"` keep separate caches. An absolute path is
+both set `cacheDir = ".cache"` keep separate caches. An absolute path is
 used as-is.
 
 ## Notes
