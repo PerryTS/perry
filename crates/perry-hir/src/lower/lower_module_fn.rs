@@ -932,11 +932,23 @@ pub fn lower_module_full(
             for method in &class.methods {
                 widening.collect_in_class(&class.name, &method.body);
             }
+            // `getters`/`setters` hold both instance and static accessors
+            // (static ones flagged in `static_accessor_fn_ids`). Static
+            // accessors bind `this` to the constructor, not an instance, so
+            // only instance accessors get instance-style `this`/`super` facts.
             for (_, getter) in &class.getters {
-                widening.collect_in_class(&class.name, &getter.body);
+                if class.static_accessor_fn_ids.contains(&getter.id) {
+                    widening.collect(&getter.body);
+                } else {
+                    widening.collect_in_class(&class.name, &getter.body);
+                }
             }
             for (_, setter) in &class.setters {
-                widening.collect_in_class(&class.name, &setter.body);
+                if class.static_accessor_fn_ids.contains(&setter.id) {
+                    widening.collect(&setter.body);
+                } else {
+                    widening.collect_in_class(&class.name, &setter.body);
+                }
             }
             // Static methods bind `this` to the constructor, not an instance,
             // so instance-member resolution would be wrong — keep it bare.
