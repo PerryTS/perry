@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use perry_codegen::FpContractMode;
@@ -178,6 +178,30 @@ pub(super) fn apply_pkg_and_toml_config(
                     .and_then(|v| v.as_bool())
                 {
                     ctx.fast_math = fm;
+                }
+                // perry.cacheDir: directory for Perry's on-disk caches.
+                // Default `<root>/node_modules/.cache/perry` (the
+                // find-cache-dir convention). Precedence below: `--cache-dir`
+                // → `PERRY_CACHE_DIR` → this package.json field. `compile.rs`
+                // already resolved `ctx.cache_dir` once before the build-cache
+                // probe ran; re-resolve here so the canonical config pass owns
+                // the package.json read alongside its `perry.*` siblings and
+                // every later consumer (audit.json, object/link cache, sandbox
+                // profiles) sees the same value. See `docs/src/cli/cache-dir.md`.
+                if let Some(s) = pkg
+                    .get("perry")
+                    .and_then(|p| p.get("cacheDir"))
+                    .and_then(|v| v.as_str())
+                {
+                    if !s.is_empty() {
+                        let cli_or_env = args
+                            .cache_dir
+                            .clone()
+                            .or_else(|| std::env::var_os("PERRY_CACHE_DIR").map(PathBuf::from));
+                        let override_dir = cli_or_env.unwrap_or_else(|| PathBuf::from(s));
+                        ctx.cache_dir =
+                            super::object_cache::resolve_cache_dir(&ctx.cache_root, Some(&override_dir));
+                    }
                 }
                 // #2309: perry.experiments.treeShake — host opt-in to
                 // tree-shaking / dead-code elimination (OR'd with the

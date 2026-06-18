@@ -2,8 +2,9 @@
 //!
 //! Tier 2.1 follow-up (v0.5.340) — extracts the V2.2 codegen cache
 //! family from `compile.rs`. Three concerns clustered here because
-//! they all relate to the `.perry-cache/objects/<target>/<key>.o`
-//! cache layout:
+//! they all relate to the `<cache_dir>/objects/<target>/<key>.o`
+//! cache layout (where `cache_dir` defaults to
+//! `<project_root>/node_modules/.cache/perry`):
 //!
 //! 1. **`djb2_hash`** + **`Djb2Hasher`** — a fast non-crypto hash
 //!    used both for the cache-key field hasher and by other parts
@@ -58,6 +59,64 @@ fn perry_build_id() -> u64 {
             .map(|bytes| djb2_hash(&bytes))
             .unwrap_or(0)
     })
+}
+
+/// Directory holding Perry's on-disk caches for a project. Precedence:
+/// `--cache-dir` → `PERRY_CACHE_DIR` → package.json `perry.cacheDir`
+/// → default `<project_root>/node_modules/.cache/perry` (the find-cache-dir
+/// convention used by babel-loader / eslint / etc.). Relative overrides
+/// resolve against `project_root`.
+///
+/// This is a pure function: the caller reads the env var + package.json and
+/// passes the merged override in, so the resolver is race-free and unit-
+/// testable. Pass `None` for `override_dir` to get the default location.
+pub fn resolve_cache_dir(project_root: &Path, override_dir: Option<&Path>) -> PathBuf {
+    match override_dir {
+        Some(dir) if dir.is_absolute() => dir.to_path_buf(),
+        Some(dir) => project_root.join(dir),
+        None => project_root
+            .join("node_modules")
+            .join(".cache")
+            .join("perry"),
+    }
+}
+
+/// Read the project's cache-dir override from the environment and
+/// package.json, applying the non-CLI half of [`resolve_cache_dir`]'s
+/// precedence: `PERRY_CACHE_DIR` env var → package.json `perry.cacheDir`.
+/// Walks up from `project_root` to find the nearest `package.json` so it
+/// behaves like the rest of the compile pipeline's config discovery.
+/// Returns `None` when neither source sets a path, leaving the default.
+pub fn cache_dir_override(project_root: &Path) -> Option<PathBuf> {
+    if let Some(env) = std::env::var_os("PERRY_CACHE_DIR") {
+        if !env.is_empty() {
+            return Some(PathBuf::from(env));
+        }
+    }
+    let mut dir = project_root.to_path_buf();
+    loop {
+        let candidate = dir.join("package.json");
+        if candidate.exists() {
+            if let Ok(content) = fs::read_to_string(&candidate) {
+                if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(s) = pkg
+                        .get("perry")
+                        .and_then(|p| p.get("cacheDir"))
+                        .and_then(|v| v.as_str())
+                    {
+                        if !s.is_empty() {
+                            return Some(PathBuf::from(s));
+                        }
+                    }
+                }
+            }
+            break;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
 }
 
 /// Streaming djb2 accumulator so multi-part keys don't have to build a
@@ -129,8 +188,9 @@ fn stable_type_key(ty: &perry_types::Type) -> String {
 /// NOT captured in the key: the host CPU. `compile_ll_to_object` passes
 /// `-mcpu=native`/`-march=native` to clang, so the emitted `.o` bakes in
 /// whatever instruction set the build machine supports. The cache is
-/// consequently **machine-local** — `.perry-cache/` is in `.gitignore`
-/// for this reason. Sharing across machines with different CPUs (rsync,
+/// consequently **machine-local** — the default `node_modules/.cache/perry`
+/// is inside the already-gitignored `node_modules/` for this reason.
+/// Sharing across machines with different CPUs (rsync,
 /// NFS, Docker bind-mount) can produce SIGILL at runtime.
 ///
 /// Cross-platform non-determinism (Mach-O LC_UUID, PE TimeDateStamp,
@@ -728,7 +788,8 @@ fn serialize_namespace_entry_kind(kind: &perry_codegen::NamespaceEntryKind, out:
         }
     }
 }
-/// On-disk per-module object cache at `.perry-cache/objects/<target>/<hash:016x>.o`.
+/// On-disk per-module object cache at `<cache_dir>/objects/<target>/<hash:016x>.o`,
+/// where `cache_dir` defaults to `<project_root>/node_modules/.cache/perry`.
 ///
 /// Each rayon codegen worker calls `lookup_path(key)`; on hit, it skips the
 /// LLVM pipeline and links the cached object file directly. Older callers may
@@ -756,16 +817,15 @@ pub struct ObjectCache {
 }
 
 impl ObjectCache {
-    /// Create a new cache rooted at `<project_root>/.perry-cache/objects/<target>/`.
+    /// Create a new cache rooted at `<cache_dir>/objects/<target>/`, where
+    /// `cache_dir` is the already-resolved Perry cache directory (see
+    /// [`resolve_cache_dir`] — default `<project_root>/node_modules/.cache/perry`).
     /// `target_triple` is the LLVM target triple (or `"host"` for the host
     /// default). Passing `enabled = false` returns a no-op instance —
     /// every `lookup` misses and every `store` is a silent drop.
-    pub fn new(project_root: &Path, target_triple: &str, enabled: bool) -> Self {
+    pub fn new(cache_dir: &Path, target_triple: &str, enabled: bool) -> Self {
         let cache_dir = if enabled {
-            let dir = project_root
-                .join(".perry-cache")
-                .join("objects")
-                .join(target_triple);
+            let dir = cache_dir.join("objects").join(target_triple);
             match fs::create_dir_all(&dir) {
                 Ok(()) => Some(dir),
                 Err(_) => None, // silent degrade: cache stays disabled
@@ -1556,14 +1616,66 @@ mod object_cache_tests {
 
     #[test]
     fn cache_files_land_under_target_subdirectory() {
-        // The on-disk layout must be .perry-cache/objects/<target>/<hex>.o
-        // so cross-compile caches can coexist without colliding.
+        // The on-disk layout must be <cache_dir>/objects/<target>/<hex>.o
+        // so cross-compile caches can coexist without colliding. The dir
+        // passed to ObjectCache::new is the already-resolved cache dir.
         let dir = tempdir().unwrap();
         let cache = ObjectCache::new(dir.path(), "aarch64-apple-darwin", true);
         cache.store(0xabc, b"xx");
         let expected = dir
             .path()
-            .join(".perry-cache")
+            .join("objects")
+            .join("aarch64-apple-darwin")
+            .join(format!("{:016x}.o", 0xabc_u64));
+        assert!(expected.exists(), "missing: {}", expected.display());
+    }
+
+    #[test]
+    fn resolve_cache_dir_defaults_to_node_modules_cache_perry() {
+        // No override → the find-cache-dir convention under the project root.
+        let root = Path::new("/projects/app");
+        let got = resolve_cache_dir(root, None);
+        assert_eq!(
+            got,
+            Path::new("/projects/app")
+                .join("node_modules")
+                .join(".cache")
+                .join("perry")
+        );
+    }
+
+    #[test]
+    fn resolve_cache_dir_absolute_override_used_as_is() {
+        // An absolute override ignores the project root entirely.
+        let root = Path::new("/projects/app");
+        let override_dir = Path::new("/var/cache/perry");
+        let got = resolve_cache_dir(root, Some(override_dir));
+        assert_eq!(got, Path::new("/var/cache/perry"));
+    }
+
+    #[test]
+    fn resolve_cache_dir_relative_override_resolves_against_project_root() {
+        // A relative override joins onto the project root, so two projects
+        // with the same `perry.cacheDir: ".cache"` don't collide.
+        let root = Path::new("/projects/app");
+        let override_dir = Path::new("build/cache");
+        let got = resolve_cache_dir(root, Some(override_dir));
+        assert_eq!(got, Path::new("/projects/app").join("build").join("cache"));
+    }
+
+    #[test]
+    fn object_cache_writes_under_resolved_cache_dir() {
+        // End-to-end: resolve the default dir, build the cache against it,
+        // and confirm bytes land under <resolved>/objects/<target>/.
+        let dir = tempdir().unwrap();
+        let resolved = resolve_cache_dir(dir.path(), None);
+        let cache = ObjectCache::new(&resolved, "aarch64-apple-darwin", true);
+        cache.store(0xabc, b"xx");
+        let expected = dir
+            .path()
+            .join("node_modules")
+            .join(".cache")
+            .join("perry")
             .join("objects")
             .join("aarch64-apple-darwin")
             .join(format!("{:016x}.o", 0xabc_u64));
