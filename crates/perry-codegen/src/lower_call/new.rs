@@ -172,19 +172,28 @@ fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) ->
         .contains_key(&(class.name.clone(), ctor_method_name))
 }
 
+/// Construct via the shared standalone `<class>_constructor` symbol and apply
+/// ECMAScript constructor return-override semantics to its result. Returns the
+/// construction value: the freshly-allocated `this` (`obj_box`) for an implicit
+/// or `undefined` return, an explicitly-returned object, or — for a derived
+/// constructor returning a primitive — a `js_ctor_return_override` call that
+/// throws a TypeError at runtime. The standalone symbol returns the ctor body's
+/// explicit `return <value>` (or NaN-boxed `undefined` on fall-through), so the
+/// override must be applied HERE at the construction site rather than discarding
+/// the symbol's result. Refs class/subclass/derived-class-return-override-*.
 fn call_local_constructor_symbol(
     ctx: &mut FnCtx<'_>,
     class: &perry_hir::Class,
     obj_box: &str,
     lowered_args: &[String],
-) {
+) -> String {
     let ctor_method_name = format!("{}_constructor", class.name);
     let Some(ctor_name) = ctx
         .methods
         .get(&(class.name.clone(), ctor_method_name))
         .cloned()
     else {
-        return;
+        return obj_box.to_string();
     };
     // The standalone `<class>_constructor` symbol's signature is the class's
     // OWN ctor params, OR — when the class has no own ctor — the closest
@@ -243,7 +252,24 @@ fn call_local_constructor_symbol(
     for arg in &ctor_values {
         ctor_args.push((DOUBLE, arg.as_str()));
     }
-    let _ = ctx.block().call(DOUBLE, &ctor_name, &ctor_args);
+    let ret_val = ctx.block().call(DOUBLE, &ctor_name, &ctor_args);
+    // Apply the spec return-override on the symbol's result. A class is
+    // "derived" (subject to the stricter rules — a returned primitive is a
+    // TypeError) if it has ANY heritage, matching the inline path's check.
+    let is_derived = class.extends.is_some()
+        || class.extends_name.is_some()
+        || class.native_extends.is_some()
+        || class.extends_expr.is_some();
+    let is_derived_str = if is_derived { "1" } else { "0" };
+    ctx.block().call(
+        DOUBLE,
+        "js_ctor_return_override",
+        &[
+            (DOUBLE, obj_box),
+            (DOUBLE, &ret_val),
+            (I32, is_derived_str),
+        ],
+    )
 }
 
 /// Lower `new ClassName(args…)` — Phase C.1.
@@ -871,8 +897,8 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         || ctor_alias_collision
         || force_ctor_call
     {
-        call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
-        return Ok(obj_box);
+        let result = call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
+        return Ok(result);
     }
 
     // Allocate a `this` slot and store the new object there. The
