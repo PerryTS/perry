@@ -676,6 +676,20 @@ pub fn gc_collect_pending_suppressed_parse() {
     }
 
     let in_use = crate::arena::arena_in_use_bytes();
+    if gen_gc_enabled() {
+        let old_pending = GC_OLD_RECLAIM_PENDING.with(|pending| pending.get());
+        let old_in_use = crate::arena::old_gen_in_use_bytes();
+        let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+        if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
+            GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+            gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
+                GcTriggerKind::OldGenBytes,
+            ))
+            .emit_after_current();
+            return;
+        }
+    }
+
     if gen_gc_enabled() && in_use >= GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES {
         let outcome =
             gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::ArenaBytes));
