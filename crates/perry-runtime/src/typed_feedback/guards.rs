@@ -713,6 +713,59 @@ pub extern "C" fn js_class_field_set_ic(
     js_class_field_set_fallback(site_id, obj_bits, key_raw, value);
 }
 
+/// Class-field-GET inline cache, FULLY OUTLINED (#5391 path 2 — extends the
+/// #5334 lever-B full-outline from field-SET to field-GET). For oversized
+/// modules the entire `class_field_get` diamond (inline precheck + guard call +
+/// fast slot load + by-name fallback + phi) collapses to this one call,
+/// shrinking the large minified user functions enough for `clang -O0` to
+/// compile them in practical time.
+///
+/// Reproduces the diamond's semantics: run the same
+/// `js_typed_feedback_class_field_get_guard`; on a PASS read the field slot as
+/// `f64` (a plain number is self-boxing in nan-boxing, so raw-f64 and boxed
+/// slots read identically — matching the inline `class_field_get.fast` plain
+/// `load double`); on a FAIL record the fallback and read by name. The full
+/// outline drops the inline path's static raw-number type hint (the result is
+/// treated as a general JS value), which is value-correct — acceptable on the
+/// size-gated full-outline path.
+#[no_mangle]
+pub extern "C" fn js_class_field_get_ic(
+    site_id: u64,
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    key: *const crate::StringHeader,
+    expected_field_index: u32,
+    require_raw_f64: i32,
+) -> f64 {
+    let guard_ok = js_typed_feedback_class_field_get_guard(
+        site_id,
+        receiver,
+        expected_class_id,
+        expected_keys,
+        key,
+        expected_field_index,
+        require_raw_f64,
+    );
+
+    if guard_ok != 0 {
+        let object_addr = normalize_raw_object_addr(receiver.to_bits());
+        unsafe {
+            let fields_ptr =
+                (object_addr as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const f64;
+            return std::ptr::read(fields_ptr.add(expected_field_index as usize));
+        }
+    }
+
+    crate::typed_feedback::js_typed_feedback_record_fallback_call(site_id);
+    let obj_bits = receiver.to_bits();
+    let key_raw = key as u64 & crate::value::POINTER_MASK;
+    crate::object::js_object_get_field_by_name_f64(
+        obj_bits as *const ObjectHeader,
+        key_raw as *const crate::StringHeader,
+    )
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_typed_feedback_native_call_method(
     site_id: u64,
@@ -951,6 +1004,7 @@ mod keep_guard_symbols {
     #[used] static G1: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
     #[used] static G1C: extern "C" fn(u64, u64, u64, f64) = js_class_field_set_fallback;
     #[used] static G1D: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
+    #[used] static G1E: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> f64 = js_class_field_get_ic;
     #[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
 }

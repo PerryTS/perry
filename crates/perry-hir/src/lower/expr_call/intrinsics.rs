@@ -110,6 +110,62 @@ pub(super) fn try_require_literal(
     Ok(None)
 }
 
+/// #5389 Tier 2: a bare, **computed** `require(expr)` (non-literal specifier)
+/// inside a compiled external / `compilePackages` module.
+///
+/// Literal specifiers are handled by `try_require_literal` (which runs first):
+/// native builtins fold to `NativeModuleRef`, and the `createRequire`-alias /
+/// destructuring transforms rewrite literal package requires to imports. A
+/// non-literal specifier can't be rewritten statically, so route it through the
+/// same synchronous dynamic-require path as dynamic `import()`: emit a
+/// `DynamicImport { synchronous: true }` node whose `arg` `collect_modules`
+/// const-folds (or globs) to a finite target set, registering each as a dynamic
+/// import edge. Codegen then dispatches to the matching compiled-module
+/// namespace **synchronously** (no Promise), with the Tier-1 ambient
+/// createRequire-backed `require` as the no-match / unresolved fallthrough
+/// (builtins resolve by string; unknown packages throw the descriptive
+/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`).
+///
+/// Gated to external modules: in first-party source a bare `require` keeps the
+/// deliberate compile-time behavior (#668). Returns `Some(expr)` when matched.
+pub(super) fn try_dynamic_require(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+) -> Result<Option<Expr>> {
+    if !ctx.is_external_module {
+        return Ok(None);
+    }
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return Ok(None);
+    };
+    let ast::Expr::Ident(ident) = callee_expr.as_ref() else {
+        return Ok(None);
+    };
+    // Only the bare unshadowed global `require` — a local/func/imported binding
+    // named `require` shadows it (and matched an earlier lowering arm).
+    if ident.sym.as_ref() != "require"
+        || ctx.lookup_local("require").is_some()
+        || ctx.lookup_func("require").is_some()
+        || ctx.lookup_imported_func("require").is_some()
+        || call.args.len() != 1
+        || call.args[0].spread.is_some()
+    {
+        return Ok(None);
+    }
+    // Literal specifiers were already handled by `try_require_literal`.
+    if matches!(call.args[0].expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(_))) {
+        return Ok(None);
+    }
+    let arg = lower_expr(ctx, call.args[0].expr.as_ref())?;
+    Ok(Some(Expr::DynamicImport {
+        paths: Vec::new(),
+        arg: Box::new(arg),
+        byte_offset: call.span.lo.0,
+        deferred_error: None,
+        synchronous: true,
+    }))
+}
+
 /// #1678 (Phase 0 of #1677) — classify a bare `Function(...)` /
 /// `eval(...)` call. The `Function('return this')()` globalThis fold runs
 /// before this (in `lower_call_inner`) and short-circuits, so its inner

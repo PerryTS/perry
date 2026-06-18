@@ -531,6 +531,19 @@ pub struct LoweringContext {
     /// call dispatched into `Object.create`. Scoped save/restore in
     /// `lower_fn_body_block_stmt`.
     pub(crate) forward_class_names: std::collections::HashSet<String>,
+    /// Names of TOP-LEVEL `class X { … }` declarations in the module being
+    /// lowered (populated by the module pre-pass). A NAMED class EXPRESSION
+    /// nested in a function body — e.g. minimatch's `defaults()` returns
+    /// `Object.assign(m, { Minimatch: class Minimatch extends orig.Minimatch
+    /// {…} })` — whose name collides with one of these must NOT reuse the
+    /// top-level class's ClassId / module-scope registration: per JS spec a
+    /// class-expression's name binds only inside its own body. Reusing the id
+    /// silently overwrote the real exported class with the (nearly empty)
+    /// nested expression, so `new Minimatch(...)` produced a body-less
+    /// instance (every field/method undefined). This set lets
+    /// `lower_class_from_ast` detect that collision and allocate a fresh,
+    /// uniquely-named class instead.
+    pub(crate) module_class_decl_names: std::collections::HashSet<String>,
     /// Counter for generating anon-class names (`__AnonShape_N`).
     // #854: initialized in `new` but unread — anon-shape classes are now named
     // by content-addressed FNV hash (see `synthesize_anon_shape_class`), not by
