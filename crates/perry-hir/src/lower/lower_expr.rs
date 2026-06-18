@@ -235,6 +235,64 @@ fn anonymous_class_has_static_name_member(class: &ast::Class) -> bool {
     })
 }
 
+/// True when an `Expr` is cheap to evaluate more than once with no observable
+/// side effects — safe to duplicate into an optional-call guard condition.
+/// Conservative: only the obvious read-only leaf/access shapes qualify.
+fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
+    match expr {
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::This
+        | Expr::Undefined
+        | Expr::Null
+        | Expr::Number(_)
+        | Expr::String(_)
+        | Expr::Bool(_) => true,
+        // `a.b` / `a[const]` chains over repeatable receivers stay repeatable
+        // (property reads are not side-effecting in this codebase's model).
+        Expr::PropertyGet { object, .. } => opt_call_receiver_repeatable(object),
+        Expr::IndexGet { object, index } => {
+            opt_call_receiver_repeatable(object) && opt_call_receiver_repeatable(index)
+        }
+        _ => false,
+    }
+}
+
+/// Build the condition under which `obj.method?.(args)` short-circuits to
+/// `undefined`: the resolved function value is nullish. The naive check
+/// `obj.method == null` is WRONG when `obj` is a primitive string, because
+/// `PropertyGet{string, method}` reads back `undefined` even though the
+/// builtin (`split`/`replace`/…) is perfectly callable through the call path
+/// — so the guard wrongly short-circuited (`mime`'s
+/// `type?.split?.(';')[0]` returned `undefined`). Per spec, a string DOES have
+/// the method, so we must NOT short-circuit. When the receiver is repeatable
+/// we widen the guard to `func_value == null && typeof receiver !== "string"`:
+/// for a real string the typeof clause is false (never short-circuit → the
+/// call dispatches the builtin), while a user object missing the method still
+/// short-circuits (#830 preserved). Non-repeatable receivers keep the plain
+/// function-value check to avoid double-evaluating side effects.
+fn opt_call_func_nullish_guard(receiver: &Expr, func_value: Expr) -> Expr {
+    let func_nullish = Expr::Compare {
+        op: CompareOp::LooseEq,
+        left: Box::new(func_value),
+        right: Box::new(Expr::Null),
+    };
+    if opt_call_receiver_repeatable(receiver) {
+        let not_string = Expr::Compare {
+            op: CompareOp::Ne,
+            left: Box::new(Expr::TypeOf(Box::new(receiver.clone()))),
+            right: Box::new(Expr::String("string".to_string())),
+        };
+        Expr::Logical {
+            op: LogicalOp::And,
+            left: Box::new(func_nullish),
+            right: Box::new(not_string),
+        }
+    } else {
+        func_nullish
+    }
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -1872,6 +1930,11 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     // "X is not a function" (issue #4699: zod `safeParse`'s
                     // `iss.inst?._zod.def?.error?.(iss)` error-map probe).
                     let mut callee_from_chain = false;
+                    // Receiver of an `obj.method?.(args)` callee, captured so the
+                    // function-value nullish guard can avoid false-short-circuiting
+                    // on string builtins (`type?.split?.(...)`) — see
+                    // `opt_call_func_nullish_guard`. `None` for non-member callees.
+                    let mut opt_call_member_receiver: Option<Expr> = None;
                     let (check_expr, callee_expr) = {
                         let mut lower_member_flat =
                             |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
@@ -1909,7 +1972,8 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                             // (prop), call the function (prop) — codegen still sees
                             // a PropertyGet callee so `this` binds to obj.
                             ast::Expr::Member(m) => {
-                                let (_obj, prop) = lower_member_flat(m)?;
+                                let (obj, prop) = lower_member_flat(m)?;
+                                opt_call_member_receiver = Some(obj);
                                 (prop.clone(), prop)
                             }
                             ast::Expr::OptChain(inner) => match &*inner.base {
@@ -1939,7 +2003,9 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                                 //    callee + dispatches the builtin normally.
                                 ast::OptChainBase::Member(m) => {
                                     callee_from_chain = opt_chain.optional;
-                                    lower_member_flat(m)?
+                                    let (obj, prop) = lower_member_flat(m)?;
+                                    opt_call_member_receiver = Some(obj.clone());
+                                    (obj, prop)
                                 }
                                 _ => {
                                     let ce = lower_expr(ctx, callee)?;
@@ -1985,12 +2051,19 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                         // before calling — otherwise an `undefined` property is
                         // invoked and throws "X is not a function" (#4699).
                         let else_expr: Box<Expr> = if callee_from_chain {
-                            Box::new(Expr::Conditional {
-                                condition: Box::new(Expr::Compare {
+                            // String-builtin-safe nullish guard: a real string
+                            // receiver never short-circuits even though
+                            // `string.method` reads as undefined.
+                            let guard_cond = match &opt_call_member_receiver {
+                                Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee),
+                                None => Expr::Compare {
                                     op: CompareOp::LooseEq,
                                     left: Box::new(fixed_callee),
                                     right: Box::new(Expr::Null),
-                                }),
+                                },
+                            };
+                            Box::new(Expr::Conditional {
+                                condition: Box::new(guard_cond),
                                 then_expr: Box::new(Expr::Undefined),
                                 else_expr: Box::new(outer_call),
                             })
@@ -2050,15 +2123,24 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     // before the call — otherwise an `undefined` property is
                     // invoked and throws "X is not a function" (#4699).
                     let else_expr: Box<Expr> = match func_value_for_guard {
-                        Some(func_value) => Box::new(Expr::Conditional {
-                            condition: Box::new(Expr::Compare {
-                                op: CompareOp::LooseEq,
-                                left: Box::new(func_value),
-                                right: Box::new(Expr::Null),
-                            }),
-                            then_expr: Box::new(Expr::Undefined),
-                            else_expr: Box::new(call_expr),
-                        }),
+                        Some(func_value) => {
+                            // String-builtin-safe: do not short-circuit when the
+                            // receiver is a primitive string whose builtin method
+                            // reads back as `undefined` (`type?.split?.(...)`).
+                            let guard_cond = match &opt_call_member_receiver {
+                                Some(recv) => opt_call_func_nullish_guard(recv, func_value),
+                                None => Expr::Compare {
+                                    op: CompareOp::LooseEq,
+                                    left: Box::new(func_value),
+                                    right: Box::new(Expr::Null),
+                                },
+                            };
+                            Box::new(Expr::Conditional {
+                                condition: Box::new(guard_cond),
+                                then_expr: Box::new(Expr::Undefined),
+                                else_expr: Box::new(call_expr),
+                            })
+                        }
                         None => Box::new(call_expr),
                     };
 
@@ -2069,12 +2151,27 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     // undefined to fall through and produce
                     // `[object Object]` (or worse) when the receiver
                     // is `Map.get(missing)` etc.
-                    Ok(Expr::Conditional {
-                        condition: Box::new(Expr::Compare {
+                    //
+                    // For the simple `obj.method?.(args)` shape (`callee_from_chain`
+                    // is false and we captured a member receiver), `check_expr` is
+                    // the FUNCTION VALUE `obj.method`. Reading `string.method` as a
+                    // property yields `undefined` for builtins even though they're
+                    // callable, so use the string-builtin-safe guard to avoid a
+                    // false short-circuit (`"a/b".split?.(...)`). Otherwise
+                    // (`check_expr` is a receiver, or callee is not a member) the
+                    // plain nullish check is correct.
+                    let condition = if !callee_from_chain && opt_call_member_receiver.is_some() {
+                        let recv = opt_call_member_receiver.unwrap();
+                        opt_call_func_nullish_guard(&recv, check_expr)
+                    } else {
+                        Expr::Compare {
                             op: CompareOp::LooseEq,
                             left: Box::new(check_expr),
                             right: Box::new(Expr::Null),
-                        }),
+                        }
+                    };
+                    Ok(Expr::Conditional {
+                        condition: Box::new(condition),
                         then_expr: Box::new(Expr::Undefined),
                         else_expr,
                     })
