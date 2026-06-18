@@ -453,6 +453,14 @@ pub struct ImportedClass {
     pub constructor_param_count: usize,
     /// Whether the source class declared its own constructor body.
     pub has_own_constructor: bool,
+    /// Whether the source class's constructor's last declared parameter is
+    /// `...rest`. Symmetric to `method_has_rest` but for the constructor: the
+    /// source module compiled `<class>_constructor(this, arg0, …)` expecting
+    /// the rest slot to receive a PACKED ARRAY of the trailing args. Without
+    /// this flag the cross-module `new C(a, b, c)` dispatch passed the args
+    /// positionally, so `arg0 = a` (raw) and `b`/`c` were dropped — a
+    /// `constructor(...args)` saw `args = a`, length 1.
+    pub constructor_has_rest: bool,
     /// Whether the source class has instance fields that require initializer replay.
     pub has_instance_fields: bool,
     /// Method names defined on this class.
@@ -520,6 +528,10 @@ pub(crate) struct ImportedCtor {
     pub param_count: usize,
     pub has_own_constructor: bool,
     pub has_instance_fields: bool,
+    /// True when the constructor's last declared param is `...rest`. Tells
+    /// the cross-module `new` dispatch to pack the trailing args into an
+    /// array for the rest slot rather than passing them positionally.
+    pub has_rest: bool,
 }
 
 impl ImportedCtor {
