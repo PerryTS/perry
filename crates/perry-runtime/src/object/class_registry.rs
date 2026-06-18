@@ -3832,8 +3832,15 @@ extern "C" fn class_accessor_setter_thunk(
 /// Wrap a raw class accessor func_ptr as a callable function VALUE for
 /// descriptor reflection (`Object.getOwnPropertyDescriptor(C.prototype,
 /// "x").get`). Built-in-shaped: `.length` 0/1, no `.prototype`, native
-/// `toString` form.
-pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> f64 {
+/// `toString` form. `prop_name` is the accessor's property key — the spec
+/// `.name` of a `get`/`set` accessor is the key prefixed with `"get "`/`"set "`
+/// (Function Definitions: SetFunctionName with the "get"/"set" prefix), e.g.
+/// `Object.getOwnPropertyDescriptor(C.prototype, "x").get.name === "get x"`.
+pub(crate) fn class_accessor_function_value(
+    raw_ptr: usize,
+    is_setter: bool,
+    prop_name: &str,
+) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -3852,6 +3859,22 @@ pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> 
         if is_setter { 1 } else { 0 },
     );
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    // Spec `.name` = "get <key>" / "set <key>" with attributes
+    // { writable: false, enumerable: false, configurable: true } (mirrors the
+    // `Function.prototype.bind` name path). Without this the reflected accessor
+    // value's `.name` defaulted to "" — refs class/.../fn-name-accessor-{get,set}.
+    let prefix = if is_setter { "set " } else { "get " };
+    let fn_name = format!("{prefix}{prop_name}");
+    let name_ptr = crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
+    let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
+    unsafe {
+        crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    }
+    crate::object::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
     crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
     crate::value::js_nanbox_pointer(closure as i64)
 }

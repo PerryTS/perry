@@ -1959,7 +1959,31 @@ pub(super) fn build_and_run_link(
         return Ok(link_cache_status);
     }
 
+    // Windows hosts cap a spawned process's command line (`CreateProcess` ~32
+    // KiB); a link with many object files — ≥~450 local modules (e.g. dense
+    // barrel `export *` re-exports, or the `@earendil-works/pi-ai` module
+    // graph) — overflows it and fails with `The filename or extension is too
+    // long. (os error 206)` before the linker even starts. Route the whole
+    // argument vector through a linker *response file* (`@file`), which
+    // `link.exe` / `lld-link` (and `clang`/`cc`) read instead of the command
+    // line, so the invocation no longer scales with module count. Only the
+    // native-Windows host is affected (other hosts have a multi-MB `ARG_MAX`);
+    // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path elsewhere for testing.
+    let mut response_file_to_clean: Option<PathBuf> = None;
+    if cfg!(target_os = "windows") || std::env::var_os("PERRY_FORCE_LINK_RESPONSE_FILE").is_some() {
+        // MSVC-style quoting for the native-Windows linker (link.exe/lld-link);
+        // GNU-style for a clang/cc driver (the forced-test path on macOS/Linux).
+        let msvc_quoting = cfg!(target_os = "windows") && is_windows;
+        if let Some((rsp_cmd, rsp_path)) = rewrite_link_with_response_file(&cmd, msvc_quoting) {
+            cmd = rsp_cmd;
+            response_file_to_clean = Some(rsp_path);
+        }
+    }
+
     let status_result = cmd.status();
+    if let Some(path) = response_file_to_clean {
+        let _ = fs::remove_file(path);
+    }
     if let Some(path) = embedded_info_plist_path {
         let _ = fs::remove_file(path);
     }
@@ -1972,5 +1996,137 @@ pub(super) fn build_and_run_link(
     Ok(link_cache_status)
 }
 
+/// Quote one linker argument for a response file. `msvc` selects `link.exe` /
+/// `lld-link` rules (a `"` toggles a quoted run; backslashes are literal Windows
+/// path separators, so they are NOT escaped — only an embedded `"` is escaped as
+/// `\"`); otherwise GNU/clang rules (inside double quotes `\` and `"` escape, so
+/// both are backslash-escaped). An argument with no whitespace/quote needs no
+/// quoting in either dialect — the common case (long object/lib paths).
+pub(super) fn quote_response_arg(arg: &str, msvc: bool) -> String {
+    let needs_quote = arg.is_empty()
+        || arg
+            .bytes()
+            .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'"'));
+    if !needs_quote {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    for c in arg.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' if !msvc => out.push_str("\\\\"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Render a linker `Command`'s full argument vector as response-file content
+/// (one quoted arg per line). Pure + unit-tested; the `\n` separator and
+/// per-arg quoting are what `link.exe`/`lld-link`/`clang` accept via `@file`.
+pub(super) fn response_file_contents(args: &[String], msvc: bool) -> String {
+    let mut s = String::new();
+    for a in args {
+        s.push_str(&quote_response_arg(a, msvc));
+        s.push('\n');
+    }
+    s
+}
+
+/// Rewrite a linker invocation to pass its arguments via a response file
+/// (`<linker> @<file>`) instead of inline, dodging the Windows `CreateProcess`
+/// command-line length cap (os error 206) on links with many object files.
+/// Preserves program, env overrides, and working directory. The response file
+/// goes in the OS temp dir under a per-process/-output unique name (so parallel
+/// links don't clobber each other) and the caller deletes it after the link.
+/// Returns `None` if there's nothing to gain (no args) or the file can't be
+/// written — the caller then keeps the original inline command.
+fn rewrite_link_with_response_file(cmd: &Command, msvc: bool) -> Option<(Command, PathBuf)> {
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    if args.is_empty() {
+        return None;
+    }
+    let contents = response_file_contents(&args, msvc);
+    let rsp = std::env::temp_dir().join(format!("perry-link-{}.rsp", std::process::id()));
+    fs::write(&rsp, contents).ok()?;
+
+    let mut new_cmd = Command::new(cmd.get_program());
+    new_cmd.arg(format!("@{}", rsp.display()));
+    // Preserve env overrides (e.g. MSVC LIB/PATH set by select_linker_command)
+    // and the working directory the original command was configured with.
+    for (key, val) in cmd.get_envs() {
+        match val {
+            Some(v) => {
+                new_cmd.env(key, v);
+            }
+            None => {
+                new_cmd.env_remove(key);
+            }
+        }
+    }
+    if let Some(cwd) = cmd.get_current_dir() {
+        new_cmd.current_dir(cwd);
+    }
+    Some((new_cmd, rsp))
+}
+
 #[cfg(test)]
 mod optional_framework_dir_tests;
+
+#[cfg(test)]
+mod response_file_tests {
+    use super::{quote_response_arg, response_file_contents};
+
+    #[test]
+    fn plain_paths_are_unquoted_in_both_dialects() {
+        assert_eq!(quote_response_arg("/tmp/a_ts.o", false), "/tmp/a_ts.o");
+        assert_eq!(
+            quote_response_arg(r"C:\build\d0449_ts.o", true),
+            r"C:\build\d0449_ts.o"
+        );
+        // /OPT:REF etc. — no whitespace, untouched.
+        assert_eq!(quote_response_arg("/OPT:REF", true), "/OPT:REF");
+    }
+
+    #[test]
+    fn msvc_quotes_spaces_keeps_backslashes_literal() {
+        // Windows path with a space: quoted, backslashes NOT escaped.
+        assert_eq!(
+            quote_response_arg(r"C:\Program Files\x.lib", true),
+            "\"C:\\Program Files\\x.lib\""
+        );
+    }
+
+    #[test]
+    fn gnu_quotes_and_escapes_backslashes() {
+        assert_eq!(quote_response_arg("/a b/x.o", false), "\"/a b/x.o\"");
+        assert_eq!(
+            quote_response_arg(r"/a\b c/x.o", false),
+            "\"/a\\\\b c/x.o\""
+        );
+    }
+
+    #[test]
+    fn embedded_quote_is_escaped() {
+        assert_eq!(quote_response_arg("a\"b", true), "\"a\\\"b\"");
+        assert_eq!(quote_response_arg("a\"b", false), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn contents_is_one_arg_per_line() {
+        let args = vec![
+            "/tmp/main.o".to_string(),
+            "/tmp/mod 1.o".to_string(),
+            "-lperry".to_string(),
+        ];
+        assert_eq!(
+            response_file_contents(&args, false),
+            "/tmp/main.o\n\"/tmp/mod 1.o\"\n-lperry\n"
+        );
+    }
+}

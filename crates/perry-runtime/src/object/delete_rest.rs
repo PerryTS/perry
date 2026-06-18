@@ -178,6 +178,24 @@ pub extern "C" fn js_object_delete_field(
                 // below so hasOwnProperty / Object.keys stop seeing it.
             }
         }
+        // A class-declaration prototype object: instance accessors (`get x()`)
+        // and methods live in the class vtable, not the keys_array, so the scan
+        // below would "succeed vacuously" while the member stayed visible to
+        // hasOwnProperty / getOwnPropertyDescriptor. Record the key as deleted
+        // so those reflective paths agree it is gone (test262 verifyProperty's
+        // `configurable` check: `delete obj[name]` then assert the key absent —
+        // class/definition/{getters,setters}-prop-desc).
+        if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                if name != "constructor"
+                    && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
+                        || super::native_module::class_has_own_method(cid, name))
+                {
+                    super::class_registry::class_mark_key_deleted(cid, name);
+                    return 1;
+                }
+            }
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously

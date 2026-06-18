@@ -6700,6 +6700,28 @@ pub(super) fn install_proto_method(
     value
 }
 
+/// Install `alias_name` on `proto_obj` as the SAME function object as an
+/// already-installed method (`value` is that method's installed property
+/// value). Annex B legacy aliases — `trimLeft`→`trimStart`,
+/// `trimRight`→`trimEnd`, `toGMTString`→`toUTCString` — are required to be the
+/// very same function object (`String.prototype.trimLeft === trimStart`, and
+/// `.name` reports the canonical method's name), with the standard
+/// `{ writable: true, enumerable: false, configurable: true }` method
+/// descriptor. See test262 `annexB/built-ins/{String,Date}` (#5346).
+pub(super) fn install_proto_method_alias(
+    proto_obj: *mut ObjectHeader,
+    alias_name: &str,
+    value: f64,
+) {
+    let key = crate::string::js_string_from_bytes(alias_name.as_ptr(), alias_name.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        alias_name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+}
+
 pub(super) fn install_proto_method_rest(
     proto_obj: *mut ObjectHeader,
     method_name: &str,

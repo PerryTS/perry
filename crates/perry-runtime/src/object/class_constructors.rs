@@ -262,6 +262,50 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         Some(p) if p != 0 => p,
         _ => return undef,
     };
+    // Static-context super call (`super.m()` inside a `static` method): the
+    // receiver is the class constructor (a ClassRef), so resolve the PARENT's
+    // STATIC method (not an instance/prototype method) and invoke it with
+    // `this` bound to the current class. Refs class/super/in-static-methods.
+    if super::class_ref_id(this_value).is_some() {
+        if let Some((func_ptr, param_count, has_rest)) =
+            super::class_registry::lookup_static_method_in_chain(parent_cid, name)
+        {
+            let prev_this = crate::object::js_implicit_this_set(this_value);
+            crate::object::static_this_arm_if_unarmed(this_value);
+            let result = if has_rest {
+                // Mirror `js_class_static_method_call`'s rest bundling: fixed
+                // positional args, then the remaining args as an array.
+                let fixed = (param_count as usize).saturating_sub(1);
+                let arr = crate::array::js_array_alloc(args_len.saturating_sub(fixed) as u32);
+                let mut i = fixed;
+                while i < args_len {
+                    crate::array::js_array_push_f64(arr, *args_ptr.add(i));
+                    i += 1;
+                }
+                let rest_box = crate::value::js_nanbox_pointer(arr as i64);
+                let mut buf: Vec<f64> = Vec::with_capacity(param_count as usize);
+                for j in 0..fixed {
+                    buf.push(if j < args_len {
+                        *args_ptr.add(j)
+                    } else {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    });
+                }
+                buf.push(rest_box);
+                super::class_registry::call_static_method(
+                    func_ptr,
+                    buf.as_ptr(),
+                    buf.len(),
+                    param_count,
+                )
+            } else {
+                super::class_registry::call_static_method(func_ptr, args_ptr, args_len, param_count)
+            };
+            crate::object::static_this_disarm();
+            crate::object::js_implicit_this_set(prev_this);
+            return result;
+        }
+    }
     // `lookup_class_method_in_chain` resolves under the registry read lock and
     // DROPS it before returning — the invoked method body may take the registry
     // write lock (a lazy `require()` registering a module class), so we must not

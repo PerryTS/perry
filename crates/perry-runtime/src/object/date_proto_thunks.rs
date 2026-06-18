@@ -299,18 +299,17 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
         0,
     );
     super::global_this::install_proto_method(proto_obj, "toJSON", date_to_json as *const u8, 1);
-    super::global_this::install_proto_method(
+    let utc = super::global_this::install_proto_method(
         proto_obj,
         "toUTCString",
         date_to_utc_string as *const u8,
         0,
     );
-    super::global_this::install_proto_method(
-        proto_obj,
-        "toGMTString",
-        date_to_utc_string as *const u8,
-        0,
-    );
+    // Annex B: `Date.prototype.toGMTString` is the SAME function object as
+    // `toUTCString` (`toGMTString === toUTCString`, `.name === "toUTCString"`),
+    // not an independent thunk (test262 `annexB/built-ins/Date/.../toGMTString/
+    // value`, #5346).
+    super::global_this::install_proto_method_alias(proto_obj, "toGMTString", utc);
 }
 
 // --- Setters ---------------------------------------------------------------

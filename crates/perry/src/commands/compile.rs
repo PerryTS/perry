@@ -2587,6 +2587,11 @@ pub fn run_with_parse_cache(
                                             .map(|c| c.params.len())
                                             .unwrap_or(0),
                                         has_own_constructor: class.constructor.is_some(),
+                                        constructor_has_rest: class
+                                            .constructor
+                                            .as_ref()
+                                            .map(|c| c.params.iter().any(|p| p.is_rest))
+                                            .unwrap_or(false),
                                         has_instance_fields: !class.fields.is_empty(),
                                         method_names: class
                                             .methods
@@ -2783,6 +2788,11 @@ pub fn run_with_parse_cache(
                                                 .map(|c| c.params.len())
                                                 .unwrap_or(0),
                                             has_own_constructor: class.constructor.is_some(),
+                                            constructor_has_rest: class
+                                                .constructor
+                                                .as_ref()
+                                                .map(|c| c.params.iter().any(|p| p.is_rest))
+                                                .unwrap_or(false),
                                             has_instance_fields: !class.fields.is_empty(),
                                             method_names: class
                                                 .methods
@@ -3031,6 +3041,11 @@ pub fn run_with_parse_cache(
                                     .map(|c| c.params.len())
                                     .unwrap_or(0),
                                 has_own_constructor: class.constructor.is_some(),
+                                constructor_has_rest: class
+                                    .constructor
+                                    .as_ref()
+                                    .map(|c| c.params.iter().any(|p| p.is_rest))
+                                    .unwrap_or(false),
                                 has_instance_fields: !class.fields.is_empty(),
                                 method_names: class
                                     .methods
@@ -3097,6 +3112,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_has_rest: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.iter().any(|p| p.is_rest))
+                                .unwrap_or(false),
                             has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
@@ -3250,6 +3270,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_has_rest: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.iter().any(|p| p.is_rest))
+                                .unwrap_or(false),
                             has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
@@ -3710,6 +3735,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_has_rest: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.iter().any(|p| p.is_rest))
+                                .unwrap_or(false),
                             has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
@@ -3904,6 +3934,11 @@ pub fn run_with_parse_cache(
                                 .map(|c| c.params.len())
                                 .unwrap_or(0),
                             has_own_constructor: class.constructor.is_some(),
+                            constructor_has_rest: class
+                                .constructor
+                                .as_ref()
+                                .map(|c| c.params.iter().any(|p| p.is_rest))
+                                .unwrap_or(false),
                             has_instance_fields: !class.fields.is_empty(),
                             method_names: class.methods.iter().map(|m| m.name.clone()).collect(),
                             method_param_counts: class
