@@ -669,6 +669,11 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
 
 #[test]
 fn typed_feedback_marks_numeric_array_literals() {
+    // Serialize against the array-literal full-outline test and pin it off, so
+    // this test always observes the inline numeric-array construction
+    // (js_array_mark_numeric_f64_layout) rather than the outlined builder.
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let numeric_ir = ir_for(module(
         "typed_feedback_numeric_array_literal.ts",
         Vec::new(),
