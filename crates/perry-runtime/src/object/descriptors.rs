@@ -323,7 +323,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 };
                 if let Some((g, s)) = accessor {
                     return build_accessor_descriptor(
-                        super::class_registry::class_accessor_function_value(g, false, &method_name),
+                        super::class_registry::class_accessor_function_value(
+                            g,
+                            false,
+                            &method_name,
+                        ),
                         super::class_registry::class_accessor_function_value(s, true, &method_name),
                         false,
                         true,

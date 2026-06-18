@@ -175,8 +175,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
                             reg.get(&cid).and_then(|m| m.get(key_name)).map(|&(g, _)| g)
                         {
                             if getter_ptr != 0 {
-                                let f: extern "C" fn(f64) -> f64 =
-                                    std::mem::transmute(getter_ptr);
+                                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
                                 let prev = crate::object::js_implicit_this_set(receiver);
                                 let r = f(receiver);
                                 crate::object::js_implicit_this_set(prev);

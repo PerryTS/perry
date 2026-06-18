@@ -3848,8 +3848,7 @@ pub(crate) fn class_accessor_function_value(
     // value's `.name` defaulted to "" — refs class/.../fn-name-accessor-{get,set}.
     let prefix = if is_setter { "set " } else { "get " };
     let fn_name = format!("{prefix}{prop_name}");
-    let name_ptr =
-        crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
+    let name_ptr = crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
     let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
     unsafe {
         crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
