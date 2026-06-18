@@ -701,15 +701,12 @@ pub extern "C" fn js_class_field_set_ic(
         return;
     }
 
-    // Guard FAIL → record + route by name (same as js_class_field_set_fallback).
-    crate::typed_feedback::js_typed_feedback_record_fallback_call(site_id);
+    // Guard FAIL → identical to the cold guard-miss arm. Delegate to the shared
+    // fallback helper so by-name routing (frozen / accessor / setter-in-chain)
+    // stays defined in exactly one place.
     let obj_bits = receiver.to_bits();
     let key_raw = key as u64 & crate::value::POINTER_MASK;
-    crate::object::js_object_set_field_by_name(
-        obj_bits as *mut ObjectHeader,
-        key_raw as *const crate::StringHeader,
-        value,
-    );
+    js_class_field_set_fallback(site_id, obj_bits, key_raw, value);
 }
 
 #[no_mangle]

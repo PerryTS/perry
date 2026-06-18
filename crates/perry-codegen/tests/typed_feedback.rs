@@ -359,6 +359,57 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
 }
 
 #[test]
+fn full_outline_ic_auto_gate_counts_class_methods() {
+    // #5334 lever B: the auto size-gate counts class CALLABLES (methods,
+    // accessors, ctor), not just top-level `hir.functions`. A class-heavy module
+    // (the minified-bundle pathology) must trigger even though it has only one
+    // top-level function — class methods/closures don't live in `hir.functions`.
+    let mut big = class(150, "Big", vec![field("x", Type::Number)]);
+    for i in 0..6u32 {
+        big.methods.push(Function {
+            id: 200 + i,
+            name: format!("m{i}"),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Number,
+            body: vec![Stmt::Return(Some(Expr::Number(0.0)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+    }
+    let module = module_with_classes(
+        "auto_gate.ts",
+        vec![big],
+        vec![param(1, "p", Type::Named("Big".to_string()))],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+                value: Box::new(Expr::Number(7.0)),
+            }),
+            Stmt::Return(Some(Expr::Number(0.0))),
+        ],
+    );
+
+    let _lock = ENV_LOCK.lock().unwrap();
+    // Auto path (override unset): callable count = 1 probe fn + 6 methods = 7,
+    // which clears MIN_FUNCS=5 even though `hir.functions.len()` is just 1. The
+    // pre-fix function-only count (1) would have stayed under the threshold.
+    let _ic = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", None);
+    let _min = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC_MIN_FUNCS", Some("5"));
+    let ir = ir_for(module);
+    assert!(ir.contains("call void @js_class_field_set_ic"));
+    assert!(!ir.contains("class_field_set.fast"));
+}
+
+#[test]
 fn typed_feedback_guards_direct_class_method_specialization() {
     // Serialize against the lever-B test (#5334) and pin full-outline off so the
     // class's synthesized field-set keeps its inline fallback (asserted below).
