@@ -272,7 +272,7 @@ struct DecodeResult {
 /// Strict TC39 hex decode. Throws SyntaxError on odd length or invalid char.
 /// Writes up to `dst.len()` bytes; returns chars-read / bytes-written.
 fn hex_decode_strict(input: &[u8], dst: &mut [u8]) -> DecodeResult {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         throw_syntax(b"Input string must contain hex characters in even length");
     }
     let mut written = 0usize;

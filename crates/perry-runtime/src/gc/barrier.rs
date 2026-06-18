@@ -526,8 +526,8 @@ pub(super) unsafe fn scan_dirty_slot_range(
         stats.dirty_slot_pages_considered += 1;
         let start_addr = page_start.max(slots_start);
         let end_addr = page_end.min(slots_end);
-        let start_idx = (start_addr - slots_start + 7) / 8;
-        let end_idx = (end_addr - slots_start + 7) / 8;
+        let start_idx = (start_addr - slots_start).div_ceil(8);
+        let end_idx = (end_addr - slots_start).div_ceil(8);
         if start_idx < end_idx && start_idx < slot_count {
             ranges.push((start_idx, end_idx.min(slot_count)));
         }
@@ -780,7 +780,7 @@ pub(super) unsafe fn plausible_arena_user_ptr_header(
     if header.is_null() {
         return None;
     }
-    if (header as usize) % std::mem::align_of::<GcHeader>() != 0 {
+    if !(header as usize).is_multiple_of(std::mem::align_of::<GcHeader>()) {
         return None;
     }
     let obj_type = (*header).obj_type;

@@ -323,7 +323,7 @@ fn is_constructor_value(value: f64) -> bool {
 /// `CreateDataProperty` hands to `[[DefineOwnProperty]]`.
 unsafe fn data_property_descriptor(value: f64) -> f64 {
     let desc = crate::object::js_object_alloc(0, 4);
-    let mut set = |name: &[u8], v: f64| {
+    let set = |name: &[u8], v: f64| {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(desc, key, v);
     };
@@ -727,14 +727,11 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
         // gate the spec reads on the per-element hole check.
         for i in 0..len as usize {
             let v = *elems.add(i);
-            if v.to_bits() == crate::value::TAG_HOLE {
-                if crate::array::array_spec_has_index(materialized, i as u32) {
-                    out = js_array_push_f64(
-                        out,
-                        crate::array::array_spec_get(materialized, i as u32),
-                    );
-                    continue;
-                }
+            if v.to_bits() == crate::value::TAG_HOLE
+                && crate::array::array_spec_has_index(materialized, i as u32)
+            {
+                out = js_array_push_f64(out, crate::array::array_spec_get(materialized, i as u32));
+                continue;
             }
             out = js_array_push_f64(out, v);
         }

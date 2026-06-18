@@ -5558,7 +5558,7 @@ pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) 
     } else {
         bits_num.trunc()
     };
-    if bits_int < 0.0 || bits_int > 9_007_199_254_740_991.0 {
+    if !(0.0..=9_007_199_254_740_991.0).contains(&bits_int) {
         crate::fs::validate::throw_range_error_with_code(
             "The number of bits is invalid (must be a non-negative integer)",
         );

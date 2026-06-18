@@ -767,7 +767,7 @@ fn get_then_action(value: f64) -> Result<Option<f64>, f64> {
     let then = combinator_catch_js(|| unsafe {
         crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
     })?;
-    if let Some(_) = callable_closure_value(then) {
+    if callable_closure_value(then).is_some() {
         return Ok(Some(then));
     }
     if is_native_array_value(value) {

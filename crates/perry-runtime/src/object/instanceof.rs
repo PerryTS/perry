@@ -281,7 +281,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
-    return js_instanceof_dynamic_tail(value, type_ref);
+    js_instanceof_dynamic_tail(value, type_ref)
 }
 
 /// Runtime class id for a globalThis built-in constructor *name*.

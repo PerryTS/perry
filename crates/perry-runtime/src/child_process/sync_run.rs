@@ -47,9 +47,7 @@ impl Default for CpRunOptions {
 }
 
 fn cp_read_option_number(opts_val: f64, key: &[u8]) -> Option<f64> {
-    if cp_object_ptr(opts_val).is_none() {
-        return None;
-    }
+    cp_object_ptr(opts_val)?;
     let value = cp_get_field(opts_val, key);
     let js_value = JSValue::from_bits(value.to_bits());
     if js_value.is_undefined() || js_value.is_null() {

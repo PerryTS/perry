@@ -89,7 +89,7 @@ fn to_byte_offset(value: f64) -> i64 {
     }
     let n = crate::builtins::js_number_coerce(value);
     let i = if n.is_nan() { 0.0 } else { n.trunc() };
-    if i < 0.0 || i > 9_007_199_254_740_991.0 {
+    if !(0.0..=9_007_199_254_740_991.0).contains(&i) {
         throw_dataview_oob();
     }
     i as i64

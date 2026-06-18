@@ -118,10 +118,7 @@ pub extern "C" fn js_process_exit(code: f64) {
     //     TypeError [ERR_INVALID_ARG_TYPE], otherwise it is validated as a
     //     number (so `"2.5"` → RangeError, `"2"` → exit 2).
     //   * anything else (boolean/object/array) → TypeError.
-    let exit_code = match validate_exit_code(code) {
-        Some(c) => c,
-        None => 0,
-    };
+    let exit_code = validate_exit_code(code).unwrap_or_default();
     js_process_run_finalization_exit();
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
@@ -402,7 +399,7 @@ struct ProcessPermissionDrop {
 
 thread_local! {
     static PROCESS_FINALIZATION_REGISTRY: RefCell<Vec<ProcessFinalizationEntry>> =
-        RefCell::new(Vec::new());
+        const { RefCell::new(Vec::new()) };
     static PROCESS_FINALIZATION_BEFORE_EXIT_RAN: Cell<bool> = const { Cell::new(false) };
     static PROCESS_FINALIZATION_EXIT_RAN: Cell<bool> = const { Cell::new(false) };
     static PROCESS_FINALIZATION_OBJECT: Cell<f64> = const { Cell::new(0.0) };
@@ -3094,7 +3091,7 @@ fn validate_cpu_usage_field(obj: *mut crate::object::ObjectHeader, name: &'stati
 }
 
 fn previous_cpu_value_is_valid(value: f64) -> bool {
-    value.is_finite() && value >= 0.0 && value <= MAX_SAFE_INTEGER_F64
+    value.is_finite() && (0.0..=MAX_SAFE_INTEGER_F64).contains(&value)
 }
 
 fn throw_cpu_prior_invalid_type(value: f64) -> ! {

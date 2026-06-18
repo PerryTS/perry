@@ -213,8 +213,7 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
             // object/scalar roots materialize eagerly after building the tape,
             // so they do two parses' worth of work. Peek the first meaningful
             // byte and keep object-root API payloads on the direct parser.
-            len >= LAZY_MIN_BLOB_BYTES
-                && len <= LAZY_MAX_BLOB_BYTES
+            (LAZY_MIN_BLOB_BYTES..=LAZY_MAX_BLOB_BYTES).contains(&len)
                 && bytes
                     .iter()
                     .copied()

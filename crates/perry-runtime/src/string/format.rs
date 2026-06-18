@@ -405,7 +405,7 @@ pub extern "C" fn js_number_to_precision(value: f64, precision: f64) -> *mut Str
             } else {
                 "-Infinity".to_string()
             }
-        } else if p_number < 1.0 || p_number > 100.0 {
+        } else if !(1.0..=100.0).contains(&p_number) {
             throw_number_format_range_error("toPrecision() argument must be between 1 and 100");
         } else {
             let p = p_number as usize;

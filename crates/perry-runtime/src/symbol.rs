@@ -399,7 +399,7 @@ pub unsafe extern "C" fn js_symbol_key_for(sym_f64: f64) -> f64 {
     // Registered symbols carry the description as Arc<str> in the side
     // table; materialize a fresh StringHeader in this thread's arena.
     if let Some(s) = registered_symbol_description(sym_ptr as usize) {
-        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.as_bytes().len() as u32);
+        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
         return f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK));
     }
     let desc = (*sym_ptr).description;
@@ -426,7 +426,7 @@ pub unsafe extern "C" fn js_symbol_description(sym_f64: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     if let Some(s) = registered_symbol_description(sym_ptr as usize) {
-        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.as_bytes().len() as u32);
+        let header = js_string_from_bytes(s.as_bytes().as_ptr(), s.len() as u32);
         return f64::from_bits(STRING_TAG | (header as u64 & POINTER_MASK));
     }
     let desc = (*sym_ptr).description;

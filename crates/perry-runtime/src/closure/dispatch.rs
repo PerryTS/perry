@@ -120,7 +120,7 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
         if closure.is_null() || unsafe { (*closure).type_tag } != CLOSURE_MAGIC {
             return this_arg;
         }
-        if unsafe { (*closure).func_ptr } as usize == BOUND_FUNCTION_FUNC_PTR as usize {
+        if std::ptr::eq(unsafe { (*closure).func_ptr }, BOUND_FUNCTION_FUNC_PTR) {
             let inner = unsafe { js_closure_get_capture_f64(closure, 0) };
             let ij = crate::value::JSValue::from_bits(inner.to_bits());
             if !ij.is_pointer() {

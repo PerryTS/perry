@@ -382,7 +382,7 @@ fn normalize_win32_str(input: &str) -> String {
     }
     // #1728: preserve a trailing separator the input carried, matching Node
     // (`.\` → `.\`, `C:\foo\` → `C:\foo\`). Only meaningful with a non-empty tail.
-    let input_trailing_sep = input.chars().next_back().map_or(false, is_win32_sep);
+    let input_trailing_sep = input.chars().next_back().is_some_and(is_win32_sep);
     if !tail.is_empty() && input_trailing_sep {
         tail.push('\\');
     }
@@ -871,7 +871,7 @@ pub extern "C" fn js_path_to_namespaced_path_value(value: f64) -> f64 {
 }
 
 #[cfg(feature = "regex-engine")]
-fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'a str>)> {
+fn brace_alternation(pattern: &str, open: usize) -> Option<(usize, Vec<&str>)> {
     let bytes = pattern.as_bytes();
     let mut depth = 0usize;
     let mut arm_start = open + 1;
@@ -902,7 +902,7 @@ fn brace_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, Vec<&'
 }
 
 #[cfg(feature = "regex-engine")]
-fn extglob_alternation<'a>(pattern: &'a str, open: usize) -> Option<(usize, char, Vec<&'a str>)> {
+fn extglob_alternation(pattern: &str, open: usize) -> Option<(usize, char, Vec<&str>)> {
     let bytes = pattern.as_bytes();
     if open + 1 >= bytes.len() || bytes[open + 1] != b'(' {
         return None;
@@ -1109,8 +1109,7 @@ fn win32_basename_inner(input: &str) -> String {
     // #1728: UNC server/share segments count as ordinary segments here, so
     // `\\server\share\` → `share` rather than the old root-stripped empty.
     scan.split(is_win32_sep)
-        .filter(|s| !s.is_empty())
-        .next_back()
+        .rfind(|s| !s.is_empty())
         .unwrap_or("")
         .to_string()
 }

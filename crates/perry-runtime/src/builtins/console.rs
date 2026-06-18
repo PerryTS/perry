@@ -433,7 +433,7 @@ fn print_console_text(text: &str, stderr: bool) {
     let prefix = console_group_prefix();
     let mut out = String::new();
     if prefix.is_empty() {
-        out.push_str(&text);
+        out.push_str(text);
     } else {
         for (i, line) in text.split('\n').enumerate() {
             if i > 0 {

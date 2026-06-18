@@ -36,7 +36,7 @@ fn typed_array_view_to_index(value: f64) -> i64 {
     // `ToIntegerOrInfinity` truncates BEFORE the range check, so a value in
     // (-1, 0) is 0, not a RangeError.
     let integer = n.trunc();
-    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+    if !(0.0..=9_007_199_254_740_991.0).contains(&integer) {
         throw_range_error(b"Invalid typed array length");
     }
     integer as i64

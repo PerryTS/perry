@@ -173,29 +173,24 @@ fn snapshot_cursor_block(
 ) -> Option<ArenaWalkBlock> {
     let block = match region {
         ARENA_CURSOR_GENERAL => ARENA.with(|arena| unsafe {
-            (&(*arena.get()).blocks)
-                .get(block_pos)
-                .map(snapshot_block_fields)
+            let blocks = &(*arena.get()).blocks;
+            blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_SURVIVOR0 => SURVIVOR_ARENA_0.with(|arena| unsafe {
-            (&(*arena.get()).blocks)
-                .get(block_pos)
-                .map(snapshot_block_fields)
+            let blocks = &(*arena.get()).blocks;
+            blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_SURVIVOR1 => SURVIVOR_ARENA_1.with(|arena| unsafe {
-            (&(*arena.get()).blocks)
-                .get(block_pos)
-                .map(snapshot_block_fields)
+            let blocks = &(*arena.get()).blocks;
+            blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_LONGLIVED => LONGLIVED_ARENA.with(|arena| unsafe {
-            (&(*arena.get()).blocks)
-                .get(block_pos)
-                .map(snapshot_block_fields)
+            let blocks = &(*arena.get()).blocks;
+            blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_OLD => OLD_ARENA.with(|arena| unsafe {
-            (&(*arena.get()).blocks)
-                .get(block_pos)
-                .map(snapshot_block_fields)
+            let blocks = &(*arena.get()).blocks;
+            blocks.get(block_pos).map(snapshot_block_fields)
         }),
         _ => None,
     }?;

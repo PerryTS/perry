@@ -277,7 +277,7 @@ fn file_url_to_path_bytes(url_f64: f64, windows: bool) -> Vec<u8> {
         // decoded form: position 1 is an ASCII letter, position 2 is `:`.
         let letter = decoded.get(1).copied().unwrap_or(0) | 0x20;
         let sep = decoded.get(2).copied().unwrap_or(0);
-        if !(b'a'..=b'z').contains(&letter) || sep != b':' {
+        if !letter.is_ascii_lowercase() || sep != b':' {
             throw_url_type_error_with_code(
                 "File URL path must be absolute",
                 "ERR_INVALID_FILE_URL_PATH",

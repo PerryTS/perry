@@ -415,9 +415,9 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
 /// Issue #434: pre-fix, `JSValueKey::hash` and `jsvalue_eq` only recognized
 /// heap-pointer string representations, so `Set.has(JSON.parse('"input"'))`
 /// missed the `"input"` literal stored as STRING_TAG.
-fn string_view_from_bits<'a>(
+fn string_view_from_bits(
     bits: u64,
-    scratch: &'a mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
 ) -> Option<(*const u8, u32)> {
     let upper = bits >> 48;
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {

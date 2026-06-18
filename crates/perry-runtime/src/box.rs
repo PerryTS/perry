@@ -203,7 +203,7 @@ fn is_plausible_box_ptr(ptr: *mut Box) -> bool {
     if (addr as u64) >= 0x0001_0000_0000_0000 {
         return false;
     }
-    if addr % std::mem::align_of::<Box>() != 0 {
+    if !addr.is_multiple_of(std::mem::align_of::<Box>()) {
         return false;
     }
     true

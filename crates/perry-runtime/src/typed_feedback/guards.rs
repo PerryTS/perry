@@ -125,7 +125,7 @@ fn method_direct_call_contract(
         }
         if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
             || (*obj).class_id != expected_class_id
-            || (*obj).keys_array as usize != expected_keys as usize
+            || !std::ptr::eq((*obj).keys_array, expected_keys)
             || shape_addr != expected_keys as usize
         {
             return (shape_addr, class_id, gc_type, name_hash, false);
@@ -925,8 +925,7 @@ pub unsafe extern "C" fn js_method_direct_shape_guard(
     if (*obj).object_type != crate::error::OBJECT_TYPE_REGULAR {
         return 0;
     }
-    ((*obj).class_id == expected_class_id && (*obj).keys_array as usize == expected_keys as usize)
-        as i32
+    ((*obj).class_id == expected_class_id && std::ptr::eq((*obj).keys_array, expected_keys)) as i32
 }
 
 #[no_mangle]

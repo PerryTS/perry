@@ -3014,8 +3014,7 @@ pub(crate) fn native_module_has_enumerable_key(module_name: &str, key: &str) -> 
     {
         return crate::process::process_permission_enabled();
     }
-    native_module_enumerable_keys(module_name)
-        .is_some_and(|keys| keys.iter().any(|candidate| *candidate == key.as_bytes()))
+    native_module_enumerable_keys(module_name).is_some_and(|keys| keys.contains(&key.as_bytes()))
 }
 
 fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
@@ -6171,7 +6170,10 @@ pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
         return false;
     }
     let closure = raw as *const crate::closure::ClosureHeader;
-    if unsafe { (*closure).func_ptr } as usize != crate::closure::BOUND_METHOD_FUNC_PTR as usize {
+    if !std::ptr::eq(
+        unsafe { (*closure).func_ptr },
+        crate::closure::BOUND_METHOD_FUNC_PTR,
+    ) {
         return false;
     }
     let captured = crate::closure::js_closure_get_capture_f64(closure, 0);
@@ -7327,9 +7329,9 @@ pub(crate) unsafe fn get_native_module_constant(
                 cjs_default_export_value("dns/promises")
             }
             _ => dns_lookup_flag_constant(property)
-                .or_else(|| dns_error_alias(property).map(|alias| str_val(alias))),
+                .or_else(|| dns_error_alias(property).map(&str_val)),
         },
-        "dns/promises" => dns_error_alias(property).map(|alias| str_val(alias)),
+        "dns/promises" => dns_error_alias(property).map(&str_val),
         "async_hooks" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("async_hooks"),
             "asyncWrapProviders" => Some(crate::async_hooks::js_async_hooks_async_wrap_providers()),
@@ -8572,7 +8574,7 @@ unsafe fn vt_get_own_field(
         std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).unwrap_or("");
     // A user override (`require('node:timers').setImmediate = patched`)
     // wins all built-in resolution below — CJS exports are mutable in Node.
-    if let Some(value) = native_namespace_prop_override_get(&module_name, property_name) {
+    if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
         return Some(JSValue::from_bits(value.to_bits()));
     }
     if matches!(

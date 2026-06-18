@@ -126,7 +126,7 @@ fn raw_addr_from_value(value: f64) -> usize {
     let jsval = crate::JSValue::from_bits(bits);
     if jsval.is_pointer() || jsval.is_string() {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
         bits as usize
     } else {
         0
@@ -221,7 +221,7 @@ pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 
 
     let raw_ptr = if jsval.is_pointer() || jsval.is_string() {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
         bits as usize
     } else {
         0

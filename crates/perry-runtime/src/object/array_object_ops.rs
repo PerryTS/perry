@@ -37,7 +37,7 @@ pub(crate) unsafe fn mark_all_array_props(
     }
     let arr = obj as *const crate::array::ArrayHeader;
     let addr = obj as usize;
-    let mut apply = |key: String| {
+    let apply = |key: String| {
         let mut attrs =
             super::get_property_attrs(addr, &key).unwrap_or(PropertyAttrs::new(true, true, true));
         if drop_writable {

@@ -325,7 +325,7 @@ pub extern "C" fn js_date_new_from_value(value: f64) -> f64 {
 fn days_from_civil(year: i64, month: u32, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as i64; // [0, 399]
+    let yoe = y - era * 400; // [0, 399]
     let m = month as i64;
     let mp = if m > 2 { m - 3 } else { m + 9 }; // [0, 11]
     let doy = (153 * mp + 2) / 5 + day - 1; // day-of-year, day may be off-range
@@ -442,8 +442,7 @@ fn iso_year(year: i64) -> String {
 /// Since we store dates as timestamps, this is an identity function
 #[no_mangle]
 pub extern "C" fn js_date_get_time(timestamp: f64) -> f64 {
-    let timestamp = date_cell_timestamp(timestamp);
-    timestamp
+    date_cell_timestamp(timestamp)
 }
 
 /// Convert Date to ISO 8601 string (date.toISOString())
@@ -1075,8 +1074,8 @@ pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(timestamp) {
         return payload;
     }
-    let timestamp = date_cell_timestamp(timestamp);
-    timestamp
+
+    date_cell_timestamp(timestamp)
 }
 
 /// date.getTimezoneOffset() — returns the difference in minutes between

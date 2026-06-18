@@ -366,12 +366,10 @@ pub extern "C" fn js_navstack_register_route(
             .lock()
             .expect("NAVSTACK_REGISTRY poisoned");
         let map = guard.get_or_insert_with(std::collections::HashMap::new);
-        map.entry(synth_id.clone())
-            .or_insert_with(Vec::new)
-            .push(NavRoute {
-                name: route_name.clone(),
-                handle: widget_handle,
-            });
+        map.entry(synth_id.clone()).or_default().push(NavRoute {
+            name: route_name.clone(),
+            handle: widget_handle,
+        });
     }
     // Initial visibility — match current state value (set by __state_init
     // earlier in the same module init order, so this is always populated
@@ -516,7 +514,7 @@ pub extern "C" fn js_foreach_register(
         let mut guard = FOREACH_REGISTRY.lock().expect("FOREACH_REGISTRY poisoned");
         let map = guard.get_or_insert_with(std::collections::HashMap::new);
         map.entry(synth_id.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(ForEachBinding {
                 container_handle,
                 render_closure,

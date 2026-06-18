@@ -388,7 +388,7 @@ thread_local! {
     static STRUCTURED_CLONE_IN_PROGRESS: std::cell::RefCell<std::collections::HashSet<usize>>
         = std::cell::RefCell::new(std::collections::HashSet::new());
     static STRUCTURED_CLONE_TRANSFER_STATE: std::cell::RefCell<Option<StructuredCloneTransferState>>
-        = std::cell::RefCell::new(None);
+        = const { std::cell::RefCell::new(None) };
 }
 
 #[derive(Default)]

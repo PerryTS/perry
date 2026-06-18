@@ -378,7 +378,7 @@ fn storage_kind_from_value(value: f64) -> Option<StorageKind> {
     if ptr == 0 {
         return None;
     }
-    let ptr = ptr as i64;
+    let ptr = ptr;
     if ptr == crate::object::LOCAL_STORAGE_PTR.load(Ordering::Acquire) {
         Some(StorageKind::Local)
     } else if ptr == crate::object::SESSION_STORAGE_PTR.load(Ordering::Acquire) {

@@ -958,7 +958,7 @@ pub unsafe fn dispatch_buffer_method(
                             // Only numeric-string indices that are in bounds
                             // count as own properties for Buffer/Uint8Array.
                             if let Ok(idx) = s.parse::<u32>() {
-                                let buf_len = (*buf_ptr).length as u32;
+                                let buf_len = (*buf_ptr).length;
                                 idx < buf_len
                             } else {
                                 false
@@ -977,7 +977,7 @@ pub unsafe fn dispatch_buffer_method(
                     let n = args[0];
                     if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
                         let idx = n as u32;
-                        let buf_len = (*buf_ptr).length as u32;
+                        let buf_len = (*buf_ptr).length;
                         idx < buf_len
                     } else {
                         false
@@ -1007,7 +1007,7 @@ pub unsafe fn dispatch_buffer_method(
                         let bytes = std::slice::from_raw_parts(sdata, slen);
                         if let Ok(s) = std::str::from_utf8(bytes) {
                             if let Ok(idx) = s.parse::<u32>() {
-                                let buf_len = (*buf_ptr).length as u32;
+                                let buf_len = (*buf_ptr).length;
                                 idx < buf_len
                             } else {
                                 false
@@ -1024,7 +1024,7 @@ pub unsafe fn dispatch_buffer_method(
                     let n = args[0];
                     if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
                         let idx = n as u32;
-                        let buf_len = (*buf_ptr).length as u32;
+                        let buf_len = (*buf_ptr).length;
                         idx < buf_len
                     } else {
                         false
