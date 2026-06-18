@@ -371,15 +371,17 @@ fn full_outline_array_literal_uses_builder_call() {
     // #5391: full-outline replaces the inline array-literal construction
     // (bump-alloc diamond + per-element store/note/barrier) with one
     // `js_array_from_values` call over a stack buffer.
+    // A param-based array (not all-const) so it reaches `lower_array_literal`
+    // rather than const-folding to a flat rodata global.
     let build = || {
         module(
             "outline_arr.ts",
-            Vec::new(),
+            vec![param(1, "x", Type::Number)],
             Type::Any,
             vec![Stmt::Return(Some(Expr::Array(vec![
-                Expr::Number(1.0),
+                Expr::LocalGet(1),
                 Expr::Number(2.0),
-                Expr::Number(3.0),
+                Expr::LocalGet(1),
             ])))],
         )
     };
@@ -391,7 +393,8 @@ fn full_outline_array_literal_uses_builder_call() {
         let ir = ir_for(build());
         assert!(ir.contains("call i64 @js_array_from_values"));
         assert!(!ir.contains("arrlit.fast"));
-        assert!(!ir.contains("js_inline_arena_slow_alloc"));
+        // the inline bump-alloc CALL (not its always-present declare) is gone
+        assert!(!ir.contains("call ptr @js_inline_arena_slow_alloc"));
     }
     {
         // OFF: the inline construction path (whatever it is for this literal) —
