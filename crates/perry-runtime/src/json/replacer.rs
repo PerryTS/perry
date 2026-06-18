@@ -1046,3 +1046,32 @@ pub unsafe extern "C" fn js_json_stringify_full(
     // Return as NaN-boxed string
     (STRING_TAG | (result_ptr as u64 & POINTER_MASK)) as i64
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn js_json_stringify_full_length(
+    value: f64,
+    replacer_f64: f64,
+    spacer_f64: f64,
+) -> u32 {
+    let replacer_bits = replacer_f64.to_bits();
+    let spacer_bits = spacer_f64.to_bits();
+    let no_replacer = replacer_bits == TAG_NULL || replacer_bits == TAG_UNDEFINED;
+    let no_spacer =
+        spacer_bits == TAG_NULL || spacer_bits == TAG_UNDEFINED || spacer_bits == TAG_FALSE;
+    if no_replacer && no_spacer {
+        if let Some(len) = try_stringify_lazy_array_len(value) {
+            return len;
+        }
+    }
+
+    let bits = js_json_stringify_full(value, replacer_f64, spacer_f64) as u64;
+    if bits == TAG_UNDEFINED {
+        return 0;
+    }
+    let string_ptr = (bits & POINTER_MASK) as *const StringHeader;
+    if string_ptr.is_null() {
+        0
+    } else {
+        (*string_ptr).utf16_len
+    }
+}

@@ -203,6 +203,68 @@ fn typed_feedback_trace_dump_runs_before_entry_return() {
     assert!(dump_pos < ret_pos);
 }
 
+fn json_stringify_full_expr(value: Expr) -> Expr {
+    Expr::JsonStringifyFull(
+        Box::new(value),
+        Box::new(Expr::Undefined),
+        Box::new(Expr::Undefined),
+    )
+}
+
+#[test]
+fn typed_feedback_lowers_length_only_json_stringify_local_to_length_helper() {
+    let ir = ir_for(module(
+        "typed_feedback_json_stringify_length_only.ts",
+        vec![param(1, "value", Type::Any)],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "json".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(json_stringify_full_expr(Expr::LocalGet(1))),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(2)),
+                property: "length".to_string(),
+            })),
+        ],
+    ));
+
+    assert!(
+        ir.contains("call i32 @js_json_stringify_full_length"),
+        "{ir}"
+    );
+    assert!(!ir.contains("call i64 @js_json_stringify_full("), "{ir}");
+    assert!(!ir.contains("call double @js_value_length_f64"), "{ir}");
+}
+
+#[test]
+fn typed_feedback_keeps_json_stringify_local_when_value_escapes() {
+    let ir = ir_for(module(
+        "typed_feedback_json_stringify_value_escape.ts",
+        vec![param(1, "value", Type::Any)],
+        Type::String,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "json".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(json_stringify_full_expr(Expr::LocalGet(1))),
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+
+    assert!(ir.contains("call i64 @js_json_stringify_full("), "{ir}");
+    assert!(
+        !ir.contains("call i32 @js_json_stringify_full_length"),
+        "{ir}"
+    );
+}
+
 #[test]
 fn typed_feedback_folds_constant_modulo_i64_accumulator_loop() {
     let ir = ir_for(module(

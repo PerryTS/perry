@@ -31,6 +31,7 @@ pub(crate) struct NativeRegionFactGraph {
 pub(crate) struct RepresentationFacts {
     pub integer_locals: HashSet<u32>,
     pub unsigned_i32_locals: HashSet<u32>,
+    pub json_stringify_length_only_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -94,6 +95,10 @@ impl NativeRegionFactGraph {
 
     pub(crate) fn unsigned_i32_locals(&self) -> &HashSet<u32> {
         &self.representation.unsigned_i32_locals
+    }
+
+    pub(crate) fn json_stringify_length_only_locals(&self) -> &HashSet<u32> {
+        &self.representation.json_stringify_length_only_locals
     }
 
     pub(crate) fn index_used_locals(&self) -> &HashSet<u32> {
@@ -170,6 +175,8 @@ pub(crate) fn collect_native_region_fact_graph(
     let integer_locals =
         super::integer_locals::collect_integer_locals(stmts, flat_const_ids, clamp_fn_ids);
     let unsigned_i32_locals = super::i32_locals::collect_unsigned_i32_locals(stmts);
+    let json_stringify_length_only_locals =
+        collect_json_stringify_length_only_locals(stmts, boxed_vars, module_globals);
     let index_used_locals = super::index_uses::collect_index_used_locals(stmts);
     let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
@@ -217,6 +224,7 @@ pub(crate) fn collect_native_region_fact_graph(
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
             unsigned_i32_locals,
+            json_stringify_length_only_locals,
         },
         integer_range: IntegerRangeFacts {
             index_used_locals,
@@ -280,6 +288,388 @@ fn collect_known_noalias_buffer_locals(stmts: &[Stmt]) -> HashSet<u32> {
     let mut known_length_values = HashMap::new();
     collect_owned_buffer_lets(stmts, &mut out, &mut known_length_values);
     out
+}
+
+#[derive(Default)]
+struct StringifyLengthUseState {
+    candidates: HashSet<u32>,
+    length_reads: HashMap<u32, usize>,
+    rejected: HashSet<u32>,
+}
+
+fn collect_json_stringify_length_only_locals(
+    stmts: &[Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+) -> HashSet<u32> {
+    let mut state = StringifyLengthUseState::default();
+    collect_json_stringify_length_candidates(stmts, boxed_vars, module_globals, &mut state);
+    if state.candidates.is_empty() {
+        return HashSet::new();
+    }
+    scan_stringify_length_stmts(stmts, &mut state);
+    state
+        .candidates
+        .into_iter()
+        .filter(|id| {
+            !state.rejected.contains(id) && state.length_reads.get(id).copied().unwrap_or(0) > 0
+        })
+        .collect()
+}
+
+fn collect_json_stringify_length_candidates(
+    stmts: &[Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    state: &mut StringifyLengthUseState,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let {
+                id,
+                mutable,
+                init: Some(init),
+                ..
+            } => {
+                if !*mutable
+                    && !boxed_vars.contains(id)
+                    && !module_globals.contains_key(id)
+                    && matches!(init, Expr::JsonStringifyFull(..))
+                {
+                    state.candidates.insert(*id);
+                }
+                collect_json_stringify_length_candidates_in_expr(
+                    init,
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+            }
+            Stmt::Let { init: None, .. } => {}
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                collect_json_stringify_length_candidates_in_expr(
+                    expr,
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+            }
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_) => {}
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_json_stringify_length_candidates_in_expr(
+                    condition,
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+                collect_json_stringify_length_candidates(
+                    then_branch,
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+                if let Some(else_branch) = else_branch {
+                    collect_json_stringify_length_candidates(
+                        else_branch,
+                        boxed_vars,
+                        module_globals,
+                        state,
+                    );
+                }
+            }
+            Stmt::While { condition, body } => {
+                collect_json_stringify_length_candidates_in_expr(
+                    condition,
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+                collect_json_stringify_length_candidates(body, boxed_vars, module_globals, state);
+            }
+            Stmt::DoWhile { body, condition } => {
+                collect_json_stringify_length_candidates(body, boxed_vars, module_globals, state);
+                collect_json_stringify_length_candidates_in_expr(
+                    condition,
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    collect_json_stringify_length_candidates(
+                        std::slice::from_ref(init.as_ref()),
+                        boxed_vars,
+                        module_globals,
+                        state,
+                    );
+                }
+                if let Some(condition) = condition {
+                    collect_json_stringify_length_candidates_in_expr(
+                        condition,
+                        boxed_vars,
+                        module_globals,
+                        state,
+                    );
+                }
+                if let Some(update) = update {
+                    collect_json_stringify_length_candidates_in_expr(
+                        update,
+                        boxed_vars,
+                        module_globals,
+                        state,
+                    );
+                }
+                collect_json_stringify_length_candidates(body, boxed_vars, module_globals, state);
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_json_stringify_length_candidates(
+                    std::slice::from_ref(body.as_ref()),
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_json_stringify_length_candidates(body, boxed_vars, module_globals, state);
+                if let Some(catch) = catch {
+                    collect_json_stringify_length_candidates(
+                        &catch.body,
+                        boxed_vars,
+                        module_globals,
+                        state,
+                    );
+                }
+                if let Some(finally) = finally {
+                    collect_json_stringify_length_candidates(
+                        finally,
+                        boxed_vars,
+                        module_globals,
+                        state,
+                    );
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                collect_json_stringify_length_candidates_in_expr(
+                    discriminant,
+                    boxed_vars,
+                    module_globals,
+                    state,
+                );
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        collect_json_stringify_length_candidates_in_expr(
+                            test,
+                            boxed_vars,
+                            module_globals,
+                            state,
+                        );
+                    }
+                    collect_json_stringify_length_candidates(
+                        &case.body,
+                        boxed_vars,
+                        module_globals,
+                        state,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn collect_json_stringify_length_candidates_in_expr(
+    expr: &Expr,
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    state: &mut StringifyLengthUseState,
+) {
+    if matches!(expr, Expr::Closure { .. }) {
+        return;
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        collect_json_stringify_length_candidates_in_expr(child, boxed_vars, module_globals, state)
+    });
+}
+
+fn scan_stringify_length_stmts(stmts: &[Stmt], state: &mut StringifyLengthUseState) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(init) = init {
+                    scan_stringify_length_expr(init, state);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                scan_stringify_length_expr(expr, state);
+            }
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_) => {}
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                scan_stringify_length_expr(condition, state);
+                scan_stringify_length_stmts(then_branch, state);
+                if let Some(else_branch) = else_branch {
+                    scan_stringify_length_stmts(else_branch, state);
+                }
+            }
+            Stmt::While { condition, body } => {
+                scan_stringify_length_expr(condition, state);
+                scan_stringify_length_stmts(body, state);
+            }
+            Stmt::DoWhile { body, condition } => {
+                scan_stringify_length_stmts(body, state);
+                scan_stringify_length_expr(condition, state);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    scan_stringify_length_stmts(std::slice::from_ref(init.as_ref()), state);
+                }
+                if let Some(condition) = condition {
+                    scan_stringify_length_expr(condition, state);
+                }
+                if let Some(update) = update {
+                    scan_stringify_length_expr(update, state);
+                }
+                scan_stringify_length_stmts(body, state);
+            }
+            Stmt::Labeled { body, .. } => {
+                scan_stringify_length_stmts(std::slice::from_ref(body.as_ref()), state);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                scan_stringify_length_stmts(body, state);
+                if let Some(catch) = catch {
+                    scan_stringify_length_stmts(&catch.body, state);
+                }
+                if let Some(finally) = finally {
+                    scan_stringify_length_stmts(finally, state);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                scan_stringify_length_expr(discriminant, state);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        scan_stringify_length_expr(test, state);
+                    }
+                    scan_stringify_length_stmts(&case.body, state);
+                }
+            }
+            Stmt::PreallocateBoxes(ids) => {
+                for id in ids {
+                    reject_stringify_length_local(*id, state);
+                }
+            }
+        }
+    }
+}
+
+fn scan_stringify_length_expr(expr: &Expr, state: &mut StringifyLengthUseState) {
+    match expr {
+        Expr::PropertyGet { object, property } if property == "length" => {
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if state.candidates.contains(id) {
+                    *state.length_reads.entry(*id).or_insert(0) += 1;
+                    return;
+                }
+            }
+        }
+        Expr::LocalGet(id) => {
+            reject_stringify_length_local(*id, state);
+        }
+        Expr::LocalSet(id, value) => {
+            reject_stringify_length_local(*id, state);
+            scan_stringify_length_expr(value, state);
+            return;
+        }
+        Expr::Update { id, .. } => {
+            reject_stringify_length_local(*id, state);
+            return;
+        }
+        Expr::Delete(target) => {
+            reject_stringify_length_refs_in_expr(target, state);
+            return;
+        }
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            ..
+        } => {
+            for id in captures.iter().chain(mutable_captures.iter()) {
+                reject_stringify_length_local(*id, state);
+            }
+            return;
+        }
+        _ => {}
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        scan_stringify_length_expr(child, state)
+    });
+}
+
+fn reject_stringify_length_refs_in_expr(expr: &Expr, state: &mut StringifyLengthUseState) {
+    match expr {
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+            reject_stringify_length_local(*id, state);
+        }
+        Expr::Closure {
+            captures,
+            mutable_captures,
+            ..
+        } => {
+            for id in captures.iter().chain(mutable_captures.iter()) {
+                reject_stringify_length_local(*id, state);
+            }
+            return;
+        }
+        _ => {}
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        reject_stringify_length_refs_in_expr(child, state)
+    });
+}
+
+fn reject_stringify_length_local(id: u32, state: &mut StringifyLengthUseState) {
+    if state.candidates.contains(&id) {
+        state.rejected.insert(id);
+    }
 }
 
 fn collect_owned_buffer_lets_child_scope(
@@ -483,6 +873,14 @@ mod tests {
             left: Box::new(left),
             right: Box::new(right),
         }
+    }
+
+    fn stringify_full(value: Expr) -> Expr {
+        Expr::JsonStringifyFull(
+            Box::new(value),
+            Box::new(Expr::Undefined),
+            Box::new(Expr::Undefined),
+        )
     }
 
     fn empty_function(id: u32, name: &str, return_type: Type, body: Vec<Stmt>) -> Function {
@@ -745,6 +1143,130 @@ mod tests {
             .shape_stability
             .scalar_replaceable_object_locals
             .contains(&3));
+    }
+
+    #[test]
+    fn native_fact_graph_collects_json_stringify_length_only_locals() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 2,
+                name: "json".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(stringify_full(Expr::LocalGet(1))),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(2)),
+                property: "length".to_string(),
+            })),
+        ];
+
+        let graph = collect_native_region_fact_graph(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(graph.json_stringify_length_only_locals().contains(&2));
+    }
+
+    #[test]
+    fn native_fact_graph_keeps_json_stringify_length_facts_scoped_to_closure_body() {
+        let closure_body = vec![
+            Stmt::Let {
+                id: 2,
+                name: "json".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(stringify_full(Expr::Integer(1))),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(2)),
+                property: "length".to_string(),
+            })),
+        ];
+        let stmts = vec![Stmt::Let {
+            id: 9,
+            name: "callback".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Closure {
+                func_id: 101,
+                params: Vec::new(),
+                return_type: Type::Number,
+                body: closure_body.clone(),
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                enclosing_class: None,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }),
+        }];
+
+        let parent_graph = collect_native_region_fact_graph(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        let closure_graph = collect_native_region_fact_graph(
+            &closure_body,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(!parent_graph
+            .json_stringify_length_only_locals()
+            .contains(&2));
+        assert!(closure_graph
+            .json_stringify_length_only_locals()
+            .contains(&2));
+    }
+
+    #[test]
+    fn native_fact_graph_rejects_json_stringify_locals_with_value_uses() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 2,
+                name: "json".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(stringify_full(Expr::LocalGet(1))),
+            },
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(2)),
+                    property: "length".to_string(),
+                }),
+                right: Box::new(Expr::LocalGet(2)),
+            })),
+        ];
+
+        let graph = collect_native_region_fact_graph(
+            &stmts,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(!graph.json_stringify_length_only_locals().contains(&2));
     }
 
     #[test]

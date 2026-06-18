@@ -265,6 +265,7 @@ thread_local! {
 pub(super) const GC_SUPPRESSED_TINY_PARSE_BYTES: usize = 1024 * 1024;
 pub(super) const GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES: usize = 48 * 1024 * 1024;
 pub(super) const GC_SUPPRESSED_TINY_PARSE_FULL_GC_IN_USE_TRIGGER_BYTES: usize = 24 * 1024 * 1024;
+const GC_SUPPRESSED_PARSE_BOUNDARY_DRAIN_STEPS: usize = 128;
 
 pub(super) fn gc_suppressed_parse_is_tiny(parse_growth: usize) -> bool {
     parse_growth <= GC_SUPPRESSED_TINY_PARSE_BYTES
@@ -626,7 +627,6 @@ pub fn gc_bump_malloc_trigger() {
                     trigger.set(bytes_now);
                 }
             });
-            gc_check_trigger();
         } else {
             crate::arena::arena_start_fresh_general_block();
             GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
@@ -634,12 +634,12 @@ pub fn gc_bump_malloc_trigger() {
     }
 }
 
-/// Run a full collection that was armed by tiny JSON parse churn.
+/// Run a collection that was armed by tiny JSON parse churn.
 ///
-/// This is separate from the raise-only post-parse trigger bump. Full
-/// mark-sweep needs the collection to happen before the next suppressed parse,
-/// not immediately after the previous one, otherwise the parse result is still
-/// rooted and every churn block looks partially live.
+/// This is separate from the raise-only post-parse trigger bump. The collection
+/// needs to happen before the next suppressed parse, not immediately after the
+/// previous one, otherwise the parse result is still rooted and every churn
+/// block looks partially live.
 pub fn gc_collect_pending_suppressed_parse() {
     let pending = GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| {
         let was_pending = pending.get();
@@ -653,6 +653,47 @@ pub fn gc_collect_pending_suppressed_parse() {
         || gc_blocked_by_unsafe_zone()
     {
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+        return;
+    }
+
+    if gc_budgeted_cycle_active() {
+        for _ in 0..GC_SUPPRESSED_PARSE_BOUNDARY_DRAIN_STEPS {
+            let result = gc_runtime_safepoint();
+            match result.status {
+                JS_GC_STEP_STATUS_ACTIVE => continue,
+                JS_GC_STEP_STATUS_COMPLETED | JS_GC_STEP_STATUS_IDLE => break,
+                JS_GC_STEP_STATUS_SKIPPED => {
+                    GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+                    return;
+                }
+                _ => break,
+            }
+        }
+        if gc_budgeted_cycle_active() {
+            GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+            return;
+        }
+    }
+
+    let in_use = crate::arena::arena_in_use_bytes();
+    if gen_gc_enabled() {
+        let old_pending = GC_OLD_RECLAIM_PENDING.with(|pending| pending.get());
+        let old_in_use = crate::arena::old_gen_in_use_bytes();
+        let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
+        if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
+            GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+            gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
+                GcTriggerKind::OldGenBytes,
+            ))
+            .emit_after_current();
+            return;
+        }
+    }
+
+    if gen_gc_enabled() && in_use >= GC_SUPPRESSED_TINY_PARSE_IN_USE_TRIGGER_BYTES {
+        let outcome =
+            gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::ArenaBytes));
+        gc_finish_arena_trigger_collection(in_use, outcome);
         return;
     }
 

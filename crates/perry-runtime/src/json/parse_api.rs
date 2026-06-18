@@ -325,8 +325,9 @@ fn should_use_tape_parse(len: usize, bytes: &[u8]) -> bool {
 ///
 /// Wraps the tape path in the same GC-safety contract as the direct
 /// parser (pending parse-boundary collection → gc_check_trigger →
-/// suppress → parse → unsuppress → bump malloc trigger + cache trim) so
-/// it's a drop-in replacement behind the feature flag.
+/// suppress → parse → unsuppress → bump malloc trigger + parse-boundary
+/// scheduling + cache trim) so it's a drop-in replacement behind the feature
+/// flag.
 pub(crate) unsafe fn try_parse_via_tape(
     text_ptr: *const StringHeader,
     bytes: &[u8],
@@ -357,6 +358,7 @@ pub(crate) unsafe fn try_parse_via_tape(
 
         crate::gc::gc_unsuppress();
         crate::gc::gc_bump_malloc_trigger();
+        crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
         parse_root_restore(text_root);
 
         PARSE_KEY_CACHE.with(|c| {
@@ -448,6 +450,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
 
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_malloc_trigger();
+    crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     parse_root_restore(text_root);
 
     PARSE_KEY_CACHE.with(|c| {

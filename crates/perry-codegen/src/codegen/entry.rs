@@ -240,6 +240,9 @@ pub(super) fn compile_module_entry(
             active_region_id: None,
             locals: HashMap::new(),
             local_types: init_local_types,
+            json_stringify_length_only_locals: main_native_facts
+                .json_stringify_length_only_locals()
+                .clone(),
             current_block: 0,
             discard_expr_value: false,
             func_names,
@@ -678,6 +681,9 @@ pub(super) fn compile_module_entry(
             active_region_id: None,
             locals: HashMap::new(),
             local_types: HashMap::new(),
+            json_stringify_length_only_locals: init_native_facts
+                .json_stringify_length_only_locals()
+                .clone(),
             current_block: 0,
             discard_expr_value: false,
             func_names,
