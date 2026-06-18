@@ -9,7 +9,7 @@ use super::{
     nanbox_pointer_inline, FnCtx,
 };
 use crate::type_analysis::is_numeric_expr;
-use crate::types::{I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 /// Lower an array literal `[a, b, c, …]`.
 ///
@@ -56,6 +56,26 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
             ctx, value_expr,
         ));
         vals.push(lower_expr(ctx, value_expr)?);
+    }
+
+    // #5391: oversized modules outline array-literal construction. The inline
+    // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
+    // data-table builders huge (single 18MB functions clang -O0 can't compile
+    // in practical time). Instead spill the already-evaluated element values to
+    // a per-literal stack buffer and build the array in ONE runtime call. The
+    // buffer is hoisted to the entry block (fixed size per site; bounded total
+    // stack) and consumed immediately by the call, so no GC-visible window.
+    if crate::codegen::full_outline_ic_enabled() {
+        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+        for (i, v) in vals.iter().enumerate() {
+            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+            ctx.block().store(DOUBLE, v, &slot);
+        }
+        let n_str = n.to_string();
+        let arr = ctx
+            .block()
+            .call(I64, "js_array_from_values", &[(PTR, &buf), (I32, &n_str)]);
+        return Ok(nanbox_pointer_inline(ctx.block(), &arr));
     }
 
     // Inline bump-allocator path for small literals. Size threshold matches

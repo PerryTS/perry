@@ -1,0 +1,78 @@
+name: Node Suite Regression Guard
+
+# Wires scripts/node_suite_regression_check.py (roadmap I-02) into CI. That
+# guard runs the full print-and-diff node-suite and FAILS if any baselined
+# module's pass count drops below its floor (test-parity/node_suite_baseline.json,
+# oracle node 26). It was written verbatim because node:dns once silently went
+# 83% -> 0% behind a green build, yet until now it ran in ZERO workflows.
+#
+# Decoupled from the (not-yet-enabled) merge queue on purpose: it runs nightly
+# and on demand today, and the `merge_group` trigger below is INERT until a
+# maintainer turns the merge queue on in branch protection — at which point this
+# guard automatically gates every merge with no further workflow change.
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly, offset from the Node Core Subset Radar (17 3) to avoid overlap.
+    - cron: "37 4 * * *"
+  # Inert until the merge queue is enabled in branch protection; then this guard
+  # runs once per merge against the actual merged tree.
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-suite-guard-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_CACHE_SIZE: "2G"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  node-suite-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Read-only job (build + test); don't leave the GITHUB_TOKEN in the
+          # local git config (least privilege — OWASP / CodeRabbit).
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Start sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Setup Node.js
+        # Node 26 is the oracle the node_suite_baseline.json floors were
+        # captured on; running any other major would compare against the
+        # wrong reference and produce spurious regressions.
+        uses: actions/setup-node@v6
+        with:
+          node-version: "26"
+
+      - name: Build Perry release binary
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib
+
+      - name: Node-suite regression guard (floor baseline, node 26)
+        # Fails (exit 1) if any baselined module drops below its floor;
+        # improvements are accepted and reported as +N. pipefail propagates the
+        # script's exit through the tee into the step.
+        run: |
+          set -euo pipefail
+          echo '### Node-suite regression guard (node 26)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/node_suite_regression_check.py target/release/perry . \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

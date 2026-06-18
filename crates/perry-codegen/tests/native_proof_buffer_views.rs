@@ -1585,6 +1585,52 @@ fn native_owned_uint8array_set_fallback_uses_uint8array_helper() {
 }
 
 #[test]
+fn uint8array_const_local_length_uses_inline_byte_get_set() {
+    let ir = compile_ir(
+        "uint8array_const_local_length_inline_byte_access.ts",
+        vec![
+            number_let(1, "size", false, int(16)),
+            Stmt::Let {
+                id: 2,
+                name: "buf".to_string(),
+                ty: Type::Named("Uint8Array".to_string()),
+                mutable: false,
+                init: Some(Expr::Uint8ArrayNew(Some(Box::new(local(1))))),
+            },
+            for_loop(
+                3,
+                local(1),
+                vec![Stmt::Expr(Expr::Uint8ArraySet {
+                    array: Box::new(local(2)),
+                    index: Box::new(local(3)),
+                    value: Box::new(local(3)),
+                })],
+            ),
+            Stmt::Return(Some(Expr::Uint8ArrayGet {
+                array: Box::new(local(2)),
+                index: Box::new(int(0)),
+            })),
+        ],
+    );
+    assert!(
+        ir.contains("store i8"),
+        "bounded Uint8Array set should lower to an inline byte store:\n{ir}"
+    );
+    assert!(
+        ir.contains("load i8"),
+        "bounded Uint8Array get should lower to an inline byte load:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_uint8array_set"),
+        "inline Uint8Array set should not call the runtime helper:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_uint8array_get"),
+        "inline Uint8Array get should not call the runtime helper:\n{ir}"
+    );
+}
+
+#[test]
 fn native_owned_typed_array_fallback_reasons_are_explicit() {
     let disposed = compile_artifact_json(
         "artifact_native_owned_disposed.ts",

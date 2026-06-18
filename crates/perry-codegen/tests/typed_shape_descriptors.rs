@@ -167,6 +167,152 @@ fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
     &block_ir[..end_pos]
 }
 
+#[test]
+fn scalar_object_literal_skips_pure_unobserved_initializers() {
+    let module = base_module(
+        "scalar_object_literal_used_fields.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "obj".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Object(vec![
+                    ("used".to_string(), Expr::Integer(7)),
+                    (
+                        "unused".to_string(),
+                        Expr::Binary {
+                            op: BinaryOp::Add,
+                            left: Box::new(Expr::String("drop_".to_string())),
+                            right: Box::new(Expr::Integer(1)),
+                        },
+                    ),
+                ])),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "used".to_string(),
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        !ir.contains("call i64 @js_object_alloc"),
+        "non-escaping object literal should stay scalar-replaced"
+    );
+    assert!(
+        !ir.contains("call i64 @js_string_concat"),
+        "pure unobserved field initializer should not be lowered"
+    );
+}
+
+#[test]
+fn scalar_array_literal_skips_pure_unobserved_initializers() {
+    let module = base_module(
+        "scalar_array_literal_used_indices.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "arr".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(vec![
+                    Expr::Integer(7),
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::String("drop_".to_string())),
+                        right: Box::new(Expr::Integer(1)),
+                    },
+                    Expr::Integer(9),
+                ])),
+            },
+            Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(0)),
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        !ir.contains("call i64 @js_array_alloc"),
+        "non-escaping array literal should stay scalar-replaced"
+    );
+    assert!(
+        !ir.contains("call i64 @js_string_concat"),
+        "pure unobserved array initializer should not be lowered"
+    );
+}
+
+#[test]
+fn scalar_object_literal_keeps_observable_unobserved_initializers() {
+    let module = base_module(
+        "scalar_object_literal_observable_unused.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "obj".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Object(vec![
+                    ("used".to_string(), Expr::Integer(7)),
+                    ("unused".to_string(), Expr::DateNow),
+                ])),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "used".to_string(),
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call double @js_date_now"),
+        "unobserved initializers that are not proven discardable must still be lowered"
+    );
+}
+
+#[test]
+fn scalar_object_literal_keeps_initializers_read_by_update() {
+    let module = base_module(
+        "scalar_object_literal_update_read.ts",
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "obj".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Object(vec![(
+                    "count".to_string(),
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::String("4".to_string())),
+                        right: Box::new(Expr::Integer(1)),
+                    },
+                )])),
+            },
+            Stmt::Return(Some(Expr::PropertyUpdate {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "count".to_string(),
+                op: BinaryOp::Add,
+                prefix: false,
+            })),
+        ],
+        Vec::new(),
+    );
+
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call i64 @js_string_concat"),
+        "field initializer read by obj.field++ must still be lowered"
+    );
+}
+
 fn assert_typed_feedback_setter_after(ir: &str, start_pos: usize, context: &str) {
     let after_start = &ir[start_pos..];
     assert!(
