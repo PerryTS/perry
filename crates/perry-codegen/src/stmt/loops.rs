@@ -73,6 +73,14 @@ struct I64LoopAccumulator {
     slot: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ModuloAccumulatorClosedForm {
+    acc_local_id: u32,
+    counter_local_id: u32,
+    final_counter: i64,
+    final_acc: i64,
+}
+
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
 ///
 /// ```text
@@ -482,6 +490,31 @@ pub(crate) fn lower_for(
     let i32_only_counter_update = classify_i32_only_counter_update(ctx, init, update, body);
     let i64_loop_accumulator =
         prepare_i64_loop_accumulator(ctx, local_bound_classification, update, body);
+    if let Some((acc, closed_form)) = i64_loop_accumulator.as_ref().and_then(|acc| {
+        classify_modulo_accumulator_closed_form(ctx, local_bound_classification, update, body, acc)
+            .map(|closed_form| (acc, closed_form))
+    }) {
+        emit_modulo_accumulator_closed_form(ctx, acc, closed_form);
+        if local_bound_counter_i32_was_fresh {
+            if let Some((counter_id, _, _)) = local_bound_classification {
+                ctx.i32_counter_slots.remove(&counter_id);
+            }
+        }
+        if local_bound_bound_i32_was_fresh {
+            if let Some((_, bound_id, _)) = local_bound_classification {
+                ctx.i32_counter_slots.remove(&bound_id);
+            }
+        }
+        ctx.bounded_index_pairs
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        ctx.bounded_buffer_index_pairs
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        ctx.guarded_buffer_index_pairs
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        ctx.int_range_facts
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        return Ok(());
+    }
 
     let cond_idx = ctx.new_block("for.cond");
     let prebody_idx = if has_loop_prebody {
@@ -1148,6 +1181,123 @@ fn sync_i64_accumulator_to_double_slot(ctx: &mut FnCtx<'_>, acc: &I64LoopAccumul
     let double_value = ctx.block().sitofp(I64, &i64_value, DOUBLE);
     ctx.block().store(DOUBLE, &double_value, &double_slot);
     ctx.exact_safe_integer_locals.remove(&acc.local_id);
+}
+
+fn classify_modulo_accumulator_closed_form(
+    ctx: &FnCtx<'_>,
+    local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    acc: &I64LoopAccumulator,
+) -> Option<ModuloAccumulatorClosedForm> {
+    let (counter_id, bound_id, op) = local_bound_classification?;
+    if !matches!(op, perry_hir::CompareOp::Lt)
+        || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+    {
+        return None;
+    }
+
+    let [Stmt::Expr(perry_hir::Expr::LocalSet(acc_id, value))] = body else {
+        return None;
+    };
+    if *acc_id != acc.local_id {
+        return None;
+    }
+    let modulus = modulo_accumulator_addend(acc.local_id, counter_id, value.as_ref())?;
+    let start = *ctx.exact_safe_integer_locals.get(&counter_id)?;
+    let bound = *ctx.exact_safe_integer_locals.get(&bound_id)?;
+    let initial_acc = *ctx.exact_safe_integer_locals.get(&acc.local_id)?;
+    if start < 0 || bound < 0 || initial_acc < 0 {
+        return None;
+    }
+    let final_counter = if start < bound { bound } else { start };
+    i32::try_from(final_counter).ok()?;
+
+    let delta = if start < bound {
+        let end_sum = modulo_prefix_sum(bound as i128, modulus as i128)?;
+        let start_sum = modulo_prefix_sum(start as i128, modulus as i128)?;
+        end_sum.checked_sub(start_sum)?
+    } else {
+        0
+    };
+    let final_acc = (initial_acc as i128).checked_add(delta)?;
+    if final_acc < 0 || final_acc > MAX_SAFE_INTEGER_I64 as i128 {
+        return None;
+    }
+
+    Some(ModuloAccumulatorClosedForm {
+        acc_local_id: acc.local_id,
+        counter_local_id: counter_id,
+        final_counter,
+        final_acc: final_acc as i64,
+    })
+}
+
+fn modulo_accumulator_addend(acc_id: u32, counter_id: u32, value: &perry_hir::Expr) -> Option<i64> {
+    let addend = self_add_accumulator_addend(acc_id, value)?;
+    let perry_hir::Expr::Binary {
+        op: perry_hir::BinaryOp::Mod,
+        left,
+        right,
+    } = addend
+    else {
+        return None;
+    };
+    let perry_hir::Expr::LocalGet(id) = left.as_ref() else {
+        return None;
+    };
+    if *id != counter_id {
+        return None;
+    }
+    let modulus = exact_nonnegative_integer_const(right.as_ref())?;
+    (modulus > 0).then_some(modulus)
+}
+
+fn modulo_prefix_sum(n: i128, modulus: i128) -> Option<i128> {
+    if n < 0 || modulus <= 0 {
+        return None;
+    }
+    let period_sum = modulus
+        .checked_mul(modulus.checked_sub(1)?)?
+        .checked_div(2)?;
+    let full_periods = n.checked_div(modulus)?;
+    let remainder = n.checked_rem(modulus)?;
+    let full_sum = full_periods.checked_mul(period_sum)?;
+    let tail_sum = remainder
+        .checked_mul(remainder.checked_sub(1)?)?
+        .checked_div(2)?;
+    full_sum.checked_add(tail_sum)
+}
+
+fn emit_modulo_accumulator_closed_form(
+    ctx: &mut FnCtx<'_>,
+    acc: &I64LoopAccumulator,
+    closed_form: ModuloAccumulatorClosedForm,
+) {
+    ctx.block()
+        .store(I64, &closed_form.final_acc.to_string(), &acc.slot);
+    sync_i64_accumulator_to_double_slot(ctx, acc);
+    ctx.exact_safe_integer_locals
+        .insert(closed_form.acc_local_id, closed_form.final_acc);
+    ctx.nonnegative_integer_locals
+        .insert(closed_form.acc_local_id);
+
+    if let Some(i32_slot) = ctx
+        .i32_counter_slots
+        .get(&closed_form.counter_local_id)
+        .cloned()
+    {
+        ctx.block()
+            .store(I32, &closed_form.final_counter.to_string(), &i32_slot);
+    }
+    if let Some(double_slot) = ctx.locals.get(&closed_form.counter_local_id).cloned() {
+        let final_counter = crate::nanbox::double_literal(closed_form.final_counter as f64);
+        ctx.block().store(DOUBLE, &final_counter, &double_slot);
+    }
+    ctx.exact_safe_integer_locals
+        .insert(closed_form.counter_local_id, closed_form.final_counter);
+    ctx.nonnegative_integer_locals
+        .insert(closed_form.counter_local_id);
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
