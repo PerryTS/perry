@@ -3027,6 +3027,23 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         );
     }
 
+    // OrdinarySetPrototypeOf: a non-extensible target rejects a *changing*
+    // prototype. `Object.setPrototypeOf` surfaces that rejection as a
+    // TypeError; `Reflect.setPrototypeOf` returns `false` without throwing
+    // (handled in js_reflect_set_prototype_of, which never reaches here for the
+    // reject case). A no-op set to the SAME prototype still succeeds. Primitive
+    // targets are extensible-irrelevant — `obj_value_no_extend` is false for
+    // non-objects, so they fall through to the no-op return below. (test262
+    // Reflect/preventExtensions/prevent-extensions:
+    // `Object.setPrototypeOf(o, Array.prototype)` after preventExtensions.)
+    if crate::object::obj_value_no_extend(obj_value) {
+        let current = js_object_get_prototype_of(obj_value);
+        if current.to_bits() != proto_bits {
+            throw_object_type_error(b"#<Object> is not extensible");
+        }
+        return obj_value;
+    }
+
     // #2820: setting the prototype of a primitive target is a spec no-op that
     // returns the (boxed) primitive value. `value_is_object_like` is false for
     // numbers/strings/booleans, and class refs are handled by the recording
