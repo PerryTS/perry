@@ -688,6 +688,10 @@ pub extern "C" fn js_class_field_set_ic(
                 let fields_ptr =
                     (object_addr as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
                 let slot = fields_ptr.add(expected_field_index as usize);
+                // GC_STORE_AUDIT(POINTER_FREE): a passing guard with
+                // require_raw_f64 proved the slot is pointer-free by typed-shape
+                // descriptor and the value is a plain number — identical to the
+                // inline `class_field_set.fast` raw-f64 store, which is barrier-free.
                 std::ptr::write(slot, value);
             }
         } else {
