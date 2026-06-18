@@ -276,6 +276,9 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
         }
         Expr::IndexGet { object, .. } => {
+            if is_flat_const_int_index_get(ctx, init) {
+                return Some(HirType::Number);
+            }
             // arr[i] where arr is Array<T> → element type T.
             // Handles both LocalGet(arr) and PropertyGet(this, "field")
             // — the latter lets `this.parts[i]` get the right type
@@ -660,6 +663,22 @@ fn is_fixed_width_buffer_numeric_read(method: &str) -> bool {
     )
 }
 
+fn is_flat_const_int_index_get(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    let Expr::IndexGet { object, .. } = e else {
+        return false;
+    };
+    match object.as_ref() {
+        Expr::IndexGet { object: inner, .. } => {
+            matches!(inner.as_ref(), Expr::LocalGet(id) if ctx.flat_const_arrays.contains_key(id))
+        }
+        Expr::LocalGet(id) => ctx
+            .array_row_aliases
+            .get(id)
+            .is_some_and(|(const_id, _)| ctx.flat_const_arrays.contains_key(const_id)),
+        _ => false,
+    }
+}
+
 pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_)
@@ -727,6 +746,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
         Expr::IndexGet { object, .. } => {
+            if is_flat_const_int_index_get(ctx, e) {
+                return true;
+            }
             if receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(is_numeric_typed_array_class)
@@ -794,6 +816,7 @@ pub(crate) fn is_integer_valued_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) => true,
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
+        Expr::IndexGet { .. } if is_flat_const_int_index_get(ctx, e) => true,
         Expr::LocalGet(id) => ctx.integer_locals.contains(id),
         Expr::Update { id, .. } => ctx.integer_locals.contains(id),
         Expr::Binary { op, left, right } => match op {

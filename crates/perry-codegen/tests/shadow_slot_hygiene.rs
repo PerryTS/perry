@@ -1,5 +1,5 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
+use perry_hir::{BinaryOp, Expr, Function, Module, ModuleInitKind, Stmt};
 use perry_types::Type;
 
 fn empty_opts() -> CompileOptions {
@@ -237,6 +237,63 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 }),
             },
             Stmt::Expr(Expr::LocalGet(32)),
+        ],
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+    }
+}
+
+fn flat_const_numeric_operand_module() -> Module {
+    Module {
+        name: "entry_flat_const_numeric_operand.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: Vec::new(),
+        init: vec![
+            Stmt::Let {
+                id: 40,
+                name: "kernel".to_string(),
+                ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
+                mutable: false,
+                init: Some(Expr::Array(vec![
+                    Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)]),
+                    Expr::Array(vec![Expr::Integer(3), Expr::Integer(4)]),
+                ])),
+            },
+            Stmt::Let {
+                id: 41,
+                name: "product".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(40)),
+                            index: Box::new(Expr::Integer(1)),
+                        }),
+                        index: Box::new(Expr::Integer(0)),
+                    }),
+                    right: Box::new(Expr::Integer(2)),
+                }),
+            },
+            Stmt::Expr(Expr::LocalGet(41)),
         ],
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
@@ -647,6 +704,22 @@ fn flat_const_row_aliases_do_not_reserve_shadow_slots() {
     assert!(
         !main_ir.contains("call void @js_shadow_slot_set(i32 1"),
         "row aliases of flat-const tables must not touch shadow slots"
+    );
+}
+
+#[test]
+fn flat_const_int_values_are_numeric_operands() {
+    let ir = String::from_utf8(
+        compile_module(&flat_const_numeric_operand_module(), entry_opts()).unwrap(),
+    )
+    .expect("LLVM IR should be UTF-8");
+    let main_ir = function_slice(&ir, "main");
+
+    assert!(ir.contains("@perry_flat_entry_flat_const_numeric_operand_ts__"));
+    assert!(main_ir.contains("fmul double"), "{main_ir}");
+    assert!(
+        !main_ir.contains("call double @js_number_coerce"),
+        "{main_ir}"
     );
 }
 
