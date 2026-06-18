@@ -1,4 +1,37 @@
-## v0.5.1184 — fix: unblock main CI — dead-stripped symbol + cargo-test staticlib + oversized link/mod.rs
+## v0.5.1185 — perf(ci): make per-PR cargo-test fast (<10 min) — unit tests for affected crates; integration tests move to nightly/tags
+
+The `cargo-test` gate took ~90 min: it built the **entire workspace** in debug,
+serially (`CARGO_BUILD_JOBS=1` + `cargo clean` between packages, a 14 GB-disk
+workaround), and 30/40 perry **integration** test files (`tests/*.rs`) each shell
+out to `perry compile` on the **auto-optimize** path — a whole-program optimized
+rebuild, ~4–6 min apiece, and concurrent auto-opt builds thrash a shared target
+so they can't be parallelized. That made the gate roughly worthless on every PR.
+
+Per-PR `cargo-test` is now two things at once — **scoped** and **unit-only**:
+
+1. **Scoped to the diff** (`scripts/ci_test_scope.py`): test only each changed
+   `crates/<dir>` plus its **reverse-dependency closure** (a foundational-crate
+   change still fans out). Runtime-linked crates (`perry-stdlib`, `perry-ffi`,
+   `perry-ext-*`) add a `perry` edge (the driver links those archives at runtime,
+   not via cargo). Infra changes (`.github/`, `scripts/`, `rust-toolchain*`) or
+   any unrecognized path → full; metadata-only changes (`CHANGELOG.md`,
+   `CLAUDE.md`, `*.md`, `docs/`, root `Cargo.toml`/`Cargo.lock`) → nothing (a
+   version-bump PR is instantly green).
+2. **Unit / lib / bin tests only** (`cargo test --lib --bins`): the slow
+   auto-optimize integration tests are **not** run per-PR. Unit-test binaries are
+   small, so builds parallelize safely (no serialization / clean churn) and there
+   is no staticlib to build. This is the part that bounds the per-PR wall-clock.
+
+The **full** suite — including every integration test — runs on **release tags**,
+a new **nightly `schedule`** (04:00 UTC), `workflow_dispatch`, and any PR labeled
+`run-extended-tests`. Release tags gate publishing, so nothing ships untested;
+the nightly run is the cross-crate / integration regression backstop (main pushes
+don't trigger Tests today). `test.yml` branches the cargo-test step on
+`github.event_name`: `pull_request` → fast path; everything else → full.
+
+Trade-off (chosen deliberately, prioritizing a usable per-PR gate): a regression
+only an integration test would catch lands on a PR and is caught by the nightly /
+release-tag full run rather than at PR time.
 
 Three pre-existing CI fragilities on `main` were turning required checks red for
 PRs. Fixed together since all are "make main's CI green again."
