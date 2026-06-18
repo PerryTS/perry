@@ -172,20 +172,24 @@ fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) ->
         .contains_key(&(class.name.clone(), ctor_method_name))
 }
 
+/// Emit a call to the shared standalone `<class>_constructor` symbol and
+/// return the raw value it produced. The standalone ctor function returns
+/// `undefined` for an ordinary constructor (implicit `return this`) or the
+/// explicitly-returned value for a `return <expr>` body — the caller applies
+/// `js_ctor_return_override` to that raw value to honor ECMAScript's
+/// constructor-return-override rule (a returned object/function replaces the
+/// freshly-allocated `this`). Returns `None` when no standalone symbol exists.
 fn call_local_constructor_symbol(
     ctx: &mut FnCtx<'_>,
     class: &perry_hir::Class,
     obj_box: &str,
     lowered_args: &[String],
-) {
+) -> Option<String> {
     let ctor_method_name = format!("{}_constructor", class.name);
-    let Some(ctor_name) = ctx
+    let ctor_name = ctx
         .methods
         .get(&(class.name.clone(), ctor_method_name))
-        .cloned()
-    else {
-        return;
-    };
+        .cloned()?;
     // The standalone `<class>_constructor` symbol's signature is the class's
     // OWN ctor params, OR — when the class has no own ctor — the closest
     // ancestor-with-a-ctor's params (codegen/artifacts.rs synthesizes the
@@ -243,7 +247,7 @@ fn call_local_constructor_symbol(
     for arg in &ctor_values {
         ctor_args.push((DOUBLE, arg.as_str()));
     }
-    let _ = ctx.block().call(DOUBLE, &ctor_name, &ctor_args);
+    Some(ctx.block().call(DOUBLE, &ctor_name, &ctor_args))
 }
 
 /// Lower `new ClassName(args…)` — Phase C.1.
@@ -871,7 +875,33 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         || ctor_alias_collision
         || force_ctor_call
     {
-        call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
+        // Apply ECMAScript constructor return-override semantics on the
+        // standalone-symbol path too. The shared `<class>_constructor` symbol
+        // returns `undefined` for an ordinary ctor (implicit `return this`) or
+        // the explicitly-returned value for a `return <expr>` body. Pre-fix this
+        // path discarded that value and always yielded `obj_box`, so a ctor like
+        // chalk's `class Chalk { constructor(o){ return chalkFactory(o); } }`
+        // produced the empty default instance instead of the returned factory
+        // function ("value is not a function" on `new Chalk(...).red(...)`).
+        // `js_ctor_return_override` returns `obj_box` for an `undefined`/
+        // primitive (base) return, so ordinary ctors are unaffected.
+        if let Some(ctor_ret) = call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args) {
+            let is_derived = class.extends.is_some()
+                || class.extends_name.is_some()
+                || class.native_extends.is_some()
+                || class.extends_expr.is_some();
+            let is_derived_lit = if is_derived { "1" } else { "0" };
+            let final_box = ctx.block().call(
+                DOUBLE,
+                "js_ctor_return_override",
+                &[
+                    (DOUBLE, &obj_box),
+                    (DOUBLE, &ctor_ret),
+                    (crate::types::I32, is_derived_lit),
+                ],
+            );
+            return Ok(final_box);
+        }
         return Ok(obj_box);
     }
 
