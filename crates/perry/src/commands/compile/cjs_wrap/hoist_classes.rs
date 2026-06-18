@@ -220,9 +220,30 @@ pub fn rewrite_module_exports_class_expression(source: &str) -> Option<String> {
 /// already a duplicate of a previously-seen class (defensive).
 pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, String) {
     let bytes = source.as_bytes();
-    let mut hoisted_blocks: Vec<&str> = Vec::new();
-    let mut hoisted_names: Vec<String> = Vec::new();
-    let mut elided: Vec<(usize, usize)> = Vec::new();
+
+    // A top-level `class` candidate discovered by the brace-balanced scan.
+    // We collect every candidate first, then decide hoist-vs-keep in a
+    // chain-aware fixpoint pass below — deciding per class independently
+    // (the original single forward pass) splits an inheritance chain across
+    // the IIFE boundary: a parent KEPT inside the IIFE (because it refs an
+    // IIFE-local) becomes invisible to a child HOISTED to top level, so the
+    // child's `extends <Parent>` throws `ReferenceError: <Parent> is not
+    // defined` (ajv `class AssignOp extends Assign` / `new Assign(...)`).
+    struct ClassCand<'a> {
+        name: String,
+        block_text: &'a str,
+        // `extends <Parent>` parent identifier (first ident after `extends`),
+        // if this class extends a bare same-module name (not a member access
+        // like `_x.default` — those resolve via a different path).
+        extends_parent: Option<String>,
+        line_start: usize,
+        end: usize,
+        // True iff the class body / extends-head textually references an
+        // IIFE-local binding (#2310 / #5251). Such a class genuinely cannot
+        // be hoisted out of the IIFE.
+        references_iife_local: bool,
+    }
+    let mut candidates: Vec<ClassCand> = Vec::new();
 
     // Issue #2310 — collect the names of top-level `let`/`const`/`var`
     // declarations in this CJS source so we can REFUSE to hoist a class
@@ -383,10 +404,16 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
                         let references_iife_local =
                             class_body_references_any(body_text, &iife_locals)
                                 || class_body_references_any(extends_head, &iife_locals);
-                        if !hoisted_names.contains(&class_name) && !references_iife_local {
-                            hoisted_blocks.push(block_text);
-                            hoisted_names.push(class_name);
-                            elided.push((line_start, r));
+                        let extends_parent = parse_extends_parent(extends_head);
+                        if !candidates.iter().any(|c| c.name == class_name) {
+                            candidates.push(ClassCand {
+                                name: class_name,
+                                block_text,
+                                extends_parent,
+                                line_start,
+                                end: r,
+                                references_iife_local,
+                            });
                         }
                         i = r;
                         continue;
@@ -399,6 +426,55 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
             i += 1;
         }
         i += 1;
+    }
+
+    // Chain-aware keep decision. Start by keeping every class that directly
+    // references an IIFE-local; then iterate to a fixpoint, additionally
+    // keeping any class whose `extends` parent is a same-module sibling that
+    // is itself kept. A kept parent cannot be hoisted (it's an IIFE-local),
+    // so a hoisted child would lose visibility of it — keep the child too.
+    // Parents resolved via member access / require alias are handled by the
+    // #2310/#5251 textual checks already and are not in `candidates`, so they
+    // never force-keep here.
+    let cand_names: std::collections::HashSet<&str> =
+        candidates.iter().map(|c| c.name.as_str()).collect();
+    let mut kept: Vec<bool> = candidates.iter().map(|c| c.references_iife_local).collect();
+    loop {
+        let mut changed = false;
+        for idx in 0..candidates.len() {
+            if kept[idx] {
+                continue;
+            }
+            if let Some(parent) = &candidates[idx].extends_parent {
+                // Only same-module sibling parents matter.
+                if cand_names.contains(parent.as_str()) {
+                    let parent_kept = candidates
+                        .iter()
+                        .position(|c| &c.name == parent)
+                        .map(|pidx| kept[pidx])
+                        .unwrap_or(false);
+                    if parent_kept {
+                        kept[idx] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut hoisted_blocks: Vec<&str> = Vec::new();
+    let mut hoisted_names: Vec<String> = Vec::new();
+    let mut elided: Vec<(usize, usize)> = Vec::new();
+    for (idx, cand) in candidates.iter().enumerate() {
+        if kept[idx] {
+            continue;
+        }
+        hoisted_blocks.push(cand.block_text);
+        hoisted_names.push(cand.name.clone());
+        elided.push((cand.line_start, cand.end));
     }
 
     let mut out_source = source.to_string();
@@ -432,6 +508,149 @@ pub fn extract_top_level_class_decls(source: &str) -> (String, Vec<String>, Stri
 /// We accept the same anchor rule as the class scan: declarations at the
 /// start of a line (after only whitespace), brace-depth-aware so we
 /// ignore decls inside functions / classes / object literals.
+/// Walk a brace/bracket-balanced binding pattern starting at `start`
+/// (which must point at the opening `{` or `[`) and push every bound
+/// identifier into `names`. Returns the byte index just past the
+/// matching closing delimiter.
+///
+/// Object patterns bind the *target* of each `key: target` pair (the
+/// shorthand `key` when no `: target` is present); array patterns bind
+/// each element. Defaults (`= expr`) and computed/literal keys are
+/// skipped over so they don't contribute spurious names, and a rest
+/// element (`...rest`) binds `rest`. Nested patterns recurse. This is a
+/// conservative textual walk (no SWC parse) matching the rest of the
+/// cjs_wrap layer; over-collecting a name is harmless here (it only
+/// makes the #2310 hoist guard *more* conservative), so the goal is to
+/// never MISS a real binding.
+fn collect_pattern_binding_names(bytes: &[u8], start: usize, names: &mut Vec<String>) -> usize {
+    let open = bytes[start];
+    let (close, is_object) = if open == b'{' {
+        (b'}', true)
+    } else {
+        (b']', false)
+    };
+    let mut i = start + 1;
+    // In an object pattern, after a `:` the following identifier is the
+    // binding target (not a key); track that so `{ key: target }` records
+    // `target`, while a bare `{ key }` records `key`.
+    let mut after_colon = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' | b'[' => {
+                i = collect_pattern_binding_names(bytes, i, names);
+                after_colon = false;
+                continue;
+            }
+            c if c == close => {
+                i += 1;
+                break;
+            }
+            // Skip string / template keys.
+            b'"' | b'\'' => {
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'`' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            // A default initializer (`= expr`) — skip to the next top-level
+            // comma or the pattern's closing delimiter, brace/paren aware so
+            // a default object/array/call doesn't confuse the element split.
+            b'=' if i + 1 >= bytes.len() || bytes[i + 1] != b'=' => {
+                i += 1;
+                let mut inner: i32 = 0;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'(' | b'[' | b'{' => inner += 1,
+                        b')' | b']' | b'}' if inner > 0 => inner -= 1,
+                        c if c == close && inner == 0 => break,
+                        b',' if inner == 0 => break,
+                        b'"' | b'\'' => {
+                            let q = bytes[i];
+                            i += 1;
+                            while i < bytes.len() && bytes[i] != q {
+                                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                                    i += 2;
+                                    continue;
+                                }
+                                i += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                after_colon = false;
+            }
+            b':' => {
+                after_colon = true;
+                i += 1;
+            }
+            b',' => {
+                after_colon = false;
+                i += 1;
+            }
+            // A computed object key `[expr]:` — skip the bracketed expression
+            // (only meaningful in object patterns; array patterns never hit
+            // this because their `[` is consumed by the nested-pattern arm).
+            b'[' => {
+                // Unreachable in practice (handled above), kept for clarity.
+                i += 1;
+            }
+            c if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c == b'.' => {
+                // Identifier (or `...rest` after the dots). Read it.
+                let name_start = i;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric()
+                        || bytes[i] == b'_'
+                        || bytes[i] == b'$'
+                        || bytes[i] == b'.')
+                {
+                    i += 1;
+                }
+                let raw = std::str::from_utf8(&bytes[name_start..i]).unwrap_or("");
+                // Strip a leading `...` (rest element).
+                let ident = raw.trim_start_matches('.');
+                // In an object pattern, a bare identifier followed (after
+                // whitespace) by `:` is a KEY, not a binding — defer to the
+                // post-colon identifier. Peek ahead past whitespace.
+                let mut j = i;
+                while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                    j += 1;
+                }
+                let is_key = is_object && !after_colon && j < bytes.len() && bytes[j] == b':';
+                if !is_key && !ident.is_empty() && !ident.contains('.') {
+                    let n = ident.to_string();
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+                after_colon = false;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    i
+}
+
 fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
     let bytes = source.as_bytes();
     let mut names: Vec<String> = Vec::new();
@@ -526,18 +745,32 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
             while q < bytes.len() && (bytes[q] == b' ' || bytes[q] == b'\t') {
                 q += 1;
             }
-            let name_start = q;
-            while q < bytes.len()
-                && (bytes[q].is_ascii_alphanumeric() || bytes[q] == b'_' || bytes[q] == b'$')
-            {
-                q += 1;
-            }
-            if q > name_start {
-                let n = std::str::from_utf8(&bytes[name_start..q])
-                    .unwrap_or("")
-                    .to_string();
-                if !n.is_empty() && !names.contains(&n) {
-                    names.push(n);
+            // Issue: a destructuring declarator (`const { tbl } = require(...)`,
+            // `const [a, b] = ...`) binds names INSIDE a `{…}`/`[…]` pattern,
+            // not as a bare identifier. The plain identifier scan below skips
+            // straight past the `{`/`[` and captures nothing, so a class whose
+            // body references `tbl` looks free of IIFE-locals → gets hoisted →
+            // severs its closure over `tbl` → `tbl` resolves to the `_cjs.tbl`
+            // export read-back, which is `undefined` (semver's `const { t } =
+            // require('./re')` read from a class method is exactly this). Walk
+            // the brace/bracket-balanced pattern and collect every bound name.
+            if q < bytes.len() && (bytes[q] == b'{' || bytes[q] == b'[') {
+                let pat_end = collect_pattern_binding_names(bytes, q, &mut names);
+                q = pat_end;
+            } else {
+                let name_start = q;
+                while q < bytes.len()
+                    && (bytes[q].is_ascii_alphanumeric() || bytes[q] == b'_' || bytes[q] == b'$')
+                {
+                    q += 1;
+                }
+                if q > name_start {
+                    let n = std::str::from_utf8(&bytes[name_start..q])
+                        .unwrap_or("")
+                        .to_string();
+                    if !n.is_empty() && !names.contains(&n) {
+                        names.push(n);
+                    }
                 }
             }
             // Skip ahead past an `=` initializer (brace/paren/bracket-aware so a
@@ -738,6 +971,42 @@ pub fn source_has_top_level_return(source: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Parse the `extends` parent identifier out of a class head's extends-clause
+/// text (the slice between the class name and the body's opening `{`, e.g.
+/// ` extends Assign `). Returns the bare parent identifier ONLY when the
+/// extends target is a simple same-module name — `Some("Assign")`. Returns
+/// `None` for an absent `extends`, or for a member-access / call-expression
+/// parent (`extends _code.default`, `extends mixin(Base)`) since those
+/// resolve via the require-alias path, not as a sibling top-level class.
+fn parse_extends_parent(extends_head: &str) -> Option<String> {
+    let trimmed = extends_head.trim_start();
+    let rest = trimmed.strip_prefix("extends")?;
+    // `extends` must be followed by whitespace (not `extendsX`).
+    let after = rest.strip_prefix(|c: char| c.is_ascii_whitespace())?;
+    let after = after.trim_start();
+    let bytes = after.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if i == 0 {
+        return None;
+    }
+    let ident = &after[..i];
+    // Anything after the identifier other than whitespace (`.`, `(`, `<`)
+    // means it's a member access / call / generic — not a bare sibling.
+    let tail = after[i..].trim_start();
+    if !tail.is_empty() {
+        return None;
+    }
+    Some(ident.to_string())
 }
 
 /// Issue #2310 — true if `class_body` contains any of the given names as a

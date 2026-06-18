@@ -759,14 +759,20 @@ unsafe fn inherited_proto_accessor_value(
     if acc.get == 0 {
         return Some(JSValue::undefined());
     }
-    let closure = (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
-    if closure.is_null() {
-        return Some(JSValue::undefined());
-    }
-    let previous_this = js_implicit_this_set(receiver);
-    let value = crate::closure::js_closure_call0(closure);
-    js_implicit_this_set(previous_this);
-    Some(JSValue::from_bits(value.to_bits()))
+    // Route through `invoke_accessor_getter` rather than a bare
+    // `js_implicit_this_set` + `js_closure_call0`. A getter installed via
+    // `Object.defineProperty(Class.prototype, name, { get })` is an ORDINARY
+    // method closure whose body reads `this` from its captured receiver slot —
+    // not from IMPLICIT_THIS — so merely setting IMPLICIT_THIS left the getter
+    // observing the prototype it lives on instead of the instance (winston's
+    // `get transports()` saw the prototype, whose `this._readableState` is
+    // undefined → "Cannot convert undefined or null to object").
+    // `invoke_accessor_getter` clones the closure with `this` rebound to the
+    // real receiver (and applies strict/sloppy coercion), matching the
+    // own-accessor read path.
+    Some(super::field_get_set::invoke_accessor_getter(
+        acc.get, receiver,
+    ))
 }
 
 unsafe fn resolve_proto_chain_field_inner(
@@ -777,6 +783,30 @@ unsafe fn resolve_proto_chain_field_inner(
     let mut cid = class_id;
     let mut depth = 0usize;
     while depth < 32 {
+        // The reflective `ClassName.prototype` object
+        // (`CLASS_DECL_PROTOTYPE_OBJECTS`) is where a user
+        // `Object.defineProperty(ClassName.prototype, name, { get })` installs
+        // its accessor — distinct from the #711/#809 synthetic-proto cache
+        // (`CLASS_PROTOTYPE_OBJECTS`) that the rest of this walk reads. The
+        // instance-read walk historically only consulted the latter, so such a
+        // getter was invisible to `instance.name` (winston:
+        // `Object.defineProperty(Logger.prototype, 'transports', { get })`,
+        // read as `this.transports`, came back `undefined` → `.length` threw).
+        // Check the decl-proto object for an ACCESSOR only: it is allocated
+        // WITH this `class_id` (`js_object_alloc(class_id, 0)`), so routing its
+        // DATA reads back through `js_object_get_field_by_name` would re-enter
+        // this same walk for the same id and recurse infinitely (a Transform
+        // subclass's `_read` lookup stack-overflowed → SIGSEGV). Class methods /
+        // data are already covered by the vtable + `class_prototype_object`
+        // path below, so the accessor-only probe here is sufficient.
+        if let Some(receiver) = receiver {
+            let decl_proto = class_decl_prototype_object(cid);
+            if !decl_proto.is_null() {
+                if let Some(value) = inherited_proto_accessor_value(decl_proto, key, receiver) {
+                    return Some(value);
+                }
+            }
+        }
         let proto_obj = class_prototype_object(cid);
         if !proto_obj.is_null() {
             if let Some(receiver) = receiver {
@@ -3785,8 +3815,15 @@ extern "C" fn class_accessor_setter_thunk(
 /// Wrap a raw class accessor func_ptr as a callable function VALUE for
 /// descriptor reflection (`Object.getOwnPropertyDescriptor(C.prototype,
 /// "x").get`). Built-in-shaped: `.length` 0/1, no `.prototype`, native
-/// `toString` form.
-pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> f64 {
+/// `toString` form. `prop_name` is the accessor's property key — the spec
+/// `.name` of a `get`/`set` accessor is the key prefixed with `"get "`/`"set "`
+/// (Function Definitions: SetFunctionName with the "get"/"set" prefix), e.g.
+/// `Object.getOwnPropertyDescriptor(C.prototype, "x").get.name === "get x"`.
+pub(crate) fn class_accessor_function_value(
+    raw_ptr: usize,
+    is_setter: bool,
+    prop_name: &str,
+) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -3805,6 +3842,22 @@ pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> 
         if is_setter { 1 } else { 0 },
     );
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    // Spec `.name` = "get <key>" / "set <key>" with attributes
+    // { writable: false, enumerable: false, configurable: true } (mirrors the
+    // `Function.prototype.bind` name path). Without this the reflected accessor
+    // value's `.name` defaulted to "" — refs class/.../fn-name-accessor-{get,set}.
+    let prefix = if is_setter { "set " } else { "get " };
+    let fn_name = format!("{prefix}{prop_name}");
+    let name_ptr = crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
+    let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
+    unsafe {
+        crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    }
+    crate::object::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
     crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
     crate::value::js_nanbox_pointer(closure as i64)
 }

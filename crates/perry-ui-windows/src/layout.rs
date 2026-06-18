@@ -574,14 +574,14 @@ fn measure_stack_intrinsic(handle: i64, kind: &WidgetKind, vertical: bool, cross
 #[cfg(target_os = "windows")]
 fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
     unsafe {
-        let hdc = GetDC(hwnd);
+        let hdc = GetDC(Some(hwnd));
         if hdc.is_invalid() {
             return if vertical { 20 } else { 100 };
         }
 
         let text_len = GetWindowTextLengthW(hwnd);
         if text_len == 0 {
-            let _ = ReleaseDC(hwnd, hdc);
+            let _ = ReleaseDC(Some(hwnd), hdc);
             return if vertical { 20 } else { 100 };
         }
 
@@ -589,9 +589,10 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
         GetWindowTextW(hwnd, &mut buf);
 
         // Send WM_GETFONT to get the current font
-        let hfont = HFONT(SendMessageW(hwnd, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as *mut _);
+        let hfont =
+            HFONT(SendMessageW(hwnd, WM_GETFONT, Some(WPARAM(0)), Some(LPARAM(0))).0 as *mut _);
         let old_font = if !hfont.is_invalid() {
-            SelectObject(hdc, hfont)
+            SelectObject(hdc, hfont.into())
         } else {
             HGDIOBJ::default()
         };
@@ -613,7 +614,7 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
             if !old_font.is_invalid() {
                 SelectObject(hdc, old_font);
             }
-            let _ = ReleaseDC(hwnd, hdc);
+            let _ = ReleaseDC(Some(hwnd), hdc);
 
             (rect.bottom - rect.top).max(16)
         } else {
@@ -623,7 +624,7 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
             if !old_font.is_invalid() {
                 SelectObject(hdc, old_font);
             }
-            let _ = ReleaseDC(hwnd, hdc);
+            let _ = ReleaseDC(Some(hwnd), hdc);
 
             size.cx.max(20)
         }
@@ -637,7 +638,7 @@ pub fn force_paint_backgrounds(handle: i64) {
         if let Some(hwnd) = widgets::get_hwnd_safe(handle) {
             if widgets::get_bg_brush(handle).is_some() {
                 unsafe {
-                    let _ = InvalidateRect(hwnd, None, true);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
                     let _ = UpdateWindow(hwnd);
                 }
             }

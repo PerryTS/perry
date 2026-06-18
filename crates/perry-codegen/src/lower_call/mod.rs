@@ -39,6 +39,7 @@ mod console_promise;
 mod early_branches;
 mod event_target;
 mod extern_func;
+mod field_init;
 mod func_ref;
 mod jsx;
 mod method_override;
@@ -47,6 +48,7 @@ mod native;
 mod native_module_dispatch;
 mod native_table;
 mod new;
+mod new_helpers;
 mod options;
 mod property_get;
 mod ui_styling;
@@ -99,9 +101,16 @@ pub(crate) use native::lower_native_method_call;
 // Re-export pub(crate) `new.rs` items consumed outside this module
 // (codegen.rs / expr.rs / stmt.rs) so `crate::lower_call::lower_new`
 // etc. keep resolving after the split.
-pub(crate) use new::{
-    apply_field_initializers_recursive, bind_inline_constructor_params, lower_new,
-    restore_inline_constructor_scope, FieldInitMode,
+pub(crate) use field_init::{apply_field_initializers_recursive, FieldInitMode};
+pub(crate) use new::{bind_inline_constructor_params, lower_new, restore_inline_constructor_scope};
+// The derived-ctor no-super static-throw predicates (shared with the
+// standalone-ctor-symbol path in `codegen/method.rs`, which is the default
+// `new` lowering when `force_ctor_call` redirects construction to the shared
+// symbol instead of inlining). Refs class/subclass/builtin-objects/*/
+// super-must-be-called.
+pub(crate) use new_helpers::{
+    ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
+    ctor_body_uses_this,
 };
 // `extract_options_fields` is consumed by `expr.rs` as
 // `crate::lower_call::extract_options_fields` — keep that path stable.
@@ -115,6 +124,23 @@ pub(crate) use native_table::iter_native_module_table;
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // #5253: localize the `ReferenceError: X is not defined` thrown by the
+    // unresolved-identifier runtime helper. A bare unresolved identifier
+    // (`module`, winston's stray globals, …) lowers to
+    // `Call { callee: ExternFuncRef("js_global_get_or_throw_unresolved"),
+    // args: [name], byte_offset }` (perry-hir lower_expr). That helper throws a
+    // ReferenceError through `js_referenceerror_new` → `make_stack`, which reads
+    // `CURRENT_CALL_LOCATION`. Emit a `js_set_call_location` from the call's
+    // recorded byte offset (set on `pending_call_offset` by the `Expr::Call`
+    // dispatcher) before lowering the call, so the throw carries `at file:line`.
+    // No-op in the default build; offset 0 (synthesized refs) resolves to none.
+    if let Expr::ExternFuncRef { name, .. } = callee {
+        if name == "js_global_get_or_throw_unresolved" {
+            let off = ctx.strings.pending_call_offset();
+            crate::expr::calls::emit_call_location_at(ctx, off);
+        }
+    }
+
     // #3656: `p.call(thisArg, …)` / `p.apply(thisArg, argsArray)` on a Proxy
     // routes through the proxy's `[[Call]]` (apply trap) rather than reading
     // `.call`/`.apply` off the forwarded target.

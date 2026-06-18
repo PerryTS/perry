@@ -211,6 +211,9 @@ fn regex_global_result_array_preserves_young_match_strings() {
 #[test]
 fn plugin_and_promise_field_population_helpers_preserve_young_children() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _plugin_registry_guard = crate::plugin::PLUGIN_REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let _env_guard = EnvVarGuard::set("PERRY_GC_VERIFY_EVACUATION", "1");
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 

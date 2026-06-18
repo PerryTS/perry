@@ -303,6 +303,20 @@ pub(super) fn try_array_only_methods(
                         if ctx.namespace_import_locals.contains(&n) {
                             return Ok(Err(args));
                         }
+                        // A default/CJS-module import binding used as a method
+                        // receiver (`import semver from "semver"; semver.sort(x)`)
+                        // is a module-exports object, never a local array. It
+                        // lowers to an `ExternFuncRef` receiver, so the array-
+                        // method fold would mis-route `semver.sort(list)` into
+                        // `Expr::ArraySort { array: semver, comparator: list }`
+                        // (the single `list` arg landing in the comparator slot →
+                        // "comparison function must be either a function or
+                        // undefined"). Treat imported bindings like namespaces and
+                        // bail to the namespace/object method dispatch.
+                        if ctx.lookup_local(&n).is_none() && ctx.lookup_imported_func(&n).is_some()
+                        {
+                            return Ok(Err(args));
+                        }
                         let ty = ctx.lookup_local_type(&n);
                         let class_typed = ty
                             .as_ref()
@@ -722,7 +736,14 @@ pub(super) fn try_array_only_methods(
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayValues(Box::new(array_expr))));
                     }
-                    "sort" if !args.is_empty() => {
+                    // `!recv_is_class` gate: semver re-exports
+                    // `sort = (list) => list.sort(cmp)` and the driver calls
+                    // `semver.sort(list)`. Without the guard the namespace/class
+                    // receiver was folded to `Expr::ArraySort`, mis-routing the
+                    // single `list` argument into the comparator slot ("comparison
+                    // function must be either a function or undefined"). Mirrors
+                    // the sibling `map`/`filter`/`reduce` arms.
+                    "sort" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArraySort {
                             array: Box::new(array_expr),

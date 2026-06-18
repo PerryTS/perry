@@ -2389,6 +2389,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ))
                 }
                 _ => {
+                    super::downgrade_buffer_aliases_in_expr(
+                        ctx,
+                        callee,
+                        crate::native_value::MaterializationReason::UnknownCallEscape,
+                    );
                     for arg in args {
                         super::downgrade_buffer_aliases_in_expr(
                             ctx,
@@ -2408,6 +2413,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             byte_offset,
             ..
         } => {
+            super::downgrade_buffer_aliases_in_expr(
+                ctx,
+                callee,
+                crate::native_value::MaterializationReason::UnknownCallEscape,
+            );
             for arg in args {
                 super::downgrade_buffer_aliases_in_expr(
                     ctx,

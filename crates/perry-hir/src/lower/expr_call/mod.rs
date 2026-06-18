@@ -58,8 +58,8 @@ use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
     check_eval_function_call, try_bare_regexp_call, try_builtin_prototype_method_apply_call,
-    try_embed_wasm, try_function_return_this, try_iife_call_rewrite, try_iterator_from,
-    try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
+    try_dynamic_require, try_embed_wasm, try_function_return_this, try_iife_call_rewrite,
+    try_iterator_from, try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
     try_pod_layout_constants, try_precompile, try_require_literal,
     try_strict_eval_arguments_assignment,
@@ -143,12 +143,21 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     // are likewise out of scope once we unwind past their owning
     // call). `truncate` is a no-op when nothing was added.
     if ctx.native_instances.len() > ni_mark {
-        ctx.native_instances.truncate(ni_mark);
+        ctx.truncate_native_instances(ni_mark);
     }
     result
 }
 
 fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
+    // Safety net for the receiver-lowering memo (see
+    // `LoweringContext::prelowered_member_receiver`): the memo is set by
+    // `try_static_method_and_instance` only to be consumed by the immediately
+    // following fall-through tail's `lower_member_inner`. It is single-shot and
+    // span-keyed, but in case a code path sets it without the tail consuming it,
+    // drop any stale entry here so it can never leak across calls. This runs
+    // before the callee tail (which lowers a Member, not a Call), so it never
+    // clobbers an in-flight memo for the call currently being lowered.
+    ctx.prelowered_member_receiver = None;
     // Check if any argument has spread
     let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
 
@@ -163,6 +172,12 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     // Compile-time intrinsics + legacy CJS/UMD bare-callee shapes
     // (require/embedWasm/IIFE.call/Function('return this')/RegExp).
     if let Some(expr) = try_require_literal(ctx, call)? {
+        return Ok(expr);
+    }
+    // #5389 Tier 2: a computed `require(expr)` in a compiled external module
+    // lowers to a synchronous dynamic-require node (resolved + dispatched like
+    // dynamic `import()`, but returning the namespace value directly).
+    if let Some(expr) = try_dynamic_require(ctx, call)? {
         return Ok(expr);
     }
     if let Some(expr) = try_embed_wasm(ctx, call)? {
@@ -655,6 +670,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                 arg: Box::new(arg),
                 byte_offset: call.span.lo.0,
                 deferred_error: None,
+                synchronous: false,
             })
         }
     }

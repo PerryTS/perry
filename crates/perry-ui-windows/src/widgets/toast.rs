@@ -178,7 +178,7 @@ fn present_toast_win32(msg: String) {
             TOAST_HEIGHT,
             None,
             None,
-            HINSTANCE::from(hinstance),
+            Some(HINSTANCE::from(hinstance)),
             None,
         ) {
             Ok(h) => h,
@@ -199,7 +199,7 @@ fn present_toast_win32(msg: String) {
             CORNER_RADIUS,
         );
         if !rgn.is_invalid() {
-            SetWindowRgn(hwnd, rgn, false);
+            SetWindowRgn(hwnd, Some(rgn), false);
             // SetWindowRgn takes ownership of the region — don't DeleteObject(rgn).
         }
 
@@ -219,7 +219,7 @@ fn present_toast_win32(msg: String) {
         let _ = UpdateWindow(hwnd);
 
         // 50ms tick timer drives the fade-in / hold / fade-out animation.
-        let _ = SetTimer(hwnd, TIMER_ID, 50, None);
+        let _ = SetTimer(Some(hwnd), TIMER_ID, 50, None);
     }
 }
 
@@ -268,7 +268,7 @@ fn tick_animation(hwnd: HWND) {
     if done {
         ACTIVE_TOAST.with(|s| *s.borrow_mut() = None);
         unsafe {
-            let _ = KillTimer(hwnd, TIMER_ID);
+            let _ = KillTimer(Some(hwnd), TIMER_ID);
             let _ = DestroyWindow(hwnd);
         }
         PRESENTING.with(|p| p.set(false));
@@ -294,7 +294,7 @@ unsafe fn paint_toast(hwnd: HWND) {
     let mut client_rect = RECT::default();
     GetClientRect(hwnd, &mut client_rect).ok();
     FillRect(hdc, &client_rect, bg_brush);
-    let _ = DeleteObject(bg_brush);
+    let _ = DeleteObject(bg_brush.into());
 
     // Draw white text, centered.
     let mut wide: Vec<u16> = msg.encode_utf16().collect();
@@ -313,15 +313,15 @@ unsafe fn paint_toast(hwnd: HWND) {
             0,
             0,
             0,
-            0,
-            0,
-            0,
-            0,
+            windows::Win32::Graphics::Gdi::FONT_CHARSET(0),
+            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(0),
+            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0),
+            windows::Win32::Graphics::Gdi::FONT_QUALITY(0),
             0,
             windows::core::PCWSTR(font_family.as_ptr()),
         );
         let old_font: HGDIOBJ = if !hfont.is_invalid() {
-            SelectObject(hdc, hfont)
+            SelectObject(hdc, hfont.into())
         } else {
             HGDIOBJ::default()
         };
@@ -344,7 +344,7 @@ unsafe fn paint_toast(hwnd: HWND) {
             SelectObject(hdc, old_font);
         }
         if !hfont.is_invalid() {
-            let _ = DeleteObject(hfont);
+            let _ = DeleteObject(hfont.into());
         }
     }
 
@@ -377,7 +377,7 @@ unsafe extern "system" fn toast_wnd_proc(
         x if x == WM_DESTROY => {
             // Kill the timer defensively in case DestroyWindow is called
             // externally (e.g. app shutdown before the fade completes).
-            let _ = KillTimer(hwnd, TIMER_ID);
+            let _ = KillTimer(Some(hwnd), TIMER_ID);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),

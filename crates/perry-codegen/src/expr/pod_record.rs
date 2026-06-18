@@ -8,6 +8,7 @@ use crate::native_value::{
     LoweredValue, MaterializationReason, NativeRep, NativeValueState, PodLayoutField,
     PodLayoutManifest, SemanticKind,
 };
+use crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback;
 use crate::types::{DOUBLE, F32, I32, I64, I8};
 
 use super::{
@@ -408,8 +409,34 @@ pub(crate) fn lower_and_store_initial_pod_field(
     field: &PodLayoutField,
     value: &Expr,
 ) -> Result<()> {
-    let expected = field_expected_rep(field);
-    let lowered = lower_expr_native(ctx, value, expected)?;
+    let needs_raw_f64_fallback_coercion =
+        expr_may_return_boxed_value_from_raw_f64_fallback(ctx, value)
+            || matches!(value, Expr::IndexGet { .. } | Expr::PropertyGet { .. });
+    let lowered = if matches!(field.native_rep, NativeRep::F64 | NativeRep::F32)
+        && needs_raw_f64_fallback_coercion
+    {
+        let raw = lower_expr(ctx, value)?;
+        let coerced = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &raw)]);
+        let (rep, llvm_ty, value) = match field.native_rep {
+            NativeRep::F64 => (NativeRep::F64, DOUBLE, coerced),
+            NativeRep::F32 => {
+                let value = ctx.block().fptrunc(DOUBLE, &coerced, F32);
+                (NativeRep::F32, F32, value)
+            }
+            _ => unreachable!(),
+        };
+        LoweredValue {
+            semantic: SemanticKind::JsNumber,
+            rep,
+            llvm_ty,
+            value,
+        }
+    } else {
+        let expected = field_expected_rep(field);
+        lower_expr_native(ctx, value, expected)?
+    };
     store_pod_field_native(ctx, local_id, data_slot, field, &lowered);
     Ok(())
 }

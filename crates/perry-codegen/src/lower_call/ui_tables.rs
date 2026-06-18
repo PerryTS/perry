@@ -284,6 +284,47 @@ static PERRY_PLUGIN_INSTANCE_TABLE: &[UiSig] = &[
         args: &[UiArgKind::F64, UiArgKind::F64],
         ret: UiReturnKind::F64,
     },
+    // api.unregisterHook(hookName, handler) -> undefined
+    // Removes the single entry whose closure bits match `handler`. The
+    // caller must be the same plugin that registered the hook; otherwise
+    // the call is a silent no-op.
+    UiSig {
+        method: "unregisterHook",
+        runtime: "perry_plugin_unregister_hook",
+        args: &[UiArgKind::F64, UiArgKind::Closure],
+        ret: UiReturnKind::F64,
+    },
+    // api.unregisterTool(name) -> undefined
+    UiSig {
+        method: "unregisterTool",
+        runtime: "perry_plugin_unregister_tool",
+        args: &[UiArgKind::F64],
+        ret: UiReturnKind::F64,
+    },
+    // api.unregisterService(name) -> undefined
+    // The service's `stopFn` is invoked before the entry is removed,
+    // matching the lifecycle contract of `registerService`.
+    UiSig {
+        method: "unregisterService",
+        runtime: "perry_plugin_unregister_service",
+        args: &[UiArgKind::F64],
+        ret: UiReturnKind::F64,
+    },
+    // api.unregisterRoute(path) -> undefined
+    UiSig {
+        method: "unregisterRoute",
+        runtime: "perry_plugin_unregister_route",
+        args: &[UiArgKind::F64],
+        ret: UiReturnKind::F64,
+    },
+    // api.off(event, handler) -> undefined
+    // Removes the single event-bus subscription whose closure bits match.
+    UiSig {
+        method: "off",
+        runtime: "perry_plugin_off",
+        args: &[UiArgKind::F64, UiArgKind::Closure],
+        ret: UiReturnKind::F64,
+    },
 ];
 
 pub fn perry_plugin_table_lookup(method: &str) -> Option<&'static UiSig> {

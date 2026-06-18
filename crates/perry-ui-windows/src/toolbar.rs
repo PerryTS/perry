@@ -94,9 +94,9 @@ pub fn create() -> i64 {
                 0,
                 800,
                 32,
-                parking,
+                Some(parking),
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -158,9 +158,9 @@ pub fn add_item(toolbar_handle: i64, label_ptr: *const u8, icon_ptr: *const u8, 
                         2,
                         76,
                         28,
-                        *parent,
+                        Some(*parent),
                         None,
-                        HINSTANCE::from(hinstance),
+                        Some(HINSTANCE::from(hinstance)),
                         None,
                     );
                 }
@@ -185,7 +185,7 @@ pub fn attach(toolbar_handle: i64) {
                     let apps = apps.borrow();
                     if let Some(app) = apps.first() {
                         unsafe {
-                            let _ = SetParent(*toolbar_hwnd, app.hwnd);
+                            let _ = SetParent(*toolbar_hwnd, Some(app.hwnd));
                         }
                     }
                 });

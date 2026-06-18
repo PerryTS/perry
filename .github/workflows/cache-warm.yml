@@ -1,0 +1,102 @@
+name: Warm CI cache
+
+# WHY THIS EXISTS
+# ---------------
+# The `Tests` workflow (test.yml) runs ONLY on pull_request + version tags —
+# never on push to main. GitHub Actions cache scoping means a run can only
+# restore caches saved on its OWN branch or on the DEFAULT branch (main); one
+# PR can never read another PR's cache. So with nothing running the cache-
+# producing build on main, no main-scoped cache ever existed, and every PR
+# started cold:
+#   - Swatinem/rust-cache in test.yml has `save-if: refs/heads/main`, but
+#     test.yml never runs on main → it never saved target/.
+#   - sccache (now a persisted disk cache, v0.5.1179) likewise only saw
+#     PR-scoped saves, invisible to other PRs.
+# Result: cargo-test recompiled the whole dependency graph cold every run
+# (~90-103 min), tipping over its timeout on perry-runtime/perry-codegen PRs.
+#
+# This workflow runs the cache-producing build ONCE per main merge so the
+# main-scoped rust-cache (target/) and sccache disk cache exist for every PR
+# to restore. It uses the SAME shared-key / sccache key prefix as test.yml's
+# jobs, so those jobs warm-restore from here. It is best-effort
+# (continue-on-error), never a gate.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cache-warm.yml'
+  workflow_dispatch:
+
+concurrency:
+  # Only the latest main commit needs a warm cache; cancel older in-flight warms.
+  group: cache-warm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    # Best-effort cache population — must never block or fail anything.
+    continue-on-error: true
+    # Comfortably above the cold first run; later runs are far shorter.
+    timeout-minutes: 120
+    env:
+      RUSTC_WRAPPER: sccache
+      # Mirror test.yml's sccache config EXACTLY (local disk cache, NOT the GHA
+      # backend) so the cache this job saves is byte-compatible with what the
+      # cargo-test / api-docs-drift / compiler-output-regression jobs restore.
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+      # Keep artifacts small so building the heavy crates' test binaries does
+      # not exhaust the shared-runner disk (same reason test.yml sets these).
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      # Save the sccache disk cache under the SAME prefix test.yml restores
+      # (`sccache-<os>-perry-`). This runs on main, so the saved entry is
+      # main-scoped → restorable by every PR. run_id keeps the key unique.
+      - name: Cache sccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-warm-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      # Same shared-key as test.yml; save-if true because this only runs on main.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: "true"
+
+      # Compile (do NOT run) the test binaries of the heaviest crates. This
+      # pulls in essentially the entire third-party dependency graph plus the
+      # big first-party crates — the bulk of cargo-test's compile time — so the
+      # cheap ext-* crates that follow in cargo-test reuse the cached units.
+      # `--no-run` skips execution (this is a cache warm, not a test run); the
+      # per-crate prune keeps target/ under the runner's disk budget.
+      - name: Warm build (heavy crates)
+        run: |
+          for pkg in perry-runtime perry-stdlib perry-codegen perry; do
+            echo "::group::cargo test -p $pkg --no-run"
+            cargo test -p "$pkg" --no-run
+            echo "::endgroup::"
+            find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete || true
+          done
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true

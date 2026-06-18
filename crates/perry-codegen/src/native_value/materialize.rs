@@ -44,7 +44,9 @@ fn transition_lossy(rep: &NativeRep, op: &NativeAbiTransitionOp) -> bool {
         NativeAbiTransitionOp::UnsignedIntToFloat => {
             matches!(rep, NativeRep::U64 | NativeRep::USize | NativeRep::HandleId)
         }
-        NativeAbiTransitionOp::None
+        NativeAbiTransitionOp::JsValueToBits
+        | NativeAbiTransitionOp::BitsToJsValue
+        | NativeAbiTransitionOp::None
         | NativeAbiTransitionOp::FloatExtend
         | NativeAbiTransitionOp::PointerBox
         | NativeAbiTransitionOp::NativeHandleBox
@@ -52,19 +54,20 @@ fn transition_lossy(rep: &NativeRep, op: &NativeAbiTransitionOp) -> bool {
     }
 }
 
-fn record_materialized_transition(
+fn record_transition(
     ctx: &mut FnCtx<'_>,
     expr_kind: &'static str,
     consumer: &'static str,
     materialized: &LoweredValue,
     from_native_rep: String,
+    to_native_rep: String,
     op: NativeAbiTransitionOp,
     reason: MaterializationReason,
     lossy: bool,
 ) {
     let transition = NativeAbiTransitionRecord {
         from_native_rep,
-        to_native_rep: NativeRep::JsValue.name().to_string(),
+        to_native_rep,
         op,
         reason: reason.clone(),
         lossy,
@@ -83,6 +86,29 @@ fn record_materialized_transition(
         false,
         false,
         Vec::new(),
+    );
+}
+
+fn record_materialized_transition(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    materialized: &LoweredValue,
+    from_native_rep: String,
+    op: NativeAbiTransitionOp,
+    reason: MaterializationReason,
+    lossy: bool,
+) {
+    record_transition(
+        ctx,
+        expr_kind,
+        consumer,
+        materialized,
+        from_native_rep,
+        NativeRep::JsValue.name().to_string(),
+        op,
+        reason,
+        lossy,
     );
 }
 
@@ -168,6 +194,52 @@ pub(crate) fn materialize_promise_boundary_to_js_value(
     )
 }
 
+pub(crate) fn materialize_js_value_bits(
+    ctx: &mut FnCtx<'_>,
+    lowered: LoweredValue,
+    reason: MaterializationReason,
+) -> String {
+    if matches!(&lowered.rep, NativeRep::JsValueBits) {
+        return lowered.value;
+    }
+    let js_value = materialize_js_value(ctx, lowered, reason.clone());
+    let bits = ctx.block().bitcast_double_to_i64(&js_value);
+    let materialized = LoweredValue::js_value_bits(bits.clone());
+    record_transition(
+        ctx,
+        "materialize_js_value_bits",
+        "materialize_js_value_bits",
+        &materialized,
+        NativeRep::JsValue.name().to_string(),
+        NativeRep::JsValueBits.name().to_string(),
+        NativeAbiTransitionOp::JsValueToBits,
+        reason,
+        false,
+    );
+    bits
+}
+
+fn materialize_js_value_bits_to_js_value(
+    ctx: &mut FnCtx<'_>,
+    lowered: LoweredValue,
+    reason: MaterializationReason,
+) -> String {
+    let from_native_rep = lowered.rep.name().to_string();
+    let value = ctx.block().bitcast_i64_to_double(&lowered.value);
+    let materialized = LoweredValue::js_value(value.clone());
+    record_materialized_transition(
+        ctx,
+        "materialize_js_value",
+        "materialize_js_value_bits",
+        &materialized,
+        from_native_rep,
+        NativeAbiTransitionOp::BitsToJsValue,
+        reason,
+        false,
+    );
+    value
+}
+
 pub(crate) fn materialize_js_value(
     ctx: &mut FnCtx<'_>,
     lowered: LoweredValue,
@@ -175,6 +247,9 @@ pub(crate) fn materialize_js_value(
 ) -> String {
     if matches!(&lowered.rep, NativeRep::JsValue) {
         return lowered.value;
+    }
+    if matches!(&lowered.rep, NativeRep::JsValueBits) {
+        return materialize_js_value_bits_to_js_value(ctx, lowered, reason);
     }
     if matches!(&lowered.rep, NativeRep::NativeHandle) {
         return materialize_native_handle_to_js_value(ctx, lowered, reason);
@@ -196,6 +271,7 @@ pub(crate) fn materialize_js_value(
         NativeRep::BufferView(_)
         | NativeRep::PodRecord { .. }
         | NativeRep::PodRecordView { .. }
+        | NativeRep::JsValueBits
         | NativeRep::JsValue
         | NativeRep::NativeHandle
         | NativeRep::PromiseBoundary => NativeAbiTransitionOp::None,
@@ -217,6 +293,7 @@ pub(crate) fn materialize_js_value(
         NativeRep::BufferView(_) => lowered.value.clone(),
         NativeRep::PodRecord { .. } => lowered.value.clone(),
         NativeRep::PodRecordView { .. } => lowered.value.clone(),
+        NativeRep::JsValueBits => lowered.value.clone(),
         NativeRep::JsValue
         | NativeRep::F64
         | NativeRep::NativeHandle

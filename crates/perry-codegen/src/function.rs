@@ -61,9 +61,9 @@ pub struct LlFunction {
     ///
     /// `to_ir()` splices these instructions into block 0 at the
     /// `entry_init_boundary` instruction index. If no boundary is set
-    /// (e.g. user functions, which have no init prelude), they're
-    /// appended to `entry_allocas` instead so the dominance guarantee
-    /// still holds.
+    /// (e.g. user functions, which have no init prelude), they are
+    /// emitted immediately after entry allocas and before the first
+    /// block instruction so the dominance guarantee still holds.
     entry_post_init_setup: Vec<String>,
     /// Index in block 0's instruction list where `entry_post_init_setup`
     /// should be spliced in. Set by `mark_entry_init_boundary` after
@@ -252,6 +252,24 @@ impl LlFunction {
             .push(format!("  store {} {}, ptr {}", ty, val, ptr));
     }
 
+    /// Emit a one-time void call in the function-entry setup region.
+    ///
+    /// Use this for metadata/registration work that must happen before
+    /// any reachable hot-path use but does not need to run at each use
+    /// site. If the function has an init prelude boundary, the call is
+    /// spliced after runtime/string initialization; otherwise it is
+    /// emitted at the top of the entry block with the other entry setup.
+    pub fn entry_setup_call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
+        crate::ext_registry::record_ffi_call(func_name);
+        let arg_str = args
+            .iter()
+            .map(|(ty, value)| format!("{} {}", ty, value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let line = format!("  call void @{}({})", func_name, arg_str);
+        self.entry_post_init_setup.push(line);
+    }
+
     /// Emit a one-time function-entry init sequence: allocate a `ptr`
     /// slot, call `func_name()` (no args), store the result in the
     /// slot, return the slot pointer name. Used by the inline bump
@@ -341,6 +359,20 @@ impl LlFunction {
     /// sub-expression whose control flow may have split.
     pub fn last_block_label(&self) -> Option<&str> {
         self.blocks.last().map(|b| b.label.as_str())
+    }
+
+    /// Cheap estimate of this function's rendered IR size in bytes, used to
+    /// balance codegen-unit partitioning (#5391) without rendering twice. Sums
+    /// the byte length of every instruction + entry alloca (the dominant terms);
+    /// block labels/headers are a small fixed overhead per block.
+    pub fn estimated_ir_bytes(&self) -> usize {
+        let body: usize = self
+            .blocks
+            .iter()
+            .map(|b| b.instructions_iter().map(|i| i.len() + 1).sum::<usize>() + b.label.len() + 4)
+            .sum();
+        let allocas: usize = self.entry_allocas.iter().map(|a| a.len() + 1).sum();
+        body + allocas + self.name.len() + 64
     }
 
     pub fn to_ir(&self) -> String {

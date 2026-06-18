@@ -217,26 +217,83 @@ pub(super) fn emit_string_pool(
         }
     }
 
+    // #5391 function splitting: a large bundle interns ~190K strings, and
+    // emitting every string's init (from-bytes + nanbox + global store + GC-root
+    // register) into ONE `__perry_init_strings` block makes a single ~68MB
+    // function that `clang -O0` (forced for oversized modules, #4880) cannot
+    // compile in practical time — its per-function passes are superlinear in
+    // function size. The inits are independent (each handle is stored to its own
+    // global; no SSA value flows between iterations), so split them into chunk
+    // functions of `STRINGS_PER_CHUNK` each and call them in sequence from the
+    // init. Combined with codegen-unit splitting, the ~48 chunks bin-pack evenly
+    // across units instead of one unit carrying the monolith.
+    let strings_per_chunk: usize = std::env::var("PERRY_STRING_INIT_CHUNK_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(4000);
+    let mut string_chunk_names: Vec<String> = Vec::new();
+    {
+        let mut count_in_chunk = strings_per_chunk; // force a new chunk on entry 0
+        let mut cur_idx = 0usize;
+        for entry in strings.iter() {
+            if count_in_chunk >= strings_per_chunk {
+                if !string_chunk_names.is_empty() {
+                    llmod
+                        .function_mut(cur_idx)
+                        .unwrap()
+                        .block_mut(0)
+                        .unwrap()
+                        .ret_void();
+                }
+                let cname = format!(
+                    "__perry_init_strings_{}_chunk{}",
+                    module_prefix,
+                    string_chunk_names.len()
+                );
+                llmod
+                    .define_function(&cname, VOID, vec![])
+                    .create_block("entry");
+                cur_idx = llmod.function_count() - 1;
+                string_chunk_names.push(cname);
+                count_in_chunk = 0;
+            }
+            let blk = llmod.function_mut(cur_idx).unwrap().block_mut(0).unwrap();
+
+            let bytes_ref = format!("@{}", entry.bytes_global);
+            let handle_ref = format!("@{}", entry.handle_global);
+            let len_str = entry.byte_len.to_string();
+            let from_bytes_fn = if entry.is_wtf8 {
+                "js_string_from_wtf8_bytes"
+            } else {
+                "js_string_from_bytes"
+            };
+            let handle = blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
+            let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
+            crate::expr::emit_root_nanbox_store_on_block(blk, &nanboxed, &handle_ref);
+            let addr_i64 = blk.ptrtoint(&handle_ref, I64);
+            blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+            count_in_chunk += 1;
+        }
+        if !string_chunk_names.is_empty() {
+            llmod
+                .function_mut(cur_idx)
+                .unwrap()
+                .block_mut(0)
+                .unwrap()
+                .ret_void();
+        }
+    }
+
     let init_name = format!("__perry_init_strings_{}", module_prefix);
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
     let _ = init_fn.create_block("entry");
     let blk = init_fn.block_mut(0).unwrap();
 
-    for entry in strings.iter() {
-        let bytes_ref = format!("@{}", entry.bytes_global);
-        let handle_ref = format!("@{}", entry.handle_global);
-        let len_str = entry.byte_len.to_string();
-
-        let init_fn = if entry.is_wtf8 {
-            "js_string_from_wtf8_bytes"
-        } else {
-            "js_string_from_bytes"
-        };
-        let handle = blk.call(I64, init_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
-        let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
-        crate::expr::emit_root_nanbox_store_on_block(blk, &nanboxed, &handle_ref);
-        let addr_i64 = blk.ptrtoint(&handle_ref, I64);
-        blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
+    // Run the string-init chunks first, in order (each populates its slice of
+    // the string-handle globals before any user code runs).
+    for cname in &string_chunk_names {
+        blk.call_void(cname, &[]);
     }
 
     // Register display names for top-level user functions so

@@ -797,10 +797,6 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
     if !ACCESSORS_IN_USE.with(|c| c.get()) {
         return None;
     }
-    let obj = unsafe { extract_obj_ptr(value) };
-    if obj.is_null() {
-        return None;
-    }
     let key_str = crate::builtins::js_string_coerce(key);
     if key_str.is_null() {
         return None;
@@ -813,14 +809,42 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
             Err(_) => return None,
         }
     };
-    let acc = get_accessor_descriptor(obj as usize, &name)?;
-    if acc.get != 0 {
-        Some(acc.get)
-    } else {
-        // Accessor exists but has no getter → reading yields undefined; signal
-        // that via 0 so the caller returns undefined rather than a field read.
-        Some(0)
+    // Spec [[Get]] walks the prototype chain: `Reflect.get(target, key,
+    // receiver)` must locate an accessor *getter* installed anywhere on
+    // `target`'s chain (an inherited `get x() {…}`), so the caller can rebind
+    // its `this` to the receiver before invoking it. An own *data* property at
+    // some level shadows inherited accessors, so stop the walk there and let
+    // the caller fall back to an ordinary (receiver-aware) field read. (test262
+    // Reflect/get/return-value-from-receiver: inherited-getter-via-receiver.)
+    let mut current = value;
+    // Bounded to guard against a cyclic prototype side-table; real chains are
+    // a handful of links deep.
+    for _ in 0..10_000 {
+        let obj = unsafe { extract_obj_ptr(current) };
+        if obj.is_null() {
+            return None;
+        }
+        if let Some(acc) = get_accessor_descriptor(obj as usize, &name) {
+            return if acc.get != 0 {
+                Some(acc.get)
+            } else {
+                // Accessor exists but has no getter → reading yields undefined;
+                // signal that via 0 so the caller returns undefined rather than
+                // a field read.
+                Some(0)
+            };
+        }
+        // An own (data) property at this level shadows any inherited accessor.
+        if obj_value_has_own_key(current, key) {
+            return None;
+        }
+        let proto = crate::object::js_object_get_prototype_of(current);
+        if unsafe { extract_obj_ptr(proto) }.is_null() {
+            return None;
+        }
+        current = proto;
     }
+    None
 }
 
 /// `JSON.stringify` helper: if the own key `key_f64` on `obj` is an accessor
@@ -2014,6 +2038,45 @@ unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
     let sym_f64 = f64::from_bits(0x7FFD_0000_0000_0000 | (sym as u64 & 0x0000_FFFF_FFFF_FFFF));
     let tag_value = crate::symbol::own_symbol_property(value, sym_f64)?;
     string_value_to_owned(tag_value)
+}
+
+/// The `%TypedArray%.prototype [ @@toStringTag ]` value for `value` if it is a
+/// TypedArray (the constructor name, e.g. `"Int8Array"` / `"Uint8Array"`),
+/// else `None`. Covers both the raw-pointer typed-array representation and
+/// Perry's buffer-backed `Uint8Array`/`Uint8ClampedArray` (Node's `Buffer` is
+/// a `Uint8Array`, so it too reports `"Uint8Array"`). `ArrayBuffer` /
+/// `SharedArrayBuffer` / `DataView` / `CryptoKey` are NOT typed arrays and
+/// return `None` (their `@@toStringTag` getter yields `undefined`). Shared by
+/// `js_object_to_string`'s typed-array brand arm and the public
+/// `%TypedArray%.prototype[@@toStringTag]` accessor getter.
+pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str> {
+    use crate::value::JSValue;
+    let bits = value.to_bits();
+    let jsv = JSValue::from_bits(bits);
+    let raw_addr = if jsv.is_pointer() {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if bits > 0x1000 && (bits >> 48) == 0 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if raw_addr < 0x1000 {
+        return None;
+    }
+    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+        return Some(crate::typedarray::name_for_kind(kind));
+    }
+    // Buffer-backed `Uint8Array` (and Node `Buffer`) — registered as a buffer
+    // but still a TypedArray. Exclude the non-TypedArray buffer flavours.
+    if crate::buffer::is_registered_buffer(raw_addr)
+        && crate::buffer::crypto_key_meta(raw_addr).is_none()
+        && !crate::buffer::is_array_buffer(raw_addr)
+        && !crate::buffer::is_shared_array_buffer(raw_addr)
+        && !crate::buffer::is_data_view(raw_addr)
+    {
+        return Some("Uint8Array");
+    }
+    None
 }
 
 /// `Object.prototype.toString.call(x)` — returns `[object <tag>]` where

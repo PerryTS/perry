@@ -169,9 +169,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 .unwrap_or(PropertyAttrs::new(true, true, true));
             if let Some((get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key)
             {
+                // A `0` get/set means "absent half" — surface it as `undefined`
+                // (not the number `0`) so a get-only accessor reflects
+                // `{ get, set: undefined }`.
+                let undef = crate::value::TAG_UNDEFINED;
                 return build_accessor_descriptor(
-                    f64::from_bits(get),
-                    f64::from_bits(set),
+                    f64::from_bits(if get == 0 { undef } else { get }),
+                    f64::from_bits(if set == 0 { undef } else { set }),
                     attrs.enumerable(),
                     attrs.configurable(),
                 );
@@ -319,8 +323,12 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 };
                 if let Some((g, s)) = accessor {
                     return build_accessor_descriptor(
-                        super::class_registry::class_accessor_function_value(g, false),
-                        super::class_registry::class_accessor_function_value(s, true),
+                        super::class_registry::class_accessor_function_value(
+                            g,
+                            false,
+                            &method_name,
+                        ),
+                        super::class_registry::class_accessor_function_value(s, true, &method_name),
                         false,
                         true,
                     );
@@ -724,10 +732,14 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         // fields, but they ARE own properties of the prototype.
         if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
             if let Some(ref name) = key_rust {
-                if let Some((g, s)) = super::class_registry::class_own_accessor_ptrs(cid, name) {
+                if super::class_registry::class_is_key_deleted(cid, name) {
+                    // `delete C.prototype.x` recorded the accessor as removed.
+                } else if let Some((g, s)) =
+                    super::class_registry::class_own_accessor_ptrs(cid, name)
+                {
                     return build_accessor_descriptor(
-                        super::class_registry::class_accessor_function_value(g, false),
-                        super::class_registry::class_accessor_function_value(s, true),
+                        super::class_registry::class_accessor_function_value(g, false, name),
+                        super::class_registry::class_accessor_function_value(s, true, name),
                         false,
                         true,
                     );

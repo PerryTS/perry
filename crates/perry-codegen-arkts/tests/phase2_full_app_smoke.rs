@@ -149,6 +149,7 @@ fn full_phase2_app_emits_canonical_arkui() {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     // --- Phase 2 v6 + v5: Button with state.set + inline style ---
@@ -160,6 +161,7 @@ fn full_phase2_app_emits_canonical_arkui() {
         }),
         args: vec![Expr::Number(1.0)],
         type_args: vec![],
+        byte_offset: 0,
     })];
     let inc_button = nmc(
         "Button",
@@ -523,6 +525,7 @@ fn minimal_counter_app_emits_clean_page() {
                 }),
                 args: vec![],
                 type_args: vec![],
+                byte_offset: 0,
             },
             nmc(
                 "Button",

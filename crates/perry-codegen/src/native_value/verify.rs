@@ -38,6 +38,7 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 record.function, record.block_label, record.consumer
             ));
         }
+        validate_js_value_bits_record(record, &mut errors);
         if matches!(
             record.native_rep,
             NativeRep::NativeHandle | NativeRep::PromiseBoundary
@@ -259,6 +260,52 @@ fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
             | "class_field_get.raw_f64_load"
             | "class_field_set.raw_f64_store"
     )
+}
+
+fn validate_js_value_bits_record(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    if !matches!(record.native_rep, NativeRep::JsValueBits) {
+        return;
+    }
+    let prefix = || {
+        format!(
+            "{}:{} {}",
+            record.function, record.block_label, record.consumer
+        )
+    };
+    if record.native_abi_type.is_some() {
+        errors.push(format!(
+            "{} js_value_bits cannot be used as an external ABI descriptor",
+            prefix()
+        ));
+    }
+    if record.access_mode == Some(BufferAccessMode::DynamicFallback)
+        || record.fallback_reason.is_some()
+        || record.native_value_state == NativeValueState::DynamicFallback
+    {
+        errors.push(format!(
+            "{} js_value_bits cannot be a dynamic fallback record",
+            prefix()
+        ));
+    }
+    if record.materialization_reason.is_some()
+        || record.native_value_state == NativeValueState::Materialized
+    {
+        let transition = record
+            .native_abi_transition
+            .as_ref()
+            .or(record.scalar_conversion.as_ref());
+        if !transition.is_some_and(|conversion| {
+            conversion.from_native_rep == NativeRep::JsValue.name()
+                && conversion.to_native_rep == NativeRep::JsValueBits.name()
+                && conversion.op == NativeAbiTransitionOp::JsValueToBits
+                && !conversion.lossy
+        }) {
+            errors.push(format!(
+                "{} materialized js_value_bits record must carry js_value_to_bits transition",
+                prefix()
+            ));
+        }
+    }
 }
 
 fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
@@ -790,7 +837,8 @@ fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
     Some(match rep {
         NativeRep::JsValue | NativeRep::F64 => DOUBLE,
         NativeRep::F32 => F32,
-        NativeRep::I64
+        NativeRep::JsValueBits
+        | NativeRep::I64
         | NativeRep::U64
         | NativeRep::USize
         | NativeRep::HandleId
@@ -951,6 +999,12 @@ fn valid_native_abi_transition(
     lossy: bool,
     record_rep: &NativeRep,
 ) -> bool {
+    if to == NativeRep::JsValueBits.name() {
+        return matches!(record_rep, NativeRep::JsValueBits)
+            && from == NativeRep::JsValue.name()
+            && matches!(op, NativeAbiTransitionOp::JsValueToBits)
+            && !lossy;
+    }
     if to != NativeRep::JsValue.name() {
         return false;
     }
@@ -959,6 +1013,8 @@ fn valid_native_abi_transition(
     }
     match op {
         NativeAbiTransitionOp::None => matches!(from, "f64" | "js_value") && !lossy,
+        NativeAbiTransitionOp::JsValueToBits => false,
+        NativeAbiTransitionOp::BitsToJsValue => from == "js_value_bits" && !lossy,
         NativeAbiTransitionOp::SignedIntToFloat => {
             matches!(from, "i32" | "i64") && lossy == (from == "i64")
         }
@@ -1795,6 +1851,91 @@ mod tests {
             lossy: false,
         });
         assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn accepts_region_local_js_value_bits() {
+        let mut r = record();
+        r.semantic = SemanticKind::JsValue;
+        r.native_rep = NativeRep::JsValueBits;
+        r.native_rep_name = "js_value_bits".to_string();
+        r.llvm_ty = I64;
+        r.llvm_value = "%bits".to_string();
+        assert!(verify_native_rep_records(&[r]).is_ok());
+    }
+
+    #[test]
+    fn accepts_js_value_bits_materialization_transitions() {
+        let mut to_bits = record();
+        to_bits.semantic = SemanticKind::JsValue;
+        to_bits.native_rep = NativeRep::JsValueBits;
+        to_bits.native_rep_name = "js_value_bits".to_string();
+        to_bits.llvm_ty = I64;
+        to_bits.llvm_value = "%bits".to_string();
+        to_bits.native_value_state = NativeValueState::Materialized;
+        to_bits.materialization_reason = Some(MaterializationReason::FunctionAbi);
+        to_bits.native_abi_transition = Some(NativeAbiTransitionRecord {
+            from_native_rep: "js_value".to_string(),
+            to_native_rep: "js_value_bits".to_string(),
+            op: NativeAbiTransitionOp::JsValueToBits,
+            reason: MaterializationReason::FunctionAbi,
+            lossy: false,
+        });
+
+        let mut to_js_value = record();
+        to_js_value.semantic = SemanticKind::JsValue;
+        to_js_value.native_rep = NativeRep::JsValue;
+        to_js_value.native_rep_name = "js_value".to_string();
+        to_js_value.llvm_ty = DOUBLE;
+        to_js_value.llvm_value = "%boxed".to_string();
+        to_js_value.native_value_state = NativeValueState::Materialized;
+        to_js_value.materialization_reason = Some(MaterializationReason::ReturnAbi);
+        to_js_value.native_abi_transition = Some(NativeAbiTransitionRecord {
+            from_native_rep: "js_value_bits".to_string(),
+            to_native_rep: "js_value".to_string(),
+            op: NativeAbiTransitionOp::BitsToJsValue,
+            reason: MaterializationReason::ReturnAbi,
+            lossy: false,
+        });
+
+        assert!(verify_native_rep_records(&[to_bits, to_js_value]).is_ok());
+    }
+
+    #[test]
+    fn rejects_materialized_js_value_bits_without_transition() {
+        let mut r = record();
+        r.semantic = SemanticKind::JsValue;
+        r.native_rep = NativeRep::JsValueBits;
+        r.native_rep_name = "js_value_bits".to_string();
+        r.llvm_ty = I64;
+        r.llvm_value = "%bits".to_string();
+        r.native_value_state = NativeValueState::Materialized;
+        r.materialization_reason = None;
+        assert!(verify_native_rep_records(&[r]).is_err());
+    }
+
+    #[test]
+    fn rejects_js_value_bits_as_abi_or_fallback() {
+        let mut abi = record();
+        abi.semantic = SemanticKind::JsValue;
+        abi.native_rep = NativeRep::JsValueBits;
+        abi.native_rep_name = "js_value_bits".to_string();
+        abi.llvm_ty = I64;
+        abi.llvm_value = "%bits".to_string();
+        abi.native_abi_type = Some(abi_type("jsvalue", NativeAbiDirection::Param, Some(0), 0));
+        assert!(verify_native_rep_records(&[abi]).is_err());
+
+        let mut fallback = record();
+        fallback.semantic = SemanticKind::JsValue;
+        fallback.native_rep = NativeRep::JsValueBits;
+        fallback.native_rep_name = "js_value_bits".to_string();
+        fallback.llvm_ty = I64;
+        fallback.llvm_value = "%bits".to_string();
+        fallback.access_mode = Some(BufferAccessMode::DynamicFallback);
+        fallback.native_value_state = NativeValueState::DynamicFallback;
+        fallback.materialization_reason = Some(MaterializationReason::RuntimeApi);
+        fallback.fallback_reason = Some(MaterializationReason::RuntimeApi);
+        assert!(verify_native_rep_records(&[fallback]).is_err());
     }
 
     #[test]

@@ -72,9 +72,9 @@ pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
                 0,
                 240,
                 180,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             );
             let Ok(hwnd) = hwnd else {
@@ -105,8 +105,8 @@ pub fn create(year: i64, month: i64, on_change: f64) -> i64 {
             let _ = SendMessageW(
                 hwnd,
                 MCM_SETCURSEL,
-                WPARAM(0),
-                LPARAM(&st as *const _ as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(&st as *const _ as isize)),
             );
             handle
         }
@@ -133,8 +133,8 @@ pub fn set_date(handle: i64, year: i64, month: i64, day: i64) {
             SendMessageW(
                 hwnd,
                 MCM_SETCURSEL,
-                WPARAM(0),
-                LPARAM(&st as *const _ as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(&st as *const _ as isize)),
             );
         }
     }
@@ -156,8 +156,8 @@ pub fn get_selected_date(handle: i64) -> f64 {
             SendMessageW(
                 hwnd,
                 MCM_GETCURSEL,
-                WPARAM(0),
-                LPARAM(&mut st as *mut _ as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(&mut st as *mut _ as isize)),
             );
         }
         let iso = format!("{:04}-{:02}-{:02}", st.year, st.month, st.day);
@@ -191,8 +191,8 @@ pub fn handle_selection_change(handle: i64) {
         SendMessageW(
             hwnd,
             MCM_GETCURSEL,
-            WPARAM(0),
-            LPARAM(&mut st as *mut _ as isize),
+            Some(WPARAM(0)),
+            Some(LPARAM(&mut st as *mut _ as isize)),
         );
     }
     let iso = format!("{:04}-{:02}-{:02}", st.year, st.month, st.day);

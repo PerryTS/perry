@@ -669,11 +669,22 @@ fn resolve_exports_with_conditions(
 }
 
 /// Resolve exports field from package.json for executable module entries.
+///
+/// `node` is ranked ABOVE `default` (and above `import`/`module`) because perry
+/// compiles a Node target: a package whose `exports` offers a `{ node, default }`
+/// conditional pair ships its full Node API under `node` and a reduced
+/// browser/edge build under `default`. Picking `default` drops Node-only
+/// exports — e.g. `unicorn-magic` exposes `toPath`/`traversePathUp` only in its
+/// `node` entry (`./node.js`); resolving `./default.js` left them undefined, so
+/// `npm-run-path` (→ execa) failed to LINK (`undefined symbol
+/// perry_fn_…unicorn_magic…__toPath`). Matches the `resolve_subpath_import`
+/// condition order (chalk's `#supports-color` `{ node, default }`); the two
+/// resolvers must agree.
 pub(super) fn resolve_exports(exports: &serde_json::Value, subpath: &str) -> Option<String> {
     resolve_exports_with_conditions(
         exports,
         subpath,
-        &["perry", "import", "module", "default", "require", "node"],
+        &["perry", "node", "import", "module", "default", "require"],
     )
 }
 
@@ -718,7 +729,15 @@ pub(super) fn resolve_exports_candidates(
     exports: &serde_json::Value,
     subpath: &str,
 ) -> Vec<String> {
-    const CONDITIONS: &[&str] = &["perry", "import", "module", "default", "require", "node"];
+    // `node` ranked above `default` (perry compiles a Node target): a
+    // `{ node, default }` conditional pair must resolve the Node build, not the
+    // reduced browser/edge `default`. Candidates are collected in this order
+    // and the caller picks the first that exists on disk, so listing `node`
+    // first makes the Node entry win. (unicorn-magic exposes toPath/
+    // traversePathUp only in `./node.js`; resolving `./default.js` left them
+    // undefined → npm-run-path → execa LINK failure.) Mirrors `resolve_exports`
+    // / `resolve_subpath_import`.
+    const CONDITIONS: &[&str] = &["perry", "node", "import", "module", "default", "require"];
     fn collect(value: &serde_json::Value, subpath: &str, out: &mut Vec<String>) {
         match value {
             serde_json::Value::String(s) => {

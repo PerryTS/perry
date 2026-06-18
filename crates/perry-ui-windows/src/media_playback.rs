@@ -323,16 +323,19 @@ pub fn set_now_playing(
         if !entry.smtc_installed {
             use windows::Foundation::TypedEventHandler;
             let player_handle = handle;
-            let _ = smtc.ButtonPressed(&TypedEventHandler::new(move |_, args| {
-                if let Some(args) = args {
-                    let args: &windows::Media::SystemMediaTransportControlsButtonPressedEventArgs =
-                        args;
-                    if let Ok(button) = args.Button() {
-                        enqueue_button(player_handle, button);
+            let _ = smtc.ButtonPressed(&TypedEventHandler::new(
+                move |_: windows::core::Ref<windows::Media::SystemMediaTransportControls>,
+                      args: windows::core::Ref<
+                    windows::Media::SystemMediaTransportControlsButtonPressedEventArgs,
+                >| {
+                    if let Some(args) = args.as_ref() {
+                        if let Ok(button) = args.Button() {
+                            enqueue_button(player_handle, button);
+                        }
                     }
-                }
-                Ok(())
-            }));
+                    Ok(())
+                },
+            ));
             entry.smtc_installed = true;
         }
 

@@ -7,7 +7,9 @@ use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
 
 use crate::expr::{lower_expr, FnCtx};
-use crate::type_analysis::{is_bool_expr, is_numeric_expr};
+use crate::type_analysis::{
+    expr_may_return_boxed_value_from_raw_f64_fallback, is_bool_expr, is_numeric_expr,
+};
 use crate::types::{DOUBLE, I32, I64};
 
 /// Convert a lowered condition value to an `i1` for `cond_br`.
@@ -30,7 +32,9 @@ use crate::types::{DOUBLE, I32, I64};
 /// a function call but produces correct results across the entire JS
 /// truthiness table.
 pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr) -> String {
-    if is_numeric_expr(ctx, cond_expr) {
+    if is_numeric_expr(ctx, cond_expr)
+        && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, cond_expr)
+    {
         return ctx.block().fcmp("one", cond_val, "0.0");
     }
     if is_bool_expr(ctx, cond_expr) {

@@ -1,3 +1,519 @@
+## v0.5.1189 — feat: synchronous computed `require(expr)` resolves compiled package modules — Tier 2 of #5389
+
+Builds on the Tier 1 ambient `require` (v0.5.1183). A **computed** `require(expr)`
+in a compiled external/compilePackages module — where the specifier is not a
+string literal but *does* const-fold to a finite set (ternary of literals, a
+module-`const`, or a directory-anchored template glob) — now resolves
+**synchronously** to the target compiled-module namespace, reusing the exact
+dynamic-`import()` path resolver. Previously every non-literal `require` fell back
+to the ambient closure, which only handles builtins (packages threw
+`ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`).
+
+**Mechanism** — `require(expr)` is the synchronous CJS analog of `import(expr)`,
+so it reuses the whole pipeline with one new bit:
+
+- `crates/perry-hir/src/ir/expr.rs` — new `synchronous: bool` field on
+  `Expr::DynamicImport` (`false` for ESM `import()`, `true` for CJS `require()`).
+- `crates/perry-hir/src/lower/expr_call/intrinsics.rs` — new `try_dynamic_require`:
+  a bare unshadowed `require` with a non-literal arg in an external module lowers
+  to `DynamicImport { synchronous: true }`. Literals stay on the existing
+  `try_require_literal` path; gated to `is_external_module`. Wired into the call
+  dispatch right after `try_require_literal`.
+- `crates/perry/src/commands/compile/collect_modules.rs` — the existing dynamic-
+  import const-folder/globber populates `paths` and registers each target as a
+  dynamic import edge **unchanged**. New: an *unresolved* synchronous node records
+  an empty path set (ambient fallback) instead of the `import()` deferred-reject /
+  strict error.
+- `crates/perry-codegen/src/expr/dyn_extern_i18n.rs` — new `lower_dynamic_require`:
+  emits the same single-/multi-target `js_string_equals` dispatch as `import()`,
+  but returns the namespace value **directly** (no `Promise` wrap) and uses the
+  ambient require (`js_module_ambient_require_apply`, new in
+  `crates/perry-runtime/src/module_require.rs`) as the unresolved / no-match
+  fallthrough (builtin-or-throw) rather than a rejected promise. Namespace
+  construction for the three target kinds (native submodule / native builtin /
+  compiled module) is factored into `namespace_value_for_prefix`.
+
+**Behavior** (external/compilePackages modules): `require(flag ? "./a" : "./b")`,
+`require(SPEC)` (module-const), and `` require(`./plugins/${name}`) `` (glob;
+runtime string must equal the file specifier incl. extension, same contract as
+`import()`) all resolve to the compiled namespaces synchronously. A specifier that
+does not const-fold (`["n","o",…].join("")`) still routes through the Tier 1
+ambient require — builtins resolve, unknown packages throw the descriptive error.
+**Out of scope (by design):** genuinely runtime-computed *package* strings, same
+boundary as dynamic `import()` in an AOT binary. New regression test
+`computed_require_const_folds_to_compiled_package_modules`; dynamic-`import()`
+suite (`module_import_forms`) and the Tier 1 tests stay green.
+
+## v0.5.1188 — fix(codegen): unknown builtin-namespace member reads as `undefined`, not `0` (#5347)
+
+Reading a property that does not exist on a builtin global namespace object —
+`Reflect.enumerate`, `Math.bogus`, `JSON.bogus`, `Object.bogus`, `Number.bogus`,
+… — produced the JS number `0` instead of `undefined`, so `typeof Math.bogus`
+was `"number"` and feature-detection like `Reflect.enumerate === undefined`
+(the method was removed from the spec) was `false`.
+
+The HIR collapses every builtin global receiver to the `GlobalGet(0)` sentinel,
+so codegen routes these value reads by property name alone
+(`crates/perry-codegen/src/expr/property_get.rs`). The fall-through for an
+unrecognized member returned `double_literal(0.0)`; it now returns the
+`TAG_UNDEFINED` NaN-box — a spec-correct property miss for every namespace.
+Recognized statics (`Math.PI`, `Reflect.get`, `JSON.stringify`, `Promise.*`,
+`Error.*`, `process.env`, the `globalThis` builtin names) are special-cased
+above the fall-through and are unchanged. Fixes test262
+`built-ins/Reflect/enumerate/undefined.js`; regression-pinned by
+`crates/perry/tests/builtin_namespace_unknown_member.rs`.
+
+## v0.5.1187 — fix(ci): per-PR cargo-test — per-package runs + don't fan into FFI shims (feature-unification link errors)
+
+Follow-up to #5411/#5413. Two more issues made the fast per-PR path fail on
+foundational diffs (#5402):
+
+1. **Feature-unification link errors.** Testing several crates in ONE
+   `cargo test --lib --bins -p A -p B ...` invocation unifies perry-runtime's
+   cargo features across them. A crate that enables an optional impl (e.g.
+   `fetch`) turns on perry-runtime's reference to `js_fetch_with_options`, whose
+   definition lives in a *separate* crate (perry-ext-fetch / perry-stdlib) that
+   the other test binaries don't link → `undefined reference` at link. Fix: run
+   **each crate in its own `cargo test` invocation** so feature sets stay isolated
+   (mirrors how the pre-#5411 job looped per-package).
+2. **Over-broad fan-out.** A perry-runtime change reverse-dep-closured into ~40
+   FFI-shim crates (`perry-ext-*`, perry-stdlib), each triggering a perry-runtime
+   feature rebuild. Those crates' UNIT tests are self-contained pure-Rust logic
+   that don't exercise runtime internals (the nightly full run + perry's
+   integration tests cover that interaction). Fix: `ci_test_scope.py` no longer
+   fans *into* `perry-ext-*` / perry-stdlib (`_is_fanout_leaf`); a direct change
+   to one still selects it. A perry-runtime change now selects 4 crates (perry,
+   perry-ffi, perry-runtime, perry-updater) instead of ~50.
+
+Net: per-PR cargo-test on a perry-runtime/codegen/hir change runs ~12 core-crate
+unit-test suites per-package, validated locally green in ~2 min warm.
+
+## v0.5.1186 — fix(ci): per-PR cargo-test link-OOM — serialize fast-path links + skip zero-unit-test crates
+
+The #5411 fast per-PR path built every affected crate's unit-test binary in one
+unbounded-parallel `cargo test --lib --bins -p ...` invocation. Each test binary
+statically links the whole runtime, so a wide-fan-out diff (a perry-runtime change
+selects ~50 crates) linked ~50 huge binaries at once and the runner OOMed
+(`linking with \`cc\` failed`) — the exact failure the FULL path avoids with
+`CARGO_BUILD_JOBS=1`. Surfaced on #5402 (Tier 2 touches perry-runtime).
+
+- `.github/workflows/test.yml` — the fast path now sets `CARGO_BUILD_JOBS=1`
+  (serialize the heavy links; no OOM) and filters the scope through
+  `ci_test_scope.py --with-tests`, dropping crates with no `src/` unit tests
+  (~13 zero-test FFI shims in the wide case) whose lib test binary would link the
+  runtime for zero tests.
+- `scripts/ci_test_scope.py` — new `--with-tests` mode: prints the subset of stdin
+  package names whose `src/` contains a `#[test]` / `#[tokio::test]` (unit tests
+  the `--lib --bins` filter actually runs; integration-only crates are excluded).
+
+## v0.5.1185 — perf(ci): make per-PR cargo-test fast (<10 min) — unit tests for affected crates; integration tests move to nightly/tags
+
+The `cargo-test` gate took ~90 min: it built the **entire workspace** in debug,
+serially (`CARGO_BUILD_JOBS=1` + `cargo clean` between packages, a 14 GB-disk
+workaround), and 30/40 perry **integration** test files (`tests/*.rs`) each shell
+out to `perry compile` on the **auto-optimize** path — a whole-program optimized
+rebuild, ~4–6 min apiece, and concurrent auto-opt builds thrash a shared target
+so they can't be parallelized. That made the gate roughly worthless on every PR.
+
+Per-PR `cargo-test` is now two things at once — **scoped** and **unit-only**:
+
+1. **Scoped to the diff** (`scripts/ci_test_scope.py`): test only each changed
+   `crates/<dir>` plus its **reverse-dependency closure** (a foundational-crate
+   change still fans out). Runtime-linked crates (`perry-stdlib`, `perry-ffi`,
+   `perry-ext-*`) add a `perry` edge (the driver links those archives at runtime,
+   not via cargo). Infra changes (`.github/`, `scripts/`, `rust-toolchain*`) or
+   any unrecognized path → full; metadata-only changes (`CHANGELOG.md`,
+   `CLAUDE.md`, `*.md`, `docs/`, root `Cargo.toml`/`Cargo.lock`) → nothing (a
+   version-bump PR is instantly green).
+2. **Unit / lib / bin tests only** (`cargo test --lib --bins`): the slow
+   auto-optimize integration tests are **not** run per-PR. Unit-test binaries are
+   small, so builds parallelize safely (no serialization / clean churn) and there
+   is no staticlib to build. This is the part that bounds the per-PR wall-clock.
+
+The **full** suite — including every integration test — runs on **release tags**,
+a new **nightly `schedule`** (04:00 UTC), `workflow_dispatch`, and any PR labeled
+`run-extended-tests`. Release tags gate publishing, so nothing ships untested;
+the nightly run is the cross-crate / integration regression backstop (main pushes
+don't trigger Tests today). `test.yml` branches the cargo-test step on
+`github.event_name`: `pull_request` → fast path; everything else → full.
+
+Trade-off (chosen deliberately, prioritizing a usable per-PR gate): a regression
+only an integration test would catch lands on a PR and is caught by the nightly /
+release-tag full run rather than at PR time.
+
+Three pre-existing CI fragilities on `main` were turning required checks red for
+PRs. Fixed together since all are "make main's CI green again."
+
+### 0. cargo-test never builds the runtime staticlib (latent; surfaced by fix #1)
+
+The `cargo-test` job runs `cargo test -p perry-runtime`, which only builds
+lib/bin/test targets — **not** the `staticlib` crate-type — so
+`libperry_runtime.a` / `libperry_stdlib.a` are never produced by the job and only
+exist when restored from the rust-cache. Integration tests that compile with
+`PERRY_NO_AUTO_OPTIMIZE=1` (e.g. `functional_batch2_regressions`) link the
+prebuilt archive directly, so the moment a PR touches perry-runtime/perry-stdlib
+the cached staticlib is invalidated, cargo never rebuilds it, and those tests fail
+with `Could not find libperry_runtime.a`. Fix #1 below touches perry-runtime and
+hit exactly this. Fix: add an explicit `cargo build -p perry-runtime -p
+perry-stdlib` to the cargo-test job before the integration-test loop so the
+staticlibs exist regardless of cache state.
+
+### 1. dead-stripped runtime symbol breaks cold runtime-only compiles (cargo-test)
+
+`js_array_numeric_value_to_raw_f64` (added by #5291 for representation-aware
+numeric array lowering, `crates/perry-runtime/src/array/header.rs`) is
+`#[no_mangle]` but is only ever called from generated machine code — nothing in
+the runtime crate references it. Without a `#[used]` anchor the linker dead-strips
+it from `libperry_runtime.a`, so any cold `PERRY_NO_AUTO_OPTIMIZE=1` compile of a
+program that triggers that lowering fails at link with `Undefined symbols:
+_js_array_numeric_value_to_raw_f64`. This surfaced as 5 failing
+`functional_batch2_regressions` tests. Fix: add the `#[used]` keepalive anchor
+(same pattern as the auto-optimize keepalives in `error.rs`; see
+project_autoopt_ffi_symbol_link_break). This regression class is normally
+CI-invisible because warm staticlib caches mask it.
+
+### 2. link/mod.rs over the file-size gate (lint)
+
+`crates/perry/src/commands/compile/link/mod.rs` crossed the 2000-line file-size
+gate (2132 lines) after #5400 grew the Windows response-file path, turning the
+`lint` job red for every PR branched off main. Split the single ~1770-line
+`build_and_run_link` orchestrator (the only oversized item) into a sibling
+`link/build_and_run.rs`, leaving mod.rs at 357 lines and the new file at 1785.
+Pure mechanical move (`use super::*`; `build_and_run_link` is now `pub(crate)`,
+re-exported from mod.rs; five compile-module paths became `super::super::…`).
+
+Pure mechanical move, no behavior change:
+
+- The function moved verbatim; `use super::*` pulls in every helper that stays in
+  the parent `link` module (the `NativeBackendLinkMetadata` selection, the
+  `resolve_optional_framework_dir` / `find_project_root_for` /
+  `rewrite_link_with_response_file` / `quote_response_arg` / `response_file_contents`
+  helpers, and the sibling-module re-exports).
+- `build_and_run_link` is now `pub(crate)` (was `pub(super)`) so mod.rs can
+  re-export it to the parent `compile` module via
+  `pub(super) use build_and_run::build_and_run_link;`.
+- The five fully-qualified paths that reached into the `compile` module
+  (`library_search::`, `sandbox_buildrs::`, `optimized_libs::`,
+  `run_lock_verify_for_compile`, `find_perry_workspace_root`) became
+  `super::super::…` from the new two-level-deep module.
+
+All 599 perry bin unit tests pass (including the link `response_file_tests` /
+`native_package_selection_tests` / `optional_framework_dir_tests`); a hello-world
+compile+link round-trips through the moved driver.
+
+## v0.5.1184 — fix: unblock main CI — dead-stripped symbol + cargo-test staticlib + oversized link/mod.rs
+
+Three pre-existing CI fragilities on `main` were turning required checks red for
+PRs. Fixed together since all are "make main's CI green again."
+
+### 0. cargo-test never builds the runtime staticlib (latent; surfaced by fix #1)
+
+The `cargo-test` job runs `cargo test -p perry-runtime`, which only builds
+lib/bin/test targets — **not** the `staticlib` crate-type — so
+`libperry_runtime.a` / `libperry_stdlib.a` are never produced by the job and only
+exist when restored from the rust-cache. Integration tests that compile with
+`PERRY_NO_AUTO_OPTIMIZE=1` (e.g. `functional_batch2_regressions`) link the
+prebuilt archive directly, so the moment a PR touches perry-runtime/perry-stdlib
+the cached staticlib is invalidated, cargo never rebuilds it, and those tests fail
+with `Could not find libperry_runtime.a`. Fix #1 below touches perry-runtime and
+hit exactly this. Fix: add an explicit `cargo build -p perry-runtime -p
+perry-stdlib` to the cargo-test job before the integration-test loop so the
+staticlibs exist regardless of cache state.
+
+### 1. dead-stripped runtime symbol breaks cold runtime-only compiles (cargo-test)
+
+`js_array_numeric_value_to_raw_f64` (added by #5291 for representation-aware
+numeric array lowering, `crates/perry-runtime/src/array/header.rs`) is
+`#[no_mangle]` but is only ever called from generated machine code — nothing in
+the runtime crate references it. Without a `#[used]` anchor the linker dead-strips
+it from `libperry_runtime.a`, so any cold `PERRY_NO_AUTO_OPTIMIZE=1` compile of a
+program that triggers that lowering fails at link with `Undefined symbols:
+_js_array_numeric_value_to_raw_f64`. This surfaced as 5 failing
+`functional_batch2_regressions` tests. Fix: add the `#[used]` keepalive anchor
+(same pattern as the auto-optimize keepalives in `error.rs`; see
+project_autoopt_ffi_symbol_link_break). This regression class is normally
+CI-invisible because warm staticlib caches mask it.
+
+### 2. link/mod.rs over the file-size gate (lint)
+
+`crates/perry/src/commands/compile/link/mod.rs` crossed the 2000-line file-size
+gate (2132 lines) after #5400 grew the Windows response-file path, turning the
+`lint` job red for every PR branched off main. Split the single ~1770-line
+`build_and_run_link` orchestrator (the only oversized item) into a sibling
+`link/build_and_run.rs`, leaving mod.rs at 357 lines and the new file at 1785.
+Pure mechanical move (`use super::*`; `build_and_run_link` is now `pub(crate)`,
+re-exported from mod.rs; five compile-module paths became `super::super::…`).
+
+Pure mechanical move, no behavior change:
+
+- The function moved verbatim; `use super::*` pulls in every helper that stays in
+  the parent `link` module (the `NativeBackendLinkMetadata` selection, the
+  `resolve_optional_framework_dir` / `find_project_root_for` /
+  `rewrite_link_with_response_file` / `quote_response_arg` / `response_file_contents`
+  helpers, and the sibling-module re-exports).
+- `build_and_run_link` is now `pub(crate)` (was `pub(super)`) so mod.rs can
+  re-export it to the parent `compile` module via
+  `pub(super) use build_and_run::build_and_run_link;`.
+- The five fully-qualified paths that reached into the `compile` module
+  (`library_search::`, `sandbox_buildrs::`, `optimized_libs::`,
+  `run_lock_verify_for_compile`, `find_perry_workspace_root`) became
+  `super::super::…` from the new two-level-deep module.
+
+All 599 perry bin unit tests pass (including the link `response_file_tests` /
+`native_package_selection_tests` / `optional_framework_dir_tests`); a hello-world
+compile+link round-trips through the moved driver.
+
+## v0.5.1183 — feat(hir): ambient `require` in compiled compilePackages modules — Tier 1 of #5389 (fixes #5373)
+
+A bare or **computed** `require(expr)` inside a `compilePackages`-compiled module
+threw `ReferenceError: require is not defined`. Only a **literal** `require('pkg')`
+is rewritten to an import at compile time; a non-literal callee fell through the
+HIR ident-read path to `js_global_get_or_throw_unresolved("require")`, and no
+ambient `require` binding was emitted (`require` is absent from
+`is_known_global_identifier_name`). `createRequire(import.meta.url)` from a
+`module` import worked, so the reporter (#5373) had a workaround — but a dynamic
+`require()` should keep working out of the box.
+
+**Tier 1 fix** (Tier 2 — static package/relative resolution for const-foldable
+specifiers — is tracked separately in #5389):
+
+- `crates/perry-hir/src/lower/lower_expr.rs` — in the ident-read fall-through, bind
+  a bare unshadowed `require` to a createRequire-backed closure (new
+  `js_module_ambient_require()` runtime entry) instead of the throwing global read.
+  Reaching this arm means `require` is unshadowed (a local/func/imported/native
+  binding matches an earlier arm). Also fold `typeof require` to `"function"` so the
+  common `typeof require === 'function'` capability guard works.
+- **Gated to `ctx.is_external_module`.** In first-party source the bare-`require`
+  compile error (#668, "use a static import") is deliberate and is left unchanged —
+  verified an ESM entry still reports `typeof require === 'undefined'`.
+- `crates/perry-runtime/src/module_require.rs` — `js_module_ambient_require()`
+  returns the same `make_require(undefined())` closure as `createRequire`, with a
+  `#[used]` keepalive anchor (generated-code-only callee; auto-optimize dead-strip
+  guard). `crates/perry-codegen/src/runtime_decls/strings.rs` declares the extern.
+
+**Behavior now** (external/compilePackages modules only): computed `require(builtin)`
+(e.g. `node:os`) resolves by string; computed `require(package)` throws the
+descriptive `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE` instead of a confusing
+`ReferenceError`; `typeof require === 'function'`; a shadowing local `require`
+still wins. New regression test
+`ambient_require_in_compiled_package_resolves_builtins_without_reference_error` in
+`crates/perry/tests/create_require_package.rs`; existing
+`create_require_package_specifier_reports_unsupported_interop` and the
+`create_require_literal_*` test remain green.
+
+## v0.5.1182 — fix(hir): native-builtin require destructuring stranded on a pre-registered module-var slot (#5364 × #5216 merge skew)
+
+`const { createInterface } = require("readline")` (and every destructured
+native/Node-builtin `require`) regressed to `undefined` for the bound leaf on
+`main` after v0.5.1180 — a merge-skew interaction between two independently-green
+PRs:
+
+- **#5216** lowers `const { x } = require("<native>")` by registering each
+  destructured leaf as a *native-module alias* (`register_native_module`) and
+  skipping the runtime local, so `x` / `typeof x` resolves through the static
+  native table — exact `import { x } from "<native>"` parity.
+- **#5364** taught the module-level forward-declaration pass to *pre-register*
+  destructuring leaves as module-var locals (fixing semver's bottom-of-file
+  cyclic `const { safeRe, t } = require('../internal/re')`).
+
+Together, the native-alias leaf now also had a pre-registered module-var local
+that was never written (its runtime destructuring is skipped). A bare `x` read
+resolved to that stale `undefined` local and shadowed the native alias →
+`typeof createInterface === "undefined"`. The `require_native_builtin_lowers_like_namespace_import`
+gap test (correct as written) caught it; each PR was green on its own base, so
+it slipped in only at the merged HEAD and failed the `cargo-test` gate, blocking
+the v0.5.1181 publish.
+
+Fix (`destructuring/var_decl_sources.rs`): in the native-alias branches
+(generic resolvable-native modules + `net`'s skipped factory leaves), drop the
+pre-registered module-var local via `ctx.remove_local_binding(&binding)` — the
+same thing the simple-ident `register_require_namespace_binding` path already
+does — so the leaf resolves to the native table, not a stranded local. The
+relative/file-require path that #5364 targets (`require('../internal/re')`) is
+not a resolvable native specifier, so it never enters these branches and keeps
+#5364's behavior unchanged. Verified: all 6 `module_import_forms` tests pass and
+#5364's `test_cjs_module_destructure_after_class.sh` still passes.
+
+## v0.5.1181 — fix(perry-ui-windows): migrate to windows / windows-core 0.62 (unblock Windows release publish)
+
+The v0.5.1180 release packaged macOS, Linux and Android, but **published
+nothing**: every publish job in `release-packages.yml` (`npm-publish`,
+`homebrew`, `apt`, `apt-repo`, `winget`, `update-workers`) is `needs: build`,
+and the `build` matrix's Windows leg failed to compile, collapsing the whole
+`build` job to `failure` and skipping all publishers. Only the GitHub Release
+page (notes + source tarball) shipped.
+
+Root cause: Dependabot PR #5300-era bump `c0f46f07e` raised `webview2-com` to
+`=0.39`, which resolves `windows` / `windows-core` to **0.62.2** — but
+`crates/perry-ui-windows/Cargo.toml` still pinned `windows` / `windows-core` at
+`0.58`. The webview2 COM interfaces (`ICoreWebView2`, etc.) were then a
+different crate version than perry's own `HWND` / `RECT` / `PCWSTR` / `PWSTR` /
+`Interface` types, so the WebView2 boundary in `widgets/webview.rs` failed to
+type-check (the in-file comment had warned this exact skew would break the
+build).
+
+Fix: align `perry-ui-windows` to `windows` / `windows-core` `0.62` and migrate
+the crate's source to the 0.62 API surface. This is a mechanical,
+behavior-preserving migration across ~47 files:
+
+- **`Option<HANDLE>` parameters**: many Win32 calls now take `Option<…>`
+  (`SendMessageW`/`PostMessageW` WPARAM/LPARAM, `InvalidateRect` / `SetParent`
+  / `ReleaseDC` / `SetFocus` / `SetWindowPos` / `CreateWindowExW` /
+  `SetTimer` / … HWND/HMENU/HINSTANCE) — present handles wrapped in `Some(…)`.
+- **GDI objects**: `DeleteObject` / `SelectObject` / `GetObjectW` now take
+  `HGDIOBJ`; `HBRUSH`/`HPEN`/`HFONT`/`HBITMAP` converted via `.into()`.
+- **`CreateFontW`**: charset / precision / quality integer args wrapped in
+  their 0.62 newtypes (`FONT_CHARSET` / `FONT_OUTPUT_PRECISION` /
+  `FONT_CLIP_PRECISION` / `FONT_QUALITY`).
+- **`BOOL`** moved from `windows::Win32::Foundation` to `windows::core`.
+- **`#[implement]` COM authoring** (`drag_drop.rs`) and a winrt
+  `TypedEventHandler` (`media_playback.rs`): 0.62 passes interface args as
+  `windows::core::Ref<'_, T>` instead of `Option<&T>`; signatures + bodies
+  (`pdataobj.as_ref()`) updated accordingly.
+- **`widgets/webview.rs`**: `#[implement]` macros now come from
+  `windows-core`'s re-export (the `windows` `implement` feature was removed in
+  0.62); `Error::from_win32()` replaced with
+  `Error::from(HRESULT::from_win32(GetLastError().0))`; event-registration
+  tokens are now `i64` (`add_NavigationStarting` / `add_NavigationCompleted`
+  take `*mut i64`).
+
+Verified by cross-compiling the crate to `x86_64-pc-windows-msvc` from macOS
+via `cargo-xwin` (`cargo xwin check -p perry-ui-windows --target
+x86_64-pc-windows-msvc` → clean) — the Windows build is not exercised by the
+PR `Tests` matrix (only by `release-packages.yml` on a tag), so local
+cross-check is the pre-merge gate. `perry-ui-windows` was the sole failing
+crate in the v0.5.1180 Windows build, so this restores both the
+`build (windows)` and `build-cross (perry-ui-windows)` legs and lets the
+publish jobs run.
+
+## v0.5.1180 — ci: warm the main-scoped CI cache so PRs stop building cold
+
+Follow-up to v0.5.1179. Moving sccache to a persisted disk cache was necessary
+but not sufficient: `test.yml` runs only on pull_request + version tags, never
+on push to main. GitHub Actions cache scoping lets a run restore caches from its
+own branch or the default branch (main) — but never another PR's — so with
+nothing running the cache-producing build on main, no main-scoped cache ever
+existed and every PR started cold. (The same flaw silently disabled
+`Swatinem/rust-cache`: its `save-if: refs/heads/main` never fired because
+test.yml doesn't run on main, so target/ was never saved either.)
+
+New `cache-warm.yml`: on every push to main that touches Rust (`crates/**`,
+`Cargo.toml`, `Cargo.lock`), compile — `--no-run` — the test binaries of the
+heaviest crates (`perry-runtime`, `perry-stdlib`, `perry-codegen`, `perry`),
+which pull in essentially the whole dependency graph. It saves under the SAME
+`rust-cache` shared-key (`<os>-perry`) and sccache key prefix
+(`sccache-<os>-perry-`) that test.yml's jobs restore, so the main-scoped caches
+now exist for every PR to pick up. The job is `continue-on-error` (a cache warm,
+never a gate), prunes test binaries between crates to stay within the runner
+disk budget, and uses `concurrency` to cancel superseded warms.
+
+Expected effect: after the first warm run lands on main, PR `cargo-test` should
+restore a warm cache and run ~50-60 min instead of ~90-103 min cold. No
+production code changes.
+
+## v0.5.1179 — ci: move sccache off the GHA backend onto a persisted disk cache (fix cargo-test timeouts)
+
+The `cargo-test` gate was timing out at its 120-min cap on PRs that touch
+`perry-runtime`/`perry-codegen`, and even successful runs were taking 90-103 min
+(not the "~45-50 min" the stale comment claimed). Root cause: sccache was using
+the GitHub Actions cache backend (`SCCACHE_GHA_ENABLED=true`), which stores one
+cache object per compilation unit. GitHub's cache service throttled and
+LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k objects
+(≈35 min of write time) yet the next run got essentially **zero** Rust cache
+hits (measured on a timed-out run: 3 hits / 3209 misses, 613 write errors). Every
+run effectively recompiled the whole dependency graph cold. `SCCACHE_CACHE_SIZE`
+was a silent no-op under the GHA backend, so the old `2G` never mattered.
+
+Changes (all three sccache jobs — `cargo-test`, `api-docs-drift`,
+`compiler-output-regression` — which compile overlapping crate graphs):
+
+- Switch sccache to a **local disk cache** (`SCCACHE_DIR`, `SCCACHE_GHA_ENABLED=false`,
+  `SCCACHE_CACHE_SIZE=12G`) persisted as a single tarball via `actions/cache@v4`.
+  The cache key is `sccache-<os>-perry-<job>-<run_id>` with a shared
+  `sccache-<os>-perry-` restore-keys prefix, so every run (PRs included) saves
+  its own entry while restoring the most recent one from any of the three jobs —
+  the object cache warms continuously and cross-pollinates instead of starting
+  cold each run.
+- Raise the `cargo-test` `timeout-minutes` 120 → 180 as headroom while the disk
+  cache warms (cold runs are ~90-103 min); can be lowered once warm hit rates are
+  confirmed.
+
+No production code changes.
+
+## v0.5.1178 — perf(codegen): outline per-new-site inline allocator (smaller IR + faster)
+
+`new ClassName(...)` previously emitted the full object-allocation prologue
+inline at every call site. That bloated the IR (and the resulting binary) and
+slowed codegen/compile. The allocation now calls the outlined runtime helper
+`js_object_alloc_class_inline_keys`, so each new-site shrinks to a single call.
+Complementary to #5304 (which outlined the constructor *call*); this outlines
+the *allocation*. The two touch different regions of `lower_call/new.rs`.
+
+Two supporting changes:
+
+- **Runtime (#4717):** folded the field-slot zero-fill into
+  `js_object_alloc_class_inline_keys`. The allocation moved out of per-site
+  codegen, where callers used to zero-fill `max(field_count, 8)` slots by hand;
+  doing it inside the helper keeps every caller — including the outlined `new C()`
+  path — correct by construction. Without it, a field read-before-write or a GC
+  scan of the still-constructing instance could observe stale recycled arena
+  bytes.
+- Split the `FieldInitMode` enum + `apply_field_initializers_recursive` walker
+  out of `lower_call/new.rs` into a sibling `field_init.rs` (pure move) to keep
+  the file under the 2,000-LOC CI size gate.
+
+## v0.5.1177 — fix(codegen): injective function-symbol names (distinct names that sanitize alike)
+
+Two distinct module-level functions could mangle to the same LLVM symbol, so
+clang rejected the module with "invalid redefinition of function". Two root
+causes, both fixed:
+
+- `scoped_fn_name` used the lossy `sanitize` (every non-`[A-Za-z0-9_]` byte →
+  `_`), so minified names like `$Z5` and `_Z5` both became
+  `perry_fn_<mod>___Z5`. Switched to the injective `sanitize_member` (the same
+  mangler `scoped_static_method_name` already uses); byte-identical for the
+  common `[A-Za-z0-9_]` case. `func_names` is keyed by func id and every call
+  site resolves through it, so changing the mangling stays consistent.
+- Minified code reuses short names (`function A`) across scopes, and perry
+  lambda-lifts nested functions to module level, so two module functions can
+  legitimately share a name. `compile_module` now disambiguates collisions
+  with a `__dupN` suffix keyed by the mangled symbol. Exported functions are
+  referenced cross-module by their canonical `scoped_fn_name`, so they reserve
+  their name first and never get suffixed.
+
+Sibling fix to the per-class class-keys-global disambiguation (5ac457967).
+
+## v0.5.1176 — fix(runtime): loose equality (`==`) now treats SSO short strings as strings
+
+`js_jsvalue_loose_equals` (the helper behind `assert.equal`/`assert.deepEqual`
+loose comparison) detected string operands with `is_string()`, which only
+matches heap `STRING_TAG` values and **not** `SHORT_STRING_TAG` SSO-inlined
+strings (length ≤ 5). When both operands were short strings, the function
+matched no arm — not number, not string, not bool — and fell through to
+`return 0`, so `"ab" == "ab"` and loose `assert.equal` on JSON-parsed short
+strings wrongly reported not-equal. The `to_number` coercion helper had the
+same `is_string()` gap, so `"5" == 5` also failed for SSO operands.
+
+Both sites now use `is_any_string()` and decode operands via
+`str_bytes_from_jsvalue` (a stack scratch buffer that handles SSO + heap),
+mirroring the strict-equality (`===`) path, which was already SSO-aware. This
+is a runtime-only change: codegen routes most `==` through other helpers
+(`js_loose_eq`, `js_dynamic_string_equals`), so the user-visible symptom was
+`assert.equal`/`assert.deepEqual` on short strings reporting inequality.
+
+Repro (failed before, passes now, matches `node --experimental-strip-types`):
+
+```ts
+import assert from "node:assert";
+const j: any = JSON.parse('{"k":"ab"}');
+assert.equal(j.k, "ab");                       // was: "Expected values to be loosely equal"
+assert.deepEqual({ x: "ab" }, JSON.parse('{"x":"ab"}'));
+```
+
+Found via an external code audit; verified reproducible before fixing.
+Added `value::equality::loose_eq_sso_tests` (SSO==SSO, SSO==heap, SSO vs
+number, empty-string coercion).
+
 ## v0.5.1175 — fix(http): `IncomingMessage.resume()`/`.pause()` return `this` so `res.resume().on('end', …)` chains (#4975)
 
 Part of the node:http/https behavioral-parity tail (#4975). `Readable.pause()`

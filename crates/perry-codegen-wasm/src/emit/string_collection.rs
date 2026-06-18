@@ -960,7 +960,7 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(a);
                 }
             }
-            Expr::NewDynamic { callee, args } => {
+            Expr::NewDynamic { callee, args, .. } => {
                 self.collect_strings_in_expr(callee);
                 for a in args {
                     self.collect_strings_in_expr(a);

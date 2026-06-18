@@ -739,6 +739,22 @@ pub(crate) fn value_bits_to_number(value_bits: u64) -> Option<f64> {
     Some(canonical_raw_f64(f64::from_bits(value_bits)))
 }
 
+#[no_mangle]
+pub extern "C" fn js_array_numeric_value_to_raw_f64(value: f64) -> f64 {
+    value_bits_to_number(value.to_bits()).unwrap_or(f64::NAN)
+}
+
+/// Keepalive anchor for the runtime-only link path (generated-code-only callee;
+/// see project_autoopt_ffi_symbol_link_break). Representation-aware numeric array
+/// lowering (#5291) emits calls to `js_array_numeric_value_to_raw_f64` from
+/// generated machine code only — nothing in the runtime crate references it — so
+/// without this `#[used]` anchor the linker dead-strips it from
+/// `libperry_runtime.a`, breaking cold `PERRY_NO_AUTO_OPTIMIZE=1` compiles with
+/// `Undefined symbols: _js_array_numeric_value_to_raw_f64`.
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern "C" fn(f64) -> f64 =
+    js_array_numeric_value_to_raw_f64;
+
 #[inline]
 fn canonical_raw_f64(value: f64) -> f64 {
     if value.is_nan() {

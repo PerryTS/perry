@@ -5,6 +5,63 @@ use super::*;
 use std::borrow::Cow;
 use std::path::Path;
 
+/// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
+/// bare identifier at runtime)? Used only to decide whether a CJS named export
+/// whose KEY equals such a name (`module.exports = { Error: Error }`) needs the
+/// mangled-rebinding emission so a module-scope `export const <name>` doesn't
+/// shadow the global for free references in the IIFE body. Deliberately limited
+/// to runtime VALUES (not TS-only utility types): an over-broad set would only
+/// route an unrelated export through the (correct) mangled re-export.
+fn is_global_value_builtin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Error"
+            | "TypeError"
+            | "RangeError"
+            | "SyntaxError"
+            | "ReferenceError"
+            | "EvalError"
+            | "URIError"
+            | "AggregateError"
+            | "SuppressedError"
+            | "Object"
+            | "Function"
+            | "Array"
+            | "Boolean"
+            | "Number"
+            | "String"
+            | "Symbol"
+            | "BigInt"
+            | "Math"
+            | "JSON"
+            | "Date"
+            | "RegExp"
+            | "Promise"
+            | "Proxy"
+            | "Reflect"
+            | "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "WeakRef"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "Buffer"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int8Array"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+    )
+}
+
 /// Wrap CJS source as ESM. `source_path` is the absolute path of the file
 /// being wrapped — used to resolve `require('./relative')` targets when
 /// peeking at re-export wrappers' transitive named exports.
@@ -18,6 +75,21 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     source_path: &Path,
     target: Option<&str>,
 ) -> String {
+    wrap_commonjs_with_body_offset(source, source_path, target).0
+}
+
+/// Like [`wrap_commonjs_for_target`], but also returns the byte offset within
+/// the returned wrapped source at which the ORIGINAL module body begins (i.e.
+/// the length of the injected wrapper prefix: imports + aliases + hoisted
+/// classes + the IIFE/preamble scaffolding). `--debug-symbols` uses this to map
+/// a wrapped-coordinate `byte_offset` back to original-source coordinates.
+/// `None` when the body could not be located in the wrapped output (a
+/// special-case early rewrite changed it); callers then skip the mapping.
+pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
+    source: &str,
+    source_path: &Path,
+    target: Option<&str>,
+) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
     if is_depd_index_path(source_path) {
@@ -99,6 +171,46 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     // name. The first alias for each spec wins; subsequent aliases of the
     // same spec keep their `const X = <chosen>;` form (handled below).
     let raw_aliases = extract_require_aliases_with_ranges(source);
+
+    // Names this module will declare at MODULE scope as `export const X =
+    // _cjs.X;` (the `named_export_decls` set computed below). Adopting an
+    // alias whose name matches one of these is a self-collision: the wrap
+    // would emit BOTH `import X from '<spec>';` (the adopted alias import) and
+    // `export const X = _cjs.X;` — two module-scope bindings named `X`. HIR's
+    // resolver then binds the IIFE-body reference `X` (e.g. `const { ... } =
+    // X`) to the `export const`, whose value `_cjs.X` is `undefined` until the
+    // IIFE returns. This is the pino `const symbols = require('./lib/symbols')`
+    // + `module.exports.symbols = symbols` shape: the top-level
+    // `const { ...30 syms... } = symbols` destructure read `undefined` and
+    // threw `Cannot convert undefined or null to object` (pino.js:23).
+    //
+    // Refusing adoption keeps the spec on `_req_N`, so the original body line
+    // `const X = require('<spec>')` is NOT blanked, runs inside the IIFE, and
+    // binds an IIFE-LOCAL `X = _req_N` — distinct from the module-scope
+    // `export const X`. The body's `X` references resolve to the local; the
+    // export still surfaces the value. This mirrors how a destructured
+    // `const { ... } = require('<spec>')` spec (levels/constants/tools) already
+    // keeps `_req_N` and works. The collision set deliberately excludes
+    // re-export-via-require names (those become `export { _req_N as X };`, no
+    // module-scope `const X`) and hoisted-class names (already blocked below),
+    // so class-identity adoption (#665) is unaffected.
+    let export_const_collision_names: std::collections::HashSet<String> = {
+        let plain_exports = extract_exports_from_source(source);
+        let mut reexport_names: std::collections::HashSet<String> =
+            extract_named_exports_from_require(source)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect();
+        for (name, _) in extract_object_literal_exports_from_require(source) {
+            reexport_names.insert(name);
+        }
+        plain_exports
+            .into_iter()
+            .filter(|n| !reexport_names.contains(n))
+            .filter(|n| !hoisted_class_names.contains(n))
+            .collect()
+    };
+
     let alias_is_safe = |alias: &str| -> bool {
         if alias.starts_with("_req_") {
             return false;
@@ -107,6 +219,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
             return false;
         }
         if hoisted_class_names.iter().any(|c| c == alias) {
+            return false;
+        }
+        // Self-collision with a module-scope `export const <alias> = _cjs.<alias>;`
+        // (see `export_const_collision_names` above) — keep the spec on `_req_N`.
+        if export_const_collision_names.contains(alias) {
             return false;
         }
         // #5006: a reassigned alias (`s = s.filter(...)`) must stay a real
@@ -316,8 +433,26 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     // react/index.js — which has zero `exports.X =` patterns of its own —
     // produces zero named exports and downstream `import { useState } from
     // "react"` link-fails.
+    //
+    // CRUCIAL: only specs THIS module actually re-exports
+    // (`module.exports = require('SPEC')`) qualify. A module that merely
+    // `require()`s a sibling for its own internal use — e.g. semver's
+    // `classes/comparator.js` doing `const { safeRe: re, t } =
+    // require('../internal/re')` and then defining a class that reads
+    // `re[t.COMPARATOR]` — is NOT a re-export wrapper of `../internal/re`.
+    // Forwarding the target's names here emitted spurious module-scope
+    // `export const t = _cjs.t;` (and `re`, `src`, `safeRe`) declarations
+    // that (a) shadowed the module's own same-named bindings and (b)
+    // resolved to `undefined` because those names are not on THIS module's
+    // `exports` — the `Cannot read properties of undefined (reading
+    // 'COMPARATOR')` root for semver/pino/bluebird.
+    let reexport_specs = module_reexport_specs(source);
     for spec in &require_specs {
         if !spec.starts_with("./") && !spec.starts_with("../") {
+            continue;
+        }
+        // Only forward exports of specs this module genuinely re-exports.
+        if !reexport_specs.iter().any(|s| s == spec) {
             continue;
         }
         // #4872: specs re-exported via `__exportStar` surface through the
@@ -419,6 +554,22 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
         .map(|(n, _)| n.clone())
         .collect();
 
+    // A named export whose name is a JS global-builtin VALUE (`Error`,
+    // `TypeError`, `Object`, `Promise`, …) and is NOT declared as a module
+    // binding in the body is the `module.exports = { Error: Error }` shape: the
+    // KEY collides with a global the IIFE body references freely. Emitting
+    // `export const Error = _cjs.Error;` puts a module-scope `Error` binding
+    // ahead of the global, so the body's `Error` (e.g. bluebird errors.js
+    // `inherits(SubError, Error)`) resolves to the `export const`, whose value
+    // `_cjs.Error` is `undefined` until the IIFE returns — `Parent.prototype`
+    // then threw `Cannot read properties of undefined (reading 'prototype')`.
+    // For these, surface the export through a MANGLED module-scope binding and
+    // re-export it under the original name (`const __cjsexp_Error = _cjs.Error;
+    // export { __cjsexp_Error as Error };`). The value still surfaces for named
+    // imports, but no `Error` binding shadows the global in the body.
+    let builtin_value_global_collision = |n: &str| -> bool {
+        is_global_value_builtin_name(n) && !identifier_is_declared_binding(source, n)
+    };
     let named_export_decls = if named_exports.is_empty() {
         String::new()
     } else {
@@ -426,7 +577,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
             .iter()
             .filter(|n| !hoisted_class_names.contains(n))
             .filter(|n| !named_reexport_names.contains(n))
-            .map(|n| format!("export const {} = _cjs.{};", n, n))
+            .map(|n| {
+                if builtin_value_global_collision(n) {
+                    format!(
+                        "const __cjsexp_{n} = _cjs.{n};\nexport {{ __cjsexp_{n} as {n} }};",
+                        n = n
+                    )
+                } else {
+                    format!("export const {} = _cjs.{};", n, n)
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -708,7 +868,16 @@ const _cjs = (function() {{
             wrapped
         );
     }
-    wrapped
+    // #5247: locate the original body within the wrapped output so callers can
+    // translate a wrapped-coordinate byte offset back to original coordinates.
+    // `body_for_iife` is interpolated verbatim into `wrapped`, so the first
+    // occurrence is its start. Empty body → no mapping.
+    let body_offset = if body_for_iife.is_empty() {
+        None
+    } else {
+        wrapped.find(body_for_iife.as_str())
+    };
+    (wrapped, body_offset)
 }
 
 fn target_node_platform(target: Option<&str>) -> Option<&'static str> {

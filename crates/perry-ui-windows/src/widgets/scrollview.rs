@@ -145,7 +145,7 @@ unsafe extern "system" fn scroll_wnd_proc(
         }
         WM_COMMAND | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CONTEXTMENU | WM_DRAWITEM => {
             if let Ok(parent) = GetParent(hwnd) {
-                return SendMessageW(parent, msg, wparam, lparam);
+                return SendMessageW(parent, msg, Some(wparam), Some(lparam));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -161,7 +161,7 @@ unsafe extern "system" fn scroll_wnd_proc(
                     let mut rect = RECT::default();
                     let _ = GetClientRect(hwnd, &mut rect);
                     let _ = FillRect(hdc, &rect, brush);
-                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush.into());
                     return LRESULT(1);
                 } else {
                     let mut ps = windows::Win32::Graphics::Gdi::PAINTSTRUCT::default();
@@ -169,7 +169,7 @@ unsafe extern "system" fn scroll_wnd_proc(
                     let mut rect = RECT::default();
                     let _ = GetClientRect(hwnd, &mut rect);
                     let _ = FillRect(hdc, &rect, brush);
-                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush.into());
                     windows::Win32::Graphics::Gdi::EndPaint(hwnd, &ps);
                     return LRESULT(0);
                 }
@@ -220,9 +220,9 @@ pub fn create() -> i64 {
                 0,
                 100,
                 100,
-                super::get_parking_hwnd(),
+                Some(super::get_parking_hwnd()),
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();

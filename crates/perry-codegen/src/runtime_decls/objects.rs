@@ -112,9 +112,35 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
     );
+    // #5334 lever A: class-field-SET guard-MISS fallback, outlined. The cold arm
+    // of the default diamond collapses from two calls (record_fallback +
+    // set_field_by_name) to this one. Args: (site_id, obj_bits, key_raw, value).
+    module.declare_function(
+        "js_class_field_set_fallback",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
+    // #5334 lever B: class-field-SET inline cache, FULLY outlined. For oversized
+    // modules the whole diamond (guard + fast store + fallback) collapses to one
+    // call. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // field_index, value, require_raw_f64). Same signature as the set guard.
+    module.declare_function(
+        "js_class_field_set_ic",
+        VOID,
+        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
+    );
     module.declare_function(
         "js_typed_feedback_class_field_get_guard",
         I32,
+        &[I64, DOUBLE, I32, I64, I64, I32, I32],
+    );
+    // #5391 path 2: class-field-GET inline cache, FULLY outlined. For oversized
+    // modules the whole get diamond collapses to one call returning the field
+    // value. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // field_index, require_raw_f64). Same signature as the get guard (+ f64 ret).
+    module.declare_function(
+        "js_class_field_get_ic",
+        DOUBLE,
         &[I64, DOUBLE, I32, I64, I64, I32, I32],
     );
     module.declare_function(
@@ -271,7 +297,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_typed_feedback_array_index_set_fallback_boxed",
         DOUBLE,
-        &[I64, DOUBLE, I32, DOUBLE],
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
     );
     module.declare_function(
         "js_typed_feedback_observe_array_element",

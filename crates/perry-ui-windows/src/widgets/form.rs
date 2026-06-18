@@ -78,9 +78,9 @@ pub fn create() -> i64 {
                 0,
                 100,
                 100,
-                super::get_parking_hwnd(),
+                Some(super::get_parking_hwnd()),
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -118,9 +118,9 @@ pub fn section_create(title_ptr: *const u8) -> i64 {
                 0,
                 200,
                 100,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();

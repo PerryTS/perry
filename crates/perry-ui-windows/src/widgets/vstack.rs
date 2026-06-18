@@ -62,7 +62,7 @@ unsafe extern "system" fn container_wnd_proc(
             // is the default (no custom brush), provide our own ancestor brush
             // so child controls get the correct background with WS_CLIPCHILDREN.
             if let Ok(parent) = GetParent(hwnd) {
-                let result = SendMessageW(parent, msg, wparam, lparam);
+                let result = SendMessageW(parent, msg, Some(wparam), Some(lparam));
                 if result.0 != 0 {
                     return result;
                 }
@@ -82,13 +82,13 @@ unsafe extern "system" fn container_wnd_proc(
         }
         WM_COMMAND | WM_CONTEXTMENU | WM_DRAWITEM => {
             if let Ok(parent) = GetParent(hwnd) {
-                return SendMessageW(parent, msg, wparam, lparam);
+                return SendMessageW(parent, msg, Some(wparam), Some(lparam));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         x if x == 0x0133 /* WM_CTLCOLOREDIT */ => {
             if let Ok(parent) = GetParent(hwnd) {
-                return SendMessageW(parent, msg, wparam, lparam);
+                return SendMessageW(parent, msg, Some(wparam), Some(lparam));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -126,7 +126,7 @@ unsafe extern "system" fn container_wnd_proc(
                     let mut rect = RECT::default();
                     let _ = GetClientRect(hwnd, &mut rect);
                     let _ = FillRect(hdc, &rect, brush);
-                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush.into());
                     return LRESULT(1);
                 } else {
                     let mut ps = windows::Win32::Graphics::Gdi::PAINTSTRUCT::default();
@@ -134,7 +134,7 @@ unsafe extern "system" fn container_wnd_proc(
                     let mut rect = RECT::default();
                     let _ = GetClientRect(hwnd, &mut rect);
                     let _ = FillRect(hdc, &rect, brush);
-                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+                    let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush.into());
                     windows::Win32::Graphics::Gdi::EndPaint(hwnd, &ps);
                     return LRESULT(0);
                 }
@@ -191,9 +191,9 @@ pub fn create_with_insets(spacing: f64, top: f64, left: f64, bottom: f64, right:
                 0,
                 100,
                 100,
-                super::get_parking_hwnd(),
+                Some(super::get_parking_hwnd()),
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();

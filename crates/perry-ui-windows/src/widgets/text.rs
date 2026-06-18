@@ -73,9 +73,9 @@ pub fn create(text_ptr: *const u8) -> i64 {
                 0,
                 100,
                 20,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -136,7 +136,7 @@ pub fn set_number_of_lines(handle: i64, lines: i64) {
                 // changes to take effect on STATIC controls.
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND(std::ptr::null_mut()),
+                    Some(HWND(std::ptr::null_mut())),
                     0,
                     0,
                     0,
@@ -183,7 +183,7 @@ pub fn set_truncation_mode(handle: i64, mode: i64) {
                 let _ = SetWindowLongPtrW(hwnd, GWL_STYLE, new_style as isize);
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND(std::ptr::null_mut()),
+                    Some(HWND(std::ptr::null_mut())),
                     0,
                     0,
                     0,
@@ -223,7 +223,7 @@ pub fn set_text_alignment(handle: i64, alignment: i64) {
                 // SWP_FRAMECHANGED forces STATIC style changes to take effect.
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND(std::ptr::null_mut()),
+                    Some(HWND(std::ptr::null_mut())),
                     0,
                     0,
                     0,
@@ -281,7 +281,7 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
         // Force repaint
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }
@@ -364,7 +364,7 @@ pub fn set_font_family(handle: i64, family_ptr: *const u8) {
                     let mut lf = LOGFONTW::default();
                     unsafe {
                         GetObjectW(
-                            style.font,
+                            style.font.into(),
                             std::mem::size_of::<LOGFONTW>() as i32,
                             Some(&mut lf as *mut _ as *mut _),
                         );
@@ -446,7 +446,7 @@ pub fn handle_ctlcolor(hdc: HDC, child_hwnd: HWND) -> Option<LRESULT> {
             }
             if !style.font.is_invalid() {
                 unsafe {
-                    SelectObject(hdc, style.font);
+                    SelectObject(hdc, style.font.into());
                 }
             }
             Some(bg_brush)
@@ -488,10 +488,10 @@ fn create_font_with_family(size: i32, weight: i32, family: &str) -> HFONT {
             0,            // fdwItalic
             0,            // fdwUnderline
             0,            // fdwStrikeOut
-            0,            // fdwCharSet (DEFAULT_CHARSET)
-            0,            // fdwOutputPrecision
-            0,            // fdwClipPrecision
-            0,            // fdwQuality
+            windows::Win32::Graphics::Gdi::FONT_CHARSET(0), // fdwCharSet (DEFAULT_CHARSET)
+            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(0), // fdwOutputPrecision
+            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0), // fdwClipPrecision
+            windows::Win32::Graphics::Gdi::FONT_QUALITY(0), // fdwQuality
             0,            // fdwPitchAndFamily
             windows::core::PCWSTR(family_wide.as_ptr()),
         )
@@ -510,7 +510,7 @@ fn apply_font(handle: i64, font: HFONT) {
         // Clean up old font
         if !entry.font.is_invalid() {
             unsafe {
-                let _ = DeleteObject(entry.font);
+                let _ = DeleteObject(entry.font.into());
             }
         }
         entry.font = font;
@@ -518,7 +518,12 @@ fn apply_font(handle: i64, font: HFONT) {
 
     if let Some(hwnd) = super::get_hwnd(handle) {
         unsafe {
-            SendMessageW(hwnd, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+            SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(font.0 as usize)),
+                Some(LPARAM(1)),
+            );
         }
     }
 }
@@ -574,7 +579,7 @@ fn apply_decoration(handle: i64, decoration: i64) {
     if let Some(font) = existing {
         unsafe {
             GetObjectW(
-                font,
+                font.into(),
                 std::mem::size_of::<LOGFONTW>() as i32,
                 Some(&mut lf as *mut _ as *mut _),
             );

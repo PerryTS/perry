@@ -49,6 +49,7 @@ fn empty_opts() -> CompileOptions {
         is_dynamic_import_target: false,
         debug_locations: false,
         module_source: None,
+        debug_source_line_offset: 0,
     }
 }
 
@@ -77,6 +78,7 @@ fn module_with_recursive_constructor_return() -> Module {
                 class_name: "RecursiveCtor".to_string(),
                 args: vec![Expr::Bool(false), Expr::LocalGet(11)],
                 type_args: Vec::new(),
+                byte_offset: 0,
             }))],
             else_branch: None,
         }],
@@ -125,6 +127,7 @@ fn module_with_recursive_constructor_return() -> Module {
             class_name: "RecursiveCtor".to_string(),
             args: vec![Expr::Bool(true), Expr::Undefined],
             type_args: Vec::new(),
+            byte_offset: 0,
         })],
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),

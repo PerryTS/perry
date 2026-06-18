@@ -73,6 +73,7 @@ fn entry_opts() -> CompileOptions {
         is_dynamic_import_target: false,
         debug_locations: false,
         module_source: None,
+        debug_source_line_offset: 0,
     }
 }
 

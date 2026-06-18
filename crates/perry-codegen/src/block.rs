@@ -10,6 +10,7 @@
 //! control-flow merges (if/else value context, short-circuit logical ops).
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::codegen::FpContractMode;
@@ -83,6 +84,19 @@ pub struct LlBlock {
     terminated: bool,
     counter: Rc<RegCounter>,
     fp_flags: FpFlags,
+    /// Provenance of nan-box bitcast results emitted in THIS block, for
+    /// round-trip folding (#5334 lever C). A nan-boxed JS value is an `f64`,
+    /// so any bit-level work unboxes (`bitcast double -> i64`) and any value
+    /// production re-boxes (`bitcast i64 -> double`). When a value is boxed
+    /// then immediately unboxed again (or vice versa) the pair is identity:
+    /// `bitcast(bitcast(x)) == x`. `clang -O1+` folds these via instcombine,
+    /// but the oversized-module path forces `-O0` (see #4880), which does not
+    /// — so we fold at emit time. Maps a bitcast RESULT reg to its
+    /// pre-bitcast source of the OPPOSITE type, scoped to this block so the
+    /// source is guaranteed to dominate (SSA, emitted earlier in the same
+    /// block).
+    i64_from_double: HashMap<String, String>,
+    double_from_i64: HashMap<String, String>,
 }
 
 impl LlBlock {
@@ -101,6 +115,8 @@ impl LlBlock {
             terminated: false,
             counter,
             fp_flags,
+            i64_from_double: HashMap::new(),
+            double_from_i64: HashMap::new(),
         }
     }
 
@@ -410,14 +426,31 @@ impl LlBlock {
     // -------- Conversions / bitcasts --------
 
     pub fn bitcast_i64_to_double(&mut self, val: &str) -> String {
+        // #5334 lever C: fold `bitcast i64 (bitcast double %x to i64) to double`
+        // back to %x — the round-trip is identity. The source dominates (same
+        // block, emitted earlier), so reusing it is always valid SSA.
+        if let Some(src) = self.i64_from_double.get(val) {
+            return src.clone();
+        }
         let r = self.reg();
         self.emit(format!("{} = bitcast i64 {} to double", r, val));
+        if !self.terminated {
+            self.double_from_i64.insert(r.clone(), val.to_string());
+        }
         r
     }
 
     pub fn bitcast_double_to_i64(&mut self, val: &str) -> String {
+        // #5334 lever C: fold `bitcast double (bitcast i64 %x to double) to i64`
+        // back to %x — the round-trip is identity.
+        if let Some(src) = self.double_from_i64.get(val) {
+            return src.clone();
+        }
         let r = self.reg();
         self.emit(format!("{} = bitcast double {} to i64", r, val));
+        if !self.terminated {
+            self.i64_from_double.insert(r.clone(), val.to_string());
+        }
         r
     }
 
@@ -817,6 +850,41 @@ mod tests {
             Rc::new(RegCounter::new()),
             FpFlags::new(fast_math, fp_contract_mode),
         )
+    }
+
+    #[test]
+    fn nanbox_bitcast_roundtrip_folds_to_source() {
+        // #5334 lever C: i64 -> double -> i64 collapses to the original i64,
+        // and the reverse collapses to the original double. Only the first
+        // bitcast of each pair is emitted.
+        let mut b = fresh();
+        let dbl = b.bitcast_i64_to_double("%arg"); // %r1 = bitcast i64 %arg to double
+        let back = b.bitcast_double_to_i64(&dbl); // folds -> %arg (no new instr)
+        assert_eq!(back, "%arg");
+
+        let unboxed = b.bitcast_double_to_i64("%v"); // %r2 = bitcast double %v to i64
+        let reboxed = b.bitcast_i64_to_double(&unboxed); // folds -> %v
+        assert_eq!(reboxed, "%v");
+
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = bitcast i64 %arg to double\n  %r2 = bitcast double %v to i64"
+        );
+    }
+
+    #[test]
+    fn nanbox_bitcast_non_roundtrip_still_emits() {
+        // A lone unbox with no inverse is untouched, and a fresh unbox of a
+        // different value is not mistakenly folded.
+        let mut b = fresh();
+        let a = b.bitcast_double_to_i64("%a"); // %r1
+        let c = b.bitcast_double_to_i64("%c"); // %r2 (different source, no fold)
+        assert_eq!(a, "%r1");
+        assert_eq!(c, "%r2");
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = bitcast double %a to i64\n  %r2 = bitcast double %c to i64"
+        );
     }
 
     #[test]

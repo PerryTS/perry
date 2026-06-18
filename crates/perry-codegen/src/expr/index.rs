@@ -15,6 +15,14 @@ use crate::native_value::{
 };
 use crate::types::{DOUBLE, I1, I32, I64};
 
+fn canonicalize_raw_f64_numeric_store_value(blk: &mut LlBlock, value_double: &str) -> String {
+    blk.call(
+        DOUBLE,
+        "js_array_numeric_value_to_raw_f64",
+        &[(DOUBLE, value_double)],
+    )
+}
+
 /// Inline fast-path lowering for `local_arr[i] = v`.
 ///
 /// Compiles to:
@@ -144,7 +152,7 @@ pub(crate) fn lower_index_set_fast(
             &[
                 (I64, feedback_site_id),
                 (DOUBLE, arr_box),
-                (I32, &idx_i32),
+                (DOUBLE, idx_double),
                 (DOUBLE, val_double),
             ],
         );
@@ -211,14 +219,14 @@ pub(crate) fn lower_index_set_fast(
     ctx.current_block = inbounds_idx;
     {
         let blk = ctx.block();
+        let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
         if require_numeric_layout {
-            blk.call(
-                I32,
-                "js_array_numeric_set_f64_unboxed",
-                &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, val_double)],
-            );
+            let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
+            // GC_STORE_AUDIT(POINTER_FREE): require_numeric_layout proves the
+            // array is raw-f64 and the value is canonicalized to a plain f64 —
+            // no GC pointer is written into the slot, so no write barrier.
+            blk.store(DOUBLE, &numeric_value, &element_ptr);
         } else {
-            let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
             // In-place overwrite of a non-raw-layout (e.g. downgraded `any[]`)
             // array element: the slot holds a valid value, so the scalar-aware
             // note skips the GC layout hashmap on scalar-over-scalar stores
@@ -299,20 +307,28 @@ pub(crate) fn lower_index_set_fast(
     {
         let blk = ctx.block();
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
-        let value_bits = emit_jsvalue_slot_store_on_block(
-            blk,
-            &element_ptr,
-            val_double,
-            &arr_handle,
-            &idx_i32,
-            layout_note_needed,
-            &arr_handle,
-            &element_addr,
-            write_barrier_needed,
-        )
-        .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
-        if !value_is_numeric {
-            emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+        if require_numeric_layout {
+            let numeric_value = canonicalize_raw_f64_numeric_store_value(blk, val_double);
+            // GC_STORE_AUDIT(POINTER_FREE): require_numeric_layout proves the
+            // array is raw-f64 and the value is canonicalized to a plain f64 —
+            // no GC pointer is written into the slot, so no write barrier.
+            blk.store(DOUBLE, &numeric_value, &element_ptr);
+        } else {
+            let value_bits = emit_jsvalue_slot_store_on_block(
+                blk,
+                &element_ptr,
+                val_double,
+                &arr_handle,
+                &idx_i32,
+                layout_note_needed,
+                &arr_handle,
+                &element_addr,
+                write_barrier_needed,
+            )
+            .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
+            if !value_is_numeric {
+                emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+            }
         }
         // Bump length: store idx+1 to arr_ptr+0.
         let new_len = blk.add(I32, &idx_i32, "1");

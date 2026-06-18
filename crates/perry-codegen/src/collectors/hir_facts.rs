@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 /// existing native optimizations, and every consumer must keep the normal
 /// JSValue/NaN-boxed fallback at dynamic boundaries.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct NativeRegionFactGraph {
+pub(crate) struct TypeFacts {
     pub representation: RepresentationFacts,
     pub integer_range: IntegerRangeFacts,
     pub bounds: BoundsFacts,
@@ -26,6 +26,8 @@ pub(crate) struct NativeRegionFactGraph {
     pub shape_stability: ShapeStabilityFacts,
     pub materialization_hazards: MaterializationHazardFacts,
 }
+
+pub(crate) type NativeRegionFactGraph = TypeFacts;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RepresentationFacts {
@@ -54,7 +56,9 @@ pub(crate) struct EscapeFacts {
     pub non_escaping_news: HashMap<u32, String>,
     pub non_escaping_new_used_fields: HashMap<u32, HashSet<String>>,
     pub non_escaping_arrays: HashMap<u32, u32>,
+    pub non_escaping_array_used_indices: HashMap<u32, HashSet<u32>>,
     pub non_escaping_object_literals: HashMap<u32, Vec<String>>,
+    pub non_escaping_object_literal_used_fields: HashMap<u32, HashSet<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -83,7 +87,8 @@ pub(crate) struct MaterializationHazardFacts {
     pub initially_known_hazard_locals: HashSet<u32>,
 }
 
-impl NativeRegionFactGraph {
+#[allow(dead_code)]
+impl TypeFacts {
     pub(crate) fn integer_locals(&self) -> &HashSet<u32> {
         &self.representation.integer_locals
     }
@@ -124,12 +129,67 @@ impl NativeRegionFactGraph {
         &self.escape.non_escaping_arrays
     }
 
+    pub(crate) fn non_escaping_array_used_indices(&self) -> &HashMap<u32, HashSet<u32>> {
+        &self.escape.non_escaping_array_used_indices
+    }
+
     pub(crate) fn non_escaping_object_literals(&self) -> &HashMap<u32, Vec<String>> {
         &self.escape.non_escaping_object_literals
     }
 
+    pub(crate) fn non_escaping_object_literal_used_fields(&self) -> &HashMap<u32, HashSet<String>> {
+        &self.escape.non_escaping_object_literal_used_fields
+    }
+
     pub(crate) fn materialization_hazard_locals(&self) -> &HashSet<u32> {
         &self.materialization_hazards.initially_known_hazard_locals
+    }
+
+    pub(crate) fn proves_i32_lowering(&self, local_id: u32) -> bool {
+        self.representation.integer_locals.contains(&local_id)
+            || self
+                .integer_range
+                .strictly_i32_bounded_locals
+                .contains(&local_id)
+    }
+
+    pub(crate) fn proves_unsigned_i32_lowering(&self, local_id: u32) -> bool {
+        self.representation.unsigned_i32_locals.contains(&local_id)
+    }
+
+    pub(crate) fn proves_bounds_range_seed(&self, local_id: u32) -> bool {
+        self.bounds.range_seed_locals.contains(&local_id)
+    }
+
+    pub(crate) fn proves_noalias_buffer(&self, local_id: u32) -> bool {
+        self.alias_noalias
+            .known_noalias_buffer_locals
+            .contains(&local_id)
+    }
+
+    pub(crate) fn proves_pure_helper(&self, function_id: u32) -> bool {
+        self.purity.pure_helper_function_ids.contains(&function_id)
+    }
+
+    pub(crate) fn platform_constant(&self, local_id: u32) -> Option<f64> {
+        self.platform_constants.constants.get(&local_id).copied()
+    }
+
+    pub(crate) fn scalar_replaceable_object_locals(&self) -> &HashSet<u32> {
+        &self.shape_stability.scalar_replaceable_object_locals
+    }
+
+    pub(crate) fn proves_scalar_replacement(&self, local_id: u32) -> bool {
+        self.shape_stability
+            .scalar_replaceable_object_locals
+            .contains(&local_id)
+            || self.escape.non_escaping_arrays.contains_key(&local_id)
+    }
+
+    pub(crate) fn has_materialization_hazard(&self, local_id: u32) -> bool {
+        self.materialization_hazards
+            .initially_known_hazard_locals
+            .contains(&local_id)
     }
 }
 
@@ -139,7 +199,7 @@ impl NativeRegionFactGraph {
 /// function is the single contract used by codegen entry points so new native
 /// consumers do not need to rediscover facts independently.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collect_native_region_fact_graph(
+pub(crate) fn collect_type_facts(
     stmts: &[Stmt],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
@@ -148,7 +208,7 @@ pub(crate) fn collect_native_region_fact_graph(
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
-) -> NativeRegionFactGraph {
+) -> TypeFacts {
     let integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
         flat_const_ids,
@@ -170,17 +230,24 @@ pub(crate) fn collect_native_region_fact_graph(
         super::escape_news::collect_non_escaping_new_used_fields(stmts, &non_escaping_news);
     let non_escaping_arrays =
         super::escape_arrays::collect_non_escaping_arrays(stmts, boxed_vars, module_globals);
+    let non_escaping_array_used_indices =
+        super::escape_arrays::collect_non_escaping_array_used_indices(stmts, &non_escaping_arrays);
     let non_escaping_object_literals = super::escape_objects::collect_non_escaping_object_literals(
         stmts,
         boxed_vars,
         module_globals,
     );
+    let non_escaping_object_literal_used_fields =
+        super::escape_objects::collect_non_escaping_object_literal_used_fields(
+            stmts,
+            &non_escaping_object_literals,
+        );
     let scalar_replaceable_object_locals = non_escaping_news
         .keys()
         .chain(non_escaping_object_literals.keys())
         .copied()
         .collect();
-    let graph = NativeRegionFactGraph {
+    let graph = TypeFacts {
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
             unsigned_i32_locals,
@@ -199,7 +266,9 @@ pub(crate) fn collect_native_region_fact_graph(
             non_escaping_news,
             non_escaping_new_used_fields,
             non_escaping_arrays,
+            non_escaping_array_used_indices,
             non_escaping_object_literals,
+            non_escaping_object_literal_used_fields,
         },
         purity: PurityFacts {
             pure_helper_function_ids: clamp_fn_ids.clone(),
@@ -219,15 +288,38 @@ pub(crate) fn collect_native_region_fact_graph(
     graph
 }
 
-// #854: thin wrapper over collect_native_region_fact_graph, currently only
-// exercised by this module's unit tests; kept as the focused-collector entry seam.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_native_region_fact_graph(
+    stmts: &[Stmt],
+    flat_const_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &perry_hir::Class>,
+    compile_time_constants: &HashMap<u32, f64>,
+) -> NativeRegionFactGraph {
+    collect_type_facts(
+        stmts,
+        flat_const_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+        boxed_vars,
+        module_globals,
+        classes,
+        compile_time_constants,
+    )
+}
+
+// #854: thin wrapper over collect_type_facts, currently only exercised by this
+// module's unit tests; kept as the focused-collector entry point.
 #[allow(dead_code)]
 pub(crate) fn collect_hir_facts(
     stmts: &[Stmt],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
-) -> NativeRegionFactGraph {
-    collect_native_region_fact_graph(
+) -> TypeFacts {
+    collect_type_facts(
         stmts,
         flat_const_ids,
         clamp_fn_ids,
@@ -241,11 +333,25 @@ pub(crate) fn collect_hir_facts(
 
 fn collect_known_noalias_buffer_locals(stmts: &[Stmt]) -> HashSet<u32> {
     let mut out = HashSet::new();
-    collect_owned_buffer_lets(stmts, &mut out);
+    let mut known_length_locals = HashSet::new();
+    collect_owned_buffer_lets(stmts, &mut out, &mut known_length_locals);
     out
 }
 
-fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
+fn collect_owned_buffer_lets_child_scope(
+    stmts: &[Stmt],
+    out: &mut HashSet<u32>,
+    known_length_locals: &HashSet<u32>,
+) {
+    let mut child_length_locals = known_length_locals.clone();
+    collect_owned_buffer_lets(stmts, out, &mut child_length_locals);
+}
+
+fn collect_owned_buffer_lets(
+    stmts: &[Stmt],
+    out: &mut HashSet<u32>,
+    known_length_locals: &mut HashSet<u32>,
+) {
     for stmt in stmts {
         match stmt {
             Stmt::Let {
@@ -254,8 +360,13 @@ fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
                 init: Some(init),
                 ..
             } => {
-                if !*mutable && is_owned_u8_buffer_alloc(init) {
+                if !*mutable && is_owned_u8_buffer_alloc(init, known_length_locals) {
                     out.insert(*id);
+                }
+                if !*mutable && is_fresh_uint8array_length_expr(init, known_length_locals) {
+                    known_length_locals.insert(*id);
+                } else {
+                    known_length_locals.remove(id);
                 }
             }
             Stmt::If {
@@ -263,39 +374,48 @@ fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
                 else_branch,
                 ..
             } => {
-                collect_owned_buffer_lets(then_branch, out);
+                collect_owned_buffer_lets_child_scope(then_branch, out, known_length_locals);
                 if let Some(else_branch) = else_branch {
-                    collect_owned_buffer_lets(else_branch, out);
+                    collect_owned_buffer_lets_child_scope(else_branch, out, known_length_locals);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_owned_buffer_lets(body, out);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
             }
             Stmt::For { init, body, .. } => {
+                let mut loop_length_locals = known_length_locals.clone();
                 if let Some(init) = init {
-                    collect_owned_buffer_lets(std::slice::from_ref(init.as_ref()), out);
+                    collect_owned_buffer_lets(
+                        std::slice::from_ref(init.as_ref()),
+                        out,
+                        &mut loop_length_locals,
+                    );
                 }
-                collect_owned_buffer_lets(body, out);
+                collect_owned_buffer_lets(body, out, &mut loop_length_locals);
             }
             Stmt::Labeled { body, .. } => {
-                collect_owned_buffer_lets(std::slice::from_ref(body.as_ref()), out);
+                collect_owned_buffer_lets_child_scope(
+                    std::slice::from_ref(body.as_ref()),
+                    out,
+                    known_length_locals,
+                );
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                collect_owned_buffer_lets(body, out);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
                 if let Some(catch) = catch {
-                    collect_owned_buffer_lets(&catch.body, out);
+                    collect_owned_buffer_lets_child_scope(&catch.body, out, known_length_locals);
                 }
                 if let Some(finally) = finally {
-                    collect_owned_buffer_lets(finally, out);
+                    collect_owned_buffer_lets_child_scope(finally, out, known_length_locals);
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    collect_owned_buffer_lets(&case.body, out);
+                    collect_owned_buffer_lets_child_scope(&case.body, out, known_length_locals);
                 }
             }
             Stmt::Let { init: None, .. }
@@ -311,15 +431,17 @@ fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
     }
 }
 
-fn is_owned_u8_buffer_alloc(expr: &Expr) -> bool {
+fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
     match expr {
         Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) => true,
         Expr::Uint8ArrayNew(None) => true,
-        Expr::Uint8ArrayNew(Some(size)) => is_fresh_uint8array_length_literal(size),
+        Expr::Uint8ArrayNew(Some(size)) => {
+            is_fresh_uint8array_length_expr(size, known_length_locals)
+        }
         Expr::TypedArrayNew { arg: None, .. } => true,
         Expr::TypedArrayNew {
             arg: Some(size), ..
-        } => is_fresh_uint8array_length_literal(size),
+        } => is_fresh_uint8array_length_expr(size, known_length_locals),
         Expr::NativeMethodCall {
             module,
             method,
@@ -328,6 +450,13 @@ fn is_owned_u8_buffer_alloc(expr: &Expr) -> bool {
         } if module == "buffer" && method == "copyBytesFrom" => true,
         Expr::NativeArenaView { .. } => true,
         _ => false,
+    }
+}
+
+fn is_fresh_uint8array_length_expr(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
+    match expr {
+        Expr::LocalGet(id) => known_length_locals.contains(id),
+        _ => is_fresh_uint8array_length_literal(expr),
     }
 }
 
@@ -350,6 +479,16 @@ mod tests {
             id,
             name: format!("v{}", id),
             ty: Type::Named("Uint8Array".into()),
+            mutable: false,
+            init: Some(init),
+        }
+    }
+
+    fn const_number_let(id: u32, init: Expr) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("v{}", id),
+            ty: Type::Number,
             mutable: false,
             init: Some(init),
         }
@@ -391,6 +530,20 @@ mod tests {
     }
 
     #[test]
+    fn uint8array_const_local_lengths_are_known_noalias_sources() {
+        let ids = known_ids(vec![
+            const_number_let(10, Expr::Integer(8)),
+            const_let(1, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(10))))),
+            const_number_let(11, Expr::Number(16.0)),
+            const_number_let(12, Expr::LocalGet(11)),
+            const_let(2, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(12))))),
+        ]);
+
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
     fn uint8array_non_literal_or_alias_possible_sources_are_not_noalias() {
         let ids = known_ids(vec![
             const_let(1, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(99))))),
@@ -401,6 +554,8 @@ mod tests {
                 5,
                 Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(i32::MAX as f64)))),
             ),
+            mutable_number_let(6, Expr::Integer(8)),
+            const_let(7, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(6))))),
         ]);
 
         assert!(ids.is_empty(), "unexpected noalias ids: {ids:?}");
@@ -426,6 +581,7 @@ mod tests {
         );
 
         assert!(facts.unsigned_i32_locals().contains(&2));
+        assert!(facts.proves_unsigned_i32_lowering(2));
         assert!(!facts.integer_locals().contains(&2));
     }
 
@@ -472,8 +628,11 @@ mod tests {
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
+        assert!(graph.proves_noalias_buffer(1));
         assert_eq!(graph.compile_time_constants().get(&90), Some(&1.0));
+        assert_eq!(graph.platform_constant(90), Some(1.0));
         assert!(graph.purity.pure_helper_function_ids.contains(&7));
+        assert!(graph.proves_pure_helper(7));
     }
 
     #[test]
@@ -505,12 +664,17 @@ mod tests {
         );
 
         assert!(graph.integer_locals().contains(&1));
+        assert!(graph.proves_i32_lowering(1));
+        assert!(graph.proves_bounds_range_seed(1));
         assert!(graph.index_used_locals().contains(&1));
         assert!(graph.non_escaping_object_literals().contains_key(&3));
         assert!(graph
             .shape_stability
             .scalar_replaceable_object_locals
             .contains(&3));
+        assert!(graph.scalar_replaceable_object_locals().contains(&3));
+        assert!(graph.proves_scalar_replacement(3));
+        assert!(!graph.has_materialization_hazard(3));
     }
 
     // Regression: a mutable `let __d = undefined` seed (the shape the
