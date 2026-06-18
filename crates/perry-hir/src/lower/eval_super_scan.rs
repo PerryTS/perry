@@ -509,15 +509,11 @@ fn scan_expr(scan: &mut Scan, expr: &ast::Expr, transparent: bool) {
         E::PrivateName(p) => {
             scan.private_refs.push(format!("#{}", p.name));
         }
-        E::Ident(id) => {
-            if transparent && id.sym.as_ref() == "arguments" {
-                scan.arguments_ref = true;
-            }
+        E::Ident(id) if transparent && id.sym.as_ref() == "arguments" => {
+            scan.arguments_ref = true;
         }
-        E::MetaProp(mp) => {
-            if transparent && mp.kind == ast::MetaPropKind::NewTarget {
-                scan.new_target = true;
-            }
+        E::MetaProp(mp) if transparent && mp.kind == ast::MetaPropKind::NewTarget => {
+            scan.new_target = true;
         }
         E::Unary(u) => scan_expr(scan, &u.arg, transparent),
         E::Update(u) => scan_expr(scan, &u.arg, transparent),

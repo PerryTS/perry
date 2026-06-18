@@ -1,8 +1,7 @@
-use crate::ir::{Expr, Module, ModuleKind, Stmt};
+use crate::ir::{Expr, Module, Stmt};
 use perry_types::LocalId;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 
-use super::*;
 /// Fix local native instance method calls within the same module
 ///
 /// This function tracks variables that are assigned from native module creation functions

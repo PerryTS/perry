@@ -2,20 +2,15 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::super::unimpl_hints;
-use super::object_static::build_object_static_method_call;
 use super::reflect_args::{take_reflect_ktp_args, take_reflect_kvtp_args, take_reflect_tp_args};
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{is_generator_call_expr, lower_expr, LoweringContext};
 use super::os::user_info_expr_for_call;
 
 fn path_submodule_name(module_name: &str) -> Option<&'static str> {
@@ -747,21 +742,19 @@ pub(super) fn try_native_module_methods(
                         }
                         // `Buffer.compare(a, b)` → `a.compare(b)` instance call
                         // (handled by runtime buffer dispatch).
-                        "compare" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let a = iter.next().unwrap();
-                                let b = iter.next().unwrap();
-                                return Ok(Ok(Expr::Call {
-                                    callee: Box::new(Expr::PropertyGet {
-                                        object: Box::new(a),
-                                        property: "compare".to_string(),
-                                    }),
-                                    args: vec![b],
-                                    type_args: vec![],
-                                    byte_offset: 0,
-                                }));
-                            }
+                        "compare" if args.len() >= 2 => {
+                            let mut iter = args.into_iter();
+                            let a = iter.next().unwrap();
+                            let b = iter.next().unwrap();
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(a),
+                                    property: "compare".to_string(),
+                                }),
+                                args: vec![b],
+                                type_args: vec![],
+                                byte_offset: 0,
+                            }));
                         }
                         _ => {} // Fall through to generic handling
                     }
@@ -854,9 +847,9 @@ pub(super) fn try_native_module_methods(
                             let entries = args.into_iter().next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ObjectFromEntries(Box::new(entries))));
                         }
-                        "groupBy" => {
+                        "groupBy"
                             // Object.groupBy(items, keyFn) — Node 22+ static method
-                            if args.len() >= 2 {
+                            if args.len() >= 2 => {
                                 let mut iter = args.into_iter();
                                 let items = iter.next().unwrap();
                                 let key_fn = iter.next().unwrap();
@@ -866,7 +859,6 @@ pub(super) fn try_native_module_methods(
                                     key_fn: Box::new(key_fn),
                                 }));
                             }
-                        }
                         "is" => {
                             let mut iter = args.into_iter();
                             let a = iter.next().unwrap_or(Expr::Undefined);

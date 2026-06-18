@@ -555,7 +555,7 @@ pub(crate) mod relower_trace {
         SPANS.with(|m| {
             *m.borrow_mut().entry((lo, hi)).or_insert(0) += 1;
         });
-        if n % 5_000_000 == 0 {
+        if n.is_multiple_of(5_000_000) {
             dump(&format!("periodic@{n}"));
         }
     }

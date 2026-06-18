@@ -4,18 +4,11 @@
 //! enum declarations, interface declarations, type alias declarations,
 //! constructors, class methods, getters, setters, and class properties.
 
-use anyhow::{anyhow, bail, Result};
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
-use crate::analysis::*;
-use crate::destructuring::*;
 use crate::ir::*;
-use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr,
-    throw_reference_error_expr, LoweringContext,
-};
-use crate::lower_patterns::*;
+use crate::lower::{throw_reference_error_expr, LoweringContext};
 use crate::lower_types::*;
 use crate::walker::walk_expr_children_mut;
 

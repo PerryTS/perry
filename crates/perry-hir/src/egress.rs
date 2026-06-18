@@ -236,15 +236,13 @@ fn visit_expr(expr: &Expr, ctx: &mut WalkCtx) {
 
 fn check_url(ctx: &mut WalkCtx, kind: &'static str, url: &Expr) {
     match url {
-        Expr::String(s) => {
-            if !url_matches_allowlist(s, ctx.allowed_hosts) {
-                ctx.violations.push(EgressViolation {
-                    source: ctx.source.clone(),
-                    kind,
-                    literal: Some(s.clone()),
-                    reason: EgressRefusalReason::LiteralNotAllowed,
-                });
-            }
+        Expr::String(s) if !url_matches_allowlist(s, ctx.allowed_hosts) => {
+            ctx.violations.push(EgressViolation {
+                source: ctx.source.clone(),
+                kind,
+                literal: Some(s.clone()),
+                reason: EgressRefusalReason::LiteralNotAllowed,
+            });
         }
         _ if !ctx.allow_dynamic_hosts => {
             ctx.violations.push(EgressViolation {
@@ -260,15 +258,13 @@ fn check_url(ctx: &mut WalkCtx, kind: &'static str, url: &Expr) {
 
 fn check_host(ctx: &mut WalkCtx, kind: &'static str, host: &Expr) {
     match host {
-        Expr::String(s) => {
-            if !host_matches_allowlist(s, ctx.allowed_hosts) {
-                ctx.violations.push(EgressViolation {
-                    source: ctx.source.clone(),
-                    kind,
-                    literal: Some(s.clone()),
-                    reason: EgressRefusalReason::LiteralNotAllowed,
-                });
-            }
+        Expr::String(s) if !host_matches_allowlist(s, ctx.allowed_hosts) => {
+            ctx.violations.push(EgressViolation {
+                source: ctx.source.clone(),
+                kind,
+                literal: Some(s.clone()),
+                reason: EgressRefusalReason::LiteralNotAllowed,
+            });
         }
         _ if !ctx.allow_dynamic_hosts => {
             ctx.violations.push(EgressViolation {

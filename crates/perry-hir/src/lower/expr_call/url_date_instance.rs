@@ -2,19 +2,15 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::static_receiver::static_receiver_class;
 use super::url_search_params::build_url_search_params_method_call;
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{lower_expr, LoweringContext};
 
 fn new_callee_name(ctx: &LoweringContext, new_expr: &ast::NewExpr) -> Option<String> {
     match new_expr.callee.as_ref() {

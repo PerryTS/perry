@@ -685,19 +685,9 @@ fn lower_assignment_target(
                                     } else {
                                         None
                                     }
-                                } else if let Some(func_id) = ctx.lookup_func(&cls_name) {
-                                    // Top-level / globally-registered function
-                                    // without a corresponding local binding
-                                    // (rare; most function decls also get a
-                                    // local). FuncRef lowering produces the
-                                    // singleton wrapper closure — paired
-                                    // with the matching `new` site that
-                                    // also lowers `<Ident>` through FuncRef
-                                    // (the codegen-side `try_static_class_name`
-                                    // path), the bits agree.
-                                    Some(ProtoOwner::Func(Expr::FuncRef(func_id)))
                                 } else {
-                                    None
+                                    ctx.lookup_func(&cls_name)
+                                        .map(|func_id| ProtoOwner::Func(Expr::FuncRef(func_id)))
                                 }
                             } else {
                                 None
@@ -724,12 +714,11 @@ fn lower_assignment_target(
                                 ctx.prototype_function_aliases.get(&id).copied()
                             {
                                 Some(ProtoOwner::Func(Expr::FuncRef(func_id)))
-                            } else if let Some(src_local) =
-                                ctx.prototype_function_locals.get(&id).copied()
-                            {
-                                Some(ProtoOwner::Func(Expr::LocalGet(src_local)))
                             } else {
-                                None
+                                ctx.prototype_function_locals
+                                    .get(&id)
+                                    .copied()
+                                    .map(|src_local| ProtoOwner::Func(Expr::LocalGet(src_local)))
                             }
                         } else {
                             None

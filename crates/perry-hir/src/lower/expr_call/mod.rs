@@ -18,13 +18,9 @@ use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower_patterns::detect_native_instance_expr;
 use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::{lower_expr, LoweringContext};
 
 mod array_only_methods;
 mod crypto;

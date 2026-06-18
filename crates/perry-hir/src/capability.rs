@@ -101,7 +101,7 @@ pub fn audit_module_capabilities(
         // `is_host = false`. Default-deny still safer than crash.
         Vec::new()
     };
-    if allowed.iter().any(|t| *t == "*") {
+    if allowed.contains(&"*") {
         return Vec::new();
     }
     let mut ctx = WalkCtx {
@@ -227,7 +227,7 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
 
 fn visit_expr(expr: &Expr, ctx: &mut WalkCtx) {
     if let Some((cap, kind)) = required_capability(expr) {
-        if !ctx.allowed.iter().any(|t| *t == cap) {
+        if !ctx.allowed.contains(&cap) {
             ctx.violations.push(CapabilityViolation {
                 source: ctx.source.clone(),
                 package: ctx.package.clone(),

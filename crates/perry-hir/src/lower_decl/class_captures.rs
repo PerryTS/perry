@@ -1,25 +1,9 @@
-use anyhow::{anyhow, bail, Result};
 use perry_types::{LocalId, Type};
-use swc_ecma_ast as ast;
 
-use crate::analysis::*;
-use crate::destructuring::*;
 use crate::ir::*;
-use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
-};
-use crate::lower_patterns::*;
-use crate::lower_types::*;
+use crate::lower::LoweringContext;
 
 use super::class_members::collect_method_captures;
-use super::class_validation::*;
-use super::enum_decl::*;
-use super::fn_decl::*;
-use super::helpers::*;
-use super::interface_decl::*;
-use super::private_members::*;
-use super::type_alias::*;
-use super::*;
 
 pub fn synthesize_class_captures(
     ctx: &mut LoweringContext,

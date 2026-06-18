@@ -3,19 +3,14 @@
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
 use anyhow::Result;
-use perry_types::{LocalId, Type};
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
-use super::super::unimpl_hints;
 use super::static_receiver::static_receiver_class;
-use super::url_search_params::build_url_search_params_method_call;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{extract_typed_parse_source_order, resolve_typed_parse_ty, LoweringContext};
 use super::os::user_info_expr_for_call;
 
 fn peel_webassembly_receiver_expr(mut expr: &ast::Expr) -> &ast::Expr {
@@ -74,33 +69,27 @@ pub(super) fn try_module_static_methods(
                     && is_webassembly_namespace_receiver(ctx, class_member.obj.as_ref())
                 {
                     match method_ident.sym.as_ref() {
-                        "exports" => {
-                            if !args.is_empty() {
-                                ctx.uses_webassembly = true;
-                                return Ok(Ok(Expr::WebAssemblyModuleExports(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "exports" if !args.is_empty() => {
+                            ctx.uses_webassembly = true;
+                            return Ok(Ok(Expr::WebAssemblyModuleExports(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "imports" => {
-                            if !args.is_empty() {
-                                ctx.uses_webassembly = true;
-                                return Ok(Ok(Expr::WebAssemblyModuleImports(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "imports" if !args.is_empty() => {
+                            ctx.uses_webassembly = true;
+                            return Ok(Ok(Expr::WebAssemblyModuleImports(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "customSections" => {
-                            if args.len() >= 2 {
-                                ctx.uses_webassembly = true;
-                                let mut it = args.into_iter();
-                                let module = it.next().unwrap();
-                                let name = it.next().unwrap();
-                                return Ok(Ok(Expr::WebAssemblyModuleCustomSections {
-                                    module: Box::new(module),
-                                    name: Box::new(name),
-                                }));
-                            }
+                        "customSections" if args.len() >= 2 => {
+                            ctx.uses_webassembly = true;
+                            let mut it = args.into_iter();
+                            let module = it.next().unwrap();
+                            let name = it.next().unwrap();
+                            return Ok(Ok(Expr::WebAssemblyModuleCustomSections {
+                                module: Box::new(module),
+                                name: Box::new(name),
+                            }));
                         }
                         _ => {}
                     }
@@ -112,35 +101,29 @@ pub(super) fn try_module_static_methods(
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.as_ref();
                 match method_name {
-                    "validate" => {
-                        if !args.is_empty() {
-                            ctx.uses_webassembly = true;
-                            return Ok(Ok(Expr::WebAssemblyValidate(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "validate" if !args.is_empty() => {
+                        ctx.uses_webassembly = true;
+                        return Ok(Ok(Expr::WebAssemblyValidate(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "instantiate" => {
-                        if !args.is_empty() {
-                            ctx.uses_webassembly = true;
-                            return Ok(Ok(Expr::WebAssemblyInstantiate(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "instantiate" if !args.is_empty() => {
+                        ctx.uses_webassembly = true;
+                        return Ok(Ok(Expr::WebAssemblyInstantiate(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "callExport" => {
-                        if args.len() >= 2 {
-                            ctx.uses_webassembly = true;
-                            let mut it = args.into_iter();
-                            let instance = it.next().unwrap();
-                            let name = it.next().unwrap();
-                            let rest: Vec<Expr> = it.collect();
-                            return Ok(Ok(Expr::WebAssemblyCallExport {
-                                instance: Box::new(instance),
-                                name: Box::new(name),
-                                args: rest,
-                            }));
-                        }
+                    "callExport" if args.len() >= 2 => {
+                        ctx.uses_webassembly = true;
+                        let mut it = args.into_iter();
+                        let instance = it.next().unwrap();
+                        let name = it.next().unwrap();
+                        let rest: Vec<Expr> = it.collect();
+                        return Ok(Ok(Expr::WebAssemblyCallExport {
+                            instance: Box::new(instance),
+                            name: Box::new(name),
+                            args: rest,
+                        }));
                     }
                     _ => {}
                 }
@@ -155,70 +138,54 @@ pub(super) fn try_module_static_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
-                        "readFileSync" => {
-                            if args.len() == 1 {
-                                // readFileSync(path) without encoding — returns Buffer (Node parity)
-                                return Ok(Ok(Expr::FsReadFileBinary(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "readFileSync" if args.len() == 1 => {
+                            // readFileSync(path) without encoding — returns Buffer (Node parity)
+                            return Ok(Ok(Expr::FsReadFileBinary(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "writeFileSync" => {
-                            if args.len() == 2 {
-                                let mut iter = args.into_iter();
-                                let path = iter.next().unwrap();
-                                let content = iter.next().unwrap();
-                                return Ok(Ok(Expr::FsWriteFileSync(
-                                    Box::new(path),
-                                    Box::new(content),
-                                )));
-                            }
+                        "writeFileSync" if args.len() == 2 => {
+                            let mut iter = args.into_iter();
+                            let path = iter.next().unwrap();
+                            let content = iter.next().unwrap();
+                            return Ok(Ok(Expr::FsWriteFileSync(
+                                Box::new(path),
+                                Box::new(content),
+                            )));
                         }
-                        "appendFileSync" => {
-                            if args.len() == 2 {
-                                let mut iter = args.into_iter();
-                                let path = iter.next().unwrap();
-                                let content = iter.next().unwrap();
-                                return Ok(Ok(Expr::FsAppendFileSync(
-                                    Box::new(path),
-                                    Box::new(content),
-                                )));
-                            }
+                        "appendFileSync" if args.len() == 2 => {
+                            let mut iter = args.into_iter();
+                            let path = iter.next().unwrap();
+                            let content = iter.next().unwrap();
+                            return Ok(Ok(Expr::FsAppendFileSync(
+                                Box::new(path),
+                                Box::new(content),
+                            )));
                         }
-                        "existsSync" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::FsExistsSync(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "existsSync" if !args.is_empty() => {
+                            return Ok(Ok(Expr::FsExistsSync(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "mkdirSync" => {
-                            if args.len() == 1 {
-                                return Ok(Ok(Expr::FsMkdirSync(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "mkdirSync" if args.len() == 1 => {
+                            return Ok(Ok(Expr::FsMkdirSync(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "unlinkSync" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::FsUnlinkSync(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "unlinkSync" if !args.is_empty() => {
+                            return Ok(Ok(Expr::FsUnlinkSync(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "readFileBuffer" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::FsReadFileBinary(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "readFileBuffer" if !args.is_empty() => {
+                            return Ok(Ok(Expr::FsReadFileBinary(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "rmRecursive" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::FsRmRecursive(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "rmRecursive" if !args.is_empty() => {
+                            return Ok(Ok(Expr::FsRmRecursive(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
                         // Issue #648 fallout: `fs.rmSync(path, opts?)` was
                         // historically silently no-op'd by `js_native_call_method`'s
@@ -257,12 +224,10 @@ pub(super) fn try_module_static_methods(
                             }
                             return Ok(Ok(result));
                         }
-                        "dirname" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::PathDirname(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "dirname" if !args.is_empty() => {
+                            return Ok(Ok(Expr::PathDirname(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
                         "basename" => {
                             if args.len() >= 2 {
@@ -280,12 +245,10 @@ pub(super) fn try_module_static_methods(
                                 ))));
                             }
                         }
-                        "extname" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::PathExtname(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "extname" if !args.is_empty() => {
+                            return Ok(Ok(Expr::PathExtname(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
                         "resolve" => {
                             if args.is_empty() {
@@ -308,59 +271,45 @@ pub(super) fn try_module_static_methods(
                                 return Ok(Ok(Expr::PathResolve(Box::new(joined))));
                             }
                         }
-                        "isAbsolute" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::PathIsAbsolute(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "isAbsolute" if !args.is_empty() => {
+                            return Ok(Ok(Expr::PathIsAbsolute(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "relative" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let from = iter.next().unwrap();
-                                let to = iter.next().unwrap();
-                                return Ok(Ok(Expr::PathRelative(Box::new(from), Box::new(to))));
-                            }
+                        "relative" if args.len() >= 2 => {
+                            let mut iter = args.into_iter();
+                            let from = iter.next().unwrap();
+                            let to = iter.next().unwrap();
+                            return Ok(Ok(Expr::PathRelative(Box::new(from), Box::new(to))));
                         }
-                        "normalize" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::PathNormalize(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "normalize" if !args.is_empty() => {
+                            return Ok(Ok(Expr::PathNormalize(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "parse" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::PathParse(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "parse" if !args.is_empty() => {
+                            return Ok(Ok(Expr::PathParse(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "format" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::PathFormat(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "format" if !args.is_empty() => {
+                            return Ok(Ok(Expr::PathFormat(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "toNamespacedPath" | "_makeLong" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "toNamespacedPath" | "_makeLong" if !args.is_empty() => {
+                            return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "matchesGlob" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let path_arg = iter.next().unwrap();
-                                let pattern = iter.next().unwrap();
-                                return Ok(Ok(Expr::PathMatchesGlob(
-                                    Box::new(path_arg),
-                                    Box::new(pattern),
-                                )));
-                            }
+                        "matchesGlob" if args.len() >= 2 => {
+                            let mut iter = args.into_iter();
+                            let path_arg = iter.next().unwrap();
+                            let pattern = iter.next().unwrap();
+                            return Ok(Ok(Expr::PathMatchesGlob(
+                                Box::new(path_arg),
+                                Box::new(pattern),
+                            )));
                         }
                         _ => {} // Fall through to generic handling
                     }
@@ -470,20 +419,18 @@ pub(super) fn try_module_static_methods(
                                 )));
                             }
                         }
-                        "rawJSON" => {
+                        "rawJSON"
                             // #2900: `JSON.rawJSON(text)` -> raw-JSON wrapper.
-                            if !args.is_empty() {
+                            if !args.is_empty() => {
                                 let text = args.into_iter().next().unwrap();
                                 return Ok(Ok(Expr::JsonRawJson(Box::new(text))));
                             }
-                        }
-                        "isRawJSON" => {
+                        "isRawJSON"
                             // #2900: `JSON.isRawJSON(value)` -> boolean.
-                            if !args.is_empty() {
+                            if !args.is_empty() => {
                                 let value = args.into_iter().next().unwrap();
                                 return Ok(Ok(Expr::JsonIsRawJson(Box::new(value))));
                             }
-                        }
                         _ => {} // Fall through to generic handling
                     }
                 }
@@ -600,43 +547,35 @@ pub(super) fn try_module_static_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
-                        "validate" => {
-                            if !args.is_empty() {
-                                ctx.uses_webassembly = true;
-                                return Ok(Ok(Expr::WebAssemblyValidate(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "validate" if !args.is_empty() => {
+                            ctx.uses_webassembly = true;
+                            return Ok(Ok(Expr::WebAssemblyValidate(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "compile" => {
-                            if !args.is_empty() {
-                                ctx.uses_webassembly = true;
-                                return Ok(Ok(Expr::WebAssemblyCompile(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "compile" if !args.is_empty() => {
+                            ctx.uses_webassembly = true;
+                            return Ok(Ok(Expr::WebAssemblyCompile(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "instantiate" => {
-                            if !args.is_empty() {
-                                ctx.uses_webassembly = true;
-                                return Ok(Ok(Expr::WebAssemblyInstantiate(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "instantiate" if !args.is_empty() => {
+                            ctx.uses_webassembly = true;
+                            return Ok(Ok(Expr::WebAssemblyInstantiate(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "callExport" => {
-                            if args.len() >= 2 {
-                                ctx.uses_webassembly = true;
-                                let mut it = args.into_iter();
-                                let instance = it.next().unwrap();
-                                let name = it.next().unwrap();
-                                let rest: Vec<Expr> = it.collect();
-                                return Ok(Ok(Expr::WebAssemblyCallExport {
-                                    instance: Box::new(instance),
-                                    name: Box::new(name),
-                                    args: rest,
-                                }));
-                            }
+                        "callExport" if args.len() >= 2 => {
+                            ctx.uses_webassembly = true;
+                            let mut it = args.into_iter();
+                            let instance = it.next().unwrap();
+                            let name = it.next().unwrap();
+                            let rest: Vec<Expr> = it.collect();
+                            return Ok(Ok(Expr::WebAssemblyCallExport {
+                                instance: Box::new(instance),
+                                name: Box::new(name),
+                                args: rest,
+                            }));
                         }
                         _ => {}
                     }
@@ -653,83 +592,61 @@ pub(super) fn try_module_static_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
-                        "floor" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathFloor(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "floor" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathFloor(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "ceil" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathCeil(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "ceil" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathCeil(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "round" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathRound(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "round" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathRound(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "trunc" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathTrunc(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "trunc" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathTrunc(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "sign" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathSign(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "sign" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathSign(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "abs" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathAbs(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "abs" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathAbs(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "sqrt" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathSqrt(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "sqrt" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathSqrt(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "log" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathLog(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "log" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathLog(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "log2" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathLog2(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "log2" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathLog2(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "log10" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathLog10(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "log10" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathLog10(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "pow" => {
-                            if args.len() >= 2 {
-                                let mut args_iter = args.into_iter();
-                                let base = args_iter.next().unwrap();
-                                let exp = args_iter.next().unwrap();
-                                return Ok(Ok(Expr::MathPow(Box::new(base), Box::new(exp))));
-                            }
+                        "pow" if args.len() >= 2 => {
+                            let mut args_iter = args.into_iter();
+                            let base = args_iter.next().unwrap();
+                            let exp = args_iter.next().unwrap();
+                            return Ok(Ok(Expr::MathPow(Box::new(base), Box::new(exp))));
                         }
                         "min" => {
                             if has_spread && args.len() == 1 {
@@ -750,157 +667,115 @@ pub(super) fn try_module_static_methods(
                         "random" => {
                             return Ok(Ok(Expr::MathRandom));
                         }
-                        "imul" => {
-                            if args.len() >= 2 {
-                                let mut args_iter = args.into_iter();
-                                let a = args_iter.next().unwrap();
-                                let b = args_iter.next().unwrap();
-                                return Ok(Ok(Expr::MathImul(Box::new(a), Box::new(b))));
-                            }
+                        "imul" if args.len() >= 2 => {
+                            let mut args_iter = args.into_iter();
+                            let a = args_iter.next().unwrap();
+                            let b = args_iter.next().unwrap();
+                            return Ok(Ok(Expr::MathImul(Box::new(a), Box::new(b))));
                         }
-                        "sin" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathSin(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "sin" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathSin(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "cos" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathCos(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "cos" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathCos(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "tan" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathTan(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "tan" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathTan(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "asin" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathAsin(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "asin" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathAsin(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "acos" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathAcos(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "acos" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathAcos(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "atan" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathAtan(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "atan" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathAtan(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "atan2" => {
-                            if args.len() >= 2 {
-                                let mut args_iter = args.into_iter();
-                                let y = args_iter.next().unwrap();
-                                let x = args_iter.next().unwrap();
-                                return Ok(Ok(Expr::MathAtan2(Box::new(y), Box::new(x))));
-                            }
+                        "atan2" if args.len() >= 2 => {
+                            let mut args_iter = args.into_iter();
+                            let y = args_iter.next().unwrap();
+                            let x = args_iter.next().unwrap();
+                            return Ok(Ok(Expr::MathAtan2(Box::new(y), Box::new(x))));
                         }
-                        "cbrt" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathCbrt(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "cbrt" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathCbrt(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
                         "hypot" => {
                             return Ok(Ok(Expr::MathHypot(args)));
                         }
-                        "fround" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathFround(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "fround" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathFround(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "f16round" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathF16round(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "f16round" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathF16round(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "clz32" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathClz32(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "clz32" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathClz32(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "expm1" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathExpm1(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "expm1" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathExpm1(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "log1p" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathLog1p(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "log1p" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathLog1p(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "sinh" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathSinh(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "sinh" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathSinh(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "cosh" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathCosh(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "cosh" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathCosh(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "tanh" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathTanh(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "tanh" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathTanh(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "asinh" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathAsinh(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "asinh" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathAsinh(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "acosh" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathAcosh(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "acosh" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathAcosh(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "atanh" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathAtanh(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "atanh" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathAtanh(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "exp" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::MathExp(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "exp" if !args.is_empty() => {
+                            return Ok(Ok(Expr::MathExp(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
                         _ => {} // Fall through to generic handling
                     }
@@ -1103,19 +978,15 @@ pub(super) fn try_module_static_methods(
                         }
                     }
                     match method_name {
-                        "sha256" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::CryptoSha256(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "sha256" if !args.is_empty() => {
+                            return Ok(Ok(Expr::CryptoSha256(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "md5" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::CryptoMd5(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "md5" if !args.is_empty() => {
+                            return Ok(Ok(Expr::CryptoMd5(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
                         // `crypto.getRandomValues(buf)` fills the buffer
                         // in-place with random bytes and returns it.
@@ -1123,19 +994,17 @@ pub(super) fn try_module_static_methods(
                         // the runtime buffer dispatcher (added in
                         // perry-runtime/src/object.rs) handles it via
                         // `js_buffer_fill_random`.
-                        "getRandomValues" => {
-                            if !args.is_empty() {
-                                let buf_arg = args.into_iter().next().unwrap();
-                                return Ok(Ok(Expr::Call {
-                                    callee: Box::new(Expr::PropertyGet {
-                                        object: Box::new(buf_arg),
-                                        property: "$$cryptoFillRandom".to_string(),
-                                    }),
-                                    args: vec![],
-                                    type_args: vec![],
-                                    byte_offset: 0,
-                                }));
-                            }
+                        "getRandomValues" if !args.is_empty() => {
+                            let buf_arg = args.into_iter().next().unwrap();
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(buf_arg),
+                                    property: "$$cryptoFillRandom".to_string(),
+                                }),
+                                args: vec![],
+                                type_args: vec![],
+                                byte_offset: 0,
+                            }));
                         }
                         // `crypto.randomBytes` / `randomUUID` /
                         // `randomFillSync` are handled by the shared
@@ -1226,7 +1095,7 @@ pub(super) fn try_module_static_methods(
             // first Buffer site above).
             let is_buffer_ref = obj_name == "Buffer"
                 || matches!(
-                    ctx.lookup_native_module(&obj_name),
+                    ctx.lookup_native_module(obj_name),
                     Some(("buffer", Some("Buffer")))
                 );
             if is_buffer_ref {
@@ -1254,38 +1123,32 @@ pub(super) fn try_module_static_methods(
                                 encoding,
                             }));
                         }
-                        "alloc" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let size = args_iter.next().unwrap();
-                                let fill = args_iter.next().map(Box::new);
-                                let encoding = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::BufferAlloc {
-                                    size: Box::new(size),
-                                    fill,
-                                    encoding,
+                        "alloc" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let size = args_iter.next().unwrap();
+                            let fill = args_iter.next().map(Box::new);
+                            let encoding = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::BufferAlloc {
+                                size: Box::new(size),
+                                fill,
+                                encoding,
+                            }));
+                        }
+                        "allocUnsafe" | "allocUnsafeSlow" if !args.is_empty() => {
+                            return Ok(Ok(Expr::BufferAllocUnsafe(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
+                        }
+                        "concat" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let list = args_iter.next().unwrap();
+                            if let Some(total_length) = args_iter.next() {
+                                return Ok(Ok(Expr::BufferConcatWithLength {
+                                    list: Box::new(list),
+                                    total_length: Box::new(total_length),
                                 }));
                             }
-                        }
-                        "allocUnsafe" | "allocUnsafeSlow" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::BufferAllocUnsafe(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
-                        }
-                        "concat" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let list = args_iter.next().unwrap();
-                                if let Some(total_length) = args_iter.next() {
-                                    return Ok(Ok(Expr::BufferConcatWithLength {
-                                        list: Box::new(list),
-                                        total_length: Box::new(total_length),
-                                    }));
-                                }
-                                return Ok(Ok(Expr::BufferConcat(Box::new(list))));
-                            }
+                            return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                         }
                         "copyBytesFrom" => {
                             return Ok(Ok(Expr::NativeMethodCall {
@@ -1302,51 +1165,43 @@ pub(super) fn try_module_static_methods(
                                 encoding: None,
                             }));
                         }
-                        "isBuffer" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::BufferIsBuffer(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "isBuffer" if !args.is_empty() => {
+                            return Ok(Ok(Expr::BufferIsBuffer(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "isEncoding" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::BufferIsEncoding(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "isEncoding" if !args.is_empty() => {
+                            return Ok(Ok(Expr::BufferIsEncoding(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "byteLength" => {
-                            if !args.is_empty() {
-                                let mut it = args.into_iter();
-                                let data = it.next().unwrap();
-                                let encoding = it.next().map(Box::new);
-                                return Ok(Ok(Expr::BufferByteLength {
-                                    data: Box::new(data),
-                                    encoding,
-                                }));
-                            }
+                        "byteLength" if !args.is_empty() => {
+                            let mut it = args.into_iter();
+                            let data = it.next().unwrap();
+                            let encoding = it.next().map(Box::new);
+                            return Ok(Ok(Expr::BufferByteLength {
+                                data: Box::new(data),
+                                encoding,
+                            }));
                         }
                         // `Buffer.compare(a, b)` returns -1/0/1. The runtime
                         // dispatch already handles `a.compare(b)` as an
                         // instance method routing through `js_buffer_compare`.
                         // Synthesize that form so we don't need a dedicated
                         // HIR variant or runtime entry point.
-                        "compare" => {
-                            if args.len() >= 2 {
-                                let mut iter = args.into_iter();
-                                let a = iter.next().unwrap();
-                                let b = iter.next().unwrap();
-                                return Ok(Ok(Expr::Call {
-                                    callee: Box::new(Expr::PropertyGet {
-                                        object: Box::new(a),
-                                        property: "compare".to_string(),
-                                    }),
-                                    args: vec![b],
-                                    type_args: vec![],
-                                    byte_offset: 0,
-                                }));
-                            }
+                        "compare" if args.len() >= 2 => {
+                            let mut iter = args.into_iter();
+                            let a = iter.next().unwrap();
+                            let b = iter.next().unwrap();
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::PropertyGet {
+                                    object: Box::new(a),
+                                    property: "compare".to_string(),
+                                }),
+                                args: vec![b],
+                                type_args: vec![],
+                                byte_offset: 0,
+                            }));
                         }
                         _ => {} // Fall through to generic handling
                     }
@@ -1381,11 +1236,11 @@ pub(super) fn try_module_static_methods(
             // (no mapFn). This intentionally only fires when the receiver name
             // is a real global typed-array constructor (not shadowed by a
             // local/import/class binding).
-            if let Some(kind) = crate::ir::typed_array_kind_for_name(&obj_name) {
-                let shadowed = ctx.lookup_local(&obj_name).is_some()
-                    || ctx.lookup_func(&obj_name).is_some()
-                    || ctx.lookup_imported_func(&obj_name).is_some()
-                    || ctx.lookup_class(&obj_name).is_some();
+            if let Some(kind) = crate::ir::typed_array_kind_for_name(obj_name) {
+                let shadowed = ctx.lookup_local(obj_name).is_some()
+                    || ctx.lookup_func(obj_name).is_some()
+                    || ctx.lookup_imported_func(obj_name).is_some()
+                    || ctx.lookup_class(obj_name).is_some();
                 if !shadowed && obj_name != "Uint8Array" {
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                         let method_name = method_ident.sym.as_ref();
@@ -1417,125 +1272,105 @@ pub(super) fn try_module_static_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
-                        "execSync" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let command = args_iter.next().unwrap();
-                                let options = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessExecSync {
-                                    command: Box::new(command),
-                                    options,
-                                }));
-                            }
+                        "execSync" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExecSync {
+                                command: Box::new(command),
+                                options,
+                            }));
                         }
-                        "spawnSync" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let command = args_iter.next().unwrap();
-                                let spawn_args = args_iter.next().map(Box::new);
-                                let options = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessSpawnSync {
-                                    command: Box::new(command),
-                                    args: spawn_args,
-                                    options,
-                                }));
-                            }
+                        "spawnSync" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let spawn_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessSpawnSync {
+                                command: Box::new(command),
+                                args: spawn_args,
+                                options,
+                            }));
                         }
-                        "spawn" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let command = args_iter.next().unwrap();
-                                let spawn_args = args_iter.next().map(Box::new);
-                                let options = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessSpawn {
-                                    command: Box::new(command),
-                                    args: spawn_args,
-                                    options,
-                                }));
-                            }
+                        "spawn" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let spawn_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessSpawn {
+                                command: Box::new(command),
+                                args: spawn_args,
+                                options,
+                            }));
                         }
-                        "fork" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let module = args_iter.next().unwrap();
-                                let fork_args = args_iter.next().map(Box::new);
-                                let options = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessFork {
-                                    module: Box::new(module),
-                                    args: fork_args,
-                                    options,
-                                }));
-                            }
+                        "fork" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let module = args_iter.next().unwrap();
+                            let fork_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessFork {
+                                module: Box::new(module),
+                                args: fork_args,
+                                options,
+                            }));
                         }
-                        "exec" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let command = args_iter.next().unwrap();
-                                let options = args_iter.next().map(Box::new);
-                                let callback = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessExec {
-                                    command: Box::new(command),
-                                    options,
-                                    callback,
-                                }));
-                            }
+                        "exec" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let options = args_iter.next().map(Box::new);
+                            let callback = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExec {
+                                command: Box::new(command),
+                                options,
+                                callback,
+                            }));
                         }
-                        "execFile" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let file = args_iter.next().unwrap();
-                                let file_args = args_iter.next().map(Box::new);
-                                let options = args_iter.next().map(Box::new);
-                                let callback = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessExecFile {
-                                    file: Box::new(file),
-                                    args: file_args,
-                                    options,
-                                    callback,
-                                }));
-                            }
+                        "execFile" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let file = args_iter.next().unwrap();
+                            let file_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            let callback = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExecFile {
+                                file: Box::new(file),
+                                args: file_args,
+                                options,
+                                callback,
+                            }));
                         }
-                        "execFileSync" => {
-                            if !args.is_empty() {
-                                let mut args_iter = args.into_iter();
-                                let file = args_iter.next().unwrap();
-                                let file_args = args_iter.next().map(Box::new);
-                                let options = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessExecFileSync {
-                                    file: Box::new(file),
-                                    args: file_args,
-                                    options,
-                                }));
-                            }
+                        "execFileSync" if !args.is_empty() => {
+                            let mut args_iter = args.into_iter();
+                            let file = args_iter.next().unwrap();
+                            let file_args = args_iter.next().map(Box::new);
+                            let options = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessExecFileSync {
+                                file: Box::new(file),
+                                args: file_args,
+                                options,
+                            }));
                         }
-                        "spawnBackground" => {
-                            if args.len() >= 3 {
-                                let mut args_iter = args.into_iter();
-                                let command = args_iter.next().unwrap();
-                                let spawn_args = args_iter.next().map(Box::new);
-                                let log_file = args_iter.next().unwrap();
-                                let env_json = args_iter.next().map(Box::new);
-                                return Ok(Ok(Expr::ChildProcessSpawnBackground {
-                                    command: Box::new(command),
-                                    args: spawn_args,
-                                    log_file: Box::new(log_file),
-                                    env_json,
-                                }));
-                            }
+                        "spawnBackground" if args.len() >= 3 => {
+                            let mut args_iter = args.into_iter();
+                            let command = args_iter.next().unwrap();
+                            let spawn_args = args_iter.next().map(Box::new);
+                            let log_file = args_iter.next().unwrap();
+                            let env_json = args_iter.next().map(Box::new);
+                            return Ok(Ok(Expr::ChildProcessSpawnBackground {
+                                command: Box::new(command),
+                                args: spawn_args,
+                                log_file: Box::new(log_file),
+                                env_json,
+                            }));
                         }
-                        "getProcessStatus" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::ChildProcessGetProcessStatus(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "getProcessStatus" if !args.is_empty() => {
+                            return Ok(Ok(Expr::ChildProcessGetProcessStatus(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
-                        "killProcess" => {
-                            if !args.is_empty() {
-                                return Ok(Ok(Expr::ChildProcessKillProcess(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
-                            }
+                        "killProcess" if !args.is_empty() => {
+                            return Ok(Ok(Expr::ChildProcessKillProcess(Box::new(
+                                args.into_iter().next().unwrap(),
+                            ))));
                         }
                         _ => {} // Fall through to generic handling
                     }

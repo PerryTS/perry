@@ -2,19 +2,13 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
-use super::super::unimpl_hints;
-use super::stream::is_stream_api_method;
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::LoweringContext;
 
 pub(super) fn try_module_class_static(
     ctx: &mut LoweringContext,
@@ -207,33 +201,29 @@ pub(super) fn try_module_class_static(
                         if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
                             let method_name = method_ident.sym.as_ref();
                             match (stream, method_name) {
-                                ("stdin", "setRawMode") => {
-                                    if !args.is_empty() {
-                                        let arg = args.into_iter().next().unwrap();
-                                        return Ok(Ok(Expr::ProcessStdinSetRawMode(Box::new(arg))));
-                                    }
+                                ("stdin", "setRawMode") if !args.is_empty() => {
+                                    let arg = args.into_iter().next().unwrap();
+                                    return Ok(Ok(Expr::ProcessStdinSetRawMode(Box::new(arg))));
                                 }
-                                ("stdin", "on") | ("stdin", "addListener") => {
-                                    if args.len() >= 2 {
-                                        let mut iter = args.into_iter();
-                                        let event = iter.next().unwrap();
-                                        let handler = iter.next().unwrap();
-                                        return Ok(Ok(Expr::ProcessStdinOn {
-                                            event: Box::new(event),
-                                            handler: Box::new(handler),
-                                        }));
-                                    }
+                                ("stdin", "on") | ("stdin", "addListener") if args.len() >= 2 => {
+                                    let mut iter = args.into_iter();
+                                    let event = iter.next().unwrap();
+                                    let handler = iter.next().unwrap();
+                                    return Ok(Ok(Expr::ProcessStdinOn {
+                                        event: Box::new(event),
+                                        handler: Box::new(handler),
+                                    }));
                                 }
-                                ("stdin", "removeListener") | ("stdin", "off") => {
-                                    if args.len() >= 2 {
-                                        let mut iter = args.into_iter();
-                                        let event = iter.next().unwrap();
-                                        let handler = iter.next().unwrap();
-                                        return Ok(Ok(Expr::ProcessStdinRemoveListener {
-                                            event: Box::new(event),
-                                            handler: Box::new(handler),
-                                        }));
-                                    }
+                                ("stdin", "removeListener") | ("stdin", "off")
+                                    if args.len() >= 2 =>
+                                {
+                                    let mut iter = args.into_iter();
+                                    let event = iter.next().unwrap();
+                                    let handler = iter.next().unwrap();
+                                    return Ok(Ok(Expr::ProcessStdinRemoveListener {
+                                        event: Box::new(event),
+                                        handler: Box::new(handler),
+                                    }));
                                 }
                                 ("stdin", "pause") => {
                                     return Ok(Ok(Expr::ProcessStdinLifecycle(
@@ -260,16 +250,14 @@ pub(super) fn try_module_class_static(
                                         ProcessStdinLifecycleMethod::Destroy,
                                     )));
                                 }
-                                ("stdout", "on") => {
-                                    if args.len() >= 2 {
-                                        let mut iter = args.into_iter();
-                                        let event = iter.next().unwrap();
-                                        let handler = iter.next().unwrap();
-                                        return Ok(Ok(Expr::ProcessStdoutOn {
-                                            event: Box::new(event),
-                                            handler: Box::new(handler),
-                                        }));
-                                    }
+                                ("stdout", "on") if args.len() >= 2 => {
+                                    let mut iter = args.into_iter();
+                                    let event = iter.next().unwrap();
+                                    let handler = iter.next().unwrap();
+                                    return Ok(Ok(Expr::ProcessStdoutOn {
+                                        event: Box::new(event),
+                                        handler: Box::new(handler),
+                                    }));
                                 }
                                 _ => {}
                             }

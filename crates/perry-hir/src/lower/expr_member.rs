@@ -1090,10 +1090,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 } else {
                                     None
                                 }
-                            } else if let Some(func_id) = ctx.lookup_func(&fn_name) {
-                                Some(Expr::FuncRef(func_id))
                             } else {
-                                None
+                                ctx.lookup_func(&fn_name).map(Expr::FuncRef)
                             };
                             if let Some(func_expr) = func_expr {
                                 return Ok(Expr::GetFunctionPrototypeMethod {

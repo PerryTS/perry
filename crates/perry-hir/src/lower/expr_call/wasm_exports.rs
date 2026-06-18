@@ -2,17 +2,12 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{lower_expr, LoweringContext};
 
 pub(super) fn try_wasm_instance_exports(
     ctx: &mut LoweringContext,

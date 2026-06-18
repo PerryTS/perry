@@ -1,17 +1,5 @@
-use anyhow::{anyhow, bail, Result};
-use perry_types::{LocalId, Type};
+use anyhow::{bail, Result};
 use swc_ecma_ast as ast;
-
-use crate::analysis::*;
-use crate::destructuring::*;
-use crate::ir::*;
-use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
-};
-use crate::lower_patterns::*;
-use crate::lower_types::*;
-
-use super::*;
 
 pub fn validate_legacy_decorator_surface(class: &ast::Class, class_name: &str) -> Result<()> {
     for member in &class.body {
@@ -91,10 +79,8 @@ pub fn validate_class_element_early_errors(class: &ast::Class, class_name: &str)
             // are type-only declarations, not constructors — only the
             // implementation (the one with a body) counts (#4872, rxjs's
             // `Notification` has 3 overload signatures + 1 implementation).
-            ast::ClassMember::Constructor(c) => {
-                if c.body.is_some() {
-                    constructor_count += 1;
-                }
+            ast::ClassMember::Constructor(c) if c.body.is_some() => {
+                constructor_count += 1;
             }
             ast::ClassMember::Method(m) => {
                 let Some(name) = static_prop_name(&m.key) else {

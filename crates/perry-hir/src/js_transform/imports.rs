@@ -1,8 +1,7 @@
 use crate::ir::{Expr, Module, ModuleKind, Stmt};
 use perry_types::LocalId;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
-use super::*;
 /// Information about a JavaScript module import
 #[derive(Debug, Clone)]
 pub struct JsImportInfo {

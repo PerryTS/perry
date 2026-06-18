@@ -3,19 +3,14 @@
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use super::stream::is_stream_api_method;
 use crate::ir::*;
 use crate::lower_patterns::detect_native_instance_expr;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{is_widget_modifier_name, lower_expr, LoweringContext};
 
 fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     let mut cur = e;

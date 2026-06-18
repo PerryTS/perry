@@ -313,8 +313,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         let is_module_constructor = ctx
             .lookup_native_module(callee_ident.sym.as_ref())
             .map(|(module_name, method)| {
-                module_name == "module"
-                    && matches!(method.as_deref(), Some("Module") | Some("default"))
+                module_name == "module" && matches!(method, Some("Module") | Some("default"))
             })
             .unwrap_or(false);
         if is_module_constructor {
@@ -350,8 +349,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let is_events_module_value = ctx
                 .lookup_native_module(callee_ident.sym.as_ref())
                 .map(|(module_name, method)| {
-                    module_name == "events"
-                        && (method.is_none() || method.as_deref() == Some("default"))
+                    module_name == "events" && (method.is_none() || method == Some("default"))
                 })
                 .unwrap_or(false)
                 || ctx.lookup_builtin_module_alias(callee_ident.sym.as_ref()) == Some("events");
@@ -532,7 +530,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     ctx.lookup_native_module(obj_name)
                         .and_then(|(module_name, method)| {
                             if matches!(module_name, "dns" | "dns/promises")
-                                && (method.is_none() || method.as_deref() == Some("default"))
+                                && (method.is_none() || method == Some("default"))
                             {
                                 Some(module_name.to_string())
                             } else {
@@ -591,8 +589,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 || ctx
                     .lookup_native_module(obj_name)
                     .map(|(module_name, method)| {
-                        module_name == "vm"
-                            && (method.is_none() || method.as_deref() == Some("default"))
+                        module_name == "vm" && (method.is_none() || method == Some("default"))
                     })
                     .unwrap_or(false);
             if is_vm_module
