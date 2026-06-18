@@ -1,4 +1,3 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -174,12 +173,10 @@ pub fn find_array_candidates(
                 id,
                 init: Some(Expr::Array(elements)),
                 ..
-            } => {
-                if !boxed_vars.contains(id) && !module_globals.contains_key(id) {
-                    let n = elements.len();
-                    if (1..=MAX_SCALAR_ARRAY_LEN).contains(&n) {
-                        candidates.insert(*id, n as u32);
-                    }
+            } if !boxed_vars.contains(id) && !module_globals.contains_key(id) => {
+                let n = elements.len();
+                if (1..=MAX_SCALAR_ARRAY_LEN).contains(&n) {
+                    candidates.insert(*id, n as u32);
                 }
             }
             Stmt::If {

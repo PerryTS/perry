@@ -45,10 +45,9 @@ pub(crate) fn emit_treeview(
     let Some(root_node) = root else {
         // Couldn't resolve the root TreeNode call — degrade to a comment
         // + placeholder so the user can see the gap.
-        return format!(
-            "// TreeView: couldn't resolve root TreeNode call (non-literal binding)\n\
+        return "// TreeView: couldn't resolve root TreeNode call (non-literal binding)\n\
              Text('[TreeView: unresolved root]').fontSize(14).fontColor('#888888')"
-        );
+            .to_string();
     };
 
     let field_id = format!("{}", extras.tree_view_instances.len());

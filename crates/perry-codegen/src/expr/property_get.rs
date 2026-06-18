@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -328,11 +328,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 false,
                 Vec::new(),
             );
-            return Ok(crate::native_value::materialize_js_value(
+            Ok(crate::native_value::materialize_js_value(
                 ctx,
                 lowered,
                 MaterializationReason::FunctionAbi,
-            ));
+            ))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and

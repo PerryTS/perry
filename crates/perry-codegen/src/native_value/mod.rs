@@ -12,7 +12,7 @@ pub(crate) use artifact::{
 };
 pub(crate) use buffer::{
     AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessFacts, BufferAccessMode,
-    BufferAccessProof, BufferElem, BufferEndian, BufferIndexUnit, BufferViewRep, BufferViewSlot,
+    BufferAccessProof, BufferElem, BufferEndian, BufferIndexUnit, BufferViewSlot,
     GuardedBufferIndex, LengthSource, NativeOwnedViewFact, NativeOwnedViewSlot,
 };
 pub(crate) use materialize::{
