@@ -399,7 +399,7 @@ impl JsEmitter {
                 }
                 self.output.push(')');
             }
-            Expr::NewDynamic { callee, args } => {
+            Expr::NewDynamic { callee, args, .. } => {
                 self.output.push_str("new (");
                 self.emit_expr(callee);
                 self.output.push_str(")(");

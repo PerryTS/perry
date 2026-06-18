@@ -158,6 +158,60 @@ pub unsafe extern "C" fn js_super_accessor_get(
             .ok()
             .map(|s| s.to_string())
     };
+    // Static-context super (`super.x` inside a `static` method/getter): the
+    // receiver is the class constructor (a ClassRef), so resolve against the
+    // PARENT's static side — a static getter, then a static data field —
+    // rather than the parent prototype/instance vtable below. Refs
+    // class/super/in-static-{getter,methods,setter}.
+    if super::class_ref_id(receiver).is_some() {
+        if let Some(key_name) = key_name.as_ref() {
+            // (a) parent static getter, walking the class_id chain.
+            if let Ok(guard) = crate::object::CLASS_STATIC_ACCESSORS.read() {
+                if let Some(reg) = guard.as_ref() {
+                    let mut cid = parent_class_id;
+                    let mut depth = 0usize;
+                    while cid != 0 && depth < 32 {
+                        if let Some(getter_ptr) =
+                            reg.get(&cid).and_then(|m| m.get(key_name)).map(|&(g, _)| g)
+                        {
+                            if getter_ptr != 0 {
+                                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
+                                let prev = crate::object::js_implicit_this_set(receiver);
+                                let r = f(receiver);
+                                crate::object::js_implicit_this_set(prev);
+                                return r;
+                            }
+                        }
+                        match crate::object::get_parent_class_id(cid) {
+                            Some(p) if p != 0 && p != cid => {
+                                cid = p;
+                                depth += 1;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+            // (b) parent static data field (CLASS_DYNAMIC_PROPS), same walk.
+            let mut cid = parent_class_id;
+            let mut depth = 0usize;
+            while cid != 0 && depth < 32 {
+                if let Some(v) = crate::object::CLASS_DYNAMIC_PROPS
+                    .with(|m| m.borrow().get(&cid).and_then(|f| f.get(key_name)).copied())
+                {
+                    return v;
+                }
+                match crate::object::get_parent_class_id(cid) {
+                    Some(p) if p != 0 && p != cid => {
+                        cid = p;
+                        depth += 1;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     if let Some(key_name) = key_name {
         if let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() {
             if let Some(reg) = registry.as_ref() {

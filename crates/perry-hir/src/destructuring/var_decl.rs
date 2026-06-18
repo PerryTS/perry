@@ -1502,9 +1502,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 // broke this way because a local `zipWith` (L1180) precedes it.
                 let id = ctx.lookup_local(&name).unwrap();
                 // Update the type now that we have full inference
-                if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
-                {
+                if let Some(existing_ty) = ctx.locals.lookup_type_mut(&name) {
                     *existing_ty = ty.clone();
                 }
                 id
@@ -1523,7 +1521,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     *existing_ty = ty.clone();
                 }
                 fid
-            } else if let Some(id) = is_var_decl
+            } else if let Some((reuse_pos, id)) = is_var_decl
                 .then(|| {
                     // Issue #838 followup (b): when the closure-body hoist
                     // in `lower_fn_expr` / `lower_arrow` pre-registered this
@@ -1542,18 +1540,15 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     // lexical binding, and using `lookup_local(name)` here
                     // would accidentally grab a shadowing catch parameter.
                     ctx.locals
-                        .iter()
-                        .rev()
-                        .find(|(n, lid, _)| n == &name && ctx.var_hoisted_ids.contains(lid))
-                        .map(|(_, lid, _)| *lid)
+                        .iter_named(&name)
+                        .find(|(_, (_, lid, _))| ctx.var_hoisted_ids.contains(lid))
+                        .map(|(pos, (_, lid, _))| (pos, *lid))
                 })
                 .flatten()
             {
-                if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(_, lid, _)| *lid == id)
-                {
-                    *existing_ty = ty.clone();
-                }
+                // Patch the reused binding's type in place (O(1) by position)
+                // rather than re-finding it with an O(n) scan (#5267).
+                *ctx.locals.type_mut_at(reuse_pos) = ty.clone();
                 id
             } else {
                 ctx.define_local(name.clone(), ty.clone())
@@ -1972,9 +1967,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 ctx.pre_registered_module_var_decls.remove(&name);
                 // #1758: module-scope only — see the sibling guard above.
                 let id = ctx.lookup_local(&name).unwrap();
-                if let Some((_, _, existing_ty)) =
-                    ctx.locals.iter_mut().rev().find(|(n, _, _)| n == &name)
-                {
+                if let Some(existing_ty) = ctx.locals.lookup_type_mut(&name) {
                     *existing_ty = ty.clone();
                 }
                 id

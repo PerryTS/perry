@@ -84,6 +84,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             }),
             args: call_args,
             type_args: vec![],
+            byte_offset: 0,
         }),
         else_expr: Box::new(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
@@ -92,6 +93,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             }),
             args: method_args,
             type_args: vec![],
+            byte_offset: 0,
         }),
     }
 }
@@ -511,6 +513,7 @@ pub fn linearize_body(
                 // skipping the body tail without going through the update.
                 let body_states_before = states.len();
                 let body_current_before = current.len();
+                let body_catches_before = catches.len();
                 let mut body_rewritten = body.clone();
                 rewrite_break_continue_in_stmts(&mut body_rewritten, state_id);
 
@@ -588,6 +591,15 @@ pub fn linearize_body(
                     after_loop_state,
                     update_state,
                 );
+                // Async-generator `.throw()` closures inline catch-route bodies
+                // verbatim; fix any break/continue sentinels they captured from
+                // this loop body (a user `continue`/`break` inside a `catch`).
+                fix_break_continue_sentinels_in_catches(
+                    &mut catches[body_catches_before..],
+                    state_id,
+                    after_loop_state,
+                    update_state,
+                );
             }
 
             // While-loop containing yield(s) - similar to for-loop
@@ -637,6 +649,7 @@ pub fn linearize_body(
                 // state (no separate update); `break` jumps to after_loop.
                 let while_states_before = states.len();
                 let while_current_before = current.len();
+                let while_catches_before = catches.len();
                 let mut while_body_rewritten = while_body.clone();
                 rewrite_break_continue_in_stmts(&mut while_body_rewritten, state_id);
 
@@ -680,6 +693,15 @@ pub fn linearize_body(
                 );
                 fix_break_continue_sentinels_in_stmts(
                     &mut current[while_current_before..],
+                    state_id,
+                    after_loop,
+                    cond_state,
+                );
+                // Async-generator `.throw()` closures inline catch-route bodies
+                // verbatim; fix any break/continue sentinels they captured from
+                // this loop body (a user `continue`/`break` inside a `catch`).
+                fix_break_continue_sentinels_in_catches(
+                    &mut catches[while_catches_before..],
                     state_id,
                     after_loop,
                     cond_state,

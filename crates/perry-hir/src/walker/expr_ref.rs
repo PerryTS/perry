@@ -894,13 +894,13 @@ where
                 f(v);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             f(callee);
             for a in args {
                 f(a);
             }
         }
-        Expr::NewDynamicSpread { callee, args } => {
+        Expr::NewDynamicSpread { callee, args, .. } => {
             f(callee);
             for a in args {
                 match a {

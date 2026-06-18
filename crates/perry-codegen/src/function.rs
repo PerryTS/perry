@@ -61,9 +61,9 @@ pub struct LlFunction {
     ///
     /// `to_ir()` splices these instructions into block 0 at the
     /// `entry_init_boundary` instruction index. If no boundary is set
-    /// (e.g. user functions, which have no init prelude), they're
-    /// appended to `entry_allocas` instead so the dominance guarantee
-    /// still holds.
+    /// (e.g. user functions, which have no init prelude), they are
+    /// emitted immediately after entry allocas and before the first
+    /// block instruction so the dominance guarantee still holds.
     entry_post_init_setup: Vec<String>,
     /// Index in block 0's instruction list where `entry_post_init_setup`
     /// should be spliced in. Set by `mark_entry_init_boundary` after
@@ -250,6 +250,24 @@ impl LlFunction {
     pub fn entry_allocas_push_store(&mut self, ty: crate::types::LlvmType, val: &str, ptr: &str) {
         self.entry_allocas
             .push(format!("  store {} {}, ptr {}", ty, val, ptr));
+    }
+
+    /// Emit a one-time void call in the function-entry setup region.
+    ///
+    /// Use this for metadata/registration work that must happen before
+    /// any reachable hot-path use but does not need to run at each use
+    /// site. If the function has an init prelude boundary, the call is
+    /// spliced after runtime/string initialization; otherwise it is
+    /// emitted at the top of the entry block with the other entry setup.
+    pub fn entry_setup_call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
+        crate::ext_registry::record_ffi_call(func_name);
+        let arg_str = args
+            .iter()
+            .map(|(ty, value)| format!("{} {}", ty, value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let line = format!("  call void @{}({})", func_name, arg_str);
+        self.entry_post_init_setup.push(line);
     }
 
     /// Emit a one-time function-entry init sequence: allocate a `ptr`

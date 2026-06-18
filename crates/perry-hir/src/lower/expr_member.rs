@@ -11,6 +11,7 @@
 
 use anyhow::Result;
 use perry_types::Type;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
@@ -443,6 +444,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     _ => {}
@@ -579,6 +581,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
+                            byte_offset: 0,
                         });
                     }
                     "on"
@@ -1779,7 +1782,17 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
-    let mut object_expr = lower_expr(ctx, &member.obj)?;
+    // Perf: reuse a receiver already lowered by `try_static_method_and_instance`
+    // (the chained-native-method dispatch helper) for THIS exact member callee,
+    // instead of re-lowering the whole prefix. See
+    // `LoweringContext::prelowered_member_receiver`. Match strictly by span and
+    // take it (single-shot) so a stale memo can never leak onto a different
+    // receiver. Any other consumer along the way invalidates it.
+    let obj_span = member.obj.as_ref().span();
+    let mut object_expr = match ctx.prelowered_member_receiver.take() {
+        Some((key, lowered)) if key == (obj_span.lo.0, obj_span.hi.0) => lowered,
+        _ => lower_expr(ctx, &member.obj)?,
+    };
     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
         if let Some(value) = ws_ready_state_value(prop_ident.sym.as_ref()) {
             if is_ws_ready_state_receiver(ctx, member.obj.as_ref(), &object_expr) {
@@ -2331,7 +2344,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             // for the end-of-compile notice); strict-unimplemented mode restores
             // the hard #463 refusal. #2309 tree-shake deferral is handled inside.
             let api = format!("{module}.{prop}");
-            let location = crate::eval_classifier::location_string(&ctx.source_file_path, member.span.lo.0);
+            let location =
+                crate::eval_classifier::location_string(&ctx.source_file_path, member.span.lo.0);
             match crate::check_unimplemented_api(&msg, &api, &location, member.span.lo.0) {
                 crate::UnimplementedDecision::Refuse => {
                     crate::lower_bail!(member.span, "{}", msg);
@@ -2366,8 +2380,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             //   - the index is NOT a string literal at the source level
             //     (literal keys are caught by the fold below, and never
             //     constitute string-obfuscation),
-            //   - the refusal pass is enabled (`PERRY_ALLOW_DYNAMIC_STDLIB=0` /
-            //     `perry.allowDynamicStdlibDispatch: false`; on by default),
+            //   - the refusal pass is enabled — OFF by default since #5263,
+            //     re-armed under `--lockdown` / `perry.lockdown` or the explicit
+            //     opt-out `PERRY_ALLOW_DYNAMIC_STDLIB=0` /
+            //     `perry.allowDynamicStdlibDispatch: false`,
             //   - the currently-lowering source file does NOT belong to a
             //     package on the per-package allow-list, and
             //   - there is no `// @perry-allow-dynamic` line annotation on
@@ -2485,6 +2501,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     }),
                     args: vec![*index],
                     type_args: Vec::new(),
+                    byte_offset: 0,
                 });
             }
             Ok(Expr::IndexGet { object, index })

@@ -52,6 +52,9 @@ fn empty_opts() -> CompileOptions {
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
+        debug_locations: false,
+        module_source: None,
+        debug_source_line_offset: 0,
     }
 }
 
@@ -467,6 +470,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         callee: Box::new(callee),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     }
 }
 
@@ -490,6 +494,14 @@ fn extern_call(name: &str, args: Vec<Expr>, return_type: Type) -> Expr {
         },
         args,
     )
+}
+
+fn extern_func_ref(name: &str, return_type: Type) -> Expr {
+    Expr::ExternFuncRef {
+        name: name.to_string(),
+        param_types: Vec::new(),
+        return_type,
+    }
 }
 
 fn native_library_opts(functions: Vec<(&str, Vec<&str>, &str)>) -> CompileOptions {
@@ -590,6 +602,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
             }),
             args: vec![int(0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         })),
     ];
 
@@ -673,6 +686,7 @@ fn artifact_records_buffer_read_double_as_f64() {
             }),
             args: vec![int(0)],
             type_args: Vec::new(),
+            byte_offset: 0,
         })),
     ];
 
@@ -832,13 +846,11 @@ fn explicit_width_guard_proves_wide_buffer_read() {
         records.iter().any(|record| {
             record["expr_kind"] == "BufferNumericRead"
                 && record["consumer"] == "BufferNumericRead.native_u32"
-                && record["bounds_state"]["guarded"]["guard_id"]
-                    .as_str()
-                    .is_some_and(|id| id.contains("width_4"))
+                && record["bounds_state"]["proven"]["proof"] == "loop_guard"
                 && record["buffer_access"]["access_width_bytes"] == 4
                 && record["buffer_access"]["bounds_width_units"] == 4
         }),
-        "expected i + 4 <= buf.length to guard a 4-byte native read:\n{artifact:#}"
+        "expected i + 4 <= buf.length to prove a 4-byte native read:\n{artifact:#}"
     );
 }
 
@@ -1238,6 +1250,225 @@ fn native_owned_unknown_call_escape_through_owner_alias_invalidates_views() {
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "missing_owner_root");
+}
+
+#[test]
+fn native_owned_unknown_call_escape_inside_aggregate_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_unknown_escape_inside_aggregate.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(extern_call(
+                "unknown_nested_escape",
+                vec![Expr::Array(vec![local(2)])],
+                Type::Number,
+            )),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
+}
+
+#[test]
+fn native_owned_call_spread_escape_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_call_spread_escape.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::CallSpread {
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "unknown_spread_escape".to_string(),
+                    param_types: Vec::new(),
+                    return_type: Type::Number,
+                }),
+                args: vec![perry_hir::CallArg::Spread(Expr::Array(vec![local(2)]))],
+                type_args: Vec::new(),
+            }),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
+}
+
+#[test]
+fn native_owned_proxy_apply_escape_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_proxy_apply_escape.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::ProxyApply {
+                proxy: Box::new(extern_func_ref("unknown_proxy_apply_escape", Type::Any)),
+                args: vec![Expr::Array(vec![local(2)])],
+            }),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
+}
+
+#[test]
+fn native_owned_proxy_construct_escape_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_proxy_construct_escape.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::ProxyConstruct {
+                proxy: Box::new(extern_func_ref("unknown_proxy_construct_escape", Type::Any)),
+                args: vec![Expr::Array(vec![local(2)])],
+            }),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
+}
+
+#[test]
+fn native_owned_reflect_apply_escape_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_reflect_apply_escape.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::ReflectApply {
+                func: Box::new(extern_func_ref("unknown_reflect_apply_escape", Type::Any)),
+                this_arg: Box::new(Expr::Undefined),
+                args: Box::new(Expr::Array(vec![local(2)])),
+            }),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
+}
+
+#[test]
+fn native_owned_reflect_construct_escape_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_reflect_construct_escape.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::ReflectConstruct {
+                target: Box::new(extern_func_ref(
+                    "unknown_reflect_construct_escape",
+                    Type::Any,
+                )),
+                args: Box::new(Expr::Array(vec![local(2)])),
+                new_target: Box::new(Expr::Undefined),
+            }),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
+}
+
+#[test]
+fn native_owned_js_call_value_escape_invalidates_views() {
+    let artifact = compile_artifact_json(
+        "artifact_native_owned_js_call_value_escape.ts",
+        vec![
+            native_arena_owner_let(1, "owner", int(64), false),
+            native_arena_view_let(
+                2,
+                "view",
+                1,
+                "Float64Array",
+                perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                int(0),
+                int(8),
+            ),
+            Stmt::Expr(Expr::JsCallValue {
+                callee: Box::new(extern_func_ref("unknown_js_call_value_escape", Type::Any)),
+                args: vec![Expr::Array(vec![local(2)])],
+            }),
+            Stmt::Return(Some(index_get(2, int(0)))),
+        ],
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
+}
+
+#[test]
+fn native_owned_static_method_v8_escape_invalidates_views() {
+    let mut opts = empty_opts();
+    opts.namespace_imports.push("RemoteNs".to_string());
+    opts.namespace_v8_specifiers
+        .insert("RemoteNs".to_string(), "remote:v8".to_string());
+    let artifact = compile_artifact_json_for_module_with_opts(
+        module(
+            "artifact_native_owned_static_method_v8_escape.ts",
+            vec![
+                native_arena_owner_let(1, "owner", int(64), false),
+                native_arena_view_let(
+                    2,
+                    "view",
+                    1,
+                    "Float64Array",
+                    perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                    int(0),
+                    int(8),
+                ),
+                Stmt::Expr(Expr::StaticMethodCall {
+                    class_name: "RemoteNs".to_string(),
+                    method_name: "invoke".to_string(),
+                    args: vec![Expr::Array(vec![local(2)])],
+                }),
+                Stmt::Return(Some(index_get(2, int(0)))),
+            ],
+        ),
+        opts,
+    );
+    assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
 }
 
 #[test]

@@ -164,6 +164,9 @@ lazy_static! {
     static ref REGISTRY: Mutex<PluginRegistry> = Mutex::new(PluginRegistry::new());
 }
 
+#[cfg(test)]
+pub(crate) static PLUGIN_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 /// GC root scanner for closures and JS values held by the process-wide
 /// plugin registry. These slots live outside the managed heap, so copied-minor
 /// GC must see and rewrite them explicitly.
@@ -471,6 +474,113 @@ pub extern "C" fn perry_plugin_on(api_handle: i64, event: f64, handler: f64) -> 
 pub extern "C" fn perry_plugin_emit(api_handle: i64, event: f64, data: f64) -> f64 {
     let _ = api_handle; // plugin_id available if needed for filtering
     perry_plugin_emit_event(event, data)
+}
+
+/// Unregister a previously-registered hook handler. Removes the entry whose
+/// closure bits match `handler` (closure-identity match). No-op if the
+/// caller is not the registering plugin or no such entry exists.
+#[no_mangle]
+pub extern "C" fn perry_plugin_unregister_hook(
+    api_handle: i64,
+    hook_name: f64,
+    handler: f64,
+) -> f64 {
+    let name = unsafe { extract_string(hook_name) };
+    let target_bits = handler.to_bits();
+    let mut reg = REGISTRY.lock().unwrap();
+    if let Some(plugin_id) = reg.plugin_id_for_handle(api_handle) {
+        if let Some(hooks) = reg.hooks.get_mut(&name) {
+            if let Some(pos) = hooks
+                .iter()
+                .position(|h| h.plugin_id == plugin_id && h.handler_closure == target_bits)
+            {
+                hooks.remove(pos);
+            }
+        }
+        reg.hooks.retain(|_, v| !v.is_empty());
+    }
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+/// Unregister a tool by name. No-op if the caller didn't register it.
+#[no_mangle]
+pub extern "C" fn perry_plugin_unregister_tool(api_handle: i64, name: f64) -> f64 {
+    let tool_name = unsafe { extract_string(name) };
+    let mut reg = REGISTRY.lock().unwrap();
+    if let Some(plugin_id) = reg.plugin_id_for_handle(api_handle) {
+        reg.tools
+            .retain(|t| !(t.plugin_id == plugin_id && t.name == tool_name));
+    }
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+/// Unregister a service by name. The service's `stopFn` is invoked before
+/// the entry is removed (matches the lifecycle contract of `registerService`).
+#[no_mangle]
+pub extern "C" fn perry_plugin_unregister_service(api_handle: i64, name: f64) -> f64 {
+    let svc_name = unsafe { extract_string(name) };
+    let mut reg = REGISTRY.lock().unwrap();
+    if let Some(plugin_id) = reg.plugin_id_for_handle(api_handle) {
+        if let Some(idx) = reg
+            .services
+            .iter()
+            .position(|s| s.plugin_id == plugin_id && s.name == svc_name)
+        {
+            let ptr_mask: u64 = 0x0000_FFFF_FFFF_FFFF;
+            let stop_bits = reg.services[idx].stop_fn;
+            let stop_ptr = (stop_bits & ptr_mask) as *const crate::closure::ClosureHeader;
+            if stop_ptr.is_null() {
+                reg.services.remove(idx);
+            } else {
+                drop(reg);
+                unsafe {
+                    crate::closure::js_closure_call0(stop_ptr);
+                }
+                let mut reg = REGISTRY.lock().unwrap();
+                if let Some(idx2) = reg
+                    .services
+                    .iter()
+                    .position(|s| s.plugin_id == plugin_id && s.name == svc_name)
+                {
+                    reg.services.remove(idx2);
+                }
+            }
+        }
+    }
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+/// Unregister a route by path. No-op if the caller didn't register it.
+#[no_mangle]
+pub extern "C" fn perry_plugin_unregister_route(api_handle: i64, path: f64) -> f64 {
+    let route_path = unsafe { extract_string(path) };
+    let mut reg = REGISTRY.lock().unwrap();
+    if let Some(plugin_id) = reg.plugin_id_for_handle(api_handle) {
+        reg.routes
+            .retain(|r| !(r.plugin_id == plugin_id && r.path == route_path));
+    }
+    f64::from_bits(JSValue::undefined().bits())
+}
+
+/// Unsubscribe a previously-registered event handler. Removes the entry
+/// whose closure bits match `handler`. No-op otherwise.
+#[no_mangle]
+pub extern "C" fn perry_plugin_off(api_handle: i64, event: f64, handler: f64) -> f64 {
+    let event_name = unsafe { extract_string(event) };
+    let target_bits = handler.to_bits();
+    let mut reg = REGISTRY.lock().unwrap();
+    if let Some(plugin_id) = reg.plugin_id_for_handle(api_handle) {
+        if let Some(handlers) = reg.events.get_mut(&event_name) {
+            if let Some(pos) = handlers
+                .iter()
+                .position(|e| e.plugin_id == plugin_id && e.handler_closure == target_bits)
+            {
+                handlers.remove(pos);
+            }
+        }
+        reg.events.retain(|_, v| !v.is_empty());
+    }
+    f64::from_bits(JSValue::undefined().bits())
 }
 
 // ============================================================================
@@ -998,4 +1108,280 @@ pub(crate) fn test_plugin_roots_snapshot() -> (u64, u64, u64, u64, u64, u64, u64
             .unwrap_or(0),
         reg.config.get("config").copied().unwrap_or(0),
     )
+}
+
+// ============================================================================
+// Unit tests — exercise the 5 selective-cleanup FFI functions added for
+// issue #5270 (PluginApi.unregister* / off).
+//
+// Each test seeds a small PluginRegistry directly (bypassing dlopen +
+// plugin_activate), then calls the unregister FFI with synthetic NaN-boxed
+// args. The assertions read the registry state back to confirm the targeted
+// row was removed without disturbing unrelated entries.
+// ============================================================================
+
+#[cfg(test)]
+mod unregister_tests {
+    use super::*;
+
+    /// Allocate a fresh api_handle in the test registry bound to plugin_id 1.
+    /// Mirrors what `perry_plugin_load` does for a real plugin: increments
+    /// `next_api_handle` and inserts the binding so `plugin_id_for_handle`
+    /// resolves. The handle is owned by no real shared library so there's
+    /// no dlclose on drop — `test_clear_plugin_roots` reclaims everything
+    /// at the end of the test.
+    fn fresh_api_handle() -> i64 {
+        let mut reg = REGISTRY.lock().unwrap();
+        reg.alloc_api_handle(1)
+    }
+
+    /// Seed the registry with the canonical 6-entry fixture (one of each
+    /// registration type) so each unregister test has well-defined state.
+    /// Closure bits are arbitrary f64-bit patterns; identity compare uses
+    /// `to_bits()`, so values just need to be distinct across entries.
+    fn seed() {
+        let mut reg = REGISTRY.lock().unwrap();
+        *reg = PluginRegistry::new();
+        // Reset the active_api_handles by reconstructing the registry, then
+        // re-allocate the test's preferred handle (1) below.
+        reg.hooks.insert(
+            "beforeSave".to_string(),
+            vec![
+                HookRegistration {
+                    plugin_id: 1,
+                    handler_closure: 0xAAAA_0001_0001_u64,
+                    priority: 10,
+                    mode: HOOK_MODE_FILTER,
+                },
+                HookRegistration {
+                    plugin_id: 1,
+                    handler_closure: 0xAAAA_0001_0002_u64,
+                    priority: 20,
+                    mode: HOOK_MODE_ACTION,
+                },
+            ],
+        );
+        reg.tools.push(ToolRegistration {
+            plugin_id: 1,
+            name: "formatCode".to_string(),
+            description: "format".to_string(),
+            handler_closure: 0xBBBB_0001_0001_u64,
+        });
+        reg.tools.push(ToolRegistration {
+            plugin_id: 2,
+            name: "otherPluginTool".to_string(),
+            description: "owned by plugin 2".to_string(),
+            handler_closure: 0xBBBB_0002_0001_u64,
+        });
+        reg.services.push(ServiceRegistration {
+            plugin_id: 1,
+            name: "worker".to_string(),
+            start_fn: 0xCCCC_0001_0001_u64,
+            stop_fn: 0xCCCC_0001_0002_u64,
+        });
+        reg.routes.push(RouteRegistration {
+            plugin_id: 1,
+            path: "/api/foo".to_string(),
+            handler_closure: 0xDDDD_0001_0001_u64,
+        });
+        reg.events.insert(
+            "dataUpdated".to_string(),
+            vec![EventRegistration {
+                plugin_id: 1,
+                handler_closure: 0xEEEE_0001_0001_u64,
+            }],
+        );
+        reg.active_api_handles.insert(1, 1);
+        reg.next_api_handle = 2;
+    }
+
+    fn teardown() {
+        *REGISTRY.lock().unwrap() = PluginRegistry::new();
+    }
+
+    fn lock_tests() -> std::sync::MutexGuard<'static, ()> {
+        PLUGIN_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn unregister_hook_removes_only_matching_entry() {
+        let _test_guard = lock_tests();
+        seed();
+        let handle = fresh_api_handle();
+        let hook_name = unsafe { make_nanboxed_string("beforeSave") };
+        let target_handler = f64::from_bits(0xAAAA_0001_0001_u64);
+        let _ = unsafe { perry_plugin_unregister_hook(handle, hook_name, target_handler) };
+
+        let reg = REGISTRY.lock().unwrap();
+        let hooks = reg
+            .hooks
+            .get("beforeSave")
+            .expect("beforeSave still present");
+        assert_eq!(hooks.len(), 1, "one matching handler should remain");
+        assert_eq!(hooks[0].handler_closure, 0xAAAA_0001_0002_u64);
+        drop(reg);
+
+        // Second call with the remaining handler — bucket should now be empty
+        // and the parent map entry pruned.
+        let other_handler = f64::from_bits(0xAAAA_0001_0002_u64);
+        let _ = unsafe { perry_plugin_unregister_hook(handle, hook_name, other_handler) };
+        let reg = REGISTRY.lock().unwrap();
+        assert!(
+            reg.hooks.get("beforeSave").is_none(),
+            "empty hook bucket should be removed"
+        );
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_hook_with_wrong_bits_is_noop() {
+        let _test_guard = lock_tests();
+        seed();
+        let handle = fresh_api_handle();
+        let hook_name = unsafe { make_nanboxed_string("beforeSave") };
+        let bogus_handler = f64::from_bits(0xDEAD_BEEF_DEAD_BEEF_u64);
+
+        let _ = unsafe { perry_plugin_unregister_hook(handle, hook_name, bogus_handler) };
+
+        let reg = REGISTRY.lock().unwrap();
+        let hooks = reg.hooks.get("beforeSave").unwrap();
+        assert_eq!(hooks.len(), 2, "no matching bits → both handlers stay");
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_hook_from_other_plugin_is_noop() {
+        let _test_guard = lock_tests();
+        seed();
+        // Forge an api_handle bound to plugin 2 (the owner of otherPluginTool).
+        // Plugin 2 shouldn't be able to remove plugin 1's hooks.
+        let mut reg = REGISTRY.lock().unwrap();
+        let handle_2 = reg.alloc_api_handle(2);
+        drop(reg);
+
+        let hook_name = unsafe { make_nanboxed_string("beforeSave") };
+        let target = f64::from_bits(0xAAAA_0001_0001_u64);
+        let _ = unsafe { perry_plugin_unregister_hook(handle_2, hook_name, target) };
+
+        let reg = REGISTRY.lock().unwrap();
+        assert_eq!(reg.hooks.get("beforeSave").unwrap().len(), 2);
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_tool_removes_only_matching_row() {
+        let _test_guard = lock_tests();
+        seed();
+        let handle = fresh_api_handle();
+        let name = unsafe { make_nanboxed_string("formatCode") };
+        let _ = unsafe { perry_plugin_unregister_tool(handle, name) };
+
+        let reg = REGISTRY.lock().unwrap();
+        assert_eq!(reg.tools.len(), 1, "only the matching tool is removed");
+        assert_eq!(reg.tools[0].name, "otherPluginTool");
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_tool_unknown_name_is_noop() {
+        let _test_guard = lock_tests();
+        seed();
+        let handle = fresh_api_handle();
+        let bogus = unsafe { make_nanboxed_string("doesNotExist") };
+        let _ = unsafe { perry_plugin_unregister_tool(handle, bogus) };
+
+        let reg = REGISTRY.lock().unwrap();
+        assert_eq!(reg.tools.len(), 2);
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_route_removes_matching_path() {
+        let _test_guard = lock_tests();
+        seed();
+        let handle = fresh_api_handle();
+        let path = unsafe { make_nanboxed_string("/api/foo") };
+        let _ = unsafe { perry_plugin_unregister_route(handle, path) };
+
+        let reg = REGISTRY.lock().unwrap();
+        assert_eq!(reg.routes.len(), 0);
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_service_removes_matching_row() {
+        let _test_guard = lock_tests();
+        seed();
+        let handle = fresh_api_handle();
+        let name = unsafe { make_nanboxed_string("worker") };
+        // `stop_fn` is a closure pointer stored as bits — calling
+        // `js_closure_call0` on it would dereference arbitrary memory. The
+        // null-pointer guard inside unregister_service checks the masked pointer,
+        // so stubbing stop_fn to zero exercises the removal path without crashing.
+        {
+            let mut reg = REGISTRY.lock().unwrap();
+            for svc in reg.services.iter_mut() {
+                svc.stop_fn = 0;
+            }
+        }
+        let _ = unsafe { perry_plugin_unregister_service(handle, name) };
+
+        let reg = REGISTRY.lock().unwrap();
+        assert_eq!(reg.services.len(), 0, "worker service removed");
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_off_removes_matching_event_handler() {
+        let _test_guard = lock_tests();
+        seed();
+        let handle = fresh_api_handle();
+        let event = unsafe { make_nanboxed_string("dataUpdated") };
+        let handler = f64::from_bits(0xEEEE_0001_0001_u64);
+        let _ = unsafe { perry_plugin_off(handle, event, handler) };
+
+        let reg = REGISTRY.lock().unwrap();
+        assert!(
+            reg.events.get("dataUpdated").is_none(),
+            "empty event bucket should be removed"
+        );
+        drop(reg);
+        teardown();
+    }
+
+    #[test]
+    fn unregister_with_unknown_api_handle_is_noop() {
+        let _test_guard = lock_tests();
+        seed();
+        // An api_handle that was never allocated returns None from
+        // plugin_id_for_handle → every unregister path's body is skipped.
+        let ghost_handle: i64 = 9999;
+        let hook_name = unsafe { make_nanboxed_string("beforeSave") };
+        let _ = unsafe { perry_plugin_unregister_hook(ghost_handle, hook_name, 0.0) };
+        let name = unsafe { make_nanboxed_string("formatCode") };
+        let _ = unsafe { perry_plugin_unregister_tool(ghost_handle, name) };
+        let path = unsafe { make_nanboxed_string("/api/foo") };
+        let _ = unsafe { perry_plugin_unregister_route(ghost_handle, path) };
+        let _ = unsafe { perry_plugin_unregister_service(ghost_handle, name) };
+        let event = unsafe { make_nanboxed_string("dataUpdated") };
+        let _ = unsafe { perry_plugin_off(ghost_handle, event, 0.0) };
+
+        let reg = REGISTRY.lock().unwrap();
+        assert_eq!(reg.hooks.get("beforeSave").unwrap().len(), 2);
+        assert_eq!(reg.tools.len(), 2);
+        assert_eq!(reg.routes.len(), 1);
+        assert_eq!(reg.services.len(), 1);
+        assert_eq!(reg.events.get("dataUpdated").unwrap().len(), 1);
+        drop(reg);
+        teardown();
+    }
 }

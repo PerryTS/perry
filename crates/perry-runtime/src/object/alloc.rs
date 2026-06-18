@@ -238,6 +238,21 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
         (*ptr).parent_class_id = parent_class_id;
         (*ptr).field_count = field_count;
         set_object_keys_array(ptr, keys_array);
+
+        // PerryTS/perry#4717: initialize ALL `max(field_count, 8)` field slots to
+        // `undefined`, mirroring `js_object_alloc_with_parent`. The arena hands back
+        // recycled bytes, so without this a field read-before-write — or a GC that
+        // scans the still-constructing instance — would observe stale arena bytes
+        // from a previously-freed object (e.g. `marked`'s `this.defaults` crashing
+        // with "Cannot read properties of undefined"). This used to be the caller's
+        // job (the inline bump path and `json/parser.rs` both zero-filled by hand);
+        // folding it in here keeps every caller — including the outlined `new C()`
+        // codegen path — correct by construction.
+        let fields_ptr = (ptr as *mut u8).add(header_size) as *mut JSValue;
+        for i in 0..alloc_field_count {
+            // GC_STORE_AUDIT(INIT): freshly allocated object field slot initialized to undefined.
+            ptr::write(fields_ptr.add(i), JSValue::undefined());
+        }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
     ptr

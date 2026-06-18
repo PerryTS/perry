@@ -332,7 +332,12 @@ fn reset_copying_nursery_runtime_test_state() {
     crate::geisterhand_registry::test_clear_geisterhand_roots();
     crate::ui_text_registry::test_clear_ui_text_registry_roots();
     #[cfg(feature = "full")]
-    crate::plugin::test_clear_plugin_roots();
+    {
+        let _plugin_registry_guard = crate::plugin::PLUGIN_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::plugin::test_clear_plugin_roots();
+    }
 }
 
 impl CopyingNurseryTestGuard {

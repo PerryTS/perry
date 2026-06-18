@@ -164,6 +164,8 @@ pub(super) fn rerun_collect_with_class_field_types(
         return Ok(());
     }
     let mut field_map: HashMap<String, Vec<(String, perry_types::Type)>> = HashMap::new();
+    let mut accessor_map: HashMap<String, perry_hir::ClassAccessorNames> = HashMap::new();
+    let mut parent_map: HashMap<String, String> = HashMap::new();
     for hir_module in ctx.native_modules.values() {
         for class in &hir_module.classes {
             let fields: Vec<(String, perry_types::Type)> = class
@@ -172,12 +174,38 @@ pub(super) fn rerun_collect_with_class_field_types(
                 .map(|f| (f.name.clone(), f.ty.clone()))
                 .collect();
             field_map.entry(class.name.clone()).or_insert(fields);
+            let mut accessors = perry_hir::ClassAccessorNames::default();
+            for (name, _) in &class.getters {
+                accessors.insert_getter(name.clone());
+            }
+            for (name, _) in &class.setters {
+                accessors.insert_setter(name.clone());
+            }
+            accessor_map.entry(class.name.clone()).or_insert(accessors);
+            if let Some(parent_name) = &class.extends_name {
+                parent_map
+                    .entry(class.name.clone())
+                    .or_insert_with(|| parent_name.clone());
+            }
         }
     }
-    if field_map.is_empty() {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (class_name, parent_name) in parent_map.clone() {
+            let parent_accessors = accessor_map.get(&parent_name).cloned().unwrap_or_default();
+            if parent_accessors.is_empty() {
+                continue;
+            }
+            let entry = accessor_map.entry(class_name).or_default();
+            changed |= entry.extend_from(&parent_accessors);
+        }
+    }
+    if field_map.is_empty() && accessor_map.is_empty() {
         return Ok(());
     }
     ctx.cross_module_class_field_types = field_map;
+    ctx.cross_module_class_accessors = accessor_map;
     ctx.native_modules.clear();
     visited.clear();
     *next_class_id = 1;
@@ -383,6 +411,12 @@ pub(super) fn enforce_package_default_exports(ctx: &mut CompilationContext) -> R
                 if import.type_only
                     || import.is_dynamic
                     || import.is_native
+                    // Issue #5257: an adopted `require('S')` (CJS wrap synthesized
+                    // `import _req_N from 'S'`) is NOT a static-ESM default import —
+                    // `require()` hands back the exports object, so a named-only / CJS
+                    // target is valid and must route through the namespace machinery
+                    // instead of failing Node's "no default export" rule.
+                    || import.is_adopted_require
                     || import.module_kind != perry_hir::ModuleKind::NativeCompiled
                     || !is_bare_package_specifier(&import.source)
                 {
@@ -506,6 +540,7 @@ mod js_runtime_gate_tests {
             is_dynamic: false,
             is_dynamic_target: false,
             is_deferred_require: false,
+            is_adopted_require: false,
         });
 
         let mut package = empty_module("pkg");

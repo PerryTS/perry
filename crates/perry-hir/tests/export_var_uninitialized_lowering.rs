@@ -59,9 +59,9 @@ fn uninitialized_export_var_registers_exported_binding() {
     // A backing `Stmt::Let` (declared `undefined`) must precede the IIFE
     // assignment in module init — without it codegen never emits the global
     // that backs the value-getter.
-    let let_idx = module.init.iter().position(|s| {
-        matches!(s, Stmt::Let { name, init, .. } if name == "Color" && init.is_none())
-    });
+    let let_idx = module.init.iter().position(
+        |s| matches!(s, Stmt::Let { name, init, .. } if name == "Color" && init.is_none()),
+    );
     assert!(
         let_idx.is_some(),
         "expected a hoisted `Stmt::Let {{ name: \"Color\", init: None }}` in module init: {:?}",
@@ -102,7 +102,5 @@ fn initialized_export_var_still_exports() {
     // `Some(init)` branch, not the new `else`).
     let module = lower_result("export var initialized = 1;");
     assert!(is_named_export(&module, "initialized"));
-    assert!(module
-        .exported_objects
-        .contains(&"initialized".to_string()));
+    assert!(module.exported_objects.contains(&"initialized".to_string()));
 }

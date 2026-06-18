@@ -180,6 +180,7 @@ pub(super) fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr 
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     if needs_await {
         Expr::Await(Box::new(call))

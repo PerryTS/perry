@@ -31,8 +31,7 @@ fn lower_result_mode(src: &str, strict_unimplemented: bool) -> Result<perry_hir:
             let mut cache = SourceCache::new();
             let parsed = parse_typescript_with_cache(&src, "test.ts", &mut cache)
                 .expect("parse should succeed");
-            let result =
-                lower_module(&parsed.module, "test", "test.ts").map_err(|e| e.to_string());
+            let result = lower_module(&parsed.module, "test", "test.ts").map_err(|e| e.to_string());
             // Drain any notice sites this lower recorded so they don't leak
             // into the process-global sink another test might inspect.
             let _ = perry_hir::take_deferred_eval_sites();

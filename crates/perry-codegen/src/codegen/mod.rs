@@ -50,7 +50,10 @@ mod opts;
 mod string_pool;
 
 pub use helpers::resolve_target_triple;
-pub(crate) use helpers::{default_target_triple, write_barriers_enabled};
+pub(crate) use helpers::{
+    decide_full_outline_ic, default_target_triple, full_outline_ic_enabled, module_callable_count,
+    set_full_outline_ic, write_barriers_enabled,
+};
 pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
@@ -92,6 +95,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
+    // #5334 lever B: decide ONCE, up front, whether this module is large enough
+    // to full-outline its class-field IC diamonds (read per-site during
+    // lowering via `full_outline_ic_enabled()`). Thread-local, so it must be set
+    // afresh for every module — including the `false` case, to clear any prior
+    // module's decision on this thread.
+    set_full_outline_ic(decide_full_outline_ic(module_callable_count(hir)));
+
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target
     // when a NaN-unboxed pointer is null/invalid. Prevents segfaults from
@@ -131,6 +141,19 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // becomes part of every emitted global so multi-module programs
     // don't collide on `.str.0.handle`.
     let mut strings = StringPool::with_prefix(module_prefix.clone());
+    // #5247: install per-module source-location context for the dynamic
+    // call-dispatch throw path, but only under `--debug-symbols` (which sets
+    // `opts.debug_locations` + `opts.module_source`). Off by default — no
+    // source clone, no per-call emission.
+    if opts.debug_locations {
+        if let Some(src) = opts.module_source.clone() {
+            strings.set_debug_location_ctx(Some((hir.name.clone(), src)));
+            // #5247 (CJS-wrap coordinate skew): `src` is the WRAPPED source for
+            // a CommonJS module; subtract the wrapper-prefix line count when
+            // resolving offsets so the rendered line is in original coordinates.
+            strings.set_debug_source_line_offset(opts.debug_source_line_offset);
+        }
+    }
 
     // Class lookup table for `Expr::New`. Indexed by class name —
     // the HIR has unique names per module.
@@ -298,9 +321,50 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             class_ids.insert(ic.name.clone(), class_id);
         }
 
+        let imported_getters: Vec<perry_hir::Function> = ic
+            .getter_names
+            .iter()
+            .map(|prop| perry_hir::Function {
+                id: 0,
+                name: format!("get_{}", prop),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: perry_types::Type::Any,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            })
+            .collect();
+        let imported_setters: Vec<perry_hir::Function> = ic
+            .setter_names
+            .iter()
+            .map(|prop| perry_hir::Function {
+                id: 0,
+                name: format!("set_{}", prop),
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: perry_types::Type::Any,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            })
+            .collect();
+
         // Build a stub Class with the minimum fields the codegen needs.
-        // Most fields are empty — only name, extends_name, and methods
-        // are consulted by dispatch.
+        // Imported accessor bodies execute from the source module; carrying
+        // their names here keeps dispatch and field inference conservative.
         let stub = perry_hir::Class {
             id: 0, // imported — no local ClassId
             name: effective_name.to_string(),
@@ -353,8 +417,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     decorators: Vec::new(),
                 })
                 .collect(),
-            getters: Vec::new(),
-            setters: Vec::new(),
+            getters: ic
+                .getter_names
+                .iter()
+                .cloned()
+                .zip(imported_getters)
+                .collect(),
+            setters: ic
+                .setter_names
+                .iter()
+                .cloned()
+                .zip(imported_setters)
+                .collect(),
             static_accessor_names: Vec::new(),
             static_accessor_fn_ids: Vec::new(),
             static_fields: Vec::new(),
@@ -615,8 +689,35 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .map(|(_, p, ext, fields)| (fields.clone(), ext.clone(), p.clone()))
     };
 
+    // Distinct source class names can `sanitize()` to the SAME symbol — e.g.
+    // `$X` and `_X` both become `_X` (minified bundles use `$`/`_` heavily).
+    // Two such classes are genuinely different (different shapes), so each needs
+    // its OWN keys-global; emitting `@perry_class_keys_<prefix>__<sanitized>`
+    // twice makes clang reject the IR ("redefinition of global"). Track every
+    // emitted name and disambiguate collisions with a numeric suffix. The
+    // (real-name-keyed) `class_keys_globals_map` stores the unique name, so every
+    // `new ClassName()` site still resolves to the right global.
+    let mut used_class_keys_globals: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    fn unique_global(base: String, used: &mut std::collections::HashSet<String>) -> String {
+        if used.insert(base.clone()) {
+            return base;
+        }
+        let mut n = 1u32;
+        loop {
+            let candidate = format!("{base}_{n}");
+            if used.insert(candidate.clone()) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
     for c in &hir.classes {
-        let global_name = format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name),);
+        let global_name = unique_global(
+            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+            &mut used_class_keys_globals,
+        );
         llmod.add_internal_global(&global_name, I64, "0");
 
         // Build the packed-keys string. Format: each field name
@@ -785,7 +886,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         if class_keys_globals_map.contains_key(&c.name) {
             continue;
         }
-        let global_name = format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name),);
+        let global_name = unique_global(
+            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+            &mut used_class_keys_globals,
+        );
         llmod.add_internal_global(&global_name, I64, "0");
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
         let mut packed_keys = String::new();
@@ -1068,6 +1172,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         param_count: ic.constructor_param_count,
                         has_own_constructor: ic.has_own_constructor,
                         has_instance_fields: ic.has_instance_fields,
+                        has_rest: ic.constructor_has_rest,
                     },
                 )
             })
@@ -1808,13 +1913,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
 
         // Constructor: declared as
-        // `<source_prefix>__<class>_constructor(i64 this, double arg0, …) → void`
+        // `<source_prefix>__<class>_constructor(double this, double arg0, …) → double`.
+        // The source module's standalone ctor symbol returns DOUBLE — the
+        // ECMAScript constructor return-override value (an explicit
+        // `return <obj/fn>`) or `undefined` for an ordinary ctor. Declaring it
+        // VOID discarded a returned object/function, so `new Chalk(opts)` (whose
+        // ctor `return chalkFactory(opts)`) yielded the empty instance instead of
+        // the factory. The dispatch in `lower_new` applies `js_ctor_return_override`
+        // to this value.
         let ctor_fn = format!("{}__{}_constructor", sanitize(src), sanitize(&ic.name),);
         let mut ctor_params: Vec<crate::types::LlvmType> = vec![DOUBLE];
         for _ in 0..ic.constructor_param_count {
             ctor_params.push(DOUBLE);
         }
-        llmod.declare_function(&ctor_fn, VOID, &ctor_params);
+        llmod.declare_function(&ctor_fn, DOUBLE, &ctor_params);
 
         // Cross-module static methods. Source modules emit these as static
         // functions with no `this` receiver, normally qualified by the source
@@ -1847,8 +1959,37 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut func_signatures: HashMap<u32, (usize, bool, bool, bool)> = HashMap::new();
     let mut func_synthetic_arguments: std::collections::HashSet<u32> =
         std::collections::HashSet::new();
+    // Distinct functions can mangle to the same symbol: minified code reuses
+    // short names (`function A`) across scopes, and perry lambda-lifts nested
+    // functions to module level, so two module functions can share a name — clang
+    // then rejects the duplicate `define perry_fn_<mod>__A`. Disambiguate with a
+    // numeric suffix, keyed by the mangled symbol. Exported functions are
+    // referenced cross-module by their canonical `scoped_fn_name` and are unique
+    // per module, so they reserve that name first and never get suffixed.
+    let mut used_fn_symbols: HashMap<String, u32> = HashMap::new();
     for f in &hir.functions {
-        func_names.insert(f.id, scoped_fn_name(&module_prefix, &f.name));
+        if hir.exported_functions.iter().any(|(exp, _)| exp == &f.name) {
+            used_fn_symbols
+                .entry(scoped_fn_name(&module_prefix, &f.name))
+                .or_insert(1);
+        }
+    }
+    for f in &hir.functions {
+        let base = scoped_fn_name(&module_prefix, &f.name);
+        let is_exported = hir.exported_functions.iter().any(|(exp, _)| exp == &f.name);
+        let sym = if is_exported {
+            base
+        } else {
+            let n = used_fn_symbols.entry(base.clone()).or_insert(0);
+            let s = if *n == 0 {
+                base.clone()
+            } else {
+                format!("{base}__dup{n}")
+            };
+            *n += 1;
+            s
+        };
+        func_names.insert(f.id, sym);
         let has_rest = f.params.iter().any(|p| p.is_rest);
         let synthetic_is_rest = f
             .params

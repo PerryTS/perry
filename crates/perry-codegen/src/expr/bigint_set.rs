@@ -46,6 +46,39 @@ use super::{
     I18nLowerCtx,
 };
 
+fn number_coerce_operand_is_already_primitive_number(ctx: &FnCtx<'_>, operand: &Expr) -> bool {
+    if crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, operand)
+        || is_bigint_expr(ctx, operand)
+    {
+        return false;
+    }
+    match operand {
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. }
+        | Expr::DateNow
+        | Expr::Uint8ArrayLength(_)
+        | Expr::BufferLength(_) => true,
+        Expr::LocalGet(id) | Expr::Update { id, .. } => ctx.integer_locals.contains(id),
+        Expr::Binary { op, left, right } => match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                number_coerce_operand_is_already_primitive_number(ctx, left)
+                    && number_coerce_operand_is_already_primitive_number(ctx, right)
+            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::UShr => true,
+            BinaryOp::Pow => false,
+        },
+        _ => false,
+    }
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::ObjectRest {
@@ -229,10 +262,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Number(value) coercion --------
         Expr::NumberCoerce(operand) => {
+            let already_number = number_coerce_operand_is_already_primitive_number(ctx, operand);
             let v = lower_expr(ctx, operand)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]))
+            if already_number {
+                Ok(v)
+            } else {
+                Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]))
+            }
         }
 
         // -------- set.add(value) — updates the local in place --------

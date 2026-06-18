@@ -380,7 +380,7 @@ mod keep_typed_feedback {
     #[used] static K13: extern "C" fn(u64, *mut ArrayHeader, u32, f64) = js_typed_feedback_array_set_f64;
     #[used] static K14: extern "C" fn(u64, *mut ArrayHeader, u32, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_f64_extend;
     #[used] static K15: extern "C" fn(u64, f64, i32, f64, i32) -> i32 = js_typed_feedback_plain_array_index_set_guard;
-    #[used] static K16: extern "C" fn(u64, f64, i32, f64) -> f64 = js_typed_feedback_array_index_set_fallback_boxed;
+    #[used] static K16: extern "C" fn(u64, f64, f64, f64) -> f64 = js_typed_feedback_array_index_set_fallback_boxed;
     #[used] static K17: extern "C" fn(u64, *const ArrayHeader, u32) = js_typed_feedback_observe_array_element;
     #[used] static K18: extern "C" fn(u64, *mut ArrayHeader, *const crate::StringHeader, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_string_key;
     #[used] static K19: extern "C" fn(u64, *mut ArrayHeader, f64, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_index_or_string;

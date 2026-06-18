@@ -72,22 +72,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
             }
             let Some(fn_name) = resolved_fn else {
-                // Static resolution failed. For a class with a DYNAMIC parent
-                // (`class X extends _mod.default` — the interop ESM
-                // default-export base, wall 38/42), `extends_name` is "default"
-                // and never resolves to a compile-time class, so the chain walk
-                // above finds nothing. Dispatch `super.method(...)` at runtime
-                // via the registered parent edge instead of returning the bogus
-                // numeric `0.0` (which made `super.getRequestHandler()` in
-                // Next.js's `NextNodeServer.makeRequestHandler` yield a number,
-                // and the handler it built threw "value is not a function").
-                let has_dyn_parent = ctx
-                    .classes
-                    .get(&current_class_name)
-                    .map(|c| c.extends_expr.is_some())
-                    .unwrap_or(false);
+                // Compile-time resolution failed (the parent has no INSTANCE
+                // method of this name). This happens for (1) a DYNAMIC parent
+                // (`class X extends _mod.default` — the interop ESM default base,
+                // wall 38/42) whose `extends_name` never resolves to a known
+                // class, and (2) a `super.m()` inside a `static` method, where
+                // the target is the parent's STATIC method (not in the instance
+                // tables walked above). Both are handled by the runtime helper,
+                // which walks the registered parent edge and — when `this` is a
+                // ClassRef — resolves the parent's static method. Routing here
+                // beats the bogus numeric `0.0` ("value is not a function").
                 let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
-                if has_dyn_parent && cid != 0 {
+                if cid != 0 {
                     let this_box = match ctx.this_stack.last().cloned() {
                         Some(slot) => ctx.block().load(DOUBLE, &slot),
                         None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),

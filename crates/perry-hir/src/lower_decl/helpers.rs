@@ -51,6 +51,7 @@ pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 

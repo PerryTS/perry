@@ -706,7 +706,7 @@ pub fn transform_expr(
         }
 
         // Dynamic new expressions - may be for JS classes (e.g., new ObjectId(str))
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             // Transform the callee first
             transform_expr(callee, js_imports, extern_func_to_js, local_name_to_js, tracker);
 

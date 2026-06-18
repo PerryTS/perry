@@ -551,6 +551,62 @@ fn emoji_string_property_expansion(value: &str) -> Option<String> {
     })
 }
 
+/// Does the already-emitted translation `out` end in a character-class
+/// shorthand (`\d`/`\w`/`\s` and their negations, or a `\p{…}`/`\P{…}` Unicode
+/// property)? Such an element cannot be the bound of a range, so a `-`
+/// immediately after it is a *literal* hyphen in JS, not a range operator.
+fn out_ends_with_class_shorthand(out: &str) -> bool {
+    let b = out.as_bytes();
+    // `\p{…}` / `\P{…}` property: ends with `}` preceded by a `{…` opened by
+    // an unescaped `\p` / `\P`.
+    if b.last() == Some(&b'}') {
+        if let Some(open) = out.rfind('{') {
+            let pre = &out[..open];
+            let pb = pre.as_bytes();
+            if pb.len() >= 2
+                && matches!(pb[pb.len() - 1], b'p' | b'P')
+                && pb[pb.len() - 2] == b'\\'
+                && !is_escaped_backslash(pb, pb.len() - 2)
+            {
+                return true;
+            }
+        }
+    }
+    if b.len() < 2 {
+        return false;
+    }
+    let last = b[b.len() - 1];
+    b[b.len() - 2] == b'\\'
+        && !is_escaped_backslash(b, b.len() - 2)
+        && matches!(last, b'd' | b'D' | b'w' | b'W' | b's' | b'S')
+}
+
+/// Is the backslash at `b[bs]` itself escaped (i.e. preceded by an odd run of
+/// backslashes)? Used so `\\d` (literal backslash + `d`) isn't mistaken for the
+/// `\d` shorthand.
+fn is_escaped_backslash(b: &[u8], bs: usize) -> bool {
+    let mut count = 0usize;
+    let mut k = bs;
+    while k > 0 && b[k - 1] == b'\\' {
+        count += 1;
+        k -= 1;
+    }
+    count % 2 == 1
+}
+
+/// Will the next class member at `chars[i..]` (where `chars[i]` is a `\`) be a
+/// shorthand class (`\d`/`\w`/`\s` & negations, or `\p{…}`/`\P{…}`)? A `-`
+/// directly before such an element is a literal hyphen in JS.
+fn next_is_class_shorthand(chars: &[char], i: usize) -> bool {
+    if chars.get(i) != Some(&'\\') {
+        return false;
+    }
+    matches!(
+        chars.get(i + 1),
+        Some('d' | 'D' | 'w' | 'W' | 's' | 'S' | 'p' | 'P')
+    )
+}
+
 /// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
 /// Handles JS-specific escape sequences not supported by the Rust regex crate.
 /// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
@@ -732,6 +788,20 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                 result.push(chars[i]);
                 i += 1;
             }
+        } else if in_class
+            && chars[i] == '-'
+            && (out_ends_with_class_shorthand(&result) || next_is_class_shorthand(&chars, i + 1))
+        {
+            // Inside a class, a `-` adjacent to a shorthand class (`\d`, `\w`,
+            // `\s`, …, or a `\p{…}` property) is a *literal* hyphen in JS — a
+            // shorthand can't be a range bound. The Rust `regex` crate instead
+            // tries to read `\w-\.` / `\d-z` as a range and rejects it with a
+            // `ClassRangeLiteral` parse error. Escape the hyphen so it stays a
+            // literal. joi's URI validator (`[\w-\.~%\dA-Fa-f…]`, IPv6 host)
+            // and many other real-world classes rely on this.
+            result.push('\\');
+            result.push('-');
+            i += 1;
         } else {
             result.push(chars[i]);
             i += 1;
@@ -889,5 +959,81 @@ mod tests {
         assert_eq!(js_regex_to_rust(r"[\p{RGI_Emoji}]"), r"[\p{RGI_Emoji}]");
         assert!(regex::Regex::new(r"\P{RGI_Emoji}").is_err());
         assert!(fancy_regex::Regex::new(r"\P{RGI_Emoji}").is_err());
+    }
+
+    #[test]
+    fn trivial_char_class_compiles_and_matches() {
+        // Regression for the winston/`@colors/colors` tail: a trivial, valid
+        // character class must translate and compile (and *not* be rejected by
+        // the invalid-pattern guard). `[0m]` matches `0` or `m`.
+        let translated = js_regex_to_rust("[0m]");
+        let re = regex::Regex::new(&translated).expect("[0m] must compile");
+        assert!(re.is_match("0"));
+        assert!(re.is_match("m"));
+        assert!(!re.is_match("x"));
+        // The `@colors/colors` ANSI-strip literal `\x1B\[\d+m` and the
+        // escaped-bracket form `\x1B\[0m` (`escapeStringRegexp` output) compile.
+        for pat in [r"\x1B\[\d+m", r"\x1B\[0m"] {
+            assert!(
+                regex::Regex::new(&js_regex_to_rust(pat)).is_ok(),
+                "ANSI pattern must compile: {pat}"
+            );
+        }
+        // Neither trips the bounded-quantifier false-positive guard.
+        assert!(!super::has_invalid_repeated_quantifier("[0m]"));
+        assert!(!super::has_invalid_repeated_quantifier(r"\x1B\[\d+m"));
+    }
+
+    #[test]
+    fn bounded_quantifier_in_class_not_rejected() {
+        // semver's ReDoS-hardened `safeRe` rewrites `\d+`→`\d{1,N}`,
+        // `\s*`→`\s{0,1}`, `[…]*`→`[…]{0,N}`. These bounded quantifiers are
+        // valid and must NOT be flagged by `has_invalid_repeated_quantifier`.
+        for pat in [
+            r"\d{1,16}",
+            r"\s{0,1}",
+            r"\d{0,256}",
+            r"[a-zA-Z0-9-]{0,250}",
+            r"(?:<|>)?=?",
+            r"a{0,1}",
+        ] {
+            assert!(
+                !super::has_invalid_repeated_quantifier(pat),
+                "valid bounded quantifier wrongly rejected: {pat}"
+            );
+        }
+        // A genuinely-dangling quantifier (no preceding atom) is still caught.
+        assert!(super::has_invalid_repeated_quantifier("{0,1}"));
+        assert!(super::has_invalid_repeated_quantifier("*abc"));
+    }
+
+    #[test]
+    fn class_hyphen_adjacent_to_shorthand_is_literal() {
+        // joi's URI validator builds classes like `[\w-\.~%\dA-Fa-f…]` where a
+        // `-` sits next to a `\w`/`\d` shorthand. In JS that `-` is a literal
+        // hyphen (a shorthand can't bound a range); the Rust `regex` crate
+        // would otherwise reject `\w-` as `ClassRangeLiteral`. The hyphen must
+        // be escaped to `\-`.
+        for (src, expect) in [
+            (r"[\w-\.]", r"[\w\-\.]"),
+            (r"[\d-z]", r"[\d\-z]"),
+            (r"[a\w-]", r"[a\w\-]"),
+            (r"[a-\d]", r"[a\-\d]"),
+            (r"[\p{L}-x]", r"[\p{L}\-x]"),
+        ] {
+            assert_eq!(js_regex_to_rust(src), expect, "src={src}");
+            assert!(
+                regex::Regex::new(&js_regex_to_rust(src)).is_ok(),
+                "must compile: {src}"
+            );
+        }
+        // An ordinary `a-z` range between two single literals is untouched.
+        assert_eq!(js_regex_to_rust("[a-z]"), "[a-z]");
+        // Outside a class, `-` is never escaped.
+        assert_eq!(js_regex_to_rust(r"\d-\w"), r"\d-\w");
+        // A `\w-\.` member must match `\w`, a literal `-`, and `.`.
+        let re = regex::Regex::new(&js_regex_to_rust(r"^[\w-\.]+$")).unwrap();
+        assert!(re.is_match("a-b.c_d"));
+        assert!(!re.is_match("a b"));
     }
 }

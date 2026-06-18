@@ -160,6 +160,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         Expr::Bool(update.prefix),
                     ],
                     type_args: vec![],
+                    byte_offset: 0,
                 });
             };
             let op = match update.op {

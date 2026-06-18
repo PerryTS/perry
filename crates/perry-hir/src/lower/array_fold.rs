@@ -32,6 +32,7 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
                 callee: Box::new(other),
                 args,
                 type_args: Vec::new(),
+                byte_offset: 0,
             };
         }
     };
@@ -43,6 +44,7 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
         }),
         args,
         type_args: Vec::new(),
+        byte_offset: 0,
     };
     match property.as_str() {
         "map" if !args.is_empty() => {

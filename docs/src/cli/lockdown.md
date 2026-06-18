@@ -19,10 +19,12 @@ SwiftUI / JS) inherits the protection from one choke point.
 | `perry-jsruntime` (QuickJS) in graph     | `ctx.needs_js_runtime` flipped during collection. |
 | `perry.nativeLibrary` archive reference  | `ctx.native_libraries` non-empty after resolution. |
 | `child_process.*` call sites             | HIR walker covers every `ChildProcess*` variant + the general-shape `NativeMethodCall { module: "child_process", … }` fallback. |
+| Dynamic stdlib dispatch (`fs[runtimeVar]`) | HIR lowering re-arms the `#503` refusal (`error[U006]`). Allowed by default since [#5263](https://github.com/PerryTS/perry/issues/5263); lockdown turns it back on. |
 
-All three checks run together; the failure lists every offending
-surface in one combined diagnostic so the reviewer can address the
-whole surface at once.
+The `child_process`/jsruntime/nativeLibrary checks run together as a
+combined post-collect diagnostic; the dynamic-dispatch refusal is enforced
+during HIR lowering (it re-arms the always-existing `#503` pass). The failure
+lists every offending surface so the reviewer can address it at once.
 
 ## Enabling lockdown (priority order)
 
@@ -63,9 +65,13 @@ are summarised as `... and N more`.
 Lockdown is the umbrella mode for the wider supply-chain hardening
 series ([`#495`–`#506`](https://github.com/PerryTS/perry/issues?q=is%3Aissue+label%3Aenhancement+security)):
 
-- [`#503`](https://github.com/PerryTS/perry/issues/503) — refuses
-  dynamic stdlib dispatch (`obj[runtimeVar]()`). On by default
-  regardless of lockdown.
+- [`#503`](https://github.com/PerryTS/perry/issues/503) /
+  [`#5263`](https://github.com/PerryTS/perry/issues/5263) — refuses
+  dynamic stdlib dispatch (`obj[runtimeVar]()`). **Allowed by default**
+  (dynamic selection over a linked namespace can only reach already-linked
+  members); lockdown re-arms the refusal. An explicit
+  `perry.allowDynamicStdlibDispatch: false` / `PERRY_ALLOW_DYNAMIC_STDLIB=0`
+  re-arms just this check without the rest of lockdown.
 - [`#499`](https://github.com/PerryTS/perry/issues/499) — gates
   `perry-jsruntime` behind explicit host opt-in. Lockdown forces the
   gate to its strict default.

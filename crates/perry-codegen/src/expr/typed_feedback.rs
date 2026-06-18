@@ -255,23 +255,31 @@ pub(crate) fn emit_typed_feedback_register_site(
         emit_typed_feedback_bytes_global(ctx, local_site_id, "guard", contract.guard_name);
     let fallback_global =
         emit_typed_feedback_bytes_global(ctx, local_site_id, "fallback", contract.fallback_name);
-    ctx.block().call_void(
+    let site_id_arg = site_id.to_string();
+    let kind_arg = kind.raw().to_string();
+    let module_len_arg = module.len().to_string();
+    let function_len_arg = function.len().to_string();
+    let source_len_arg = source_label.len().to_string();
+    let operation_len_arg = operation.len().to_string();
+    let guard_len_arg = contract.guard_name.len().to_string();
+    let fallback_len_arg = contract.fallback_name.len().to_string();
+    ctx.func.entry_setup_call_void(
         "js_typed_feedback_register_site",
         &[
-            (I64, &site_id.to_string()),
-            (I32, &kind.raw().to_string()),
+            (I64, &site_id_arg),
+            (I32, &kind_arg),
             (PTR, &module_global),
-            (I64, &module.len().to_string()),
+            (I64, &module_len_arg),
             (PTR, &function_global),
-            (I64, &function.len().to_string()),
+            (I64, &function_len_arg),
             (PTR, &source_global),
-            (I64, &source_label.len().to_string()),
+            (I64, &source_len_arg),
             (PTR, &operation_global),
-            (I64, &operation.len().to_string()),
+            (I64, &operation_len_arg),
             (PTR, &guard_global),
-            (I64, &contract.guard_name.len().to_string()),
+            (I64, &guard_len_arg),
             (PTR, &fallback_global),
-            (I64, &contract.fallback_name.len().to_string()),
+            (I64, &fallback_len_arg),
         ],
     );
     site_id.to_string()

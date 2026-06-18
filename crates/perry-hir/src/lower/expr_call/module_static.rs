@@ -1133,6 +1133,7 @@ pub(super) fn try_module_static_methods(
                                     }),
                                     args: vec![],
                                     type_args: vec![],
+                                    byte_offset: 0,
                                 }));
                             }
                         }
@@ -1343,6 +1344,7 @@ pub(super) fn try_module_static_methods(
                                     }),
                                     args: vec![b],
                                     type_args: vec![],
+                                    byte_offset: 0,
                                 }));
                             }
                         }

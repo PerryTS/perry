@@ -29,8 +29,10 @@ pub(crate) fn lower_array_method(
 
     match property {
         "pop" => {
-            if !args.is_empty() {
-                bail!("perry-codegen: Array.pop takes no args, got {}", args.len());
+            // No-arg method; JS ignores extras but evaluates them for side
+            // effects before the call. Evaluate then discard.
+            for extra in args.iter() {
+                let _ = lower_expr(ctx, extra)?;
             }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);
@@ -723,11 +725,9 @@ pub(crate) fn lower_array_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "shift" => {
-            if !args.is_empty() {
-                bail!(
-                    "perry-codegen: Array.shift takes no args, got {}",
-                    args.len()
-                );
+            // No-arg method; extras are evaluated for side effects then ignored.
+            for extra in args.iter() {
+                let _ = lower_expr(ctx, extra)?;
             }
             let blk = ctx.block();
             let recv_handle = unbox_to_i64(blk, &recv_box);

@@ -498,6 +498,7 @@ pub fn inline_functions(
                     is_dynamic: false,
                     is_dynamic_target: false,
                     is_deferred_require: false,
+                    is_adopted_require: false,
                 });
             }
         }
@@ -719,6 +720,7 @@ mod tests {
             class_name: name.to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
+            byte_offset: 0,
         })
     }
 

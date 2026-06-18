@@ -1075,6 +1075,7 @@ fn promise_reject(value: Expr) -> Expr {
         }),
         args: vec![value],
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -1627,6 +1628,49 @@ fn build_dispatch_catch_handler(
     )
 }
 
+/// Replace the synthesized dispatch re-entry `Stmt::Continue` (emitted by
+/// `rewrite_break_continue_in_stmts` for a user `break`/`continue`) with a
+/// suspend-return. Used when inlining a catch-route body into the async
+/// `.throw()` closure, which has no dispatch `while(true)` loop. Mirrors the
+/// recursion in `rewrite_break_continue_in_stmt`: descends into `if`/`try`
+/// (where the dispatch continue can sit) but stops at nested loops / switch /
+/// labeled / closures, whose own `continue`/`break` belong to them.
+fn rewrite_dispatch_continue_to_suspend(stmts: &mut Vec<Stmt>) {
+    for stmt in stmts.iter_mut() {
+        match stmt {
+            Stmt::Continue | Stmt::Break => {
+                *stmt = Stmt::Return(Some(make_iter_result(Expr::Undefined, false)));
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                rewrite_dispatch_continue_to_suspend(then_branch);
+                if let Some(eb) = else_branch.as_mut() {
+                    rewrite_dispatch_continue_to_suspend(eb);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_dispatch_continue_to_suspend(body);
+                if let Some(c) = catch.as_mut() {
+                    rewrite_dispatch_continue_to_suspend(&mut c.body);
+                }
+                if let Some(f) = finally.as_mut() {
+                    rewrite_dispatch_continue_to_suspend(f);
+                }
+            }
+            // Nested loops / switch / labeled / closures own their own
+            // break/continue — leave them untouched.
+            _ => {}
+        }
+    }
+}
+
 fn build_async_catch_route_body(
     route: &CatchRoute,
     finallys: &[FinallyRoute],
@@ -1667,6 +1711,19 @@ fn build_async_catch_route_body(
     rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
     rewrite_yield_to_await_in_stmts(&mut rewritten);
     rewrite_catch_returns_to_iter_result(&mut rewritten);
+    // A user `break`/`continue` inside this catch was rewritten by
+    // `rewrite_break_continue_in_stmts` into `[LocalSet(state, TARGET),
+    // Stmt::Continue]` — the trailing `Stmt::Continue` re-enters the dispatch
+    // `while(true)` loop. The async `.throw()` closure has NO dispatch loop
+    // (it runs the handler, then suspends), so that dangling dispatch-continue
+    // would be a `continue` with no enclosing loop. The preceding `LocalSet`
+    // already moved the state to the loop's resume target (cond/update/after-
+    // loop, fixed up by `fix_break_continue_sentinels_in_catches`), so the
+    // correct async behavior is to suspend right there: convert the dispatch
+    // re-entry into a `return { value: undefined, done: false }`.
+    if !fall_through {
+        rewrite_dispatch_continue_to_suspend(&mut rewritten);
+    }
 
     // #4374: if this try also has a (sync) finally, a `throw` inside the catch
     // handler must still run that finally before propagating. The normal
@@ -1889,6 +1946,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
+        byte_offset: 0,
     };
     let promise_reject = |arg: Expr| Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -1897,6 +1955,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     // Rewrite every Return inside next_body to LabeledBreak(__step_done)
@@ -1957,6 +2016,7 @@ pub fn build_async_step_driver_direct(
                 callee: Box::new(Expr::LocalGet(tid)),
                 args: vec![Expr::LocalGet(value_param_id)],
                 type_args: vec![],
+                byte_offset: 0,
             })]
         } else {
             // No __async_throw closure was constructed (callee passed None).
@@ -2033,6 +2093,7 @@ pub fn build_async_step_driver_direct(
                         callee: Box::new(Expr::LocalGet(step_self_id)),
                         args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
                         type_args: vec![],
+                        byte_offset: 0,
                     })),
                 ],
             }),

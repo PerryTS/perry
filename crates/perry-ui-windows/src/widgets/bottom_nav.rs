@@ -100,9 +100,9 @@ pub fn create(on_select: f64) -> i64 {
                 0,
                 400,
                 56,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -175,9 +175,9 @@ pub fn add_item(handle: i64, icon_ptr: *const u8, label_ptr: *const u8) {
                 0,
                 80,
                 48,
-                parent_hwnd,
-                HMENU(item_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(parent_hwnd),
+                Some(HMENU(item_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             );
             let Ok(btn) = btn else { return };
@@ -315,8 +315,11 @@ pub fn set_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
             #[cfg(target_os = "windows")]
             for item in &entry.items {
                 unsafe {
-                    let _ =
-                        windows::Win32::Graphics::Gdi::InvalidateRect(item.btn_hwnd, None, true);
+                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(
+                        Some(item.btn_hwnd),
+                        None,
+                        true,
+                    );
                 }
             }
         }
@@ -332,8 +335,11 @@ pub fn set_unselected_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
             #[cfg(target_os = "windows")]
             for item in &entry.items {
                 unsafe {
-                    let _ =
-                        windows::Win32::Graphics::Gdi::InvalidateRect(item.btn_hwnd, None, true);
+                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(
+                        Some(item.btn_hwnd),
+                        None,
+                        true,
+                    );
                 }
             }
         }

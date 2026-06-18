@@ -10,6 +10,29 @@ use crate::native_value::{
 };
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
+/// #5271: does `init` provably evaluate to a plain object literal? Two
+/// shapes reach codegen: a data-only literal stays `Expr::Object`, while a
+/// literal carrying methods/getters lowers to an immediately-invoked
+/// object-building closure whose sole param is named `__perry_obj_iife`
+/// and whose single argument is the seed `Object(..)`. Recognizing both
+/// lets `o.trim()` / `internals.trim(v, s)` resolve to the receiver's own
+/// member rather than `String.prototype.trim`.
+fn is_object_literal_init(init: &perry_hir::Expr) -> bool {
+    use perry_hir::Expr;
+    match init {
+        Expr::Object(_) => true,
+        Expr::Call { callee, args, .. } => {
+            matches!(args.first(), Some(Expr::Object(_)))
+                && matches!(
+                    callee.as_ref(),
+                    Expr::Closure { params, .. }
+                        if params.first().map_or(false, |p| p.name == "__perry_obj_iife")
+                )
+        }
+        _ => false,
+    }
+}
+
 fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
     matches!(expr, perry_hir::Expr::GlobalGet(_))
         || matches!(
@@ -44,6 +67,14 @@ pub(crate) fn lower_let(
         if let Some(init_expr) = init {
             if let Some(props) = crate::lower_call::extract_options_fields(ctx, init_expr) {
                 ctx.option_object_locals.insert(id, props);
+            }
+            // #5271: remember object-literal locals so a builtin-named member
+            // call (`o.trim()`, joi's `internals.trim(v, s)`) resolves to the
+            // object's OWN method instead of being claimed by the static
+            // String-method fast path. Covers both plain literals and the
+            // method-bearing literals that lower to an object-building IIFE.
+            if is_object_literal_init(init_expr) {
+                ctx.object_literal_locals.insert(id);
             }
         }
     }

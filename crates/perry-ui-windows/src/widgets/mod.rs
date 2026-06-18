@@ -235,9 +235,9 @@ pub fn get_parking_hwnd() -> HWND {
                 0,
                 0,
                 0,
-                HWND_MESSAGE,
-                HMENU::default(),
-                hinstance_h,
+                Some(HWND_MESSAGE),
+                Some(HMENU::default()),
+                Some(hinstance_h),
                 None,
             )
             .unwrap();
@@ -488,7 +488,7 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
             (get_hwnd(parent_handle), get_hwnd(child_handle))
         {
             unsafe {
-                let _ = SetParent(child_hwnd, parent_hwnd);
+                let _ = SetParent(child_hwnd, Some(parent_hwnd));
                 let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
                 SetWindowLongW(
                     child_hwnd,
@@ -516,7 +516,7 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
             (get_hwnd(parent_handle), get_hwnd(child_handle))
         {
             unsafe {
-                let _ = SetParent(child_hwnd, parent_hwnd);
+                let _ = SetParent(child_hwnd, Some(parent_hwnd));
                 let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
                 SetWindowLongW(
                     child_hwnd,
@@ -566,7 +566,7 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
             if let Some(child_hwnd) = get_hwnd(child_handle) {
                 unsafe {
                     let _ = ShowWindow(child_hwnd, SW_HIDE);
-                    let _ = SetParent(child_hwnd, parking);
+                    let _ = SetParent(child_hwnd, Some(parking));
                 }
             }
         }
@@ -594,7 +594,7 @@ pub fn clear_children(handle: i64) {
             if let Some(child_hwnd) = get_hwnd(*child) {
                 unsafe {
                     let _ = ShowWindow(child_hwnd, SW_HIDE);
-                    let _ = SetParent(child_hwnd, parking);
+                    let _ = SetParent(child_hwnd, Some(parking));
                 }
             }
         }
@@ -602,7 +602,8 @@ pub fn clear_children(handle: i64) {
         // preventing a black flash while new children are being added.
         if let Some(parent_hwnd) = get_hwnd(handle) {
             unsafe {
-                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(parent_hwnd, None, true);
+                let _ =
+                    windows::Win32::Graphics::Gdi::InvalidateRect(Some(parent_hwnd), None, true);
             }
         }
     }
@@ -935,16 +936,21 @@ pub fn set_control_size(handle: i64, size: i64) {
                     0,
                     0,
                     0,
-                    0,
-                    0,
-                    0,
-                    0,
+                    windows::Win32::Graphics::Gdi::FONT_CHARSET(0),
+                    windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(0),
+                    windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0),
+                    windows::Win32::Graphics::Gdi::FONT_QUALITY(0),
                     0,
                     windows::core::PCWSTR(
                         "Segoe UI\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
                     ),
                 );
-                SendMessageW(hwnd, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+                SendMessageW(
+                    hwnd,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0 as usize)),
+                    Some(LPARAM(1)),
+                );
             }
         }
     }
@@ -1104,7 +1110,7 @@ pub fn apply_shadow(handle: i64) {
     register_shadow_for_parent(parent_key, handle);
     ensure_shadow_subclass(parent_hwnd);
     unsafe {
-        let _ = InvalidateRect(parent_hwnd, None, true);
+        let _ = InvalidateRect(Some(parent_hwnd), None, true);
     }
 }
 
@@ -1163,7 +1169,7 @@ unsafe extern "system" fn shadow_subclass_proc(
 #[cfg(target_os = "windows")]
 unsafe fn paint_shadows(parent_hwnd: HWND, children: &[i64]) {
     use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
-    let hdc = GetDC(parent_hwnd);
+    let hdc = GetDC(Some(parent_hwnd));
     if hdc.is_invalid() {
         return;
     }
@@ -1172,7 +1178,7 @@ unsafe fn paint_shadows(parent_hwnd: HWND, children: &[i64]) {
             paint_shadow_for_child(parent_hwnd, hdc, child, shadow);
         }
     }
-    ReleaseDC(parent_hwnd, hdc);
+    ReleaseDC(Some(parent_hwnd), hdc);
 }
 
 /// Render one widget's drop shadow into a 32bpp DIB then `AlphaBlend`
@@ -1258,7 +1264,7 @@ unsafe fn paint_shadow_for_child(
     let dest_x = tl.x - widget_l_in_bmp;
     let dest_y = tl.y - widget_t_in_bmp;
 
-    let mem_dc = CreateCompatibleDC(parent_dc);
+    let mem_dc = CreateCompatibleDC(Some(parent_dc));
     if mem_dc.is_invalid() {
         return;
     }
@@ -1283,11 +1289,11 @@ unsafe fn paint_shadow_for_child(
     let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
     let null_section = windows::Win32::Foundation::HANDLE(std::ptr::null_mut());
     let dib = match CreateDIBSection(
-        parent_dc,
+        Some(parent_dc),
         &bmi,
         DIB_RGB_COLORS,
         &mut bits_ptr,
-        null_section,
+        Some(null_section),
         0,
     ) {
         Ok(d) if !bits_ptr.is_null() => d,
@@ -1297,7 +1303,7 @@ unsafe fn paint_shadow_for_child(
         }
     };
 
-    let old_obj = SelectObject(mem_dc, dib);
+    let old_obj = SelectObject(mem_dc, dib.into());
 
     // Render shadow: per-pixel falloff from the (un-blurred) shadow rect.
     // 32bpp ARGB layout (little-endian u32): 0xAARRGGBB where bytes go
@@ -1373,7 +1379,7 @@ unsafe fn paint_shadow_for_child(
     );
 
     SelectObject(mem_dc, old_obj);
-    let _ = DeleteObject(dib);
+    let _ = DeleteObject(dib.into());
     let _ = DeleteDC(mem_dc);
 }
 
@@ -1430,7 +1436,7 @@ fn apply_opacity(handle: i64, opacity: f64) {
             SetWindowLongW(hwnd, GWL_EXSTYLE, (cur_ex | WS_EX_LAYERED.0) as i32);
         }
         let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
-        let _ = InvalidateRect(hwnd, None, true);
+        let _ = InvalidateRect(Some(hwnd), None, true);
     }
 }
 
@@ -1523,7 +1529,7 @@ pub fn apply_corner_radius(handle: i64) {
                         radius as i32,
                         radius as i32,
                     );
-                    SetWindowRgn(hwnd, rgn, true);
+                    SetWindowRgn(hwnd, Some(rgn), true);
                 }
             }
         }
@@ -1570,7 +1576,7 @@ fn ensure_border_subclass(handle: i64) {
     }
     if let Some(hwnd) = get_hwnd_safe(handle) {
         unsafe {
-            let _ = InvalidateRect(hwnd, None, true);
+            let _ = InvalidateRect(Some(hwnd), None, true);
         }
     }
 }
@@ -1616,17 +1622,17 @@ unsafe extern "system" fn border_subclass_proc(
                 let mut rect = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rect);
                 if rect.right > 0 && rect.bottom > 0 {
-                    let hdc = GetDC(hwnd);
+                    let hdc = GetDC(Some(hwnd));
                     if !hdc.is_invalid() {
                         let pen = CreatePen(PS_SOLID, w, COLORREF(cr));
                         let null_brush = HBRUSH(GetStockObject(NULL_BRUSH).0);
-                        let old_pen = SelectObject(hdc, pen);
-                        let old_brush = SelectObject(hdc, null_brush);
+                        let old_pen = SelectObject(hdc, pen.into());
+                        let old_brush = SelectObject(hdc, null_brush.into());
                         let _ = Rectangle(hdc, 0, 0, rect.right, rect.bottom);
                         SelectObject(hdc, old_pen);
                         SelectObject(hdc, old_brush);
-                        let _ = DeleteObject(pen);
-                        ReleaseDC(hwnd, hdc);
+                        let _ = DeleteObject(pen.into());
+                        ReleaseDC(Some(hwnd), hdc);
                     }
                 }
             }
@@ -1729,7 +1735,7 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
         if let Some(hwnd) = hwnd_opt {
             set_hwnd_bg_color(hwnd, color);
             unsafe {
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }
@@ -1752,7 +1758,7 @@ pub fn set_hwnd_bg_color(hwnd: HWND, color: u32) {
         SetPropW(
             hwnd,
             windows::core::PCWSTR(prop_name.as_ptr()),
-            HANDLE((color as usize + 1) as *mut _),
+            Some(HANDLE((color as usize + 1) as *mut _)),
         );
     }
 }
@@ -1905,12 +1911,12 @@ pub fn set_background_gradient(
                 SetPropW(
                     hwnd,
                     windows::core::PCWSTR(prop_c1.as_ptr()),
-                    HANDLE((c1 as usize + 1) as *mut _),
+                    Some(HANDLE((c1 as usize + 1) as *mut _)),
                 );
                 SetPropW(
                     hwnd,
                     windows::core::PCWSTR(prop_c2.as_ptr()),
-                    HANDLE((c2 as usize + 1) as *mut _),
+                    Some(HANDLE((c2 as usize + 1) as *mut _)),
                 );
             }
         }

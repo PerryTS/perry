@@ -21,6 +21,7 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::MaterializationReason;
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -31,10 +32,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, downgrade_buffer_aliases_in_expr,
+    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -67,8 +68,18 @@ fn new_callee_is_primitive_literal(callee: &Expr) -> bool {
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::New {
-            class_name, args, ..
-        } => lower_new(ctx, class_name, args),
+            class_name,
+            args,
+            byte_offset,
+            ..
+        } => {
+            // #5253: under `--debug-symbols`, attach this `new`'s source
+            // `file:line` so a "X is not a constructor" throw from `lower_new`'s
+            // runtime-construct fallback (or a built-in non-constructor) renders
+            // a location. No-op for resolved user classes (no throw fires).
+            crate::expr::calls::emit_call_location_at(ctx, *byte_offset);
+            lower_new(ctx, class_name, args)
+        }
 
         // `new <callee>(...spread)` — spread-bearing construction. Fold every
         // argument (regular pushed, spread sources expanded via
@@ -76,8 +87,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // evaluation order, then dispatch through `js_new_function_construct_apply`
         // which materialises a flat buffer and reuses the full callee-shape
         // dispatch of the non-spread `js_new_function_construct`.
-        Expr::NewDynamicSpread { callee, args } => {
+        Expr::NewDynamicSpread {
+            callee,
+            args,
+            byte_offset,
+        } => {
             use perry_hir::CallArg;
+            let new_byte_offset = *byte_offset;
+            downgrade_buffer_aliases_in_expr(ctx, callee, MaterializationReason::UnknownCallEscape);
+            for arg in args {
+                match arg {
+                    CallArg::Expr(expr) | CallArg::Spread(expr) => {
+                        downgrade_buffer_aliases_in_expr(
+                            ctx,
+                            expr,
+                            MaterializationReason::UnknownCallEscape,
+                        )
+                    }
+                }
+            }
             let func_double = lower_expr(ctx, callee)?;
             let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
             for a in args {
@@ -104,6 +132,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
             let args_box = nanbox_pointer_inline(ctx.block(), &acc_handle);
+            // #5253: locate the not-a-constructor throw the apply path can raise.
+            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
             let result = ctx.block().call(
                 DOUBLE,
                 "js_new_function_construct_apply",
@@ -155,7 +185,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //      inspects the callee's NaN tag and dispatches to the right
         //      class constructor. That's a separate followup tracked in
         //      the v0.5.8 changelog.
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic {
+            callee,
+            args,
+            byte_offset,
+        } => {
+            // #5253: source location of this `new` for the not-a-constructor
+            // throws below. `const X: any = undefined; new X()` lowers here
+            // (callee `LocalGet`), so this is what localizes ajv's
+            // `undefined is not a constructor`.
+            let new_byte_offset = *byte_offset;
             // `new <primitive-literal>(…)` is always a `TypeError` — a primitive
             // is never a constructor (`new 1`, `new 1.5`, `new true`, `new null`,
             // `new undefined`, `new "s"`). Number literals lower to a plain `f64`
@@ -168,6 +207,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 for a in args {
                     let _ = lower_expr(ctx, a)?;
                 }
+                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
                 return Ok(ctx.block().call(DOUBLE, "js_throw_not_a_constructor", &[]));
             }
 
@@ -286,7 +326,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let mod_bytes_global =
                                 format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
                             let mod_len_str = module_name.len().to_string();
-                            return Ok(ctx.block().call(
+                            let install_sym = crate::nm_install::nm_install_symbol(module_name);
+                            let blk = ctx.block();
+                            if let Some(s) = install_sym {
+                                blk.call_void(s, &[]);
+                            }
+                            return Ok(blk.call(
                                 DOUBLE,
                                 "js_create_native_module_namespace",
                                 &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],
@@ -494,10 +539,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let then_synth = Expr::NewDynamic {
                     callee: then_expr.clone(),
                     args: args.clone(),
+                    byte_offset: new_byte_offset,
                 };
                 let else_synth = Expr::NewDynamic {
                     callee: else_expr.clone(),
                     args: args.clone(),
+                    byte_offset: new_byte_offset,
                 };
                 return lower_conditional(ctx, condition, &then_synth, &else_synth);
             }
@@ -559,12 +606,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     | Expr::Logical { .. }
             );
             if routes_through_function_construct {
+                downgrade_buffer_aliases_in_expr(
+                    ctx,
+                    callee,
+                    MaterializationReason::UnknownCallEscape,
+                );
+                for arg in args {
+                    downgrade_buffer_aliases_in_expr(
+                        ctx,
+                        arg,
+                        MaterializationReason::UnknownCallEscape,
+                    );
+                }
                 let func_double = lower_expr(ctx, callee)?;
                 let lowered_args: Vec<String> = args
                     .iter()
                     .map(|a| lower_expr(ctx, a))
                     .collect::<Result<Vec<_>>>()?;
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                // #5253: locate a not-a-constructor throw from the runtime
+                // construct path (a `LocalGet` callee holding `undefined`, a
+                // non-callable value, etc.).
+                crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
                 let result = ctx.block().call(
                     DOUBLE,
                     "js_new_function_construct",
@@ -582,12 +645,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // back to the class_id=0 empty-object baseline inside the helper,
             // preserving the previous best-effort behavior for shapes the
             // compiler can't resolve statically.
+            downgrade_buffer_aliases_in_expr(ctx, callee, MaterializationReason::UnknownCallEscape);
+            for arg in args {
+                downgrade_buffer_aliases_in_expr(
+                    ctx,
+                    arg,
+                    MaterializationReason::UnknownCallEscape,
+                );
+            }
             let func_double = lower_expr(ctx, callee)?;
             let lowered_args: Vec<String> = args
                 .iter()
                 .map(|a| lower_expr(ctx, a))
                 .collect::<Result<Vec<_>>>()?;
             let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+            // #5253: locate the not-a-constructor throw for `new <primitive>` /
+            // `new <non-constructor-value>` rejected inside the runtime helper.
+            crate::expr::calls::emit_call_location_at(ctx, new_byte_offset);
             let result = ctx.block().call(
                 DOUBLE,
                 "js_new_function_construct",

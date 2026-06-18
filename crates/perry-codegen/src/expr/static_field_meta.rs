@@ -573,7 +573,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let mod_idx = ctx.strings.intern(name);
             let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
             let mod_len_str = name.len().to_string();
-            Ok(ctx.block().call(
+            // Devirt: register this module's dispatch bucket before the namespace
+            // exists, so method calls route to it. Sole compile-time ref to the
+            // bucket's handlers — unimported modules dead-strip.
+            let install_sym = crate::nm_install::nm_install_symbol(name);
+            let blk = ctx.block();
+            if let Some(s) = install_sym {
+                blk.call_void(s, &[]);
+            }
+            Ok(blk.call(
                 DOUBLE,
                 "js_create_native_module_namespace",
                 &[(PTR, &mod_bytes_global), (I64, &mod_len_str)],

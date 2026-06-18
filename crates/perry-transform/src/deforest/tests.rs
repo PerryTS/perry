@@ -58,6 +58,7 @@ fn rejects_producer_with_out_passed_to_call() {
         callee: Box::new(Expr::FuncRef(99)),
         args: vec![Expr::LocalGet(10)],
         type_args: vec![],
+        byte_offset: 0,
     });
     assert!(analyze_producer(&func).is_none());
 }
@@ -159,6 +160,7 @@ fn rejects_producer_called_inside_closure() {
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![],
                     type_args: vec![],
+                    byte_offset: 0,
                 }),
             },
             // return v.length;
@@ -247,6 +249,7 @@ fn still_deforests_when_caller_is_not_a_closure() {
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![],
                 type_args: vec![],
+                byte_offset: 0,
             }),
         }],
         is_async: false,

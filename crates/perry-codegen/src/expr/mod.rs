@@ -14,6 +14,7 @@ use perry_types::Type as HirType;
 
 use crate::block::LlBlock;
 use crate::codegen::AppMetadata;
+use crate::collectors::NativeRegionFactGraph;
 use crate::function::LlFunction;
 use crate::lower_call::{lower_call, lower_native_method_call, lower_new};
 use crate::lower_conditional::{lower_conditional, lower_logical, lower_truthy};
@@ -155,6 +156,14 @@ pub(crate) struct FnCtx<'a> {
     pub source_function_slug: String,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
+    /// Full native-region fact graph collected for this lowered HIR region.
+    ///
+    /// Existing fields below borrow individual subgraphs for compatibility
+    /// with older lowering consumers. New native-lowering decisions should
+    /// prefer this structured graph so representation, range, bounds, alias,
+    /// escape, shape, constants, and materialization-hazard facts stay tied
+    /// to the same collector snapshot.
+    pub native_facts: &'a NativeRegionFactGraph,
     /// Map from HIR LocalId → LLVM alloca pointer (e.g. `%r3`).
     pub locals: std::collections::HashMap<u32, String>,
     /// Map from HIR LocalId → static HIR Type. Used by `is_string_expr` and
@@ -192,11 +201,14 @@ pub(crate) struct FnCtx<'a> {
     /// `Stmt::LabeledBreak`/`LabeledContinue`. Third field balances try frames
     /// as in `loop_targets`.
     pub label_targets: std::collections::HashMap<String, (String, String, usize)>,
-    /// Pending label set by `Stmt::Labeled` just before lowering the body.
-    /// The next loop that runs (`for`/`while`/`do-while`) consumes it and
-    /// registers itself in `label_targets` so `break label;` /
-    /// `continue label;` can jump to the right blocks.
-    pub pending_label: Option<String>,
+    /// Pending labels set by enclosing `Stmt::Labeled` nodes just before
+    /// lowering the body. A label *chain* like `outer: inner: for (...)`
+    /// stacks both labels here (outer pushed first, then inner) before the
+    /// loop is reached. The next loop/switch that runs consumes *all* of
+    /// them and registers each in `label_targets`, so `break outer` /
+    /// `continue inner` both resolve to that same loop's blocks. Stored
+    /// outermost-first; the innermost label is `.last()`.
+    pub pending_labels: Vec<String>,
     /// Map from class name → HIR Class definition. Built once in
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.
@@ -399,6 +411,14 @@ pub(crate) struct FnCtx<'a> {
     /// native constructor lowering read `const init = {...}; new Request(url,
     /// init)` with the same field extractor used for inline object literals.
     pub option_object_locals: std::collections::HashMap<u32, Vec<(String, Expr)>>,
+    /// LocalIds of immutable locals provably initialized from an object
+    /// literal (`const o = { … }`, including method-bearing literals that
+    /// lower to an object-building IIFE). #5271: a builtin-named method on
+    /// such a receiver (`o.trim()`, joi's `internals.trim(v, s)`) is the
+    /// object's OWN method, never `String.prototype.<m>` — so the static
+    /// String-method fast path must NOT claim it even when the call's arity
+    /// happens to match the String builtin.
+    pub object_literal_locals: std::collections::HashSet<u32>,
 
     // ── Cross-module import plumbing (Phase F) ──────────────────────
     /// Locals that are namespace imports (`import * as X from "./mod"`).
@@ -1402,7 +1422,7 @@ mod arrays_finds;
 mod bigint_set;
 mod binary;
 mod call_spread;
-mod calls;
+pub(crate) mod calls;
 mod child_proc;
 mod closure;
 mod compare;
@@ -2038,7 +2058,9 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
 pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let raw = lower_expr(ctx, expr)?;
-    if is_numeric_expr(ctx, expr) {
+    if is_numeric_expr(ctx, expr)
+        && !crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr)
+    {
         Ok(raw)
     } else {
         Ok(ctx

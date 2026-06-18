@@ -30,6 +30,11 @@ a case unless:
 Pass `--all-features` to ignore the feature allow-list and run every
 discovered case (useful for measuring the raw denominator).
 
+`staging` (TC39 proposals) is the one subtree skipped wholesale by default,
+but naming it explicitly bypasses that guard so you can measure it on demand
+(#5299): `scripts/test262_subset.py --dir staging`. Any subtree the user
+names with `--dir` is honoured even if it would otherwise be path-skipped.
+
 ### Self-validating features (oracle can't run them) — #4792
 
 Some features Perry implements aren't in the Node oracle at all — `Temporal`

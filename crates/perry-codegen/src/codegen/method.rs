@@ -142,6 +142,7 @@ pub(super) fn compile_method(
             class.name, method.name
         )),
         active_region_id: None,
+        native_facts: &native_facts,
         locals,
         local_types,
         current_block: 0,
@@ -150,7 +151,7 @@ pub(super) fn compile_method(
         strings,
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
-        pending_label: None,
+        pending_labels: Vec::new(),
         classes,
         this_stack: vec![this_slot],
         inline_ctor_return: Vec::new(),
@@ -185,6 +186,7 @@ pub(super) fn compile_method(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         option_object_locals: HashMap::new(),
+        object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
@@ -443,12 +445,13 @@ pub(super) fn compile_method(
                         for la in &forwarded {
                             ctor_args.push((DOUBLE, la.as_str()));
                         }
-                        ctx.pending_declares.push((
-                            ctor_sym.clone(),
-                            crate::types::VOID,
-                            ctor_param_types,
-                        ));
-                        ctx.block().call_void(&ctor_sym, &ctor_args);
+                        // Synthesized default-ctor forwarding to an imported parent
+                        // ctor: discard the return (parent override does not
+                        // replace `this`). Declared DOUBLE to match the symbol's
+                        // real signature (see codegen/mod.rs).
+                        ctx.pending_declares
+                            .push((ctor_sym.clone(), DOUBLE, ctor_param_types));
+                        let _ = ctx.block().call(DOUBLE, &ctor_sym, &ctor_args);
                     }
                 }
             }
@@ -489,7 +492,33 @@ pub(super) fn compile_method(
         }
     }
 
-    if method.is_async {
+    // ECMAScript TDZ-on-`this`: a DERIVED constructor whose body never calls
+    // `super()` leaves `this` uninitialized, so the implicit `return this`
+    // throws ReferenceError. The inline `new` path enforces this in
+    // `lower_new`; mirror it here for the standalone constructor-symbol path
+    // — the DEFAULT when `force_ctor_call` routes `new C(...)` through the
+    // shared `<class>_constructor` symbol instead of inlining. Without this,
+    // `class A extends Array { constructor() {} }; new A()` constructs
+    // silently instead of throwing. The predicate combination matches the
+    // inline path verbatim (closure-`super()` without a direct `this` use
+    // suppresses; a value-bearing `return` takes the return-override path).
+    // Refs class/subclass/builtin-objects/*/super-must-be-called.
+    let ctor_no_super_throw = is_constructor_method
+        && (class.extends.is_some()
+            || class.extends_name.is_some()
+            || class.native_extends.is_some()
+            || class.extends_expr.is_some())
+        && class.constructor.as_ref().is_some_and(|ctor| {
+            !crate::lower_call::ctor_body_calls_super(&ctor.body)
+                && !(crate::lower_call::ctor_body_closure_calls_super(&ctor.body)
+                    && !crate::lower_call::ctor_body_uses_this(&ctor.body))
+                && !crate::lower_call::ctor_body_has_value_return(&ctor.body)
+        });
+    if ctor_no_super_throw {
+        ctx.block()
+            .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
+        ctx.block().unreachable();
+    } else if method.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &method.body).with_context(|| {
             format!(
                 "lowering async body of method '{}::{}'",
@@ -647,6 +676,7 @@ pub(super) fn compile_static_method(
             class.name, f.name
         )),
         active_region_id: None,
+        native_facts: &native_facts,
         locals,
         local_types,
         current_block: 0,
@@ -655,7 +685,7 @@ pub(super) fn compile_static_method(
         strings,
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
-        pending_label: None,
+        pending_labels: Vec::new(),
         classes,
         this_stack: vec![this_slot],
         inline_ctor_return: Vec::new(),
@@ -694,6 +724,7 @@ pub(super) fn compile_static_method(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         option_object_locals: HashMap::new(),
+        object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,

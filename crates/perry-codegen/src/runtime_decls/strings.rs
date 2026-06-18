@@ -806,6 +806,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_process_set_max_listeners", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_get_max_listeners", DOUBLE, &[]);
     module.declare_function("js_process_get_builtin_module", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_process_get_builtin_module_devirt", DOUBLE, &[DOUBLE]);
     module.declare_function("js_process_execve", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     // #3108: process.sourceMapsEnabled getter + setSourceMapsEnabled(bool).
     module.declare_function("js_process_source_maps_enabled", DOUBLE, &[]);
@@ -1246,6 +1247,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Iterator-protocol result validation (for-of lazy loop).
     module.declare_function("js_iterator_result_validate", DOUBLE, &[DOUBLE]);
     module.declare_function("js_global_get_or_throw_unresolved", DOUBLE, &[DOUBLE]);
+    // Ambient `require` for compiled external / compilePackages modules (#5373):
+    // bind a bare `require` to a createRequire-backed closure instead of throwing
+    // ReferenceError. Takes no base; returns the require closure value.
+    module.declare_function("js_module_ambient_require", DOUBLE, &[]);
+    // #5389 Tier 2: synchronous ambient require(spec) resolution — the codegen
+    // fallthrough when a computed require() didn't const-fold to a compiled target.
+    module.declare_function("js_module_ambient_require_apply", DOUBLE, &[DOUBLE]);
     // Non-throwing global read for `typeof <unresolved>` + global read-modify-
     // write for `i++`/`i--` on a sloppy implicit global (#3575).
     module.declare_function("js_global_get_optional", DOUBLE, &[DOUBLE]);

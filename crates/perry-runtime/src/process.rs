@@ -2546,6 +2546,20 @@ fn find_nearest_package_json(specifier: &str, base: &str) -> Option<String> {
     }
 }
 
+/// Devirt codegen entry for `process.getBuiltinModule(...)`. Arms the install-all
+/// hook (so the dynamically-resolved namespace can dispatch methods) and
+/// delegates. Codegen targets THIS symbol, so `js_nm_enable_install_all` — and
+/// thus the all-buckets `js_nm_install_all` — is referenced only by programs
+/// whose source actually calls `getBuiltinModule`. The plain
+/// `js_process_get_builtin_module` (pinned by the runtime process method table in
+/// every program) stays free of that reference, preserving per-module stripping.
+#[no_mangle]
+pub extern "C" fn js_process_get_builtin_module_devirt(id: f64) -> f64 {
+    crate::object::js_nm_enable_install_all();
+    crate::node_submodules::js_node_submod_enable_install_all();
+    js_process_get_builtin_module(id)
+}
+
 /// process.getBuiltinModule(id) -> module namespace | undefined
 #[no_mangle]
 pub extern "C" fn js_process_get_builtin_module(id: f64) -> f64 {

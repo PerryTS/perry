@@ -15,7 +15,7 @@ crate-type = ["rlib", "staticlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "diagnostics", "mod-dgram"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-locale", "diagnostics", "mod-dgram"]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only
@@ -69,6 +69,17 @@ string-normalize = ["dep:unicode-normalization"]
 # wrap-ansi@9+ (and thus ink). Only `intl.rs` uses it; a program that never
 # constructs an `Intl.Segmenter` links none of it.
 intl-segmenter = ["dep:unicode-segmentation"]
+# `Intl.getCanonicalLocales` / `*.supportedLocalesOf` BCP-47 (UTS #35) language-tag
+# canonicalization via `icu_locale_core` (the data-free structural parser — case
+# normalization, variant ordering, extension well-formedness, UTS35 rejection of
+# extlang/grandfathered/duplicate-singleton tags). No CLDR data is pulled (that
+# would need `icu_locale` + `icu_locale_data`), so deep alias replacement
+# (grandfathered→preferred, complex subtag replacement) is out of scope. Only
+# `intl.rs` uses it; a program that never canonicalizes a locale links none of
+# it (the compiler enables it on `Intl.getCanonicalLocales`/`supportedLocalesOf`
+# usage). Already pulled transitively by `temporal`, so default/shipped builds
+# carry no extra weight. A hand-rolled structural fallback covers the off case.
+intl-locale = ["dep:icu_locale_core"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`
@@ -134,6 +145,10 @@ unicode-normalization = { version = "0.1", optional = true }
 # Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,
 # so it gates ink). Pure-Rust UAX #29 implementation, already in our lock graph.
 unicode-segmentation = { version = "1", optional = true }
+# #5298: BCP-47 (UTS #35) structural locale-tag canonicalization for
+# `Intl.getCanonicalLocales` / `*.supportedLocalesOf`. The data-free structural
+# parser only (no CLDR alias tables); already in our lock graph via temporal_rs.
+icu_locale_core = { version = "2", optional = true }
 idna = { version = "1", optional = true }
 url = { version = "2", optional = true }
 # #4911: real node:dns resolve*/reverse. hickory-proto provides DNS wire-format

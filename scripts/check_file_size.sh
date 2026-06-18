@@ -143,6 +143,13 @@ crates/perry-runtime/src/object/global_this.rs
 # Crossed the limit at 2014 LOC after the #2135 worker_threads
 # value-export arm. Split tracked under #1435.
 crates/perry-runtime/src/object/native_module.rs
+# Per-module native-method dispatch buckets (devirtualization): the old single
+# ~1975-LOC `dispatch_native_module_method` match was split into 37 per-module
+# `nm_dispatch_<bucket>` fns reached through a registry so the linker can
+# dead-strip unimported modules (−20% hello-world __text). The bucket fns repeat
+# the match-arm + closure-prelude shape, so the file grew past 2000; the arms are
+# intentionally kept together (generated, one logical dispatch surface).
+crates/perry-runtime/src/object/native_module_dispatch.rs
 # globalThis constructor/namespace registry; current main crossed the threshold
 # after WebCrypto + DOM/Event global exposure landed. Split tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
@@ -301,6 +308,14 @@ crates/perry-ext-http-server/src/http2_server.rs
 # on/once iterator machinery into the existing `events/` submodule is tracked
 # under #1435 with the other module-size cleanups.
 crates/perry-stdlib/src/events.rs
+# Representation-aware type-lowering work (#5291). These crossed the 2000-line
+# gate as the raw-numeric fallback hardening + native-ABI hot-loop runtime gates
+# expanded the type-analysis surface and its native-region proof tests. Splitting
+# the per-concern analysis/verify helpers into sibling modules is tracked under
+# #1435 with the other codegen file-size cleanups.
+crates/perry-codegen/src/type_analysis.rs
+crates/perry-codegen/src/native_value/verify.rs
+crates/perry-codegen/tests/native_proof_regressions.rs
 EOF
 )
 

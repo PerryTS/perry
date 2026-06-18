@@ -23,8 +23,9 @@ use crate::lower_string_method::{
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 #[allow(unused_imports)]
 use crate::type_analysis::{
-    compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
-    is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
+    compute_auto_captures, expr_may_return_boxed_value_from_raw_f64_fallback, is_array_expr,
+    is_bigint_expr, is_bool_expr, is_map_expr, is_numeric_expr, is_set_expr, is_string_expr,
+    is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -49,7 +50,8 @@ use super::{
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Unary { op, operand } => {
-            let numeric = is_numeric_expr(ctx, operand);
+            let numeric = is_numeric_expr(ctx, operand)
+                && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, operand);
             // `-<bigint>` must stay a BigInt (`typeof -1n === "bigint"`).
             // `fneg` on a NaN-boxed BigInt flips the NaN payload's sign bit
             // and produces a garbage number, so route negation through the

@@ -759,14 +759,20 @@ unsafe fn inherited_proto_accessor_value(
     if acc.get == 0 {
         return Some(JSValue::undefined());
     }
-    let closure = (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
-    if closure.is_null() {
-        return Some(JSValue::undefined());
-    }
-    let previous_this = js_implicit_this_set(receiver);
-    let value = crate::closure::js_closure_call0(closure);
-    js_implicit_this_set(previous_this);
-    Some(JSValue::from_bits(value.to_bits()))
+    // Route through `invoke_accessor_getter` rather than a bare
+    // `js_implicit_this_set` + `js_closure_call0`. A getter installed via
+    // `Object.defineProperty(Class.prototype, name, { get })` is an ORDINARY
+    // method closure whose body reads `this` from its captured receiver slot —
+    // not from IMPLICIT_THIS — so merely setting IMPLICIT_THIS left the getter
+    // observing the prototype it lives on instead of the instance (winston's
+    // `get transports()` saw the prototype, whose `this._readableState` is
+    // undefined → "Cannot convert undefined or null to object").
+    // `invoke_accessor_getter` clones the closure with `this` rebound to the
+    // real receiver (and applies strict/sloppy coercion), matching the
+    // own-accessor read path.
+    Some(super::field_get_set::invoke_accessor_getter(
+        acc.get, receiver,
+    ))
 }
 
 unsafe fn resolve_proto_chain_field_inner(
@@ -777,6 +783,30 @@ unsafe fn resolve_proto_chain_field_inner(
     let mut cid = class_id;
     let mut depth = 0usize;
     while depth < 32 {
+        // The reflective `ClassName.prototype` object
+        // (`CLASS_DECL_PROTOTYPE_OBJECTS`) is where a user
+        // `Object.defineProperty(ClassName.prototype, name, { get })` installs
+        // its accessor — distinct from the #711/#809 synthetic-proto cache
+        // (`CLASS_PROTOTYPE_OBJECTS`) that the rest of this walk reads. The
+        // instance-read walk historically only consulted the latter, so such a
+        // getter was invisible to `instance.name` (winston:
+        // `Object.defineProperty(Logger.prototype, 'transports', { get })`,
+        // read as `this.transports`, came back `undefined` → `.length` threw).
+        // Check the decl-proto object for an ACCESSOR only: it is allocated
+        // WITH this `class_id` (`js_object_alloc(class_id, 0)`), so routing its
+        // DATA reads back through `js_object_get_field_by_name` would re-enter
+        // this same walk for the same id and recurse infinitely (a Transform
+        // subclass's `_read` lookup stack-overflowed → SIGSEGV). Class methods /
+        // data are already covered by the vtable + `class_prototype_object`
+        // path below, so the accessor-only probe here is sufficient.
+        if let Some(receiver) = receiver {
+            let decl_proto = class_decl_prototype_object(cid);
+            if !decl_proto.is_null() {
+                if let Some(value) = inherited_proto_accessor_value(decl_proto, key, receiver) {
+                    return Some(value);
+                }
+            }
+        }
         let proto_obj = class_prototype_object(cid);
         if !proto_obj.is_null() {
             if let Some(receiver) = receiver {
@@ -1631,6 +1661,163 @@ pub extern "C" fn js_new_target_value() -> f64 {
 /// f64 array of length `args_len`. Falls back to a class_id=0
 /// empty-object allocation when the function value isn't a closure
 /// (preserves the pre-fix baseline for misuse).
+// ── Per-module constructor buckets (devirt phase 2) ────────────────────────
+// `new <namespace>.<Ctor>()` for node-module-namespaced constructors that the
+// old monolithic `js_new_function_construct` dispatched with a direct call to
+// the subsystem's `*_new` — statically pinning tty/fs/vm/tls/wasi/repl/stream/
+// readline handlers into every binary. Each is now a per-module fn reached only
+// through NM_CTOR_REGISTRY, registered by the same `js_nm_install_<module>()`
+// that codegen emits when the module is imported. `None` ⇒ not a ctor this
+// module owns; caller falls through (e.g. to the http/events/zlib dynamic
+// dispatchers, which already strip on their own). Helper to read arg N.
+#[inline]
+unsafe fn nm_ctor_arg(args_ptr: *const f64, args_len: usize, n: usize) -> f64 {
+    if !args_ptr.is_null() && args_len > n {
+        *args_ptr.add(n)
+    } else {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+}
+
+pub(crate) unsafe fn nm_ctor_tty(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if matches!(method, "ReadStream" | "WriteStream") {
+        let fd = nm_ctor_arg(args_ptr, args_len, 0);
+        return Some(if method == "ReadStream" {
+            crate::tty::js_tty_read_stream_new(fd)
+        } else {
+            crate::tty::js_tty_write_stream_new(fd)
+        });
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_fs(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "Utf8Stream" {
+        return Some(crate::fs::js_fs_utf8_stream_new(nm_ctor_arg(
+            args_ptr, args_len, 0,
+        )));
+    }
+    if matches!(
+        method,
+        "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
+    ) {
+        let path = nm_ctor_arg(args_ptr, args_len, 0);
+        let options = nm_ctor_arg(args_ptr, args_len, 1);
+        return Some(if matches!(method, "ReadStream" | "FileReadStream") {
+            crate::fs::js_fs_create_read_stream(path, options)
+        } else {
+            crate::fs::js_fs_create_write_stream(path, options)
+        });
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_vm(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "Script" {
+        let code = nm_ctor_arg(args_ptr, args_len, 0);
+        let options = nm_ctor_arg(args_ptr, args_len, 1);
+        return Some(crate::node_vm::js_vm_script_new(code, options));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_tls(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "SecureContext" {
+        return Some(crate::tls::js_tls_secure_context_new(nm_ctor_arg(
+            args_ptr, args_len, 0,
+        )));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_wasi(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method == "WASI" {
+        return Some(crate::wasi::js_wasi_new(nm_ctor_arg(args_ptr, args_len, 0)));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_readline(
+    module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if module == "readline/promises" && method == "Readline" {
+        let output = nm_ctor_arg(args_ptr, args_len, 0);
+        let options = nm_ctor_arg(args_ptr, args_len, 1);
+        return Some(crate::node_submodules::js_readline_promises_readline_new(
+            output, options,
+        ));
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_repl(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if matches!(method, "Recoverable" | "REPLServer") {
+        let first = nm_ctor_arg(args_ptr, args_len, 0);
+        return Some(if method == "Recoverable" {
+            crate::node_repl::js_repl_recoverable_new(first)
+        } else {
+            crate::node_repl::js_repl_repl_server_new(first)
+        });
+    }
+    None
+}
+
+pub(crate) unsafe fn nm_ctor_stream(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if matches!(
+        method,
+        "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+    ) {
+        let opts = nm_ctor_arg(args_ptr, args_len, 0);
+        return Some(match method {
+            "Readable" => crate::node_stream::js_node_stream_readable_new(opts),
+            "Writable" => crate::node_stream::js_node_stream_writable_new(opts),
+            "Duplex" => crate::node_stream::js_node_stream_duplex_new(opts),
+            "Transform" => crate::node_stream::js_node_stream_transform_new(opts),
+            "PassThrough" => crate::node_stream::js_node_stream_passthrough_new(opts),
+            _ => unreachable!(),
+        });
+    }
+    None
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_new_function_construct(
     func_value: f64,
@@ -1704,131 +1891,16 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return dispatch(method.as_ptr(), method.len(), args_ptr, args_len, 1);
             }
         }
-        if module == "tty" && matches!(method.as_str(), "ReadStream" | "WriteStream") {
-            let fd = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return if method == "ReadStream" {
-                crate::tty::js_tty_read_stream_new(fd)
-            } else {
-                crate::tty::js_tty_write_stream_new(fd)
-            };
-        }
-        if module == "fs" && method == "Utf8Stream" {
-            let options = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::fs::js_fs_utf8_stream_new(options);
-        }
-        if module == "vm" && method == "Script" {
-            let code = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            let options = if !args_ptr.is_null() && args_len > 1 {
-                *args_ptr.add(1)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::node_vm::js_vm_script_new(code, options);
-        }
-        if module == "fs"
-            && matches!(
-                method.as_str(),
-                "ReadStream" | "FileReadStream" | "WriteStream" | "FileWriteStream"
-            )
-        {
-            let path = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            let options = if !args_ptr.is_null() && args_len > 1 {
-                *args_ptr.add(1)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return if matches!(method.as_str(), "ReadStream" | "FileReadStream") {
-                crate::fs::js_fs_create_read_stream(path, options)
-            } else {
-                crate::fs::js_fs_create_write_stream(path, options)
-            };
-        }
-        if module == "tls" && method == "SecureContext" {
-            let options = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::tls::js_tls_secure_context_new(options);
-        }
-        if module == "wasi" && method == "WASI" {
-            let options = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::wasi::js_wasi_new(options);
-        }
-        if module == "readline/promises" && method == "Readline" {
-            let output = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            let options = if !args_ptr.is_null() && args_len > 1 {
-                *args_ptr.add(1)
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return crate::node_submodules::js_readline_promises_readline_new(output, options);
-        }
-        if module == "repl" && matches!(method.as_str(), "Recoverable" | "REPLServer") {
-            let first = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return if method == "Recoverable" {
-                crate::node_repl::js_repl_recoverable_new(first)
-            } else {
-                crate::node_repl::js_repl_repl_server_new(first)
-            };
-        }
-        // #3663: `new Readable(opts)` (and Writable/Duplex/Transform/PassThrough)
-        // where the constructor binding came through any aliasing path the
-        // compiler can't resolve to a bare `Expr::New` — `const { Readable } =
-        // require('stream')`, `const s = require('stream'); new s.Readable()`,
-        // or `const R = stream.Readable; new R()`. In each case the callee
-        // value is the `stream.<Ctor>` bound-method closure, so dispatch to the
-        // same runtime constructors the named-import path uses. Without this the
-        // call falls through to the empty-object baseline and the resulting
-        // object has no EventEmitter/Writable methods, so `.on()`/`.write()`/
-        // `.pipe()` throw "is not a function".
-        if module == "stream"
-            && matches!(
-                method.as_str(),
-                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
-            )
-        {
-            let opts = if !args_ptr.is_null() && args_len > 0 {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            return match method.as_str() {
-                "Readable" => crate::node_stream::js_node_stream_readable_new(opts),
-                "Writable" => crate::node_stream::js_node_stream_writable_new(opts),
-                "Duplex" => crate::node_stream::js_node_stream_duplex_new(opts),
-                "Transform" => crate::node_stream::js_node_stream_transform_new(opts),
-                "PassThrough" => crate::node_stream::js_node_stream_passthrough_new(opts),
-                _ => unreachable!(),
-            };
+        // Devirt phase 2: node-module-namespaced constructors (tty/fs/vm/tls/
+        // wasi/readline/repl/stream) dispatch through the per-module ctor
+        // registry, populated by `js_nm_install_<module>()` at import. Each
+        // unimported module's constructors are referenced only via that install
+        // symbol, so they dead-strip. `None` falls through to the dynamic-
+        // dispatch ctors below (http/events/zlib) and the global-name match.
+        if let Some(ctor) = crate::object::nm_ctor_lookup(&module) {
+            if let Some(result) = ctor(&module, &method, args_ptr, args_len) {
+                return result;
+            }
         }
         // #4904: `new http.Agent(opts)` / `new http.ClientRequest(opts)` /
         // `new http.IncomingMessage(socket)` / `new http.ServerResponse(req)`
@@ -2922,18 +2994,28 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
     // `'prototype' in C.prototype.m === false`). (Test262 definition method/accessor
     // prop-desc.)
     //
-    // #4973 / #3527 exception: bound NATIVE-MODULE *class* exports
-    // (`http.Server`, `http.IncomingMessage`, `http.ServerResponse`, …) are
+    // #4973 / #3527 / #5268 exception: bound NATIVE-MODULE *class* exports
+    // (`http.Server`, `fs.ReadStream`, `events.EventEmitter`, …) are
     // constructors in Node, and the util.inherits / `Object.create(Ctor.
-    // prototype)` subclass pattern reads their `.prototype` as a
-    // setPrototypeOf / Object.create operand. Returning None here made that
-    // read `undefined`, and `Object.create(undefined)` /
-    // `Object.setPrototypeOf(x, undefined)` then threw "Object prototype may
-    // only be an Object or null" — the exact blocker hit at Express init
-    // (`express/lib/request.js`: `Object.create(http.IncomingMessage.
-    // prototype)`). These exports are cached singleton closures
-    // (NATIVE_CALLABLE_EXPORTS), so the synthetic-class path below gives them
-    // a stable prototype object.
+    // prototype)` / `Object.setPrototypeOf(x, Ctor.prototype)` subclass
+    // pattern reads their `.prototype` as a setPrototypeOf / Object.create
+    // operand. Returning None here made that read `undefined`, and
+    // `Object.create(undefined)` / `Object.setPrototypeOf(x, undefined)` then
+    // threw "Object prototype may only be an Object or null" — the blocker hit
+    // at Express init (`express/lib/request.js`:
+    // `Object.create(http.IncomingMessage.prototype)`), graceful-fs's
+    // `ReadStream.prototype = Object.create(fs$ReadStream.prototype)`, and
+    // pino's `Object.setPrototypeOf(prototype, EventEmitter.prototype)`.
+    //
+    // A bound-native export is a constructor class when its method name uses
+    // Node's constructor-cased convention (a leading uppercase ASCII letter,
+    // e.g. `ReadStream`/`EventEmitter`/`Server`) AND it isn't explicitly
+    // marked non-constructable (built-in prototype methods like
+    // `String.prototype.charAt` carry that flag). Such exports are cached
+    // singleton closures (NATIVE_CALLABLE_EXPORTS), so the synthetic-class
+    // path below gives them a stable `.prototype` object. Non-constructor
+    // bound methods (`fs.readFile`, `path.join`, …) keep `prototype ===
+    // undefined`, matching Node's built-in non-constructor functions.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
         if jv.is_pointer() {
@@ -2942,24 +3024,17 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
                 && is_valid_obj_ptr(cptr as *const u8)
                 && crate::closure::closure_is_bound_method(cptr)
             {
+                if super::native_module::builtin_closure_is_non_constructable_value(func_value) {
+                    return None;
+                }
                 let is_native_class_export = unsafe {
                     super::native_module::bound_native_callable_module_and_method(func_value)
                 }
-                .map(|(module, method)| {
-                    matches!(
-                        (module.as_str(), method.as_str()),
-                        // Shared http/https constructor classes.
-                        ("http" | "https", "Server" | "Agent")
-                            // http-only request/response constructor classes
-                            // that userland subclasses (Express, util.inherits).
-                            | (
-                                "http",
-                                "IncomingMessage"
-                                    | "ServerResponse"
-                                    | "OutgoingMessage"
-                                    | "ClientRequest"
-                            )
-                    )
+                .map(|(_module, method)| {
+                    method
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|b| b.is_ascii_uppercase())
                 })
                 .unwrap_or(false);
                 if !is_native_class_export {
@@ -3740,8 +3815,15 @@ extern "C" fn class_accessor_setter_thunk(
 /// Wrap a raw class accessor func_ptr as a callable function VALUE for
 /// descriptor reflection (`Object.getOwnPropertyDescriptor(C.prototype,
 /// "x").get`). Built-in-shaped: `.length` 0/1, no `.prototype`, native
-/// `toString` form.
-pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> f64 {
+/// `toString` form. `prop_name` is the accessor's property key — the spec
+/// `.name` of a `get`/`set` accessor is the key prefixed with `"get "`/`"set "`
+/// (Function Definitions: SetFunctionName with the "get"/"set" prefix), e.g.
+/// `Object.getOwnPropertyDescriptor(C.prototype, "x").get.name === "get x"`.
+pub(crate) fn class_accessor_function_value(
+    raw_ptr: usize,
+    is_setter: bool,
+    prop_name: &str,
+) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -3760,6 +3842,22 @@ pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> 
         if is_setter { 1 } else { 0 },
     );
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    // Spec `.name` = "get <key>" / "set <key>" with attributes
+    // { writable: false, enumerable: false, configurable: true } (mirrors the
+    // `Function.prototype.bind` name path). Without this the reflected accessor
+    // value's `.name` defaulted to "" — refs class/.../fn-name-accessor-{get,set}.
+    let prefix = if is_setter { "set " } else { "get " };
+    let fn_name = format!("{prefix}{prop_name}");
+    let name_ptr = crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
+    let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
+    unsafe {
+        crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    }
+    crate::object::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
     crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
     crate::value::js_nanbox_pointer(closure as i64)
 }

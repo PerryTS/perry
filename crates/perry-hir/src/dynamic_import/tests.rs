@@ -490,6 +490,7 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
                 Expr::String("node_modules.asar.unpacked".to_string()),
             ],
             type_args: vec![],
+            byte_offset: 0,
         }),
     });
 
@@ -506,6 +507,7 @@ fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
             Expr::String("worker/conoutSocketWorker.js".to_string()),
         ],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     let consts = collect_module_const_locals(&module);

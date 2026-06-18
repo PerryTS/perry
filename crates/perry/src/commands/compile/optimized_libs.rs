@@ -678,7 +678,7 @@ pub(super) fn build_optimized_libs(
     // Cheap djb2 — no need for the SipHash overhead.
     let target_str = target.unwrap_or("host");
     let key_input = format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|diag={}|dgram={}|v={}",
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -689,6 +689,7 @@ pub(super) fn build_optimized_libs(
         ctx.uses_url,
         ctx.uses_string_normalize,
         ctx.uses_intl_segmenter,
+        ctx.uses_intl_locale,
         ctx.uses_diagnostics,
         ctx.uses_dgram,
         env!("CARGO_PKG_VERSION"),
@@ -806,6 +807,9 @@ pub(super) fn build_optimized_libs(
     }
     if ctx.uses_intl_segmenter {
         cross_features.push("perry-runtime/intl-segmenter".to_string());
+    }
+    if ctx.uses_intl_locale {
+        cross_features.push("perry-runtime/intl-locale".to_string());
     }
     // Cold-path diagnostic JSON serializers (~95 KB incl. the `serde_json`
     // pulled only by them) — enabled only when the program uses a heap-snapshot

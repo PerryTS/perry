@@ -217,3 +217,42 @@ pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
     make_require(undefined())
 }
+
+/// Ambient `require` for compiled external / `compilePackages` modules (Tier 1 of
+/// #5389, fixes #5373). These modules carry no CJS ambient `require` binding, so a
+/// bare or computed `require(expr)` would otherwise lower to
+/// `js_global_get_or_throw_unresolved` and throw `ReferenceError: require is not
+/// defined`. This returns the same `createRequire`-backed closure as
+/// `js_module_create_require`, but takes no base argument (it is produced where a
+/// bare `require` identifier appears, not from an explicit `createRequire(base)`).
+/// Builtins resolve by string today; package/file specifiers throw the descriptive
+/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE` until Tier 2 lands static package
+/// resolution.
+#[no_mangle]
+pub extern "C" fn js_module_ambient_require() -> f64 {
+    make_require(undefined())
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build (generated-code-only
+/// callee; see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_MODULE_AMBIENT_REQUIRE: extern "C" fn() -> f64 = js_module_ambient_require;
+
+/// Synchronous ambient `require(spec)` resolution for the #5389 Tier 2 codegen
+/// fallthrough. When a computed `require(expr)` in a compiled external module did
+/// not const-fold to a compiled-module target, the dynamic-require dispatch calls
+/// this with the runtime specifier value: it resolves exactly like a
+/// createRequire-backed `require(spec)` — builtins (`node:os`, …) by string,
+/// unknown package/file specifiers throw the descriptive
+/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`. Returns the required value directly
+/// (no Promise).
+#[no_mangle]
+pub extern "C" fn js_module_ambient_require_apply(spec: f64) -> f64 {
+    require_thunk(std::ptr::null(), spec)
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build (generated-code-only
+/// callee; see project_auto_optimize_keepalive_3320).
+#[used]
+static KEEP_JS_MODULE_AMBIENT_REQUIRE_APPLY: extern "C" fn(f64) -> f64 =
+    js_module_ambient_require_apply;

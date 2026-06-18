@@ -24,31 +24,68 @@ fi
 
 BENCHMARKS="05_fibonacci.ts 06_math_intensive.ts 10_nested_loops.ts 13_factorial.ts 16_matrix_multiply.ts"
 HAS_NODE=0
-command -v node &>/dev/null && HAS_NODE=1
+NODE_CMD=(node)
+
+detect_node_ts_runner() {
+  command -v node &>/dev/null || return 1
+
+  local probe
+  probe=$(mktemp "${TMPDIR:-/tmp}/perry-node-ts-probe.XXXXXX.ts")
+  printf 'const x: number = 1;\nconsole.log("node_ts_probe:" + x);\n' >"$probe"
+
+  if node "$probe" >/dev/null 2>&1; then
+    NODE_CMD=(node)
+    rm -f "$probe"
+    return 0
+  fi
+
+  if node --experimental-strip-types "$probe" >/dev/null 2>&1; then
+    NODE_CMD=(node --experimental-strip-types)
+    rm -f "$probe"
+    return 0
+  fi
+
+  rm -f "$probe"
+  return 1
+}
+
+if detect_node_ts_runner; then
+  HAS_NODE=1
+else
+  echo "Node.js is unavailable for .ts benchmark inputs; Node columns will be skipped." >&2
+fi
 
 extract_time() {
-  echo "$1" | grep -E "^[a-z_]+:[0-9]+" | head -1 | cut -d: -f2
+  awk -F: '/^[a-z_]+:[0-9]+/ {print $2; exit}' <<<"$1"
 }
 
 measure() {
   local tmp_err=$(mktemp) tmp_out=$(mktemp)
-  /usr/bin/time -l "$@" >"$tmp_out" 2>"$tmp_err"
-  local rss=0
-  local pmf
-  pmf=$(grep 'peak memory footprint' "$tmp_err" 2>/dev/null | awk '{print $1}')
-  if [[ -n "$pmf" && "$pmf" != "0" ]]; then
-    rss=$pmf
+  if [[ -x /usr/bin/time ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+      /usr/bin/time -l "$@" >"$tmp_out" 2>"$tmp_err" || true
+    else
+      /usr/bin/time -v "$@" >"$tmp_out" 2>"$tmp_err" || true
+    fi
   else
-    local mrs
-    mrs=$(grep 'maximum resident set size' "$tmp_err" 2>/dev/null | awk '{print $1}')
-    [[ -n "$mrs" ]] && rss=$mrs
+    "$@" >"$tmp_out" 2>"$tmp_err" || true
   fi
-  [[ -z "$rss" ]] && rss=0
-  local rss_mb=$((rss / 1024 / 1024))
+  local rss_mb=0
+  if [[ "$(uname)" == "Darwin" ]]; then
+    local rss_bytes
+    rss_bytes=$(awk '/peak memory footprint/ {print $1; exit} /maximum resident set size/ {print $1; exit}' "$tmp_err" 2>/dev/null || true)
+    rss_bytes=${rss_bytes:-0}
+    rss_mb=$((rss_bytes / 1024 / 1024))
+  else
+    local rss_kb
+    rss_kb=$(awk -F': ' '/Maximum resident set size/ {print $2; exit}' "$tmp_err" 2>/dev/null || true)
+    rss_kb=${rss_kb:-0}
+    rss_mb=$((rss_kb / 1024))
+  fi
   local output
   output=$(cat "$tmp_out")
   rm -f "$tmp_err" "$tmp_out"
-  echo "${rss_mb}|${output}"
+  printf '%s\n%s\n' "$rss_mb" "$output"
 }
 
 echo -e "${BOLD}${CYAN}Quick Bench (5 benchmarks)${NC}"
@@ -71,17 +108,17 @@ for bench in $BENCHMARKS; do
 
   # Perry
   result=$(measure "./$name")
-  p_rss=$(echo "$result" | cut -d'|' -f1)
-  p_out=$(echo "$result" | cut -d'|' -f2-)
+  p_rss=$(sed -n '1p' <<<"$result")
+  p_out=$(sed '1d' <<<"$result")
   p_ms=$(extract_time "$p_out")
 
   # Node
   n_ms="-"; n_rss="-"
   ratio="-"; mratio="-"
   if [[ $HAS_NODE -eq 1 ]]; then
-    result=$(measure node "$bench")
-    n_rss=$(echo "$result" | cut -d'|' -f1)
-    n_out=$(echo "$result" | cut -d'|' -f2-)
+    result=$(measure "${NODE_CMD[@]}" "$bench")
+    n_rss=$(sed -n '1p' <<<"$result")
+    n_out=$(sed '1d' <<<"$result")
     n_ms=$(extract_time "$n_out")
 
     if [[ "$p_ms" =~ ^[0-9]+$ && "$n_ms" =~ ^[0-9]+$ && "$n_ms" -gt 0 ]]; then

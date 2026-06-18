@@ -169,8 +169,8 @@ unsafe fn insert_node(hwnd: HWND, h_parent: isize, node_id: i64) -> isize {
     let h: isize = SendMessageW(
         hwnd,
         TVM_INSERTITEMW,
-        WPARAM(0),
-        LPARAM(&ins as *const _ as isize),
+        Some(WPARAM(0)),
+        Some(LPARAM(&ins as *const _ as isize)),
     )
     .0;
     for child in children {
@@ -205,9 +205,9 @@ pub fn create(root_node: i64, on_select: f64) -> i64 {
                 0,
                 240,
                 320,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             );
             let Ok(hwnd) = hwnd else {
@@ -242,12 +242,17 @@ unsafe fn walk_and_apply_expand(hwnd: HWND, h_item: isize, code: u32) {
     if h_item == 0 {
         return;
     }
-    SendMessageW(hwnd, TVM_EXPAND, WPARAM(code as usize), LPARAM(h_item));
+    SendMessageW(
+        hwnd,
+        TVM_EXPAND,
+        Some(WPARAM(code as usize)),
+        Some(LPARAM(h_item)),
+    );
     // Walk children — TVGN_CHILD = 4.
-    let child = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(4), LPARAM(h_item)).0;
+    let child = SendMessageW(hwnd, TVM_GETNEXTITEM, Some(WPARAM(4)), Some(LPARAM(h_item))).0;
     walk_and_apply_expand(hwnd, child, code);
     // Walk siblings — TVGN_NEXT = 1.
-    let sibling = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(1), LPARAM(h_item)).0;
+    let sibling = SendMessageW(hwnd, TVM_GETNEXTITEM, Some(WPARAM(1)), Some(LPARAM(h_item))).0;
     walk_and_apply_expand(hwnd, sibling, code);
 }
 
@@ -259,7 +264,7 @@ pub fn expand_all(handle: i64) {
         };
         unsafe {
             // TVGN_ROOT = 0
-            let root = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(0), LPARAM(0)).0;
+            let root = SendMessageW(hwnd, TVM_GETNEXTITEM, Some(WPARAM(0)), Some(LPARAM(0))).0;
             walk_and_apply_expand(hwnd, root, TVE_EXPAND);
         }
     }
@@ -276,7 +281,7 @@ pub fn collapse_all(handle: i64) {
             return;
         };
         unsafe {
-            let root = SendMessageW(hwnd, TVM_GETNEXTITEM, WPARAM(0), LPARAM(0)).0;
+            let root = SendMessageW(hwnd, TVM_GETNEXTITEM, Some(WPARAM(0)), Some(LPARAM(0))).0;
             walk_and_apply_expand(hwnd, root, TVE_COLLAPSE);
         }
     }
@@ -297,8 +302,8 @@ pub fn get_selected_id(handle: i64) -> f64 {
             let h_item = SendMessageW(
                 hwnd,
                 TVM_GETNEXTITEM,
-                WPARAM(TVGN_CARET as usize),
-                LPARAM(0),
+                Some(WPARAM(TVGN_CARET as usize)),
+                Some(LPARAM(0)),
             )
             .0;
             if h_item == 0 {
@@ -335,8 +340,8 @@ unsafe fn read_node_id_from_h_item(hwnd: HWND, h_item: isize) -> Option<String> 
     let ok = SendMessageW(
         hwnd,
         TVM_GETITEMW,
-        WPARAM(0),
-        LPARAM(&mut item as *mut _ as isize),
+        Some(WPARAM(0)),
+        Some(LPARAM(&mut item as *mut _ as isize)),
     )
     .0;
     if ok == 0 {
@@ -364,8 +369,8 @@ pub fn handle_selection_change(handle: i64) {
         let h_item = SendMessageW(
             hwnd,
             TVM_GETNEXTITEM,
-            WPARAM(TVGN_CARET as usize),
-            LPARAM(0),
+            Some(WPARAM(TVGN_CARET as usize)),
+            Some(LPARAM(0)),
         )
         .0;
         if h_item == 0 {

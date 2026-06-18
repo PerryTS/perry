@@ -109,6 +109,42 @@ pub(super) fn install_methods_on_existing_object(
     }
 }
 
+/// Install the EventEmitter prototype methods (`on`/`once`/`emit`/
+/// `removeListener`/`removeAllListeners`/…) on a *prototype* object as named
+/// own properties, each a closure that reads its receiver from the call-site
+/// `this` (IMPLICIT_THIS) rather than a captured instance.
+///
+/// readable-stream's `Readable.prototype.on` is `function (ev, fn) { var res =
+/// Stream.prototype.on.call(this, ev, fn); … }` — the legacy `Stream.prototype`
+/// must therefore expose `.on` (and siblings) as VALUES so the `.call(this)`
+/// borrow dispatches the EventEmitter `on` against the real stream instance.
+/// Before this, `Stream.prototype.on` was `undefined` and the `.call` threw
+/// "Function.prototype.call was called on a value that is not a function".
+///
+/// The closures capture `TAG_UNDEFINED` in slot 0; `this_value` treats that as
+/// "no fixed receiver — read IMPLICIT_THIS", which `Function.prototype.call`/
+/// `.apply` sets to the borrowed `this`.
+pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) {
+    register_stub_arities();
+    let methods = super::emitter_methods();
+    let mut on_method: Option<f64> = None;
+    for (name, func) in methods {
+        if name == "addListener" {
+            if let Some(val) = on_method {
+                js_object_set_field_by_name(proto, hidden_key(name.as_bytes()), val);
+                continue;
+            }
+        }
+        let closure = js_closure_alloc(func as *const u8, 1);
+        crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
+        let val = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
+        if name == "on" {
+            on_method = Some(val);
+        }
+        js_object_set_field_by_name(proto, hidden_key(name.as_bytes()), val);
+    }
+}
+
 pub(super) fn register_stub_arities() {
     let register = |func: *const u8, arity: u32| {
         crate::closure::js_register_closure_arity(func, arity);

@@ -43,6 +43,7 @@ mod expr_member;
 pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE};
 mod expr_misc;
 mod expr_new;
+mod expr_new_builtins;
 mod expr_object;
 mod unimpl_hints;
 pub(crate) use context::*;
@@ -84,6 +85,9 @@ mod lowering_context;
 pub(crate) use lowering_context::{
     LoweringContext, PrivKind, PrivMember, PrivateScope, WithEnvFrame,
 };
+
+mod locals;
+pub(crate) use locals::Locals;
 
 mod typed_parse;
 pub(crate) use typed_parse::{extract_typed_parse_source_order, resolve_typed_parse_ty};

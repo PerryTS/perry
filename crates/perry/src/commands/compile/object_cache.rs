@@ -165,6 +165,11 @@ fn compute_object_cache_key_with_env(
     // doesn't usually move between rebuilds.
     h.field("build_id", &format!("{:016x}", perry_build_id()));
     h.field("ir_only", if opts.emit_ir_only { "1" } else { "0" });
+    // #5247: `--debug-symbols` flips per-call `js_set_call_location` emission,
+    // which changes the emitted IR (and `.o` bytes). Without this in the key,
+    // toggling the flag would serve the previously-cached object and the
+    // source locations would silently not appear.
+    h.field("dbgloc", if opts.debug_locations { "1" } else { "0" });
     h.field(
         "verify_native_regions",
         if opts.verify_native_regions { "1" } else { "0" },
@@ -948,6 +953,9 @@ mod object_cache_tests {
             deferred_module_prefixes: std::collections::HashSet::new(),
             module_init_deps: Vec::new(),
             is_dynamic_import_target: false,
+            debug_locations: false,
+            module_source: None,
+            debug_source_line_offset: 0,
         }
     }
 
@@ -1011,6 +1019,20 @@ mod object_cache_tests {
         let mut b = empty_opts();
         a.is_entry_module = false;
         b.is_entry_module = true;
+        assert_ne!(
+            compute_object_cache_key(&a, 1, "0.5.156"),
+            compute_object_cache_key(&b, 1, "0.5.156")
+        );
+    }
+
+    #[test]
+    fn key_changes_with_debug_locations_flag() {
+        // #5247: toggling --debug-symbols (debug_locations) flips per-call
+        // location emission, so cached objects must not be shared across it.
+        let mut a = empty_opts();
+        let mut b = empty_opts();
+        a.debug_locations = false;
+        b.debug_locations = true;
         assert_ne!(
             compute_object_cache_key(&a, 1, "0.5.156"),
             compute_object_cache_key(&b, 1, "0.5.156")
@@ -1222,6 +1244,7 @@ mod object_cache_tests {
             source_prefix: "feature_ts".into(),
             constructor_param_count: 0,
             has_own_constructor: false,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec![],
             method_param_counts: vec![],
@@ -1256,6 +1279,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
@@ -1275,6 +1299,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 2, // different arity
             has_own_constructor: true,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
@@ -1302,6 +1327,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![1],

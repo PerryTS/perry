@@ -169,6 +169,7 @@ pub(super) fn try_object_has_own_call(
                                         }),
                                         args,
                                         type_args: Vec::new(),
+                                        byte_offset: 0,
                                     });
                                 }
                             }
@@ -205,6 +206,7 @@ pub(super) fn try_direct_has_own_call(
                         }),
                         args: vec![receiver, args[0].clone()],
                         type_args: Vec::new(),
+                        byte_offset: 0,
                     });
                 }
             }
@@ -270,6 +272,7 @@ pub(super) fn try_object_prototype_call(
                                             }),
                                             args,
                                             type_args: Vec::new(),
+                                            byte_offset: 0,
                                         });
                                     }
                                 }

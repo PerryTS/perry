@@ -89,6 +89,7 @@ pub(crate) fn push_deduped_class_computed_keys(
                 }),
                 args: vec![lowered],
                 type_args: Vec::new(),
+                byte_offset: 0,
             }));
         }
     }

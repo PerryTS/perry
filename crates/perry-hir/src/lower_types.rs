@@ -262,7 +262,46 @@ fn url_encoding_constructor_type(ctx: &LoweringContext, callee: &ast::Expr) -> O
     }
 }
 
+/// Max recursion depth for `infer_type_from_expr`. Beyond this the inference
+/// degrades to `Type::Any` (the universal sound fallback — see the
+/// `Array`/`Bin` arms below, where `Any` simply selects the tag-aware codegen
+/// path). This bounds the per-call cost so lowering a deeply-nested literal
+/// stays linear: lowering descends one nesting level at a time and re-infers
+/// the *current* value's type at each level, so an uncapped per-call cost of
+/// O(remaining subtree) made the whole pass O(n²) — #5258 (an 8000-deep object
+/// literal or `()=>()=>…` arrow chain stalled `check-lower` for minutes). Real
+/// source never nests literals this deep, so the cap loses no practical
+/// precision while keeping pathological/minified inputs tractable.
+const INFER_TYPE_RECURSION_CAP: u32 = 48;
+const INFER_TYPE_STACK_RED_ZONE: usize = 256 * 1024;
+const INFER_TYPE_STACK_SEGMENT: usize = 2 * 1024 * 1024;
+
 pub(crate) fn infer_type_from_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
+    thread_local! {
+        static INFER_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    struct DepthGuard;
+    impl Drop for DepthGuard {
+        fn drop(&mut self) {
+            INFER_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        }
+    }
+    let depth = INFER_DEPTH.with(|d| {
+        let v = d.get();
+        d.set(v + 1);
+        v
+    });
+    let _depth_guard = DepthGuard;
+    if depth >= INFER_TYPE_RECURSION_CAP {
+        return Type::Any;
+    }
+
+    stacker::maybe_grow(INFER_TYPE_STACK_RED_ZONE, INFER_TYPE_STACK_SEGMENT, || {
+        infer_type_from_expr_inner(expr, ctx)
+    })
+}
+
+fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
     match expr {
         // Literals
         ast::Expr::Lit(lit) => match lit {
