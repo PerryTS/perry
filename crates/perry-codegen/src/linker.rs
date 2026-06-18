@@ -280,6 +280,66 @@ pub fn compile_ll_to_object(ll_text: &str, target_triple: Option<&str>) -> Resul
     Ok(bytes)
 }
 
+/// Compile a module that was split into codegen units (#5391) to a SINGLE
+/// object file's bytes. Each unit `.ll` (from `LlModule::render_codegen_units`)
+/// is compiled independently by `clang -c` — bounding peak compiler memory to
+/// roughly one unit's worth instead of the whole module — and the resulting
+/// objects are merged with a partial link (`ld -r`) into one object, preserving
+/// `compile_module`'s single-`Vec<u8>` contract and the existing one-object
+/// link path. Units are compiled sequentially so peak RSS stays at one unit.
+pub fn compile_units_to_object(units: &[String], target_triple: Option<&str>) -> Result<Vec<u8>> {
+    match units {
+        [] => return compile_ll_to_object("", target_triple),
+        [only] => return compile_ll_to_object(only, target_triple),
+        _ => {}
+    }
+
+    let tmp_dir = env::temp_dir();
+    let pid = std::process::id();
+    let nonce = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(units.len());
+    for (i, unit) in units.iter().enumerate() {
+        let bytes = compile_ll_to_object(unit, target_triple)
+            .with_context(|| format!("codegen unit {}/{} failed to compile", i + 1, units.len()))?;
+        let p = tmp_dir.join(format!("perry_cgu_{}_{}_{}.o", pid, nonce, i));
+        fs::write(&p, &bytes)
+            .with_context(|| format!("failed to write codegen-unit object {}", p.display()))?;
+        obj_paths.push(p);
+    }
+
+    let combined = tmp_dir.join(format!("perry_cgu_{}_{}_combined.o", pid, nonce));
+    let ld = env::var("PERRY_LD").unwrap_or_else(|_| "ld".to_string());
+    let mut cmd = Command::new(&ld);
+    cmd.arg("-r").arg("-o").arg(&combined);
+    for p in &obj_paths {
+        cmd.arg(p);
+    }
+    let out = cmd
+        .output()
+        .with_context(|| format!("failed to invoke partial linker `{} -r`", ld))?;
+    let result = if out.status.success() {
+        fs::read(&combined)
+            .with_context(|| format!("failed to read merged object {}", combined.display()))
+    } else {
+        Err(anyhow!(
+            "partial link `{} -r` of {} codegen units failed (status={}).\nstderr:\n{}",
+            ld,
+            units.len(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ))
+    };
+
+    if env::var_os("PERRY_LLVM_KEEP_IR").is_none() {
+        for p in &obj_paths {
+            let _ = fs::remove_file(p);
+        }
+        let _ = fs::remove_file(&combined);
+    }
+    result
+}
+
 fn json_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');

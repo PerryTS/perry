@@ -447,7 +447,13 @@ pub(super) fn compile_module_entry(
             non_escaping_news: main_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
             non_escaping_arrays: main_native_facts.non_escaping_arrays().clone(),
+            non_escaping_array_used_indices: main_native_facts
+                .non_escaping_array_used_indices()
+                .clone(),
             non_escaping_object_literals: main_native_facts.non_escaping_object_literals().clone(),
+            non_escaping_object_literal_used_fields: main_native_facts
+                .non_escaping_object_literal_used_fields()
+                .clone(),
             flat_const_arrays: &cross_module.flat_const_arrays,
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,
@@ -887,7 +893,13 @@ pub(super) fn compile_module_entry(
             non_escaping_news: init_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: init_native_facts.non_escaping_new_used_fields().clone(),
             non_escaping_arrays: init_native_facts.non_escaping_arrays().clone(),
+            non_escaping_array_used_indices: init_native_facts
+                .non_escaping_array_used_indices()
+                .clone(),
             non_escaping_object_literals: init_native_facts.non_escaping_object_literals().clone(),
+            non_escaping_object_literal_used_fields: init_native_facts
+                .non_escaping_object_literal_used_fields()
+                .clone(),
             flat_const_arrays: &cross_module.flat_const_arrays,
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,

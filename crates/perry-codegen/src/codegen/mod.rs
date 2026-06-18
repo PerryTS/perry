@@ -51,8 +51,8 @@ mod string_pool;
 
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{
-    decide_full_outline_ic, default_target_triple, full_outline_ic_enabled, module_callable_count,
-    set_full_outline_ic, write_barriers_enabled,
+    decide_codegen_units, decide_full_outline_ic, default_target_triple, full_outline_ic_enabled,
+    module_callable_count, set_full_outline_ic, write_barriers_enabled,
 };
 pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
@@ -2521,6 +2521,32 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         crate::native_value::verify_native_rep_records(&llmod.native_rep_records)?;
     }
 
+    crate::native_value::write_native_rep_artifact_if_enabled(
+        &hir.name,
+        &llmod.native_rep_records,
+    )?;
+
+    // #5391 codegen units: large modules split their object compilation into N
+    // independently-compiled units so clang's peak RSS stays ~whole/N instead of
+    // OOMing on one giant TU. Gated to large modules (default 1 unit = unchanged
+    // behavior). `emit_ir_only` and `PERRY_SAVE_LL` want the whole-module text,
+    // so they take the single-text path; the split path avoids materializing the
+    // full ~1GB IR string at all (which would defeat the memory win).
+    let n_units = if opts.emit_ir_only {
+        1
+    } else {
+        decide_codegen_units(module_callable_count(hir))
+    };
+    if n_units > 1 {
+        let units = llmod.render_codegen_units(n_units);
+        log::debug!(
+            "perry-codegen: split '{}' into {} codegen units",
+            hir.name,
+            units.len()
+        );
+        return crate::linker::compile_units_to_object(&units, opts.target.as_deref());
+    }
+
     let ll_text = llmod.to_ir();
     log::debug!(
         "perry-codegen: emitted {} bytes of LLVM IR for '{}' ({} interned strings)",
@@ -2533,10 +2559,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let filename = format!("{}/{}.ll", save_dir, module_prefix);
         let _ = std::fs::write(&filename, &ll_text);
     }
-    crate::native_value::write_native_rep_artifact_if_enabled(
-        &hir.name,
-        &llmod.native_rep_records,
-    )?;
     if opts.emit_ir_only {
         Ok(ll_text.into_bytes())
     } else {

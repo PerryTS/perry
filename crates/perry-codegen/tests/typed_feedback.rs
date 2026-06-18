@@ -407,6 +407,45 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
 }
 
 #[test]
+fn full_outline_array_literal_uses_builder_call() {
+    // #5391: full-outline replaces the inline array-literal construction
+    // (bump-alloc diamond + per-element store/note/barrier) with one
+    // `js_array_from_values` call over a stack buffer.
+    // A param-based array (not all-const) so it reaches `lower_array_literal`
+    // rather than const-folding to a flat rodata global.
+    let build = || {
+        module(
+            "outline_arr.ts",
+            vec![param(1, "x", Type::Number)],
+            Type::Any,
+            vec![Stmt::Return(Some(Expr::Array(vec![
+                Expr::LocalGet(1),
+                Expr::Number(2.0),
+                Expr::LocalGet(1),
+            ])))],
+        )
+    };
+
+    let _lock = ENV_LOCK.lock().unwrap();
+
+    {
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
+        let ir = ir_for(build());
+        assert!(ir.contains("call i64 @js_array_from_values"));
+        assert!(!ir.contains("arrlit.fast"));
+        // the inline bump-alloc CALL (not its always-present declare) is gone
+        assert!(!ir.contains("call ptr @js_inline_arena_slow_alloc"));
+    }
+    {
+        // OFF: the inline construction path (whatever it is for this literal) —
+        // crucially NOT the outlined builder.
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
+        let ir = ir_for(build());
+        assert!(!ir.contains("call i64 @js_array_from_values"));
+    }
+}
+
+#[test]
 fn full_outline_ic_auto_gate_counts_class_methods() {
     // #5334 lever B: the auto size-gate counts class CALLABLES (methods,
     // accessors, ctor), not just top-level `hir.functions`. A class-heavy module
@@ -670,6 +709,11 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
 
 #[test]
 fn typed_feedback_marks_numeric_array_literals() {
+    // Serialize against the array-literal full-outline test and pin it off, so
+    // this test always observes the inline numeric-array construction
+    // (js_array_mark_numeric_f64_layout) rather than the outlined builder.
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let numeric_ir = ir_for(module(
         "typed_feedback_numeric_array_literal.ts",
         Vec::new(),
