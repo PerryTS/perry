@@ -258,24 +258,24 @@ pub(crate) fn collect_hir_facts(
 
 fn collect_known_noalias_buffer_locals(stmts: &[Stmt]) -> HashSet<u32> {
     let mut out = HashSet::new();
-    let mut known_length_locals = HashSet::new();
-    collect_owned_buffer_lets(stmts, &mut out, &mut known_length_locals);
+    let mut known_length_values = HashMap::new();
+    collect_owned_buffer_lets(stmts, &mut out, &mut known_length_values);
     out
 }
 
 fn collect_owned_buffer_lets_child_scope(
     stmts: &[Stmt],
     out: &mut HashSet<u32>,
-    known_length_locals: &HashSet<u32>,
+    known_length_values: &HashMap<u32, i64>,
 ) {
-    let mut child_length_locals = known_length_locals.clone();
-    collect_owned_buffer_lets(stmts, out, &mut child_length_locals);
+    let mut child_length_values = known_length_values.clone();
+    collect_owned_buffer_lets(stmts, out, &mut child_length_values);
 }
 
 fn collect_owned_buffer_lets(
     stmts: &[Stmt],
     out: &mut HashSet<u32>,
-    known_length_locals: &mut HashSet<u32>,
+    known_length_values: &mut HashMap<u32, i64>,
 ) {
     for stmt in stmts {
         match stmt {
@@ -285,13 +285,17 @@ fn collect_owned_buffer_lets(
                 init: Some(init),
                 ..
             } => {
-                if !*mutable && is_owned_u8_buffer_alloc(init, known_length_locals) {
+                if !*mutable && is_owned_u8_buffer_alloc(init, known_length_values) {
                     out.insert(*id);
                 }
-                if !*mutable && is_fresh_uint8array_length_expr(init, known_length_locals) {
-                    known_length_locals.insert(*id);
+                if !*mutable {
+                    if let Some(length) = fresh_uint8array_length_value(init, known_length_values) {
+                        known_length_values.insert(*id, length);
+                    } else {
+                        known_length_values.remove(id);
+                    }
                 } else {
-                    known_length_locals.remove(id);
+                    known_length_values.remove(id);
                 }
             }
             Stmt::If {
@@ -299,30 +303,30 @@ fn collect_owned_buffer_lets(
                 else_branch,
                 ..
             } => {
-                collect_owned_buffer_lets_child_scope(then_branch, out, known_length_locals);
+                collect_owned_buffer_lets_child_scope(then_branch, out, known_length_values);
                 if let Some(else_branch) = else_branch {
-                    collect_owned_buffer_lets_child_scope(else_branch, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(else_branch, out, known_length_values);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_values);
             }
             Stmt::For { init, body, .. } => {
-                let mut loop_length_locals = known_length_locals.clone();
+                let mut loop_length_values = known_length_values.clone();
                 if let Some(init) = init {
                     collect_owned_buffer_lets(
                         std::slice::from_ref(init.as_ref()),
                         out,
-                        &mut loop_length_locals,
+                        &mut loop_length_values,
                     );
                 }
-                collect_owned_buffer_lets(body, out, &mut loop_length_locals);
+                collect_owned_buffer_lets(body, out, &mut loop_length_values);
             }
             Stmt::Labeled { body, .. } => {
                 collect_owned_buffer_lets_child_scope(
                     std::slice::from_ref(body.as_ref()),
                     out,
-                    known_length_locals,
+                    known_length_values,
                 );
             }
             Stmt::Try {
@@ -330,17 +334,17 @@ fn collect_owned_buffer_lets(
                 catch,
                 finally,
             } => {
-                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_values);
                 if let Some(catch) = catch {
-                    collect_owned_buffer_lets_child_scope(&catch.body, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(&catch.body, out, known_length_values);
                 }
                 if let Some(finally) = finally {
-                    collect_owned_buffer_lets_child_scope(finally, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(finally, out, known_length_values);
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    collect_owned_buffer_lets_child_scope(&case.body, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(&case.body, out, known_length_values);
                 }
             }
             Stmt::Let { init: None, .. }
@@ -356,17 +360,17 @@ fn collect_owned_buffer_lets(
     }
 }
 
-fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
+fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_values: &HashMap<u32, i64>) -> bool {
     match expr {
         Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) => true,
         Expr::Uint8ArrayNew(None) => true,
         Expr::Uint8ArrayNew(Some(size)) => {
-            is_fresh_uint8array_length_expr(size, known_length_locals)
+            fresh_uint8array_length_value(size, known_length_values).is_some()
         }
         Expr::TypedArrayNew { arg: None, .. } => true,
         Expr::TypedArrayNew {
             arg: Some(size), ..
-        } => is_fresh_uint8array_length_expr(size, known_length_locals),
+        } => fresh_uint8array_length_value(size, known_length_values).is_some(),
         Expr::NativeMethodCall {
             module,
             method,
@@ -378,19 +382,32 @@ fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_locals: &HashSet<u32>) -> 
     }
 }
 
-fn is_fresh_uint8array_length_expr(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
+fn fresh_uint8array_length_value(
+    expr: &Expr,
+    known_length_values: &HashMap<u32, i64>,
+) -> Option<i64> {
     match expr {
-        Expr::LocalGet(id) => known_length_locals.contains(id),
-        _ => is_fresh_uint8array_length_literal(expr),
+        Expr::Integer(n) => valid_uint8array_length(*n),
+        Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => valid_uint8array_length(*n as i64),
+        Expr::LocalGet(id) => known_length_values.get(id).copied(),
+        Expr::Binary { op, left, right } => {
+            let lhs = fresh_uint8array_length_value(left, known_length_values)?;
+            let rhs = fresh_uint8array_length_value(right, known_length_values)?;
+            let value = match op {
+                perry_hir::BinaryOp::Add => lhs.checked_add(rhs)?,
+                perry_hir::BinaryOp::Sub => lhs.checked_sub(rhs)?,
+                perry_hir::BinaryOp::Mul => lhs.checked_mul(rhs)?,
+                perry_hir::BinaryOp::Div if rhs != 0 && lhs % rhs == 0 => lhs / rhs,
+                _ => return None,
+            };
+            valid_uint8array_length(value)
+        }
+        _ => None,
     }
 }
 
-fn is_fresh_uint8array_length_literal(expr: &Expr) -> bool {
-    match expr {
-        Expr::Integer(n) => *n >= 0 && *n < i32::MAX as i64,
-        Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n < i32::MAX as f64,
-        _ => false,
-    }
+fn valid_uint8array_length(value: i64) -> Option<i64> {
+    (value >= 0 && value < i32::MAX as i64).then_some(value)
 }
 
 #[cfg(test)]
@@ -438,6 +455,14 @@ mod tests {
             op: BinaryOp::UShr,
             left: Box::new(left),
             right: Box::new(Expr::Integer(0)),
+        }
+    }
+
+    fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
+        Expr::Binary {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
         }
     }
 
@@ -551,6 +576,33 @@ mod tests {
 
         assert!(ids.contains(&1));
         assert!(ids.contains(&2));
+    }
+
+    #[test]
+    fn uint8array_const_arithmetic_lengths_are_known_noalias_sources() {
+        let ids = known_ids(vec![
+            const_number_let(10, Expr::Integer(100)),
+            const_let(
+                1,
+                Expr::Uint8ArrayNew(Some(Box::new(binary(
+                    BinaryOp::Mul,
+                    Expr::LocalGet(10),
+                    Expr::LocalGet(10),
+                )))),
+            ),
+            const_number_let(11, Expr::Integer(i32::MAX as i64 - 1)),
+            const_let(
+                2,
+                Expr::Uint8ArrayNew(Some(Box::new(binary(
+                    BinaryOp::Mul,
+                    Expr::LocalGet(11),
+                    Expr::Integer(2),
+                )))),
+            ),
+        ]);
+
+        assert!(ids.contains(&1));
+        assert!(!ids.contains(&2));
     }
 
     #[test]

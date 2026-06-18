@@ -415,9 +415,25 @@ fn div(left: Expr, right: Expr) -> Expr {
     }
 }
 
+fn mul(left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Mul,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
 fn add(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
+fn sub(left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::Sub,
         left: Box::new(left),
         right: Box::new(right),
     }
@@ -1387,6 +1403,68 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
     assert!(
         !ir.contains("call i32 @js_uint8array_get"),
         "inline Uint8Array get should not call the runtime helper:\n{ir}"
+    );
+}
+
+#[test]
+fn uint8array_const_arithmetic_length_proves_affine_index_inbounds() {
+    let affine_index = add(mul(add(local(3), int(1)), local(1)), add(local(4), int(1)));
+    let body = vec![
+        number_let(1, "size", false, int(100)),
+        Stmt::Let {
+            id: 2,
+            name: "pixels".to_string(),
+            ty: Type::Named("Uint8Array".to_string()),
+            mutable: false,
+            init: Some(Expr::Uint8ArrayNew(Some(Box::new(mul(local(1), local(1)))))),
+        },
+        for_loop_with_start_and_update(
+            3,
+            int(1),
+            sub(local(1), int(1)),
+            Some(increment(3)),
+            vec![for_loop_with_start_and_update(
+                4,
+                int(1),
+                sub(local(1), int(1)),
+                Some(increment(4)),
+                vec![Stmt::Expr(Expr::Uint8ArrayGet {
+                    array: Box::new(local(2)),
+                    index: Box::new(affine_index),
+                })],
+            )],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir(
+        "uint8array_const_arithmetic_length_affine_index.ts",
+        body.clone(),
+    );
+    assert!(
+        ir.contains("load i8"),
+        "bounded Uint8Array affine get should lower to an inline byte load:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_uint8array_get"),
+        "bounded Uint8Array affine get should not call the runtime helper:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json(
+        "artifact_uint8array_const_arithmetic_length_affine_index.ts",
+        body,
+    );
+    assert!(
+        artifact["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record["expr_kind"] == "Uint8ArrayGet"
+                    && record["consumer"] == "Uint8ArrayGet.native_i32"
+                    && record["access_mode"] == "unchecked_native"
+            }),
+        "expected unchecked native Uint8Array get for const-arithmetic length:\n{artifact:#}"
     );
 }
 
