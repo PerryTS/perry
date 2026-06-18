@@ -2352,6 +2352,29 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
         // back up.
         ast::Expr::Class(class_expr) => {
             let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
+            // A NAMED class EXPRESSION whose name collides with a TOP-LEVEL
+            // class DECLARATION in the same module must NOT reuse that
+            // declaration's name / ClassId. Per JS spec a class-expression's
+            // name binds only inside its own body, so the two are distinct
+            // classes. Reusing the id silently overwrote the real exported
+            // class with the (often nearly empty) nested expression —
+            // minimatch's `defaults()` returns `Object.assign(m, { Minimatch:
+            // class Minimatch extends orig.Minimatch {…} })`, so `new
+            // Minimatch(pattern)` constructed the body-less nested class
+            // (every field/method `undefined`). Rename the colliding
+            // expression to a fresh unique name so it gets its own ClassId;
+            // the value position (object property / `new` site) holds the
+            // resulting ClassRef directly, so the original name is not needed
+            // at module scope.
+            let ident_name = match ident_name {
+                Some(n)
+                    if ctx.module_class_decl_names.contains(&n)
+                        && ctx.current_class.as_deref() != Some(n.as_str()) =>
+                {
+                    Some(format!("{}__class_expr_{}", n, ctx.fresh_class()))
+                }
+                other => other,
+            };
             let synthetic_name = ident_name.unwrap_or_else(|| {
                 if !anonymous_class_has_static_name_member(&class_expr.class) {
                     if let Some(name) = ctx.assignment_inferred_name.as_ref() {

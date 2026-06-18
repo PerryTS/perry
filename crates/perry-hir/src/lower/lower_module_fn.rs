@@ -735,6 +735,11 @@ pub fn lower_module_full(
             _ => None,
         };
         if let Some((name, cd)) = class_decl {
+            // Record this as a real top-level class DECLARATION so a
+            // same-named nested class EXPRESSION (minimatch's
+            // `defaults()` → `{ Minimatch: class Minimatch extends … }`)
+            // doesn't hijack its ClassId in `lower_class_from_ast`.
+            ctx.module_class_decl_names.insert(name.clone());
             if ctx.lookup_class(&name).is_none() {
                 let id = ctx.fresh_class();
                 ctx.register_class(name.clone(), id);
