@@ -17,6 +17,7 @@ use crate::StringHeader;
 #[cfg(feature = "intl-segmenter")]
 use unicode_segmentation::UnicodeSegmentation;
 
+mod duration_format;
 mod locale;
 mod locales;
 use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
@@ -28,6 +29,7 @@ const KIND_SEGMENTER: &str = "Segmenter";
 const KIND_LIST_FORMAT: &str = "ListFormat";
 const KIND_PLURAL_RULES: &str = "PluralRules";
 const KIND_RELATIVE_TIME: &str = "RelativeTimeFormat";
+const KIND_DURATION_FORMAT: &str = "DurationFormat";
 
 const KEY_KIND: &str = "__intlKind";
 const KEY_LOCALE: &str = "__intlLocale";
@@ -1483,6 +1485,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 0,
             );
         }
+        KIND_DURATION_FORMAT => duration_format::configure(obj, options),
         _ => {}
     }
 
@@ -1829,6 +1832,24 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
             (
                 "resolvedOptions",
                 plural_rules_resolved_options_thunk as *const u8,
+                0,
+            ),
+        ],
+    );
+    install_constructor(
+        ns_obj,
+        "DurationFormat",
+        duration_format::constructor_thunk as *const u8,
+        &[
+            ("format", duration_format::format_thunk as *const u8, 1),
+            (
+                "formatToParts",
+                duration_format::to_parts_thunk as *const u8,
+                1,
+            ),
+            (
+                "resolvedOptions",
+                duration_format::resolved_options_thunk as *const u8,
                 0,
             ),
         ],
