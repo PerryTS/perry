@@ -338,7 +338,7 @@ def numeric_array_native_records():
         native_record(
             rep="f64",
             expr_kind="NumericArrayIndexGet",
-            consumer="js_array_numeric_get_f64_unboxed",
+            consumer="numeric_array_index_get.raw_f64_load",
             access_mode="checked_native",
             bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
         ),
@@ -353,7 +353,7 @@ def numeric_array_native_records():
         native_record(
             rep="f64",
             expr_kind="NumericArrayIndexSet",
-            consumer="js_array_numeric_set_f64_unboxed",
+            consumer="numeric_array_index_set.raw_f64_store",
             access_mode="checked_native",
             bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
         ),
@@ -553,7 +553,7 @@ entry:
             native_record(
                 rep="f64",
                 expr_kind="NumericArrayIndexGet",
-                consumer="js_array_numeric_get_f64_unboxed",
+                consumer="numeric_array_index_get.raw_f64_load",
                 access_mode="checked_native",
                 bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
             ),
@@ -568,7 +568,7 @@ entry:
             native_record(
                 rep="f64",
                 expr_kind="NumericArrayIndexSet",
-                consumer="js_array_numeric_set_f64_unboxed",
+                consumer="numeric_array_index_set.raw_f64_store",
                 access_mode="checked_native",
                 bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
             ),
@@ -928,10 +928,11 @@ entry:
         )
 
     def test_generic_native_rep_checks_require_configured_records(self):
-        # The numeric indexed read is inlined: a guarded fast block computes the
-        # element pointer (inttoptr) and performs a direct `load double` instead
-        # of calling js_array_numeric_get_f64_unboxed. Push/set still go through
-        # their guarded raw-f64 helpers.
+        # The numeric indexed read and write are both inlined: guarded fast
+        # blocks compute the element pointer (inttoptr) and perform a direct
+        # `load double` / `store double` instead of calling
+        # js_array_numeric_get_f64_unboxed / js_array_numeric_set_f64_unboxed.
+        # Push still goes through its guarded raw-f64 helper.
         ir = """
 define i32 @main() {
 entry:
@@ -950,7 +951,18 @@ bidx.num.fallback.2:
   br label %bidx.num.merge.3
 
 bidx.num.merge.3:
-  call i32 @js_array_numeric_set_f64_unboxed(i64 1, i32 0, double 3.0)
+  %sg = call i32 @js_typed_feedback_numeric_array_index_set_guard(i64 1, double 0.0, i32 0, double 3.0, i32 0)
+  %sgc = icmp ne i32 %sg, 0
+  br i1 %sgc, label %idxset.inbounds.4, label %idxset.merge.5
+
+idxset.inbounds.4:
+  %sv = fadd double 3.0, 0.0
+  %saddr = add i64 1, 8
+  %sp = inttoptr i64 %saddr to ptr
+  store double %sv, ptr %sp, align 8
+  br label %idxset.merge.5
+
+idxset.merge.5:
   ret i32 0
 }
 """
@@ -973,7 +985,7 @@ bidx.num.merge.3:
             native_record(
                 rep="f64",
                 expr_kind="NumericArrayIndexGet",
-                consumer="js_array_numeric_get_f64_unboxed",
+                consumer="numeric_array_index_get.raw_f64_load",
                 access_mode="checked_native",
                 bounds_state={"guarded": {"guard_id": "numeric_array_index_get_guard"}},
             ),
@@ -988,7 +1000,7 @@ bidx.num.merge.3:
             native_record(
                 rep="f64",
                 expr_kind="NumericArrayIndexSet",
-                consumer="js_array_numeric_set_f64_unboxed",
+                consumer="numeric_array_index_set.raw_f64_store",
                 access_mode="checked_native",
                 bounds_state={"guarded": {"guard_id": "numeric_array_index_set_guard"}},
             ),

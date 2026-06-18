@@ -632,8 +632,10 @@ detail = "numeric indexed read takes the guarded raw-f64 fast path and loads the
 
 [[workloads.numeric_arrays.ir_checks]]
 name = "numeric_array_uses_unboxed_set"
-contains = "js_array_numeric_set_f64_unboxed"
-detail = "numeric indexed write uses the guarded raw-f64 helper"
+contains = "js_typed_feedback_numeric_array_index_set_guard"
+regex = '''idxset\.inbounds\.\d+:[\s\S]*?inttoptr i64 %\w+ to ptr\s*\n\s*store double %\w+, ptr %\w+[^\n]*\n\s*br label %idxset\.merge'''
+regex_none = ["call i32 @js_array_numeric_set_f64_unboxed"]
+detail = "numeric indexed write takes the guarded raw-f64 fast path and stores the slot inline (inttoptr + store double in idxset.inbounds; helper call elided)"
 
 [[workloads.numeric_arrays.stdout_checks]]
 name = "numeric_arrays_checksum"
@@ -674,7 +676,7 @@ rejected_fact_state = "invalidated"
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_get_fast_f64"
 expr_kind = "NumericArrayIndexGet"
-consumer = "js_array_numeric_get_f64_unboxed"
+consumer = "numeric_array_index_get.raw_f64_load"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
@@ -702,7 +704,7 @@ rejected_fact_state = "invalidated"
 [[workloads.numeric_arrays.native_rep_checks.require_records]]
 name = "numeric_array_set_fast_f64"
 expr_kind = "NumericArrayIndexSet"
-consumer = "js_array_numeric_set_f64_unboxed"
+consumer = "numeric_array_index_set.raw_f64_store"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
