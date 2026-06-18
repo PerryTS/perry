@@ -854,8 +854,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // for the only realistic alternative caller. The full fix
             // would side-channel the original global name through
             // lowering; deferred until a second-callable-builtin
-            // arrives. Other property shapes still fall through to
-            // `0.0`.
+            // arrives. Other unrecognized property shapes fall through
+            // to the `undefined` sentinel (a spec-correct property miss).
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
                 // `process.env` read as a VALUE (not `process.env.X`) must
                 // materialize the live env object, not the `undefined` sentinel.
@@ -1236,7 +1236,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(PTR, &key_bytes_global), (I64, &key_len)],
                     ));
                 }
-                return Ok(double_literal(0.0));
+                // Unknown member on a builtin global namespace object
+                // (`Reflect.enumerate`, `Math.bogus`, `JSON.bogus`, …): JS
+                // semantics is a plain `undefined` property miss, not `0`. The
+                // HIR collapsed the receiver to the `GlobalGet(0)` sentinel so we
+                // can't tell which namespace it was, but an unrecognized member
+                // read is `undefined` for every one of them. (The legacy `0.0`
+                // here made `typeof Math.bogus === "number"` and broke
+                // feature-detection like `Reflect.enumerate === undefined`.)
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             // Namespace-import member access: `import * as O from './oids';
             // O.OID_INT2`. The HIR lowers `O` itself to `ExternFuncRef { name:

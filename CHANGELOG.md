@@ -1,3 +1,22 @@
+## v0.5.1188 — fix(codegen): unknown builtin-namespace member reads as `undefined`, not `0` (#5347)
+
+Reading a property that does not exist on a builtin global namespace object —
+`Reflect.enumerate`, `Math.bogus`, `JSON.bogus`, `Object.bogus`, `Number.bogus`,
+… — produced the JS number `0` instead of `undefined`, so `typeof Math.bogus`
+was `"number"` and feature-detection like `Reflect.enumerate === undefined`
+(the method was removed from the spec) was `false`.
+
+The HIR collapses every builtin global receiver to the `GlobalGet(0)` sentinel,
+so codegen routes these value reads by property name alone
+(`crates/perry-codegen/src/expr/property_get.rs`). The fall-through for an
+unrecognized member returned `double_literal(0.0)`; it now returns the
+`TAG_UNDEFINED` NaN-box — a spec-correct property miss for every namespace.
+Recognized statics (`Math.PI`, `Reflect.get`, `JSON.stringify`, `Promise.*`,
+`Error.*`, `process.env`, the `globalThis` builtin names) are special-cased
+above the fall-through and are unchanged. Fixes test262
+`built-ins/Reflect/enumerate/undefined.js`; regression-pinned by
+`crates/perry/tests/builtin_namespace_unknown_member.rs`.
+
 ## v0.5.1187 — fix(ci): per-PR cargo-test — per-package runs + don't fan into FFI shims (feature-unification link errors)
 
 Follow-up to #5411/#5413. Two more issues made the fast per-PR path fail on
