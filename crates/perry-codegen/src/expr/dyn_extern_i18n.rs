@@ -46,6 +46,155 @@ use super::{
     I18nLowerCtx,
 };
 
+/// Build the namespace value for a resolved dynamic-import/require target prefix
+/// on the current block: a native submodule (`__node_submod__<key>`), a native
+/// builtin (`__native_mod__<name>`), or a compiled module (`<prefix>__init` +
+/// `@__perry_ns_<prefix>`). Returns a NaN-boxed `DOUBLE` value id.
+fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> String {
+    if let Some(key) = prefix.strip_prefix("__node_submod__") {
+        let key = key.to_string();
+        let submod_label = emit_string_literal_global(ctx, &key);
+        let submod_len = key.len();
+        let install_sym = crate::nm_install::nm_submod_install_symbol(&key);
+        let blk = ctx.block();
+        if let Some(s) = install_sym {
+            blk.call_void(s, &[]);
+        }
+        blk.call(
+            DOUBLE,
+            "js_node_submodule_namespace",
+            &[(PTR, &submod_label), (I32, &submod_len.to_string())],
+        )
+    } else if let Some(name) = prefix.strip_prefix("__native_mod__") {
+        let name = name.to_string();
+        let mod_label = emit_string_literal_global(ctx, &name);
+        let mod_len = name.len();
+        let blk = ctx.block();
+        if let Some(s) = crate::nm_install::nm_install_symbol(&name) {
+            blk.call_void(s, &[]);
+        }
+        blk.call(
+            DOUBLE,
+            "js_create_native_module_namespace",
+            &[(PTR, &mod_label), (I64, &mod_len.to_string())],
+        )
+    } else {
+        // Issue #753: trigger the target's init (idempotent for Eager targets;
+        // the populating call for Deferred targets) before loading its namespace.
+        let blk = ctx.block();
+        blk.call_void(&format!("{}__init", prefix), &[]);
+        blk.load(DOUBLE, &format!("@__perry_ns_{}", prefix))
+    }
+}
+
+/// #5389 Tier 2: lower a synchronous CommonJS `require(expr)` in a compiled
+/// external module. Mirrors the dynamic-`import()` dispatch in `lower`, but
+/// returns the target **namespace value directly** (no Promise wrap) and uses the
+/// ambient createRequire-backed require (`js_module_ambient_require_apply`) as the
+/// unresolved / no-match fallthrough instead of a rejected promise — so builtins
+/// keep resolving by string and unknown packages throw the descriptive
+/// `ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE`. `paths` is populated by the same
+/// `collect_modules` resolver as `import()`.
+fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> Result<String> {
+    // Empty `paths` → genuinely runtime-computed specifier (didn't const-fold).
+    // Resolve it entirely through the ambient require.
+    if paths.is_empty() {
+        let spec_val = lower_expr(ctx, arg)?;
+        return Ok(ctx.block().call(
+            DOUBLE,
+            "js_module_ambient_require_apply",
+            &[(DOUBLE, &spec_val)],
+        ));
+    }
+
+    // Single resolved target: the resolver proved this is the only possible
+    // specifier. Evaluate the arg for side effects, then return the namespace
+    // directly (or fall back to the ambient require if the driver didn't map the
+    // path to a target prefix).
+    if paths.len() == 1 {
+        let spec_val = lower_expr(ctx, arg)?;
+        let target_prefix = ctx.dynamic_import_path_to_prefix.get(&paths[0]).cloned();
+        return Ok(match target_prefix {
+            Some(prefix) => namespace_value_for_prefix(ctx, &prefix),
+            None => ctx.block().call(
+                DOUBLE,
+                "js_module_ambient_require_apply",
+                &[(DOUBLE, &spec_val)],
+            ),
+        });
+    }
+
+    // Multi-target: compare the runtime specifier against each resolved path via
+    // `js_string_equals`; each match stores its namespace into the result slot.
+    // The no-match fallthrough resolves via the ambient require (builtin-or-throw)
+    // rather than rejecting.
+    let spec_val = lower_expr(ctx, arg)?;
+    let result_slot = ctx.block().alloca(DOUBLE);
+    let join_block_idx = ctx.new_block("dynamic_require_join");
+    let path_handle =
+        ctx.block()
+            .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &spec_val)]);
+
+    let resolved: Vec<(String, String)> = paths
+        .iter()
+        .filter_map(|p| {
+            ctx.dynamic_import_path_to_prefix
+                .get(p)
+                .cloned()
+                .map(|tgt| (p.clone(), tgt))
+        })
+        .collect();
+
+    for (i, (path_str, target_prefix)) in resolved.iter().enumerate() {
+        let key_idx = ctx.strings.intern(path_str);
+        let key_entry = ctx.strings.entry(key_idx);
+        let key_handle_global = format!("@{}", key_entry.handle_global);
+
+        let blk = ctx.block();
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let key_handle = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &key_box)]);
+        let eq_i32 = blk.call(
+            I32,
+            "js_string_equals",
+            &[(I64, &path_handle), (I64, &key_handle)],
+        );
+        let cond = blk.icmp_ne(I32, &eq_i32, "0");
+
+        let match_block_idx = ctx.new_block(&format!("dyn_require_match_{}", i));
+        let next_label = if i + 1 < resolved.len() {
+            ctx.new_block(&format!("dyn_require_next_{}", i))
+        } else {
+            ctx.new_block(&format!("dyn_require_fallback_{}", i))
+        };
+        let match_label = ctx.block_label(match_block_idx);
+        let next_label_str = ctx.block_label(next_label);
+        ctx.block().cond_br(&cond, &match_label, &next_label_str);
+
+        ctx.current_block = match_block_idx;
+        let join_label = ctx.block_label(join_block_idx);
+        let ns_val = namespace_value_for_prefix(ctx, target_prefix);
+        let blk = ctx.block();
+        blk.store(DOUBLE, &ns_val, &result_slot);
+        blk.br(&join_label);
+
+        ctx.current_block = next_label;
+    }
+
+    // No-match fallthrough: resolve via the ambient require.
+    let join_label = ctx.block_label(join_block_idx);
+    let fallback = ctx.block().call(
+        DOUBLE,
+        "js_module_ambient_require_apply",
+        &[(DOUBLE, &spec_val)],
+    );
+    let blk = ctx.block();
+    blk.store(DOUBLE, &fallback, &result_slot);
+    blk.br(&join_label);
+
+    ctx.current_block = join_block_idx;
+    Ok(ctx.block().load(DOUBLE, &result_slot))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::WorkerNew {
@@ -117,8 +266,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             paths,
             arg,
             deferred_error,
+            synchronous,
             ..
         } => {
+            // #5389 Tier 2: a synchronous CommonJS `require(expr)` returns the
+            // target namespace value directly (no Promise) and falls back to the
+            // ambient createRequire-backed `require` for unresolved / no-match
+            // specifiers. Resolution (`paths`) is identical to `import()`.
+            if *synchronous {
+                return lower_dynamic_require(ctx, paths, arg);
+            }
             // #5230: a non-resolvable (runtime-computed) specifier was
             // *deferred* (the default, non-strict policy — analog of #5206's
             // eval deferral). Evaluate the arg for its side effects, then

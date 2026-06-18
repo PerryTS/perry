@@ -2555,6 +2555,15 @@ pub enum Expr {
         /// (`paths` resolved to a finite set). In strict mode such a site is a
         /// compile error instead and never produces a node with this set.
         deferred_error: Option<String>,
+        /// #5389 Tier 2: `true` when this node came from a **synchronous**
+        /// CommonJS `require(expr)` in a compiled external/compilePackages
+        /// module rather than an ESM `import(expr)`. Codegen returns the target
+        /// namespace value directly (no `Promise` wrap) and uses the ambient
+        /// createRequire-backed `require` as the no-match / unresolved
+        /// fallthrough (builtin-or-throw) instead of a rejected promise. The
+        /// compile-time path resolution (`collect_modules`) is identical for
+        /// both — only the dispatch shape differs. `false` for ESM `import()`.
+        synchronous: bool,
     },
     /// Compile-time-resolved `new Worker(filename, options?)` from
     /// `node:worker_threads`. The filename expression follows the same

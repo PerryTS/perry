@@ -367,6 +367,46 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
 }
 
 #[test]
+fn full_outline_ic_collapses_class_field_get_to_single_call() {
+    // #5391 path 2: full-outline collapses the class-field-GET diamond to a
+    // single `js_class_field_get_ic` call returning the field value.
+    let build = || {
+        let point = class(101, "Point", vec![field("x", Type::Number)]);
+        module_with_classes(
+            "full_outline_get.ts",
+            vec![point],
+            vec![param(1, "p", Type::Named("Point".to_string()))],
+            Type::Number,
+            vec![Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+            }))],
+        )
+    };
+
+    let _lock = ENV_LOCK.lock().unwrap();
+
+    // Forced ON: one outlined call, no inline get diamond.
+    {
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("1"));
+        let ir = ir_for(build());
+        assert!(ir.contains("call double @js_class_field_get_ic"));
+        assert!(!ir.contains("class_field_get.fast"));
+        assert!(!ir.contains("class_field_get.fallback"));
+        assert!(!ir.contains("call i32 @js_typed_feedback_class_field_get_guard"));
+    }
+
+    // Forced OFF: the inline diamond, no full-outline call.
+    {
+        let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
+        let ir = ir_for(build());
+        assert!(!ir.contains("call double @js_class_field_get_ic"));
+        assert!(ir.contains("class_field_get.fast"));
+        assert!(ir.contains("js_typed_feedback_class_field_get_guard"));
+    }
+}
+
+#[test]
 fn full_outline_ic_auto_gate_counts_class_methods() {
     // #5334 lever B: the auto size-gate counts class CALLABLES (methods,
     // accessors, ctor), not just top-level `hir.functions`. A class-heavy module
