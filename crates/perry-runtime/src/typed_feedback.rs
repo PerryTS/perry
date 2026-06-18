@@ -1242,6 +1242,49 @@ fn numeric_array_fast_observation(
     }
 }
 
+fn plain_array_fast_observation(
+    raw_addr: usize,
+    index: u32,
+    require_in_bounds: bool,
+    value_tag: Option<u16>,
+) -> Option<Observation> {
+    let header = gc_header_for_user_addr(raw_addr)?;
+    unsafe {
+        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+            || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
+        let arr = raw_addr as *const ArrayHeader;
+        let len = (*arr).length;
+        let cap = (*arr).capacity;
+        if len > 16_000_000 || len > cap {
+            return None;
+        }
+        let in_bounds = index < len;
+        if require_in_bounds && !in_bounds {
+            return None;
+        }
+        let access_kind = if in_bounds {
+            ARRAY_ACCESS_INDEXED_IN_BOUNDS
+        } else {
+            ARRAY_ACCESS_INDEXED_OUT_OF_BOUNDS
+        };
+        let layout_kind = array_layout_kind(raw_addr, len as u64);
+        let element_kind = array_element_kind(raw_addr, Some(index), len as u64, layout_kind);
+        Some(Observation {
+            source: ObservationSource::Array,
+            object_addr: 0,
+            shape_addr: 0,
+            key_hash: 0,
+            class_id: 0,
+            heap_type: crate::gc::GC_TYPE_ARRAY as u16,
+            aux: pack_array_aux(access_kind, layout_kind, element_kind, 0),
+            value_tag: value_tag.unwrap_or(element_kind),
+        })
+    }
+}
+
 fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let Some(header) = gc_header_for_user_addr(raw_addr) else {
@@ -1365,6 +1408,16 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    let require_in_bounds = require_in_bounds != 0;
+    if site_id != 0 && is_plain_number_bits(index_value.to_bits()) && index >= 0 {
+        if let Some(observation) =
+            plain_array_fast_observation(raw_addr, index as u32, require_in_bounds, None)
+        {
+            if array_guard_fast_pass(site_id, &observation, true) {
+                return 1;
+            }
+        }
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1382,7 +1435,7 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
         && plain_array_index_guard(
             raw_addr as *const ArrayHeader,
             index as u32,
-            require_in_bounds != 0,
+            require_in_bounds,
         );
     let pass = guard_observe(
         site_id,
@@ -1650,6 +1703,20 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    let require_in_bounds = require_in_bounds != 0;
+    let value_bits = value.to_bits();
+    if site_id != 0 && index >= 0 {
+        if let Some(observation) = plain_array_fast_observation(
+            raw_addr,
+            index as u32,
+            require_in_bounds,
+            Some(stable_value_kind(value_bits)),
+        ) {
+            if array_guard_fast_pass(site_id, &observation, true) {
+                return 1;
+            }
+        }
+    }
     let observed_index = if index >= 0 { index as u32 } else { u32::MAX };
     let (class_id, heap_type, aux, _element_kind) = classify_array(raw_addr, Some(observed_index));
     let observation = Observation {
@@ -1660,13 +1727,13 @@ pub extern "C" fn js_typed_feedback_plain_array_index_set_guard(
         class_id,
         heap_type,
         aux,
-        value_tag: stable_value_kind(value.to_bits()),
+        value_tag: stable_value_kind(value_bits),
     };
     let contract_valid = index >= 0
         && plain_array_index_guard(
             raw_addr as *const ArrayHeader,
             index as u32,
-            require_in_bounds != 0,
+            require_in_bounds,
         );
     let pass = guard_observe(
         site_id,

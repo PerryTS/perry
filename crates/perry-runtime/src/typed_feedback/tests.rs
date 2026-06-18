@@ -591,6 +591,72 @@ fn typed_feedback_numeric_array_fast_observation_matches_classifier() {
 }
 
 #[test]
+fn typed_feedback_plain_array_fast_observation_matches_classifier_for_mixed_layout() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+
+    let values = [1.0, 2.0, 3.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let payload = crate::string::js_string_from_bytes(b"downgraded".as_ptr(), 10);
+    let payload_value = crate::value::js_nanbox_string(payload as i64);
+    crate::array::js_array_set_f64(arr, 1, payload_value);
+    assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
+
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+    for index in [0, 1, values.len() as u32] {
+        let observation =
+            plain_array_fast_observation(raw_addr, index, false, None).expect("plain observation");
+        let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, Some(index));
+        assert_eq!(observation.class_id, class_id);
+        assert_eq!(observation.heap_type, heap_type);
+        assert_eq!(observation.aux, aux);
+        assert_eq!(observation.value_tag, element_kind);
+    }
+
+    let set_observation = plain_array_fast_observation(raw_addr, 0, true, Some(STABLE_VALUE_INT32))
+        .expect("plain set observation");
+    let (_, _, aux, _) = classify_array(raw_addr, Some(0));
+    assert_eq!(set_observation.aux, aux);
+    assert_eq!(set_observation.value_tag, STABLE_VALUE_INT32);
+    assert!(plain_array_fast_observation(raw_addr, values.len() as u32, true, None).is_none());
+}
+
+#[test]
+fn typed_feedback_plain_array_set_guard_fast_path_preserves_snapshot_counts() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(71, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
+
+    let values = [1.0, 2.0, 3.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let payload = crate::string::js_string_from_bytes(b"downgraded".as_ptr(), 10);
+    let payload_value = crate::value::js_nanbox_string(payload as i64);
+    crate::array::js_array_set_f64(arr, 1, payload_value);
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert_eq!(
+        js_typed_feedback_plain_array_index_set_guard(71, arr_box, 0, 4.0, 1),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_plain_array_index_set_guard(71, arr_box, 0, 4.0, 1),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_plain_array_index_set_guard(71, arr_box, 0, 4.0, 1),
+        1
+    );
+    assert_eq!(array_guard_cache_fast_passes(71), 2);
+
+    let snapshot = typed_feedback_snapshot();
+    let site = &snapshot.sites[0];
+    assert_eq!(site.guard_passes, 3);
+    assert_eq!(site.guard_failures, 0);
+    assert_eq!(site.observed_count, 3);
+    assert_eq!(site.observation_count, 1);
+}
+
+#[test]
 fn typed_feedback_numeric_array_guard_fast_path_respects_megamorphic_state() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();
