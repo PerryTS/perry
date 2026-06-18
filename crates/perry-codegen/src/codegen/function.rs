@@ -222,6 +222,7 @@ pub(super) fn compile_function(
         preguarded_numeric_array_index_gets: HashMap::new(),
         preguarded_numeric_array_index_sets: HashMap::new(),
         preguarded_numeric_array_affine_index_gets: Vec::new(),
+        preguarded_numeric_array_modulo_index_gets: Vec::new(),
         preguarded_numeric_array_affine_index_sets: Vec::new(),
         bounded_index_pairs: Vec::new(),
         i32_counter_slots: HashMap::new(),

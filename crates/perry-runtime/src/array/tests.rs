@@ -707,6 +707,25 @@ fn test_numeric_array_layout_query_recovers_dense_numeric_metadata() {
 }
 
 #[test]
+fn test_numeric_array_layout_allows_overallocated_capacity_below_live_limit() {
+    let mut arr = js_array_alloc(0);
+    arr = js_array_push_f64(arr, 1.0);
+
+    unsafe {
+        // Model a large dense array whose capacity rounded up past the
+        // 16M live-slot scan limit while its actual length stayed below it.
+        (*arr).capacity = 16_777_216;
+    }
+
+    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
+    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 0), 1.0);
+
+    let arr = js_array_numeric_push_f64_unboxed(arr, 2.0);
+    assert_eq!(js_array_length(arr), 2);
+    assert_eq!(js_array_numeric_get_f64_unboxed(arr, 1), 2.0);
+}
+
+#[test]
 fn test_array_get_f64_large_dense_array_preserves_values() {
     let arr = js_array_alloc_with_length(100_001);
     js_array_set_f64(arr, 100_000, 42.0);

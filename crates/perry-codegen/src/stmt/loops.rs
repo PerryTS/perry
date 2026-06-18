@@ -5,9 +5,10 @@ use super::*;
 use crate::expr::{
     emit_typed_feedback_register_site, expr_has_numeric_pointer_free_array_layout,
     lower_guarded_array_index_get_trusted_i32, BoundedIndexPair, IntRangeFact,
-    PreguardedAffineIndexExpr, PreguardedNumericArrayAffineIndexGet,
+    PreguardedAffineIndexExpr, PreguardedModuloIndexExpr, PreguardedNumericArrayAffineIndexGet,
     PreguardedNumericArrayAffineIndexSet, PreguardedNumericArrayIndexGet,
-    PreguardedNumericArrayIndexSet, TypedFeedbackContract, TypedFeedbackKind,
+    PreguardedNumericArrayIndexSet, PreguardedNumericArrayModuloIndexGet, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
@@ -38,6 +39,12 @@ struct RangeNumericArrayIndexSetPreguard {
 struct AffineNumericArrayIndexGetPreguard {
     array_local_id: u32,
     index: PreguardedAffineIndexExpr,
+}
+
+#[derive(Clone, Debug)]
+struct ModuloNumericArrayIndexGetPreguard {
+    array_local_id: u32,
+    index: PreguardedModuloIndexExpr,
 }
 
 #[derive(Clone, Debug)]
@@ -387,6 +394,21 @@ pub(crate) fn lower_for(
         } else {
             Vec::new()
         };
+    let modulo_array_get_preguards: Vec<ModuloNumericArrayIndexGetPreguard> =
+        if let (Some((counter_id, _, op)), Some(_)) =
+            (local_bound_classification, i32_local_bound_slot.as_ref())
+        {
+            if matches!(op, perry_hir::CompareOp::Lt)
+                && local_bound_index_bounds_are_safe
+                && ctx.i32_counter_slots.contains_key(&counter_id)
+            {
+                classify_modulo_numeric_array_index_get_preguards(ctx, counter_id, update, body)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
     let affine_array_set_preguards: Vec<AffineNumericArrayIndexSetPreguard> =
         if let (Some((counter_id, bound_id, op)), Some(_)) =
             (local_bound_classification, i32_local_bound_slot.as_ref())
@@ -409,6 +431,7 @@ pub(crate) fn lower_for(
         || range_array_get_preguard.is_some()
         || range_array_set_preguard.is_some()
         || !affine_array_get_preguards.is_empty()
+        || !modulo_array_get_preguards.is_empty()
         || !affine_array_set_preguards.is_empty();
 
     let cond_idx = ctx.new_block("for.cond");
@@ -506,6 +529,7 @@ pub(crate) fn lower_for(
     let mut range_preguard_runtime: Option<((u32, u32), PreguardedNumericArrayIndexGet)> = None;
     let mut range_set_preguard_runtime: Option<((u32, u32), PreguardedNumericArrayIndexSet)> = None;
     let mut affine_preguard_runtime: Vec<PreguardedNumericArrayAffineIndexGet> = Vec::new();
+    let mut modulo_preguard_runtime: Vec<PreguardedNumericArrayModuloIndexGet> = Vec::new();
     let mut affine_set_preguard_runtime: Vec<PreguardedNumericArrayAffineIndexSet> = Vec::new();
     if let Some(pre_idx) = prebody_idx {
         ctx.current_block = pre_idx;
@@ -555,6 +579,20 @@ pub(crate) fn lower_for(
                     ctx, preguard, counter_id, bound_slot,
                 )?;
                 affine_preguard_runtime.push(info);
+            }
+        }
+        if !modulo_array_get_preguards.is_empty() {
+            let bound_slot = i32_local_bound_slot
+                .as_ref()
+                .expect("modulo array get preguard requires an i32 bound slot");
+            let counter_id = local_bound_classification
+                .map(|(counter_id, _, _)| counter_id)
+                .expect("modulo preguard requires local-bound counter");
+            for preguard in modulo_array_get_preguards.iter().cloned() {
+                let info = emit_modulo_numeric_array_index_get_preguard(
+                    ctx, preguard, counter_id, bound_slot,
+                )?;
+                modulo_preguard_runtime.push(info);
             }
         }
         if !affine_array_set_preguards.is_empty() {
@@ -618,12 +656,17 @@ pub(crate) fn lower_for(
     let affine_preguard_base_len = ctx.preguarded_numeric_array_affine_index_gets.len();
     ctx.preguarded_numeric_array_affine_index_gets
         .extend(affine_preguard_runtime.iter().cloned());
+    let modulo_preguard_base_len = ctx.preguarded_numeric_array_modulo_index_gets.len();
+    ctx.preguarded_numeric_array_modulo_index_gets
+        .extend(modulo_preguard_runtime.iter().cloned());
     let affine_set_preguard_base_len = ctx.preguarded_numeric_array_affine_index_sets.len();
     ctx.preguarded_numeric_array_affine_index_sets
         .extend(affine_set_preguard_runtime.iter().cloned());
     let lower_result = lower_stmts(ctx, body);
     ctx.preguarded_numeric_array_affine_index_sets
         .truncate(affine_set_preguard_base_len);
+    ctx.preguarded_numeric_array_modulo_index_gets
+        .truncate(modulo_preguard_base_len);
     ctx.preguarded_numeric_array_affine_index_gets
         .truncate(affine_preguard_base_len);
     if let Some((key, previous)) = range_set_preguard_replacement {
@@ -1025,6 +1068,83 @@ fn emit_affine_numeric_array_index_get_preguard(
     })
 }
 
+fn emit_modulo_numeric_array_index_get_preguard(
+    ctx: &mut FnCtx<'_>,
+    preguard: ModuloNumericArrayIndexGetPreguard,
+    counter_id: u32,
+    bound_i32_slot: &str,
+) -> Result<PreguardedNumericArrayModuloIndexGet> {
+    let arr_expr = perry_hir::Expr::LocalGet(preguard.array_local_id);
+    let arr_box = lower_expr(ctx, &arr_expr)?;
+    let counter_slot = ctx
+        .i32_counter_slots
+        .get(&counter_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("modulo array get preguard missing i32 counter"))?;
+    let bound_i32 = ctx.block().load(I32, bound_i32_slot);
+    let counter_i32 = ctx.block().load(I32, &counter_slot);
+    let remaining_i32 = ctx.block().sub(I32, &bound_i32, &counter_i32);
+    let skipped_i32 = ctx.block().sub(I32, &remaining_i32, "1");
+    let skipped_i64 = ctx.block().zext(I32, &skipped_i32, I64);
+
+    let modulus_local_id = match &preguard.index {
+        PreguardedModuloIndexExpr::LocalModuloLocal {
+            modulus_local_id, ..
+        }
+        | PreguardedModuloIndexExpr::LocalTimesConstModuloLocal {
+            modulus_local_id, ..
+        } => *modulus_local_id,
+    };
+    let modulus_slot = ctx
+        .i32_counter_slots
+        .get(&modulus_local_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("modulo array get preguard missing i32 modulus"))?;
+    let modulus_i32 = ctx.block().load(I32, &modulus_slot);
+    let max_i32 = ctx.block().sub(I32, &modulus_i32, "1");
+
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        "array[index]",
+        TypedFeedbackContract::numeric_array_get_index(),
+    );
+    let guard_result = ctx.block().call(
+        I32,
+        "js_typed_feedback_numeric_array_index_get_guard_i32",
+        &[
+            (I64, &site_id),
+            (DOUBLE, &arr_box),
+            (I32, &max_i32),
+            (I32, "1"),
+        ],
+    );
+    let guard_ok_slot = ctx.func.alloca_entry(I32);
+    ctx.block().store(I32, &guard_result, &guard_ok_slot);
+    let guard_ok = ctx.block().icmp_ne(I32, &guard_result, "0");
+
+    let fast_idx = ctx.new_block("modulo_preguard.fast");
+    let done_idx = ctx.new_block("modulo_preguard.done");
+    let fast_label = ctx.block_label(fast_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&guard_ok, &fast_label, &done_label);
+
+    ctx.current_block = fast_idx;
+    ctx.block().call_void(
+        "js_typed_feedback_record_array_guard_fast_passes",
+        &[(I64, &site_id), (I64, &skipped_i64)],
+    );
+    ctx.block().br(&done_label);
+
+    ctx.current_block = done_idx;
+    Ok(PreguardedNumericArrayModuloIndexGet {
+        array_local_id: preguard.array_local_id,
+        index: preguard.index,
+        site_id,
+        guard_ok_slot,
+    })
+}
+
 fn emit_affine_numeric_array_index_set_preguard(
     ctx: &mut FnCtx<'_>,
     preguard: AffineNumericArrayIndexSetPreguard,
@@ -1308,6 +1428,55 @@ fn classify_affine_numeric_array_index_get_preguards(
     candidates
 }
 
+fn classify_modulo_numeric_array_index_get_preguards(
+    ctx: &crate::expr::FnCtx<'_>,
+    counter_id: u32,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> Vec<ModuloNumericArrayIndexGetPreguard> {
+    let [perry_hir::Stmt::Expr(expr)] = body else {
+        return Vec::new();
+    };
+    let Some(mut candidates) = collect_modulo_numeric_array_index_gets(expr, counter_id) else {
+        return Vec::new();
+    };
+    if candidates.is_empty() || candidates.len() > 4 {
+        return Vec::new();
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|candidate| seen.insert((candidate.array_local_id, candidate.index.clone())));
+
+    for candidate in &candidates {
+        if !expr_has_numeric_pointer_free_array_layout(
+            ctx,
+            &perry_hir::Expr::LocalGet(candidate.array_local_id),
+        ) {
+            return Vec::new();
+        }
+
+        let protected = modulo_index_protected_locals(candidate);
+        if protected.iter().any(|id| expr_mutates_local(expr, *id)) {
+            return Vec::new();
+        }
+        if update.is_some_and(|expr| {
+            protected
+                .iter()
+                .any(|id| *id != counter_id && expr_mutates_local(expr, *id))
+        }) {
+            return Vec::new();
+        }
+        if !modulo_index_i32_slots_are_available(ctx, &candidate.index) {
+            return Vec::new();
+        }
+        if !modulo_index_inputs_are_safe(ctx, &candidate.index) {
+            return Vec::new();
+        }
+    }
+
+    candidates
+}
+
 fn classify_affine_numeric_array_index_set_preguards(
     ctx: &crate::expr::FnCtx<'_>,
     counter_id: u32,
@@ -1384,6 +1553,27 @@ fn affine_index_protected_locals(candidate: &AffineNumericArrayIndexGetPreguard)
     locals
 }
 
+fn modulo_index_protected_locals(candidate: &ModuloNumericArrayIndexGetPreguard) -> Vec<u32> {
+    let mut locals = vec![candidate.array_local_id];
+    match &candidate.index {
+        PreguardedModuloIndexExpr::LocalModuloLocal {
+            value_local_id,
+            modulus_local_id,
+        }
+        | PreguardedModuloIndexExpr::LocalTimesConstModuloLocal {
+            value_local_id,
+            modulus_local_id,
+            ..
+        } => {
+            locals.push(*value_local_id);
+            locals.push(*modulus_local_id);
+        }
+    }
+    locals.sort_unstable();
+    locals.dedup();
+    locals
+}
+
 fn affine_set_index_protected_locals(candidate: &AffineNumericArrayIndexSetPreguard) -> Vec<u32> {
     let mut locals = vec![candidate.array_local_id];
     match &candidate.index {
@@ -1435,6 +1625,61 @@ fn affine_index_i32_slots_are_available(
                 && ctx.i32_counter_slots.contains_key(add_local_id)
         }
     }
+}
+
+fn modulo_index_i32_slots_are_available(
+    ctx: &crate::expr::FnCtx<'_>,
+    index: &PreguardedModuloIndexExpr,
+) -> bool {
+    match index {
+        PreguardedModuloIndexExpr::LocalModuloLocal {
+            value_local_id,
+            modulus_local_id,
+        }
+        | PreguardedModuloIndexExpr::LocalTimesConstModuloLocal {
+            value_local_id,
+            modulus_local_id,
+            ..
+        } => {
+            ctx.i32_counter_slots.contains_key(value_local_id)
+                && ctx.i32_counter_slots.contains_key(modulus_local_id)
+        }
+    }
+}
+
+fn modulo_index_inputs_are_safe(
+    ctx: &crate::expr::FnCtx<'_>,
+    index: &PreguardedModuloIndexExpr,
+) -> bool {
+    let (value_local_id, modulus_local_id, multiplier) = match index {
+        PreguardedModuloIndexExpr::LocalModuloLocal {
+            value_local_id,
+            modulus_local_id,
+        } => (*value_local_id, *modulus_local_id, 1),
+        PreguardedModuloIndexExpr::LocalTimesConstModuloLocal {
+            value_local_id,
+            multiplier,
+            modulus_local_id,
+        } => (*value_local_id, *modulus_local_id, *multiplier),
+    };
+    if multiplier <= 0 || !loop_counter_is_nonnegative_at_entry(ctx, value_local_id) {
+        return false;
+    }
+    let Some(value_range) =
+        crate::expr::int_range_expr(ctx, &perry_hir::Expr::LocalGet(value_local_id))
+    else {
+        return false;
+    };
+    if value_range.min < 0
+        || value_range
+            .max
+            .checked_mul(i64::from(multiplier))
+            .is_none_or(|max| max > i64::from(i32::MAX))
+    {
+        return false;
+    }
+    crate::expr::int_range_expr(ctx, &perry_hir::Expr::LocalGet(modulus_local_id))
+        .is_some_and(|range| range.min > 0 && range.max <= i64::from(i32::MAX))
 }
 
 fn affine_index_nonnegative_inputs_are_safe(
@@ -1534,6 +1779,89 @@ fn collect_affine_numeric_array_index_gets(
         // Avoid preguarding across runtime calls, short-circuit paths, or
         // HIR variants whose evaluation order/mutation behavior is not
         // modeled by this narrow classifier.
+        _ => None,
+    }
+}
+
+fn collect_modulo_numeric_array_index_gets(
+    expr: &perry_hir::Expr,
+    counter_id: u32,
+) -> Option<Vec<ModuloNumericArrayIndexGetPreguard>> {
+    use perry_hir::{ArrayElement, Expr};
+
+    let collect = |expr: &Expr| collect_modulo_numeric_array_index_gets(expr, counter_id);
+    let collect_pair = |left: &Expr, right: &Expr| {
+        let mut out = collect(left)?;
+        out.extend(collect(right)?);
+        Some(out)
+    };
+
+    match expr {
+        Expr::IndexGet { object, index } => match object.as_ref() {
+            Expr::LocalGet(array_local_id) => {
+                let index = classify_modulo_index_expr(index.as_ref(), counter_id)?;
+                Some(vec![ModuloNumericArrayIndexGetPreguard {
+                    array_local_id: *array_local_id,
+                    index,
+                }])
+            }
+            _ => None,
+        },
+        Expr::LocalSet(id, value) => {
+            if *id == counter_id {
+                None
+            } else {
+                collect(value)
+            }
+        }
+        Expr::Update { id, .. } => (*id != counter_id).then_some(Vec::new()),
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            collect_pair(left.as_ref(), right.as_ref())
+        }
+        Expr::Unary { operand, .. }
+        | Expr::Void(operand)
+        | Expr::TypeOf(operand)
+        | Expr::StringCoerce(operand)
+        | Expr::ObjectCoerce(operand)
+        | Expr::BooleanCoerce(operand)
+        | Expr::NumberCoerce(operand) => collect(operand),
+        Expr::Array(elements) => elements.iter().try_fold(Vec::new(), |mut acc, expr| {
+            acc.extend(collect(expr)?);
+            Some(acc)
+        }),
+        Expr::ArraySpread(elements) => elements.iter().try_fold(Vec::new(), |mut acc, element| {
+            match element {
+                ArrayElement::Expr(expr) | ArrayElement::Spread(expr) => {
+                    acc.extend(collect(expr)?);
+                }
+            }
+            Some(acc)
+        }),
+        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
+            collect_pair(left.as_ref(), right.as_ref())
+        }
+        Expr::MathMin(elements) | Expr::MathMax(elements) => {
+            elements.iter().try_fold(Vec::new(), |mut acc, expr| {
+                acc.extend(collect(expr)?);
+                Some(acc)
+            })
+        }
+        Expr::MathAbs(expr)
+        | Expr::MathSqrt(expr)
+        | Expr::MathFloor(expr)
+        | Expr::MathCeil(expr)
+        | Expr::MathRound(expr)
+        | Expr::MathF16round(expr) => collect(expr),
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::FuncRef(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::String(_)
+        | Expr::WtfString(_) => Some(Vec::new()),
         _ => None,
     }
 }
@@ -1797,6 +2125,66 @@ fn classify_affine_index_expr(
     }
 
     None
+}
+
+fn classify_modulo_index_expr(
+    expr: &perry_hir::Expr,
+    counter_id: u32,
+) -> Option<PreguardedModuloIndexExpr> {
+    use perry_hir::{BinaryOp, Expr};
+
+    fn local(expr: &Expr) -> Option<u32> {
+        match expr {
+            Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn counter_times_const(expr: &Expr, counter_id: u32) -> Option<i32> {
+        match expr {
+            Expr::LocalGet(id) if *id == counter_id => Some(1),
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                left,
+                right,
+            } => match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(id), Expr::Integer(multiplier))
+                | (Expr::Integer(multiplier), Expr::LocalGet(id))
+                    if *id == counter_id =>
+                {
+                    i32::try_from(*multiplier).ok().filter(|value| *value > 0)
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    let Expr::Binary {
+        op: BinaryOp::Mod,
+        left,
+        right,
+    } = expr
+    else {
+        return None;
+    };
+    let modulus_local_id = local(right.as_ref())?;
+    if modulus_local_id == counter_id {
+        return None;
+    }
+    let multiplier = counter_times_const(left.as_ref(), counter_id)?;
+    if multiplier == 1 {
+        Some(PreguardedModuloIndexExpr::LocalModuloLocal {
+            value_local_id: counter_id,
+            modulus_local_id,
+        })
+    } else {
+        Some(PreguardedModuloIndexExpr::LocalTimesConstModuloLocal {
+            value_local_id: counter_id,
+            multiplier,
+            modulus_local_id,
+        })
+    }
 }
 
 fn count_range_numeric_array_index_gets(

@@ -48,7 +48,7 @@ use super::{
     raw_f64_layout_fact, try_flat_const_2d_int, try_lower_flat_const_index_get,
     try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
     variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, PreguardedAffineIndexExpr,
-    TypedFeedbackContract, TypedFeedbackKind,
+    PreguardedModuloIndexExpr, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -517,6 +517,104 @@ fn affine_index_expr_matches(expr: &Expr, pattern: &PreguardedAffineIndexExpr) -
         })
 }
 
+fn modulo_index_expr_matches(expr: &Expr, pattern: &PreguardedModuloIndexExpr) -> bool {
+    fn local(expr: &Expr) -> Option<u32> {
+        match expr {
+            Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn local_times_const(expr: &Expr) -> Option<(u32, i32)> {
+        match expr {
+            Expr::LocalGet(id) => Some((*id, 1)),
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                left,
+                right,
+            } => match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(id), Expr::Integer(multiplier))
+                | (Expr::Integer(multiplier), Expr::LocalGet(id)) => {
+                    i32::try_from(*multiplier).ok().map(|value| (*id, value))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    let Expr::Binary {
+        op: BinaryOp::Mod,
+        left,
+        right,
+    } = expr
+    else {
+        return false;
+    };
+    let Some(modulus_local_id) = local(right.as_ref()) else {
+        return false;
+    };
+    let Some((value_local_id, multiplier)) = local_times_const(left.as_ref()) else {
+        return false;
+    };
+
+    match pattern {
+        PreguardedModuloIndexExpr::LocalModuloLocal {
+            value_local_id: expected_value,
+            modulus_local_id: expected_modulus,
+        } => {
+            value_local_id == *expected_value
+                && modulus_local_id == *expected_modulus
+                && multiplier == 1
+        }
+        PreguardedModuloIndexExpr::LocalTimesConstModuloLocal {
+            value_local_id: expected_value,
+            multiplier: expected_multiplier,
+            modulus_local_id: expected_modulus,
+        } => {
+            value_local_id == *expected_value
+                && modulus_local_id == *expected_modulus
+                && multiplier == *expected_multiplier
+        }
+    }
+}
+
+fn lower_modulo_index_expr_as_i32(
+    ctx: &mut FnCtx<'_>,
+    pattern: &PreguardedModuloIndexExpr,
+) -> Result<String> {
+    let (value_local_id, multiplier, modulus_local_id) = match pattern {
+        PreguardedModuloIndexExpr::LocalModuloLocal {
+            value_local_id,
+            modulus_local_id,
+        } => (*value_local_id, 1, *modulus_local_id),
+        PreguardedModuloIndexExpr::LocalTimesConstModuloLocal {
+            value_local_id,
+            multiplier,
+            modulus_local_id,
+        } => (*value_local_id, *multiplier, *modulus_local_id),
+    };
+    let value_slot = ctx
+        .i32_counter_slots
+        .get(&value_local_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("preguarded modulo index missing value i32 slot"))?;
+    let modulus_slot = ctx
+        .i32_counter_slots
+        .get(&modulus_local_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("preguarded modulo index missing modulus i32 slot"))?;
+    let value_i32 = ctx.block().load(I32, &value_slot);
+    let dividend_i32 = if multiplier == 1 {
+        value_i32
+    } else {
+        let multiplier = multiplier.to_string();
+        ctx.block().mul(I32, &value_i32, &multiplier)
+    };
+    let modulus_i32 = ctx.block().load(I32, &modulus_slot);
+    Ok(ctx.block().srem(I32, &dividend_i32, &modulus_i32))
+}
+
 fn lower_legacy_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -872,6 +970,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 let arr_box = lower_expr(ctx, object)?;
+                if require_numeric_layout {
+                    let modulo_preguard = if let Expr::LocalGet(arr_id) = object.as_ref() {
+                        ctx.preguarded_numeric_array_modulo_index_gets
+                            .iter()
+                            .find(|preguard| {
+                                preguard.array_local_id == *arr_id
+                                    && modulo_index_expr_matches(index, &preguard.index)
+                            })
+                            .cloned()
+                    } else {
+                        None
+                    };
+                    if let Some(preguard) = modulo_preguard {
+                        let idx_i32 = lower_modulo_index_expr_as_i32(ctx, &preguard.index)?;
+                        return lower_preguarded_numeric_array_index_get(
+                            ctx,
+                            &arr_box,
+                            &idx_i32,
+                            &preguard.site_id,
+                            &preguard.guard_ok_slot,
+                        );
+                    }
+                }
                 let i32_slots = ctx.i32_counter_slots.clone();
                 let flat_const_arrays = ctx.flat_const_arrays.clone();
                 let array_row_aliases = ctx.array_row_aliases.clone();

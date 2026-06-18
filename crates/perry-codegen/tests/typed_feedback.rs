@@ -655,6 +655,109 @@ fn typed_feedback_guards_computed_numeric_array_write_uses_i32_loop_bound() {
 }
 
 #[test]
+fn typed_feedback_preguards_modulo_numeric_array_reads_in_local_bound_loop() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let first_read = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(1)),
+        index: Box::new(Expr::Binary {
+            op: BinaryOp::Mod,
+            left: Box::new(Expr::LocalGet(5)),
+            right: Box::new(Expr::LocalGet(2)),
+        }),
+    };
+    let second_read = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(1)),
+        index: Box::new(Expr::Binary {
+            op: BinaryOp::Mod,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(Expr::LocalGet(5)),
+                right: Box::new(Expr::Integer(7)),
+            }),
+            right: Box::new(Expr::LocalGet(2)),
+        }),
+    };
+    let ir = ir_for(module(
+        "typed_feedback_modulo_array_preguard.ts",
+        vec![param(1, "xs", array_ty)],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(64)),
+            },
+            Stmt::Let {
+                id: 3,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(1000)),
+            },
+            Stmt::Let {
+                id: 4,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(1)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 5,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(5)),
+                    right: Box::new(Expr::LocalGet(3)),
+                }),
+                update: Some(Expr::Update {
+                    id: 5,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    4,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::Binary {
+                            op: BinaryOp::Mul,
+                            left: Box::new(Expr::LocalGet(4)),
+                            right: Box::new(first_read),
+                        }),
+                        right: Box::new(second_read),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(4))),
+        ],
+    ));
+
+    assert!(ir.contains("modulo_preguard.fast"), "{ir}");
+    assert!(ir.contains("bidx.preguarded.fast"), "{ir}");
+    assert!(ir.contains("bidx.preguarded.fallback"), "{ir}");
+    assert!(
+        ir.contains("call void @js_typed_feedback_record_array_guard_fast_passes"),
+        "{ir}"
+    );
+    assert_eq!(
+        ir.matches("call i32 @js_typed_feedback_numeric_array_index_get_guard_i32")
+            .count(),
+        2,
+        "{ir}"
+    );
+    assert!(!ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard("));
+    assert!(ir.contains("srem i32"), "{ir}");
+    assert!(!ir.contains("srem i64"), "{ir}");
+    assert!(!ir.contains("arr.fast"), "{ir}");
+}
+
+#[test]
 fn typed_feedback_preguards_affine_numeric_array_reads_in_local_bound_loop() {
     let array_ty = Type::Array(Box::new(Type::Number));
     let a_ik = Expr::IndexGet {
