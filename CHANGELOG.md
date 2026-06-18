@@ -1,3 +1,28 @@
+## v0.5.1187 — fix(ci): per-PR cargo-test — per-package runs + don't fan into FFI shims (feature-unification link errors)
+
+Follow-up to #5411/#5413. Two more issues made the fast per-PR path fail on
+foundational diffs (#5402):
+
+1. **Feature-unification link errors.** Testing several crates in ONE
+   `cargo test --lib --bins -p A -p B ...` invocation unifies perry-runtime's
+   cargo features across them. A crate that enables an optional impl (e.g.
+   `fetch`) turns on perry-runtime's reference to `js_fetch_with_options`, whose
+   definition lives in a *separate* crate (perry-ext-fetch / perry-stdlib) that
+   the other test binaries don't link → `undefined reference` at link. Fix: run
+   **each crate in its own `cargo test` invocation** so feature sets stay isolated
+   (mirrors how the pre-#5411 job looped per-package).
+2. **Over-broad fan-out.** A perry-runtime change reverse-dep-closured into ~40
+   FFI-shim crates (`perry-ext-*`, perry-stdlib), each triggering a perry-runtime
+   feature rebuild. Those crates' UNIT tests are self-contained pure-Rust logic
+   that don't exercise runtime internals (the nightly full run + perry's
+   integration tests cover that interaction). Fix: `ci_test_scope.py` no longer
+   fans *into* `perry-ext-*` / perry-stdlib (`_is_fanout_leaf`); a direct change
+   to one still selects it. A perry-runtime change now selects 4 crates (perry,
+   perry-ffi, perry-runtime, perry-updater) instead of ~50.
+
+Net: per-PR cargo-test on a perry-runtime/codegen/hir change runs ~12 core-crate
+unit-test suites per-package, validated locally green in ~2 min warm.
+
 ## v0.5.1186 — fix(ci): per-PR cargo-test link-OOM — serialize fast-path links + skip zero-unit-test crates
 
 The #5411 fast per-PR path built every affected crate's unit-test binary in one

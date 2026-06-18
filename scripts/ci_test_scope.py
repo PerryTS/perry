@@ -102,8 +102,26 @@ def _runtime_link_augment(seeds):
     return augmented
 
 
+def _is_fanout_leaf(name):
+    """Crates we never fan *into* when a dependency changes.
+
+    `perry-ext-*` and `perry-stdlib` are runtime FFI shims whose UNIT tests are
+    self-contained pure-Rust logic — they do not exercise perry-runtime internals,
+    so a perry-runtime change need not re-run them per-PR (the nightly full run +
+    perry's integration tests cover that interaction). Excluding them from the
+    reverse-dep fan-out keeps a foundational change from selecting ~40 crates, and
+    avoids perry-runtime feature-unification rebuilds. A direct change *to* one of
+    these crates still selects it (it starts as a seed).
+    """
+    return name == "perry-stdlib" or name.startswith("perry-ext-")
+
+
 def _reverse_dep_closure(md, seeds):
-    """All workspace members that transitively depend on any package in `seeds`."""
+    """All workspace members that transitively depend on any package in `seeds`.
+
+    Fan-out skips `_is_fanout_leaf` crates (they are not added as dependents and
+    are not traversed), so a foundational change does not pull in every FFI shim.
+    """
     members = {p["name"] for p in md["packages"]}
     # revdeps[x] = packages that directly depend on x
     revdeps = {}
@@ -116,9 +134,10 @@ def _reverse_dep_closure(md, seeds):
     while stack:
         cur = stack.pop()
         for dependent in revdeps.get(cur, ()):
-            if dependent not in affected:
-                affected.add(dependent)
-                stack.append(dependent)
+            if dependent in affected or _is_fanout_leaf(dependent):
+                continue
+            affected.add(dependent)
+            stack.append(dependent)
     return affected
 
 

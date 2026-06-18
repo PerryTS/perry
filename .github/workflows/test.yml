@@ -371,11 +371,16 @@ jobs:
             # via the `run-extended-tests` label. No staticlib dependency to
             # build (no integration tests).
             #
-            # Each crate's test binary statically links the whole runtime, so
-            # building many at once OOMs the runner (same reason the FULL path
-            # uses CARGO_BUILD_JOBS=1). Serialize here too, and drop crates with
-            # no `src/` unit tests (their lib test binary has zero tests yet
-            # still pays the heavy link).
+            # Run each crate in its OWN `cargo test` invocation — NOT one
+            # multi-package invocation. Building several crates together unifies
+            # perry-runtime's cargo features, which turns on optional impls (e.g.
+            # `fetch`) whose extern symbols (`js_fetch_with_options`) live in a
+            # separate crate the other test binaries don't link → `undefined
+            # reference` at link. Per-package builds keep each crate's
+            # perry-runtime feature set isolated. CARGO_BUILD_JOBS=1 also bounds
+            # the heavy per-binary runtime link so the runner doesn't OOM.
+            # `--with-tests` drops crates whose `src/` has no unit tests (their
+            # lib test binary would link the runtime for zero tests).
             export CARGO_BUILD_JOBS=1
             # perry-runtime first, single-threaded (process-global state); it is
             # a lib-only crate, so filter to --lib.
@@ -385,20 +390,19 @@ jobs:
             rest="$(printf '%s\n' "$scope" | grep -vx 'perry-runtime' \
               | python3 scripts/ci_test_scope.py --with-tests || true)"
             echo "Crates with unit tests in scope:"; printf '%s\n' "$rest"
-            if [ -n "$rest" ]; then
-              # One invocation across the rest of the scope. `cargo test --lib`
-              # errors if NO selected package has a library (a perry-only diff →
-              # just the bin-only `perry` crate), so include --lib only when some
-              # selected crate has one; --bins is always safe.
-              pkg_args="$(printf '%s\n' "$rest" | sed 's/^/-p /' | tr '\n' ' ')"
-              if printf '%s\n' "$rest" | python3 scripts/ci_test_scope.py --has-lib; then
+            for package in $rest; do
+              # `cargo test --lib` errors on a bin-only crate (perry), so pick
+              # the target filter per package: --lib --bins when it has a lib
+              # (lenient if it has no bins), else --bins.
+              if printf '%s\n' "$package" | python3 scripts/ci_test_scope.py --has-lib; then
                 target_filter="--lib --bins"
               else
                 target_filter="--bins"
               fi
-              echo "Running: cargo test $target_filter $pkg_args"
-              cargo test $target_filter $pkg_args
-            fi
+              echo "::group::cargo test $target_filter -p $package"
+              cargo test $target_filter -p "$package"
+              echo "::endgroup::"
+            done
           fi
 
   # ---------------------------------------------------------------------------
