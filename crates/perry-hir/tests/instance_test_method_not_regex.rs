@@ -76,3 +76,42 @@ fn regex_literal_receiver_test_call_still_uses_fast_path() {
         "`/foo/.test(...)` (regex literal) should still lower to RegExpTest"
     );
 }
+
+/// True if any body debug-prints a `StringMatch`/`StringMatchAll` node.
+fn module_has_string_match(module: &Module) -> bool {
+    let dbg = format!("{:#?}", module);
+    dbg.contains("StringMatch")
+}
+
+#[test]
+fn chained_new_dot_match_is_not_string_match() {
+    // minimatch's `minimatch(p, pat)` arrow returns
+    // `new Minimatch(pat).match(p)` — a chained `new X(arg).match(arg)` where
+    // `arg` is an untyped param. `.match()` here is an INSTANCE method, not
+    // `String.prototype.match(regex)`. The old heuristic (untyped arg ⇒
+    // regex) lowered it to `StringMatch(new Minimatch(pat), p)`, so the call
+    // returned `null` instead of the boolean match result.
+    let src = r#"
+        function f(p: any, pat: any) {
+            return new Matcher(pat).match(p);
+        }
+    "#;
+    let module = lower(src);
+    assert!(
+        !module_has_string_match(&module),
+        "`new Matcher(pat).match(p)` must NOT lower to StringMatch"
+    );
+}
+
+#[test]
+fn string_match_regex_literal_still_uses_fast_path() {
+    // A regex *literal* arg keeps the StringMatch fast path.
+    let src = r#"
+        const m = "abc123".match(/\d+/);
+    "#;
+    let module = lower(src);
+    assert!(
+        module_has_string_match(&module),
+        "`\"...\".match(/\\d+/)` (regex literal arg) should still lower to StringMatch"
+    );
+}

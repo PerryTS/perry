@@ -86,17 +86,31 @@ pub(super) fn try_regex_string_methods(
                     && args.len() == 1
                 {
                     let is_match_all = method_ident.sym.as_ref() == "matchAll";
-                    // Check if the argument is a regex literal or a local holding a regex
+                    // Check if the argument is a regex literal or a local holding a regex.
+                    //
+                    // CRITICAL (#A — minimatch source-compile): do NOT assume
+                    // an `Any`/`Unknown`/untyped ARG is a regex (which would
+                    // treat the RECEIVER as a string and lower to
+                    // `Expr::StringMatch`). `.match()` is also a common
+                    // INSTANCE method name — minimatch's `Minimatch.match` is
+                    // invoked as `new Minimatch(pat).match(p)` inside the
+                    // top-level `minimatch(p, pat)` arrow, where `p` is an
+                    // untyped param. The old `Any | Unknown | None => true`
+                    // heuristic mis-lowered that into
+                    // `StringMatch(new Minimatch(pat), p)`, so `minimatch(...)`
+                    // returned `null` instead of the boolean match result.
+                    // The runtime already routes a genuine string receiver's
+                    // `.match(regex)` through dynamic dispatch (#519/#510), so
+                    // falling through to a normal method call is correct for
+                    // BOTH a string and a class instance. Only take the codegen
+                    // fast path with positive evidence the arg is a regex.
                     let arg_is_regex = match call.args.first().map(|a| a.expr.as_ref()) {
                         Some(ast::Expr::Lit(ast::Lit::Regex(_))) => true,
                         Some(ast::Expr::Ident(ident)) => {
-                            match ctx.lookup_local_type(ident.sym.as_ref()) {
-                                // Known regex local
-                                Some(Type::Named(n)) if n == "RegExp" => true,
-                                // Unknown type — assume could be regex
-                                Some(Type::Any) | Some(Type::Unknown) | None => true,
-                                _ => false,
-                            }
+                            matches!(
+                                ctx.lookup_local_type(ident.sym.as_ref()),
+                                Some(Type::Named(n)) if n == "RegExp"
+                            )
                         }
                         _ => false,
                     };

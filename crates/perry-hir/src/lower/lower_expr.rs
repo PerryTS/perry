@@ -2352,23 +2352,34 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
         // back up.
         ast::Expr::Class(class_expr) => {
             let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
-            // A NAMED class EXPRESSION whose name collides with a TOP-LEVEL
-            // class DECLARATION in the same module must NOT reuse that
-            // declaration's name / ClassId. Per JS spec a class-expression's
-            // name binds only inside its own body, so the two are distinct
-            // classes. Reusing the id silently overwrote the real exported
-            // class with the (often nearly empty) nested expression —
-            // minimatch's `defaults()` returns `Object.assign(m, { Minimatch:
-            // class Minimatch extends orig.Minimatch {…} })`, so `new
-            // Minimatch(pattern)` constructed the body-less nested class
-            // (every field/method `undefined`). Rename the colliding
-            // expression to a fresh unique name so it gets its own ClassId;
-            // the value position (object property / `new` site) holds the
-            // resulting ClassRef directly, so the original name is not needed
-            // at module scope.
+            // A NAMED class EXPRESSION used as a VALUE whose name collides
+            // with an existing module-scope class — a TOP-LEVEL `class X`
+            // declaration OR an imported class binding — must NOT reuse that
+            // class's name / ClassId. Per JS spec a class-expression's name
+            // binds only inside its own body, so the two are distinct
+            // classes. Reusing the id silently overwrote the real class with
+            // the (often nearly empty) nested expression. minimatch's
+            // `defaults()` returns
+            //   `Object.assign(m, { Minimatch: class Minimatch extends
+            //      orig.Minimatch {…}, AST: class AST extends orig.AST {…} })`
+            // — `Minimatch` collides with the top-level `export class
+            // Minimatch` (caught via `module_class_decl_names`), and `AST`
+            // collides with the IMPORTED `import { AST } from './ast.js'`
+            // (caught via `lookup_class`, since named class imports are
+            // registered too). Both nested expressions hijacked the real
+            // class id: `new Minimatch(pattern)` built a body-less instance,
+            // and `AST.fromGlob(...)` inside `Minimatch.parse` dispatched to
+            // the wrong (empty) class. Rename the colliding expression to a
+            // fresh unique name so it gets its own ClassId; the value
+            // position (object property / `new` site) holds the resulting
+            // ClassRef directly, so the original name is not needed at module
+            // scope. The `current_class` guard avoids renaming the rare
+            // self-referential `class C { … new C() … }` expression form.
             let ident_name = match ident_name {
                 Some(n)
-                    if ctx.module_class_decl_names.contains(&n)
+                    if (ctx.module_class_decl_names.contains(&n)
+                        || ctx.lookup_class(&n).is_some()
+                        || ctx.lookup_imported_func(&n).is_some())
                         && ctx.current_class.as_deref() != Some(n.as_str()) =>
                 {
                     Some(format!("{}__class_expr_{}", n, ctx.fresh_class()))
