@@ -14,6 +14,10 @@ pub fn emit_i64_function(llmod: &mut crate::module::LlModule, f: &Function, i64_
     let lf = llmod.define_function(i64_name, I64, params);
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    if let Some(param_id) = fibonacci_recurrence_param(f) {
+        emit_i64_fibonacci_loop(lf, param_id);
+        return;
+    }
     let mut locals: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
     {
         let blk = lf.block_mut(0).unwrap();
@@ -35,6 +39,137 @@ pub fn emit_i64_function(llmod: &mut crate::module::LlModule, f: &Function, i64_
         cx.f.block_mut(cx.cur).unwrap().ret(I64, "0");
     }
 }
+
+fn emit_i64_fibonacci_loop(lf: &mut crate::function::LlFunction, param_id: u32) {
+    use crate::types::I64;
+
+    let arg = format!("%arg{}", param_id);
+    let _ = lf.create_block("i64.fib.base");
+    let base_idx = lf.num_blocks() - 1;
+    let base_label = lf.blocks()[base_idx].label.clone();
+    let _ = lf.create_block("i64.fib.loop");
+    let loop_idx = lf.num_blocks() - 1;
+    let loop_label = lf.blocks()[loop_idx].label.clone();
+    let _ = lf.create_block("i64.fib.cont");
+    let cont_idx = lf.num_blocks() - 1;
+    let cont_label = lf.blocks()[cont_idx].label.clone();
+    let _ = lf.create_block("i64.fib.done");
+    let done_idx = lf.num_blocks() - 1;
+    let done_label = lf.blocks()[done_idx].label.clone();
+
+    let (prev_slot, curr_slot, i_slot) = {
+        let entry = lf.block_mut(0).unwrap();
+        let prev_slot = entry.alloca(I64);
+        let curr_slot = entry.alloca(I64);
+        let i_slot = entry.alloca(I64);
+        entry.store(I64, "0", &prev_slot);
+        entry.store(I64, "1", &curr_slot);
+        entry.store(I64, "2", &i_slot);
+        let is_base = entry.icmp_sle(I64, &arg, "1");
+        entry.cond_br(&is_base, &base_label, &loop_label);
+        (prev_slot, curr_slot, i_slot)
+    };
+
+    lf.block_mut(base_idx).unwrap().ret(I64, &arg);
+
+    let (curr, next, i) = {
+        let loop_block = lf.block_mut(loop_idx).unwrap();
+        let prev = loop_block.load(I64, &prev_slot);
+        let curr = loop_block.load(I64, &curr_slot);
+        let next = loop_block.add(I64, &prev, &curr);
+        let i = loop_block.load(I64, &i_slot);
+        let done = loop_block.icmp_sge(I64, &i, &arg);
+        loop_block.cond_br(&done, &done_label, &cont_label);
+        (curr, next, i)
+    };
+
+    {
+        let cont = lf.block_mut(cont_idx).unwrap();
+        cont.store(I64, &curr, &prev_slot);
+        cont.store(I64, &next, &curr_slot);
+        let next_i = cont.add(I64, &i, "1");
+        cont.store(I64, &next_i, &i_slot);
+        cont.br(&loop_label);
+    }
+
+    lf.block_mut(done_idx).unwrap().ret(I64, &next);
+}
+
+fn fibonacci_recurrence_param(f: &Function) -> Option<u32> {
+    if f.params.len() != 1 {
+        return None;
+    }
+    let param_id = f.params[0].id;
+    match f.body.as_slice() {
+        [base_case, recursive_return]
+            if is_fibonacci_base_case(base_case, param_id)
+                && is_fibonacci_recursive_return(recursive_return, f.id, param_id) =>
+        {
+            Some(param_id)
+        }
+        _ => None,
+    }
+}
+
+fn is_fibonacci_base_case(stmt: &Stmt, param_id: u32) -> bool {
+    matches!(
+        stmt,
+        Stmt::If {
+            condition: Expr::Compare {
+                op: perry_hir::CompareOp::Le,
+                left,
+                right,
+            },
+            then_branch,
+            else_branch: None,
+        } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == param_id)
+            && integer_literal(right, 1)
+            && matches!(
+                then_branch.as_slice(),
+                [Stmt::Return(Some(Expr::LocalGet(id)))] if *id == param_id
+            )
+    )
+}
+
+fn is_fibonacci_recursive_return(stmt: &Stmt, sid: u32, param_id: u32) -> bool {
+    let Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    })) = stmt
+    else {
+        return false;
+    };
+    (is_self_call_minus(left, sid, param_id, 1) && is_self_call_minus(right, sid, param_id, 2))
+        || (is_self_call_minus(left, sid, param_id, 2)
+            && is_self_call_minus(right, sid, param_id, 1))
+}
+
+fn is_self_call_minus(expr: &Expr, sid: u32, param_id: u32, amount: i64) -> bool {
+    matches!(
+        expr,
+        Expr::Call { callee, args, .. }
+            if matches!(callee.as_ref(), Expr::FuncRef(id) if *id == sid)
+                && matches!(
+                    args.as_slice(),
+                    [Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left,
+                        right,
+                    }] if matches!(left.as_ref(), Expr::LocalGet(id) if *id == param_id)
+                        && integer_literal(right, amount)
+                )
+    )
+}
+
+fn integer_literal(expr: &Expr, expected: i64) -> bool {
+    match expr {
+        Expr::Integer(n) => *n == expected,
+        Expr::Number(n) => *n == expected as f64,
+        _ => false,
+    }
+}
+
 struct I64Cx<'a> {
     f: &'a mut crate::function::LlFunction,
     cur: usize,

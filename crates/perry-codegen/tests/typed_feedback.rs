@@ -1432,6 +1432,68 @@ fn i64_loop_accumulator_uses_affine_counter_addend() {
 }
 
 #[test]
+fn integer_specialized_fibonacci_recurrence_uses_i64_loop() {
+    let ir = ir_for(module(
+        "integer_fibonacci_loop.ts",
+        vec![param(2, "n", Type::Number)],
+        Type::Number,
+        vec![
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: CompareOp::Le,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::Integer(1)),
+                },
+                then_branch: vec![Stmt::Return(Some(Expr::LocalGet(2)))],
+                else_branch: None,
+            },
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }],
+                    type_args: Vec::new(),
+                }),
+                right: Box::new(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(2)),
+                    }],
+                    type_args: Vec::new(),
+                }),
+            })),
+        ],
+    ));
+    let i64_name = "perry_fn_integer_fibonacci_loop_ts__probe_i64";
+    let wrapper_name = "perry_fn_integer_fibonacci_loop_ts__probe";
+
+    assert!(
+        ir.contains(&format!("define i64 @{i64_name}(i64 %arg2) alwaysinline")),
+        "{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{wrapper_name}(double %arg2) alwaysinline"
+        )),
+        "{ir}"
+    );
+    assert!(ir.contains("i64.fib.loop"), "{ir}");
+    assert!(ir.contains("i64.fib.done"), "{ir}");
+    assert!(ir.contains("icmp sle i64 %arg2, 1"), "{ir}");
+    assert_eq!(ir.matches(&format!("call i64 @{i64_name}")).count(), 1);
+    assert!(
+        !ir.contains(&format!("call fastcc i64 @{i64_name}")),
+        "{ir}"
+    );
+}
+
+#[test]
 fn i64_loop_accumulator_rejects_negative_zero_initial_value() {
     let ir = ir_for(module(
         "i64_loop_accumulator_negative_zero.ts",
