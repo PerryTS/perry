@@ -1060,6 +1060,29 @@ fn exact_nonnegative_integer_const(expr: &perry_hir::Expr) -> Option<i64> {
     (0..=MAX_SAFE_INTEGER_I64).contains(&value).then_some(value)
 }
 
+fn bounded_byte_get_addend_max(
+    ctx: &FnCtx<'_>,
+    counter_id: u32,
+    buffer: &perry_hir::Expr,
+    index: &perry_hir::Expr,
+) -> Option<i64> {
+    let perry_hir::Expr::LocalGet(index_id) = index else {
+        return None;
+    };
+    if *index_id != counter_id {
+        return None;
+    }
+    let perry_hir::Expr::LocalGet(buffer_id) = buffer else {
+        return None;
+    };
+    if !ctx.buffer_view_slots.contains_key(buffer_id) {
+        return None;
+    }
+    crate::expr::bounds_for_buffer_access_width(ctx, *buffer_id, index, 1)
+        .allows_inbounds()
+        .then_some(255)
+}
+
 fn nonnegative_i64_addend_max(
     ctx: &FnCtx<'_>,
     counter_id: u32,
@@ -1088,6 +1111,12 @@ fn nonnegative_i64_addend_max(
             }
             let divisor = exact_nonnegative_integer_const(right.as_ref())?;
             (divisor > 0).then_some(divisor - 1)
+        }
+        perry_hir::Expr::Uint8ArrayGet { array, index } => {
+            bounded_byte_get_addend_max(ctx, counter_id, array, index)
+        }
+        perry_hir::Expr::BufferIndexGet { buffer, index } => {
+            bounded_byte_get_addend_max(ctx, counter_id, buffer, index)
         }
         _ => None,
     }

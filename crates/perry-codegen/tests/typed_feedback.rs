@@ -1267,6 +1267,92 @@ fn i64_loop_accumulator_syncs_once_for_self_add_body() {
 }
 
 #[test]
+fn i64_loop_accumulator_uses_uint8array_byte_addend() {
+    let byte_get = Expr::Uint8ArrayGet {
+        array: Box::new(Expr::LocalGet(2)),
+        index: Box::new(Expr::LocalGet(4)),
+    };
+    let ir = ir_for(module(
+        "i64_loop_accumulator_uint8array_get.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "size".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(16)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "bytes".to_string(),
+                ty: Type::Named("Uint8Array".to_string()),
+                mutable: false,
+                init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(1))))),
+            },
+            Stmt::Let {
+                id: 3,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 4,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(4)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 4,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    3,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(3)),
+                        right: Box::new(byte_get),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(3))),
+        ],
+    ));
+    let body_start = ir.find("\nfor.body.").expect("for body block");
+    let body_end = ir[body_start..]
+        .find("\nfor.update.")
+        .map(|offset| body_start + offset)
+        .expect("for update block");
+    let exit_start = ir.find("\nfor.exit.").expect("for exit block");
+    let body_ir = &ir[body_start..body_end];
+    let exit_ir = &ir[exit_start..];
+
+    assert!(body_ir.contains("load i8"), "{body_ir}");
+    assert!(body_ir.contains("zext i8"), "{body_ir}");
+    assert!(body_ir.contains("zext i32"), "{body_ir}");
+    assert!(body_ir.contains("add i64"), "{body_ir}");
+    assert!(body_ir.contains("store i64"), "{body_ir}");
+    assert!(!body_ir.contains("fadd double"), "{body_ir}");
+    assert!(!body_ir.contains("store double"), "{body_ir}");
+    assert!(
+        !body_ir.contains("call i32 @js_uint8array_get"),
+        "{body_ir}"
+    );
+    assert!(exit_ir.contains("sitofp i64"), "{exit_ir}");
+    assert!(exit_ir.contains("store double"), "{exit_ir}");
+}
+
+#[test]
 fn i64_loop_accumulator_rejects_negative_zero_initial_value() {
     let ir = ir_for(module(
         "i64_loop_accumulator_negative_zero.ts",

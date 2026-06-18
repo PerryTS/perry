@@ -224,6 +224,15 @@ fn lower_nonnegative_i64_addend(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
             let rem = blk.srem(I32, &i32_value, &divisor_i32.to_string());
             Ok(Some(blk.sext(I32, &rem, I64)))
         }
+        Expr::Uint8ArrayGet { array, index } => {
+            let byte_i32 = super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?.value;
+            Ok(Some(ctx.block().zext(I32, &byte_i32, I64)))
+        }
+        Expr::BufferIndexGet { buffer, index } => {
+            let byte_i32 =
+                super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?.value;
+            Ok(Some(ctx.block().zext(I32, &byte_i32, I64)))
+        }
         _ => Ok(None),
     }
 }
