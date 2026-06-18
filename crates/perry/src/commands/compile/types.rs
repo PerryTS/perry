@@ -222,8 +222,10 @@ pub struct CompileArgs {
     /// `PERRY_CACHE_DIR` env var, `[perry] cacheDir` in perry.toml, or
     /// `"perry": { "cacheDir": "<path>" }` in package.json; precedence is
     /// CLI flag > env > perry.toml > package.json. A relative path resolves
-    /// against the project root. Useful for CI caches, shared build farms,
-    /// or read-only project roots.
+    /// against the project root. Useful for read-only project roots and
+    /// per-machine CI caches; the object cache is machine-local (native
+    /// `.o` bytes keyed by CPU/OS/toolchain), so avoid sharing one
+    /// directory across heterogeneous build machines.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
 
@@ -515,7 +517,8 @@ pub struct CompilationContext {
     pub cache_root: PathBuf,
     /// Resolved on-disk cache directory for this build, computed once via
     /// `resolve_cache_dir`. Every on-disk cache (objects, audit.json, build,
-    /// link, debug dumps, sandbox profiles) lives directly under this dir.
+    /// link, sandbox profiles) lives directly under this dir; `--trace`
+    /// dumps are written separately under `.perry-trace/` (see that flag).
     /// Precedence: `--cache-dir` → `PERRY_CACHE_DIR` → perry.toml
     /// `[perry] cacheDir` → package.json `perry.cacheDir` → default
     /// `<cache_root>/node_modules/.cache/perry`.

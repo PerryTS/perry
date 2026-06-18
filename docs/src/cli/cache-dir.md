@@ -18,10 +18,10 @@ and the env var and CLI flag override `perry.toml`:
 
 ```
 # 1. Per-build CLI flag (wins over everything)
-perry --cache-dir /var/cache/perry myapp.ts
+perry compile --cache-dir /var/cache/perry myapp.ts
 
 # 2. Per-shell environment
-PERRY_CACHE_DIR=/var/cache/perry perry myapp.ts
+PERRY_CACHE_DIR=/var/cache/perry perry compile myapp.ts
 
 # 3. Per-project perry.toml, alongside the other [perry] settings
 [perry]
