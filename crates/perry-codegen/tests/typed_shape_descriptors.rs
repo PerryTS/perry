@@ -243,7 +243,7 @@ fn number_typed_local_array_literal_keeps_runtime_layout_note() {
 }
 
 #[test]
-fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
+fn number_typed_local_array_push_keeps_boxed_runtime_fallback() {
     let module = base_module(
         "number_typed_local_array_push.ts",
         vec![
@@ -272,10 +272,8 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
 
     let ir = ir_for(module);
 
-    assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"),
-        "number-typed array pushes should validate the runtime value before the numeric path"
-    );
+    assert!(ir.contains("apush.numeric_value"), "{ir}");
+    assert!(!ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"));
     assert!(
         ir.contains("call void @js_typed_feedback_record_fallback_call")
             && ir.contains("call i64 @js_array_push_f64"),
@@ -400,16 +398,15 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
     );
 
     let ir = ir_for(module);
-    let fast_ir = block_between(&ir, "\napush.numeric_fast.", "\napush.numeric_fallback.");
+    let fast_ir = block_between(
+        &ir,
+        "\napush.numeric_inbounds.",
+        "\napush.numeric_fallback.",
+    );
 
-    assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"),
-        "plain-number loop pushes must guard that the runtime layout is still raw-f64"
-    );
-    assert!(
-        ir.contains("call i64 @js_array_numeric_push_f64_unboxed"),
-        "plain-number loop pushes should use the raw-f64 push helper on the guarded fast path"
-    );
+    assert!(ir.contains("apush.numeric_inbounds"));
+    assert!(!ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"));
+    assert!(!ir.contains("call i64 @js_array_numeric_push_f64_unboxed"));
     assert!(
         !fast_ir.contains("call void @js_gc_note_slot_layout"),
         "integer arithmetic push value should not update slot layout"

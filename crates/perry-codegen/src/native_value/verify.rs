@@ -258,6 +258,7 @@ fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
             | "numeric_array_index_get.raw_f64_load"
             | "numeric_array_index_get.range_preguarded_raw_f64_load"
             | "numeric_array_index_set.raw_f64_store"
+            | "numeric_array_push.raw_f64_store"
             | "js_array_numeric_push_f64_unboxed"
             | "class_field_get.raw_f64_load"
             | "class_field_set.raw_f64_store"
@@ -1272,6 +1273,7 @@ mod tests {
                 "NumericArrayIndexSet",
                 "numeric_array_index_set.raw_f64_store",
             ),
+            ("NumericArrayPush", "numeric_array_push.raw_f64_store"),
             ("NumericArrayPush", "js_array_numeric_push_f64_unboxed"),
             ("ClassFieldGet", "class_field_get.raw_f64_load"),
             ("ClassFieldSet", "class_field_set.raw_f64_store"),

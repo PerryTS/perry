@@ -693,8 +693,9 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
     ));
 
     assert!(ir.contains("numeric_array_push_guard"));
-    assert!(ir.contains("js_typed_feedback_numeric_array_push_guard"));
-    assert!(ir.contains("js_array_numeric_push_f64_unboxed"));
+    assert!(ir.contains("apush.numeric_inbounds"));
+    assert!(!ir.contains("call i32 @js_typed_feedback_numeric_array_push_guard"));
+    assert!(!ir.contains("call i64 @js_array_numeric_push_f64_unboxed"));
     assert!(ir.contains("js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call i64 @js_array_push_f64"));
 }

@@ -30,7 +30,7 @@ use crate::type_analysis::{
     is_numeric_expr, is_set_expr, is_string_expr, is_url_search_params_expr, receiver_class_name,
 };
 #[allow(unused_imports)]
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
@@ -92,35 +92,86 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "array.push",
                     TypedFeedbackContract::numeric_array_push(),
                 );
-                let fast_idx = ctx.new_block("apush.numeric_fast");
+                let layout_idx = ctx.new_block("apush.numeric_layout");
+                let value_idx = ctx.new_block("apush.numeric_value");
+                let room_idx = ctx.new_block("apush.numeric_room");
+                let inbounds_idx = ctx.new_block("apush.numeric_inbounds");
                 let fallback_idx = ctx.new_block("apush.numeric_fallback");
                 let merge_idx = ctx.new_block("apush.numeric_merge");
-                let fast_label = ctx.block_label(fast_idx);
+                let layout_label = ctx.block_label(layout_idx);
+                let value_label = ctx.block_label(value_idx);
+                let room_label = ctx.block_label(room_idx);
+                let inbounds_label = ctx.block_label(inbounds_idx);
                 let fallback_label = ctx.block_label(fallback_idx);
                 let merge_label = ctx.block_label(merge_idx);
 
-                let guard_ok = {
-                    let blk = ctx.block();
-                    let guard_i32 = blk.call(
-                        I32,
-                        "js_typed_feedback_numeric_array_push_guard",
-                        &[(I64, &feedback_site_id), (DOUBLE, &arr_box), (DOUBLE, &v)],
-                    );
-                    blk.icmp_ne(I32, &guard_i32, "0")
-                };
-                ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
-
-                ctx.current_block = fast_idx;
-                {
+                let arr_handle = {
                     let blk = ctx.block();
                     let arr_handle = unbox_to_i64(blk, &arr_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_array_numeric_push_f64_unboxed",
-                        &[(I64, &arr_handle), (DOUBLE, &v)],
-                    );
-                    let new_box = nanbox_pointer_inline(blk, &new_handle);
-                    blk.store(DOUBLE, &new_box, &slot);
+                    let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
+                    let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
+                    let gc_flags = blk.load(I8, &gc_flags_ptr);
+                    let fwd_bits = blk.and(I8, &gc_flags, "128");
+                    let is_fwd = blk.icmp_ne(I8, &fwd_bits, "0");
+                    blk.cond_br(&is_fwd, &fallback_label, &layout_label);
+                    arr_handle
+                };
+
+                ctx.current_block = layout_idx;
+                {
+                    let blk = ctx.block();
+                    let reserved_addr = blk.sub(I64, &arr_handle, "6");
+                    let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+                    let reserved = blk.load(I16, &reserved_ptr);
+                    let raw_f64_bits = blk.and(I16, &reserved, "128");
+                    let has_raw_f64_layout = blk.icmp_ne(I16, &raw_f64_bits, "0");
+                    blk.cond_br(&has_raw_f64_layout, &value_label, &fallback_label);
+                }
+
+                ctx.current_block = value_idx;
+                {
+                    let blk = ctx.block();
+                    let value_bits = blk.bitcast_double_to_i64(&v);
+                    let upper = blk.lshr(I64, &value_bits, "48");
+                    let below_boxed_range = blk.icmp_ult(I64, &upper, "32761"); // 0x7ff9
+                    let above_boxed_range = blk.icmp_ugt(I64, &upper, "32767"); // 0x7fff
+                    let value_is_plain_number = blk.or(I1, &below_boxed_range, &above_boxed_range);
+                    blk.cond_br(&value_is_plain_number, &room_label, &fallback_label);
+                }
+
+                ctx.current_block = room_idx;
+                {
+                    let blk = ctx.block();
+                    let length = blk.safe_load_i32_from_ptr(&arr_handle);
+                    let cap_addr = blk.add(I64, &arr_handle, "4");
+                    let cap_ptr = blk.inttoptr(I64, &cap_addr);
+                    let capacity = blk.load(I32, &cap_ptr);
+                    let has_room = blk.icmp_ult(I32, &length, &capacity);
+                    let length_ok = blk.icmp_ule(I32, &length, "16000000");
+                    let can_inline = blk.and(I1, &has_room, &length_ok);
+                    blk.cond_br(&can_inline, &inbounds_label, &fallback_label);
+                }
+
+                ctx.current_block = inbounds_idx;
+                let fast_length_double;
+                {
+                    let blk = ctx.block();
+                    let length = blk.safe_load_i32_from_ptr(&arr_handle);
+                    let length_i64 = blk.zext(I32, &length, I64);
+                    let byte_offset = blk.shl(I64, &length_i64, "3");
+                    let with_header = blk.add(I64, &byte_offset, "8");
+                    let element_addr = blk.add(I64, &arr_handle, &with_header);
+                    let element_ptr = blk.inttoptr(I64, &element_addr);
+                    let is_nan = blk.fcmp("uno", &v, "0.0");
+                    let canonical_nan = double_literal(f64::NAN);
+                    let store_value = blk.select(I1, &is_nan, DOUBLE, &canonical_nan, &v);
+                    // GC_STORE_AUDIT(POINTER_FREE): raw-f64 push stores numeric payloads only.
+                    blk.store(DOUBLE, &store_value, &element_ptr);
+                    let new_length = blk.add(I32, &length, "1");
+                    let arr_ptr = blk.inttoptr(I64, &arr_handle);
+                    // GC_STORE_AUDIT(POINTER_FREE): array length header update has no child pointer.
+                    blk.store(I32, &new_length, &arr_ptr);
+                    fast_length_double = blk.sitofp(I32, &new_length, DOUBLE);
                     blk.br(&merge_label);
                 }
                 let pushed = LoweredValue {
@@ -132,10 +183,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.record_lowered_value_with_access_mode_and_facts(
                     "NumericArrayPush",
                     Some(*array_id),
-                    "js_array_numeric_push_f64_unboxed",
+                    "numeric_array_push.raw_f64_store",
                     &pushed,
                     Some(BoundsState::Guarded {
-                        guard_id: "numeric_array_push_guard".to_string(),
+                        guard_id: "inline_numeric_array_push_guard".to_string(),
                     }),
                     None,
                     Some(BufferAccessMode::CheckedNative),
@@ -155,6 +206,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
 
                 ctx.current_block = fallback_idx;
+                let fallback_length_double;
                 {
                     let blk = ctx.block();
                     blk.call_void(
@@ -169,6 +221,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
                     blk.store(DOUBLE, &new_box, &slot);
+                    let length_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
+                    fallback_length_double = blk.sitofp(I32, &length_i32, DOUBLE);
                     blk.br(&merge_label);
                 }
                 let fallback = LoweredValue {
@@ -209,8 +263,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
 
                 ctx.current_block = merge_idx;
-                let current_box = ctx.block().load(DOUBLE, &slot);
-                return Ok(emit_array_box_length(ctx, &current_box));
+                return Ok(ctx.block().phi(
+                    DOUBLE,
+                    &[
+                        (&fast_length_double, &inbounds_label),
+                        (&fallback_length_double, &fallback_label),
+                    ],
+                ));
             }
 
             // Fast path: local-bound, non-captured, non-boxed array.
