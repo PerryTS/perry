@@ -777,6 +777,12 @@ pub(crate) struct FnCtx<'a> {
     pub direct_method_new_locals: std::collections::HashMap<u32, std::collections::HashSet<String>>,
     pub direct_field_new_locals: std::collections::HashMap<u32, std::collections::HashSet<String>>,
 
+    /// Exact safe-integer values for raw numeric fields on immutable
+    /// `new` locals. Only constructor/field-initializer facts seed this map;
+    /// ordinary field stores invalidate it, and trusted closed-form loop folds
+    /// may update it.
+    pub exact_safe_integer_class_fields: std::collections::HashMap<(u32, String), i64>,
+
     /// Non-escaping `new` locals identified by escape analysis. Maps
     /// local_id → class_name for `let p = new Point(...)` where `p`
     /// is only used in PropertyGet/PropertySet. The Stmt::Let lowering

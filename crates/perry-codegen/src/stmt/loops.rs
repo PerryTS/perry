@@ -12,9 +12,10 @@ use crate::expr::{
 };
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
+use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{BoundedBufferIndex, BoundsProof, BoundsState, LengthSource};
 use crate::type_analysis::{is_array_expr, is_numeric_expr};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, I8};
 
 #[derive(Clone, Copy, Debug)]
 struct InvariantArrayIndexGetHoist {
@@ -79,6 +80,16 @@ struct AccumulatorClosedForm {
     counter_local_id: u32,
     final_counter: i64,
     final_acc: i64,
+}
+
+#[derive(Clone, Debug)]
+struct DirectFieldAccumulatorClosedForm {
+    object_local_id: u32,
+    field: String,
+    field_index: u32,
+    counter_local_id: u32,
+    final_counter: i64,
+    final_field: i64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -525,6 +536,30 @@ pub(crate) fn lower_for(
         .map(|closed_form| (acc, closed_form))
     }) {
         emit_accumulator_closed_form(ctx, acc, closed_form);
+        if local_bound_counter_i32_was_fresh {
+            if let Some((counter_id, _, _)) = local_bound_classification {
+                ctx.i32_counter_slots.remove(&counter_id);
+            }
+        }
+        if local_bound_bound_i32_was_fresh {
+            if let Some((_, bound_id, _)) = local_bound_classification {
+                ctx.i32_counter_slots.remove(&bound_id);
+            }
+        }
+        ctx.bounded_index_pairs
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        ctx.bounded_buffer_index_pairs
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        ctx.guarded_buffer_index_pairs
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        ctx.int_range_facts
+            .retain(|fact| fact.scope_id != loop_proof_scope_id);
+        return Ok(());
+    }
+    if let Some(closed_form) =
+        classify_direct_field_accumulator_closed_form(ctx, local_bound_classification, update, body)
+    {
+        emit_direct_field_accumulator_closed_form(ctx, closed_form)?;
         if local_bound_counter_i32_was_fresh {
             if let Some((counter_id, _, _)) = local_bound_classification {
                 ctx.i32_counter_slots.remove(&counter_id);
@@ -1500,6 +1535,160 @@ fn emit_accumulator_closed_form(
         .insert(closed_form.counter_local_id, closed_form.final_counter);
     ctx.nonnegative_integer_locals
         .insert(closed_form.counter_local_id);
+}
+
+fn classify_direct_field_accumulator_closed_form(
+    ctx: &FnCtx<'_>,
+    local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<DirectFieldAccumulatorClosedForm> {
+    let (counter_id, bound_id, op) = local_bound_classification?;
+    if !matches!(op, perry_hir::CompareOp::Lt)
+        || !ctx.i32_counter_slots.contains_key(&counter_id)
+        || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+    {
+        return None;
+    }
+
+    let [Stmt::Expr(perry_hir::Expr::PropertySet {
+        object,
+        property,
+        value,
+    })] = body
+    else {
+        return None;
+    };
+    let perry_hir::Expr::LocalGet(object_local_id) = object.as_ref() else {
+        return None;
+    };
+    if *object_local_id == counter_id {
+        return None;
+    }
+    let class_name = ctx.const_new_class_locals.get(object_local_id)?;
+    if !ctx
+        .direct_field_new_locals
+        .get(object_local_id)
+        .is_some_and(|fields| fields.contains(property))
+    {
+        return None;
+    }
+    if !crate::type_analysis::class_field_declared_type(ctx, class_name, property)
+        .as_ref()
+        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate)
+    {
+        return None;
+    }
+    let field_index = crate::type_analysis::class_field_global_index(ctx, class_name, property)?;
+    let initial_field = ctx
+        .exact_safe_integer_class_fields
+        .get(&(*object_local_id, property.clone()))
+        .copied()?;
+    let addend = affine_accumulator_addend(
+        counter_id,
+        self_add_class_field_addend(*object_local_id, property, value.as_ref())?,
+    )?;
+    let start = *ctx.exact_safe_integer_locals.get(&counter_id)?;
+    let bound = *ctx.exact_safe_integer_locals.get(&bound_id)?;
+    if start < 0 || bound < 0 || initial_field < 0 {
+        return None;
+    }
+    let final_counter = if start < bound { bound } else { start };
+    i32::try_from(final_counter).ok()?;
+
+    let iterations = if start < bound {
+        (bound as i128).checked_sub(start as i128)?
+    } else {
+        0
+    };
+    let counter_sum = arithmetic_series_sum(start as i128, final_counter as i128)?;
+    let delta = addend
+        .coeff
+        .checked_mul(counter_sum)?
+        .checked_add(addend.constant.checked_mul(iterations)?)?;
+    let final_field = (initial_field as i128).checked_add(delta)?;
+    if final_field < 0 || final_field > MAX_SAFE_INTEGER_I64 as i128 {
+        return None;
+    }
+
+    Some(DirectFieldAccumulatorClosedForm {
+        object_local_id: *object_local_id,
+        field: property.clone(),
+        field_index,
+        counter_local_id: counter_id,
+        final_counter,
+        final_field: final_field as i64,
+    })
+}
+
+fn self_add_class_field_addend<'a>(
+    object_local_id: u32,
+    field: &str,
+    value: &'a perry_hir::Expr,
+) -> Option<&'a perry_hir::Expr> {
+    let perry_hir::Expr::Binary {
+        op: perry_hir::BinaryOp::Add,
+        left,
+        right,
+    } = value
+    else {
+        return None;
+    };
+    match (left.as_ref(), right.as_ref()) {
+        (perry_hir::Expr::PropertyGet { object, property }, addend)
+            if property == field
+                && matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == object_local_id) =>
+        {
+            Some(addend)
+        }
+        (addend, perry_hir::Expr::PropertyGet { object, property })
+            if property == field
+                && matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == object_local_id) =>
+        {
+            Some(addend)
+        }
+        _ => None,
+    }
+}
+
+fn emit_direct_field_accumulator_closed_form(
+    ctx: &mut FnCtx<'_>,
+    closed_form: DirectFieldAccumulatorClosedForm,
+) -> Result<()> {
+    let object_expr = perry_hir::Expr::LocalGet(closed_form.object_local_id);
+    let recv_box = lower_expr(ctx, &object_expr)?;
+    let field_idx_str = closed_form.field_index.to_string();
+    let final_field = crate::nanbox::double_literal(closed_form.final_field as f64);
+    let blk = ctx.block();
+    let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+    let obj_ptr = blk.inttoptr(I64, &obj_handle);
+    let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+    let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
+    blk.store(DOUBLE, &final_field, &field_ptr);
+
+    ctx.exact_safe_integer_class_fields.insert(
+        (closed_form.object_local_id, closed_form.field),
+        closed_form.final_field,
+    );
+
+    if let Some(i32_slot) = ctx
+        .i32_counter_slots
+        .get(&closed_form.counter_local_id)
+        .cloned()
+    {
+        ctx.block()
+            .store(I32, &closed_form.final_counter.to_string(), &i32_slot);
+    }
+    if let Some(double_slot) = ctx.locals.get(&closed_form.counter_local_id).cloned() {
+        let final_counter = crate::nanbox::double_literal(closed_form.final_counter as f64);
+        ctx.block().store(DOUBLE, &final_counter, &double_slot);
+    }
+    ctx.exact_safe_integer_locals
+        .insert(closed_form.counter_local_id, closed_form.final_counter);
+    ctx.nonnegative_integer_locals
+        .insert(closed_form.counter_local_id);
+    Ok(())
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {

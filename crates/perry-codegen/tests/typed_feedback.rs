@@ -98,6 +98,31 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
     }
 }
 
+fn function(
+    id: u32,
+    name: &str,
+    params: Vec<Param>,
+    return_type: Type,
+    body: Vec<Stmt>,
+) -> Function {
+    Function {
+        id,
+        name: name.to_string(),
+        type_params: Vec::new(),
+        params,
+        return_type,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }
+}
+
 fn module(name: &str, params: Vec<Param>, return_type: Type, body: Vec<Stmt>) -> Module {
     module_with_classes(name, Vec::new(), params, return_type, body)
 }
@@ -1698,6 +1723,223 @@ fn typed_feedback_keeps_dynamic_bound_affine_accumulator_loop() {
                 ))],
             },
             Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+    let body_start = ir.find("\nfor.body.").expect("for body block");
+    let body_end = ir[body_start..]
+        .find("\nfor.update.")
+        .map(|offset| body_start + offset)
+        .expect("for update block");
+    let body_ir = &ir[body_start..body_end];
+
+    assert!(body_ir.contains("fadd double"), "{body_ir}");
+    assert!(body_ir.contains("store double"), "{body_ir}");
+}
+
+#[test]
+fn typed_feedback_folds_direct_class_field_accumulator_loop() {
+    let mut counter = class(120, "Counter", vec![field("value", Type::Number)]);
+    counter.constructor = Some(function(
+        121,
+        "constructor",
+        Vec::new(),
+        Type::Void,
+        vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+            value: Box::new(Expr::Integer(5)),
+        })],
+    ));
+    counter.methods.push(function(
+        124,
+        "increment",
+        Vec::new(),
+        Type::Void,
+        vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+            value: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "value".to_string(),
+                }),
+                right: Box::new(Expr::Integer(1)),
+            }),
+        })],
+    ));
+    counter.methods.push(function(
+        125,
+        "get",
+        Vec::new(),
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+        }))],
+    ));
+    let ir = ir_for(module_with_classes(
+        "direct_class_field_accumulator_closed_form.ts",
+        vec![counter],
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(10)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "counter".to_string(),
+                ty: Type::Named("Counter".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Counter".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                }),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(2)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(2)),
+                    property: "value".to_string(),
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(2)),
+                            property: "value".to_string(),
+                        }),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                })],
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(2)),
+                property: "value".to_string(),
+            })),
+        ],
+    ));
+
+    assert!(ir.contains("store double 13.0"), "{ir}");
+    assert!(ir.contains("store i32 10"), "{ir}");
+    assert!(!ir.contains("for.body"), "{ir}");
+    assert!(!ir.contains("asm sideeffect"), "{ir}");
+}
+
+#[test]
+fn typed_feedback_keeps_dynamic_bound_direct_class_field_accumulator_loop() {
+    let mut counter = class(122, "Counter", vec![field("value", Type::Number)]);
+    counter.constructor = Some(function(
+        123,
+        "constructor",
+        Vec::new(),
+        Type::Void,
+        vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+            value: Box::new(Expr::Integer(0)),
+        })],
+    ));
+    counter.methods.push(function(
+        126,
+        "increment",
+        Vec::new(),
+        Type::Void,
+        vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+            value: Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "value".to_string(),
+                }),
+                right: Box::new(Expr::Integer(1)),
+            }),
+        })],
+    ));
+    counter.methods.push(function(
+        127,
+        "get",
+        Vec::new(),
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: "value".to_string(),
+        }))],
+    ));
+    let ir = ir_for(module_with_classes(
+        "direct_class_field_accumulator_dynamic_bound.ts",
+        vec![counter],
+        vec![param(1, "limit", Type::Number)],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 2,
+                name: "counter".to_string(),
+                ty: Type::Named("Counter".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Counter".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                }),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(2)),
+                    property: "value".to_string(),
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(2)),
+                            property: "value".to_string(),
+                        }),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                })],
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(2)),
+                property: "value".to_string(),
+            })),
         ],
     ));
     let body_start = ir.find("\nfor.body.").expect("for body block");

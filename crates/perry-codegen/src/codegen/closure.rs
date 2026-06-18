@@ -321,6 +321,7 @@ pub(super) fn compile_closure(
         const_new_class_locals: HashMap::new(),
         direct_method_new_locals: native_facts.direct_method_new_locals().clone(),
         direct_field_new_locals: native_facts.direct_field_new_locals().clone(),
+        exact_safe_integer_class_fields: HashMap::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),

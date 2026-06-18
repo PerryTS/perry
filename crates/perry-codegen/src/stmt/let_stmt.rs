@@ -1064,6 +1064,9 @@ pub(crate) fn lower_let(
             }
         }
         crate::expr::record_native_arena_owner_assignment(ctx, id, init_expr);
+        if !mutable {
+            record_exact_safe_integer_class_field_initializers(ctx, id, init_expr);
+        }
         // Buffer data-pointer slot for local (non-global) const buffers. The
         // HIR fact layer owns the source-shape decision; lowering only consumes
         // the stable local-id fact and emits the ptr slot used by
@@ -1092,6 +1095,101 @@ pub(crate) fn lower_let(
         ctx.block().store(DOUBLE, &lit, &slot);
     }
     Ok(())
+}
+
+fn record_exact_safe_integer_class_field_initializers(
+    ctx: &mut FnCtx<'_>,
+    local_id: u32,
+    init_expr: &perry_hir::Expr,
+) {
+    let perry_hir::Expr::New { class_name, .. } = init_expr else {
+        return;
+    };
+    if !ctx
+        .const_new_class_locals
+        .get(&local_id)
+        .is_some_and(|exact_class| exact_class == class_name)
+    {
+        return;
+    }
+    let Some(fields) = ctx.direct_field_new_locals.get(&local_id).cloned() else {
+        return;
+    };
+    for field in fields {
+        if let Some(value) = exact_safe_integer_class_field_initializer(ctx, class_name, &field) {
+            ctx.exact_safe_integer_class_fields
+                .insert((local_id, field), value);
+        }
+    }
+}
+
+fn exact_safe_integer_class_field_initializer(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    field_name: &str,
+) -> Option<i64> {
+    let class = ctx.classes.get(class_name)?;
+    if class.extends.is_some()
+        || class.extends_name.is_some()
+        || class.native_extends.is_some()
+        || class.extends_expr.is_some()
+    {
+        return None;
+    }
+
+    let mut known = None;
+    for field in &class.fields {
+        if field.key_expr.is_some() || field.name != field_name {
+            continue;
+        }
+        if let Some(init) = field.init.as_ref() {
+            known = Some(exact_safe_integer_const_expr(init)?);
+        }
+    }
+
+    if let Some(ctor) = &class.constructor {
+        for stmt in &ctor.body {
+            let perry_hir::Stmt::Expr(perry_hir::Expr::PropertySet {
+                object,
+                property,
+                value,
+            }) = stmt
+            else {
+                return None;
+            };
+            if !matches!(object.as_ref(), perry_hir::Expr::This) {
+                return None;
+            }
+            let Some(exact) = exact_safe_integer_const_expr(value.as_ref()) else {
+                return None;
+            };
+            if property == field_name {
+                known = Some(exact);
+            }
+        }
+    }
+
+    known
+}
+
+fn exact_safe_integer_const_expr(expr: &perry_hir::Expr) -> Option<i64> {
+    let value = match expr {
+        perry_hir::Expr::Integer(n) => *n,
+        perry_hir::Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+            if *n == 0.0 && n.is_sign_negative() {
+                return None;
+            }
+            let value = *n as i64;
+            if (value as f64) != *n {
+                return None;
+            }
+            value
+        }
+        _ => return None,
+    };
+    (-crate::expr::MAX_SAFE_INTEGER_I64..=crate::expr::MAX_SAFE_INTEGER_I64)
+        .contains(&value)
+        .then_some(value)
 }
 
 fn pod_view_count_source(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> String {

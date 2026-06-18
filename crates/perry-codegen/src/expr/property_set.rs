@@ -58,6 +58,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
         } => {
             if let Expr::LocalGet(id) = object.as_ref() {
+                ctx.exact_safe_integer_class_fields
+                    .remove(&(*id, property.clone()));
+            }
+            if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx.pod_records.get(id).is_some_and(|local| {
                     local
                         .layout
