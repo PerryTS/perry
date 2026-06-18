@@ -119,7 +119,26 @@ pub(super) fn try_imported_array_methods(
                                     }
                                 }
                                 "sort" => {
-                                    if !args.is_empty() {
+                                    // Like `join` above: only fold when the
+                                    // imported binding is statically Array-typed.
+                                    // semver re-exports `sort = (list) =>
+                                    // list.sort(cmp)` and the driver calls
+                                    // `semver.sort(list)`; `semver` is an imported
+                                    // module-exports object (return_type Any), so
+                                    // folding to `Expr::ArraySort { array: semver,
+                                    // comparator: list }` mis-routed the single
+                                    // `list` arg into the comparator slot →
+                                    // "comparison function must be either a
+                                    // function or undefined". Fall through to the
+                                    // generic call path, which invokes the imported
+                                    // `sort` function correctly.
+                                    if !args.is_empty()
+                                        && matches!(
+                                            extern_ref,
+                                            Expr::ExternFuncRef { ref return_type, .. }
+                                                if matches!(return_type, Type::Array(_))
+                                        )
+                                    {
                                         return Ok(Ok(Expr::ArraySort {
                                             array: Box::new(extern_ref),
                                             comparator: Box::new(args.into_iter().next().unwrap()),

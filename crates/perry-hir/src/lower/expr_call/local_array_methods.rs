@@ -15,6 +15,37 @@ use super::super::{
     resolve_typed_parse_ty, LoweringContext,
 };
 
+/// True when `recv_ty` is a statically-known class/namespace instance type
+/// (a `Named` or `Generic` type that is not itself an array). Used to gate
+/// array-method folds (`.sort`/`.map`/…) so a user/library method that merely
+/// shares a builtin Array name (e.g. semver's `semver.sort(list)`) is not
+/// rewritten into the corresponding `Expr::Array*` fast path. TypedArray
+/// `Named` types are deliberately treated as arrays (not class instances).
+fn receiver_is_class_instance(recv_ty: Option<&Type>) -> bool {
+    let is_typed_array = |n: &str| {
+        matches!(
+            n,
+            "Int8Array"
+                | "Int16Array"
+                | "Int32Array"
+                | "Uint8Array"
+                | "Uint8ClampedArray"
+                | "Uint16Array"
+                | "Uint32Array"
+                | "Float16Array"
+                | "Float32Array"
+                | "Float64Array"
+                | "BigInt64Array"
+                | "BigUint64Array"
+        )
+    };
+    match recv_ty {
+        Some(Type::Named(n)) => !is_typed_array(n),
+        Some(Type::Generic { base, .. }) => base != "Array",
+        _ => false,
+    }
+}
+
 pub(super) fn try_local_array_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -533,7 +564,19 @@ pub(super) fn try_local_array_methods(
                                 }
                             }
                             "sort" => {
-                                if !args.is_empty() {
+                                // semver `module.exports.sort = (list) => …` is
+                                // re-exported as a plain function and called as
+                                // `semver.sort(list)`. The receiver there is a
+                                // class/namespace instance, NOT an array, so
+                                // folding to `Expr::ArraySort` mis-routed the
+                                // single `list` argument into the comparator slot
+                                // → "comparison function must be either a function
+                                // or undefined". Only fold when the receiver is
+                                // not a statically-known class instance (mirrors
+                                // the `map`/`filter`/`with` guards).
+                                if !args.is_empty()
+                                    && !receiver_is_class_instance(ctx.lookup_local_type(&arr_name))
+                                {
                                     return Ok(Ok(Expr::ArraySort {
                                         array: Box::new(Expr::LocalGet(array_id)),
                                         comparator: Box::new(args.into_iter().next().unwrap()),
