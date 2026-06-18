@@ -438,6 +438,28 @@ fn test_numeric_array_layout_metadata_preserves_and_downgrades_on_writes() {
 }
 
 #[test]
+fn test_sparse_heap_pointer_mask_summarizes_as_mixed() {
+    let mut arr = js_array_alloc(0);
+    for i in 0..256 {
+        arr = js_array_push_f64(arr, i as f64);
+    }
+
+    let str_ptr = crate::string::js_string_from_bytes(b"sparse-pointer".as_ptr(), 14);
+    let str_value =
+        f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK));
+    js_array_set_f64(arr, 128, str_value);
+
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(arr as usize, 256),
+        Some(1)
+    );
+    assert_eq!(
+        crate::gc::layout_pointer_slot_summary_for_user(arr as usize, 256),
+        Some(crate::gc::LayoutPointerSlotSummary::Mixed)
+    );
+}
+
+#[test]
 fn test_numeric_array_layout_mark_rejects_holes_and_accepts_dense_numbers() {
     let arr = js_array_alloc_with_length(2);
 

@@ -14,6 +14,13 @@ pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LayoutPointerSlotSummary {
+    Empty,
+    Full,
+    Mixed,
+}
+
 #[derive(Clone)]
 pub(super) enum LayoutSlotMask {
     Inline(u64),
@@ -134,6 +141,79 @@ impl LayoutSlotMask {
         count
     }
 
+    pub(super) fn slot_summary(&self, slot_count: usize) -> LayoutPointerSlotSummary {
+        if slot_count == 0 {
+            return LayoutPointerSlotSummary::Empty;
+        }
+
+        match self {
+            LayoutSlotMask::Inline(bits) => {
+                let limit = slot_count.min(64);
+                let mask = if limit == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << limit) - 1
+                };
+                let word = *bits & mask;
+                if word == 0 {
+                    LayoutPointerSlotSummary::Empty
+                } else if slot_count <= 64 && word == mask {
+                    LayoutPointerSlotSummary::Full
+                } else {
+                    LayoutPointerSlotSummary::Mixed
+                }
+            }
+            LayoutSlotMask::Heap(words) => {
+                let word_count = slot_count.div_ceil(64);
+                if word_count == 0 || words.is_empty() {
+                    return LayoutPointerSlotSummary::Empty;
+                }
+
+                let last_tracked_word = words.last().copied().unwrap_or(0);
+                if words.len() < word_count {
+                    debug_assert_ne!(last_tracked_word, 0);
+                    if last_tracked_word != 0 {
+                        return LayoutPointerSlotSummary::Mixed;
+                    }
+                }
+
+                let mut has_pointer_slot = false;
+                let mut has_non_pointer_slot = words.len() < word_count;
+                for (word_index, &raw_word) in
+                    words.iter().take(word_count.min(words.len())).enumerate()
+                {
+                    let remaining = slot_count.saturating_sub(word_index * 64);
+                    let limit = remaining.min(64);
+                    let mask = if limit == 64 {
+                        u64::MAX
+                    } else if limit == 0 {
+                        0
+                    } else {
+                        (1u64 << limit) - 1
+                    };
+                    let word = raw_word & mask;
+                    if word != 0 {
+                        has_pointer_slot = true;
+                    }
+                    if word != mask {
+                        has_non_pointer_slot = true;
+                    }
+                    if has_pointer_slot && has_non_pointer_slot {
+                        return LayoutPointerSlotSummary::Mixed;
+                    }
+                }
+
+                if has_pointer_slot && has_non_pointer_slot {
+                    LayoutPointerSlotSummary::Mixed
+                } else if has_pointer_slot {
+                    LayoutPointerSlotSummary::Full
+                } else {
+                    LayoutPointerSlotSummary::Empty
+                }
+            }
+        }
+    }
+
     pub(super) fn intersects(&self, other: &Self, slot_count: usize) -> bool {
         let mut found = false;
         self.visit_slots(slot_count, |slot| {
@@ -205,6 +285,31 @@ impl LayoutSlotMask {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_slot_mask_tests {
+    use super::*;
+
+    #[test]
+    fn slot_summary_ignores_tracked_slots_beyond_requested_count() {
+        let mask = LayoutSlotMask::Heap(vec![0, 0, 1]);
+
+        assert_eq!(mask.slot_summary(128), LayoutPointerSlotSummary::Empty);
+        assert_eq!(mask.slot_summary(129), LayoutPointerSlotSummary::Mixed);
+
+        let full_mask = LayoutSlotMask::Heap(vec![u64::MAX, u64::MAX, 1]);
+        assert_eq!(full_mask.slot_summary(128), LayoutPointerSlotSummary::Full);
+        assert_eq!(full_mask.slot_summary(129), LayoutPointerSlotSummary::Full);
+    }
+
+    #[test]
+    fn slot_summary_handles_zero_tail_heap_masks() {
+        let mask = LayoutSlotMask::Heap(vec![u64::MAX, 0, 0]);
+
+        assert_eq!(mask.slot_summary(64), LayoutPointerSlotSummary::Full);
+        assert_eq!(mask.slot_summary(128), LayoutPointerSlotSummary::Mixed);
     }
 }
 
@@ -738,6 +843,27 @@ pub(crate) fn layout_visit_pointer_slots_for_user<F: FnMut(usize)>(
     visit: F,
 ) -> bool {
     layout_visit_pointer_slots(user_ptr, slot_count, visit)
+}
+
+pub(crate) fn layout_pointer_slot_summary_for_user(
+    user_ptr: usize,
+    slot_count: usize,
+) -> Option<LayoutPointerSlotSummary> {
+    unsafe {
+        let header = layout_header_for_user(user_ptr)?;
+        match (*header)._reserved & GC_LAYOUT_STATE_MASK {
+            GC_LAYOUT_POINTER_FREE => Some(LayoutPointerSlotSummary::Empty),
+            GC_LAYOUT_SIDE_MASK => {
+                let mask = LAYOUT_SLOT_MASKS.with(|m| m.borrow().get(&user_ptr).cloned());
+                let Some(mask) = mask else {
+                    set_layout_state(header, GC_LAYOUT_UNKNOWN);
+                    return None;
+                };
+                Some(mask.slot_summary(slot_count))
+            }
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn layout_typed_raw_f64_slot_for_user(user_ptr: usize, slot_index: usize) -> bool {

@@ -620,19 +620,11 @@ fn array_layout_kind(addr: usize, len: u64) -> u8 {
         return ARRAY_LAYOUT_EMPTY;
     }
 
-    let mut pointer_slots = 0usize;
-    if crate::gc::layout_visit_pointer_slots_for_user(addr, len as usize, |_| {
-        pointer_slots = pointer_slots.saturating_add(1);
-    }) {
-        if pointer_slots == 0 {
-            ARRAY_LAYOUT_POINTER_FREE
-        } else if pointer_slots as u64 == len {
-            ARRAY_LAYOUT_POINTER_ONLY
-        } else {
-            ARRAY_LAYOUT_MIXED
-        }
-    } else {
-        ARRAY_LAYOUT_UNKNOWN
+    match crate::gc::layout_pointer_slot_summary_for_user(addr, len as usize) {
+        Some(crate::gc::LayoutPointerSlotSummary::Empty) => ARRAY_LAYOUT_POINTER_FREE,
+        Some(crate::gc::LayoutPointerSlotSummary::Full) => ARRAY_LAYOUT_POINTER_ONLY,
+        Some(crate::gc::LayoutPointerSlotSummary::Mixed) => ARRAY_LAYOUT_MIXED,
+        None => ARRAY_LAYOUT_UNKNOWN,
     }
 }
 
