@@ -79,7 +79,11 @@ intl-segmenter = ["dep:unicode-segmentation"]
 # it (the compiler enables it on `Intl.getCanonicalLocales`/`supportedLocalesOf`
 # usage). Already pulled transitively by `temporal`, so default/shipped builds
 # carry no extra weight. A hand-rolled structural fallback covers the off case.
-intl-locale = ["dep:icu_locale_core"]
+# `icu_locale_core/alloc` is required for `Locale::try_from_str`/`normalize` and
+# the mutable `Keywords`/`Variants` builders `Intl.Locale` uses; without it the
+# auto-optimize build of a Temporal-free program that touches `Intl.Locale`
+# would fail (alloc was previously only pulled in transitively by `temporal`).
+intl-locale = ["dep:icu_locale_core", "icu_locale_core/alloc"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`

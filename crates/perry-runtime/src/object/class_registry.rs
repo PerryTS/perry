@@ -495,7 +495,14 @@ pub(crate) fn ensure_function_prototype_object(
     // overwrite the populated prototype). Gated on `temporal_ctor_kind` so the
     // ordinary class-prototype flow (which relies on the cache for method
     // registration) is unaffected.
-    if super::global_this::temporal_ctor_kind(func_value).is_some() {
+    // `Intl.Locale` follows the same pattern as Temporal: its `prototype` (with
+    // accessor getters + `toString`/`maximize`/`minimize`) is populated at
+    // globalThis init and stamped on the closure's `prototype` dynamic prop.
+    // Return it as-is so `new Intl.Locale()` doesn't shadow it with a fresh
+    // empty prototype.
+    if super::global_this::temporal_ctor_kind(func_value).is_some()
+        || crate::intl::is_locale_ctor(func_value)
+    {
         let fv_bits = func_value.to_bits();
         let fp = (fv_bits & crate::value::POINTER_MASK) as usize;
         if fp != 0 {

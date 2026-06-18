@@ -1647,6 +1647,19 @@ fn set_proto_to_string_tag(proto: *mut ObjectHeader, tag: &str) {
     );
 }
 
+// ---- Intl.Locale -----------------------------------------------------------
+// Implemented in the `locale` submodule (gated on `intl-locale`); kept separate
+// so `intl.rs` stays under the file-size gate.
+#[cfg(feature = "intl-locale")]
+mod locale;
+#[cfg(feature = "intl-locale")]
+pub(crate) use locale::{install_locale_constructor, is_locale_ctor};
+
+#[cfg(not(feature = "intl-locale"))]
+pub(crate) fn is_locale_ctor(_func_value: f64) -> bool {
+    false
+}
+
 fn install_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
@@ -1831,4 +1844,9 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
             ),
         ],
     );
+    // `Intl.Locale` needs the `icu_locale_core` BCP-47 parser (gated on the
+    // `intl-locale` feature, enabled by the compiler when a program references
+    // `Intl.Locale`).
+    #[cfg(feature = "intl-locale")]
+    install_locale_constructor(ns_obj);
 }

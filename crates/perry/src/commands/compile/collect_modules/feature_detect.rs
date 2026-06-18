@@ -183,6 +183,7 @@ pub(super) fn detect_optional_feature_usage(
         // Both lower with the method name as a `property` token.
         if hir_debug.contains("property: \"getCanonicalLocales\"")
             || hir_debug.contains("property: \"supportedLocalesOf\"")
+            || hir_debug.contains("property: \"Locale\"")
         {
             ctx.uses_intl_locale = true;
         }
