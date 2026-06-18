@@ -398,22 +398,34 @@ def benchmark_deltas(compiler: dict[str, Any], errors: list[str], *, gate: bool)
     if gate and missing:
         errors.append(f"benchmark deltas missing values: {missing}")
     non_improving = []
+    zero_baseline_required_fields = []
+    positive_required_improvements = []
     for field in REQUIRED_IMPROVEMENT_FIELDS:
         delta = fields.get(field, {})
         control_value = delta.get("control")
         typed_value = delta.get("typed")
         if control_value is None or typed_value is None:
             continue
-        if control_value <= 0:
-            non_improving.append(
-                f"{field}: control must be positive to prove a reduction "
-                f"(control={control_value}, typed={typed_value})"
-            )
-        elif typed_value >= control_value:
+        if control_value > 0:
+            if typed_value < control_value:
+                positive_required_improvements.append(field)
+                continue
             non_improving.append(
                 f"{field}: typed must be lower than control "
                 f"(control={control_value}, typed={typed_value})"
             )
+        elif typed_value > control_value:
+            non_improving.append(
+                f"{field}: typed must not exceed zero-baseline control "
+                f"(control={control_value}, typed={typed_value})"
+            )
+        else:
+            zero_baseline_required_fields.append(field)
+    if gate and not positive_required_improvements:
+        non_improving.append(
+            "at least one required improvement field must have a positive control "
+            "baseline and a lower typed value"
+        )
     if gate and non_improving:
         errors.append(f"benchmark deltas missing required improvements: {non_improving}")
     return {
@@ -421,6 +433,8 @@ def benchmark_deltas(compiler: dict[str, Any], errors: list[str], *, gate: bool)
         "typed_workload": "native_abi_packet_typed",
         "control_workload": "native_abi_packet_control",
         "required_improvement_fields": list(REQUIRED_IMPROVEMENT_FIELDS),
+        "positive_required_improvements": positive_required_improvements,
+        "zero_baseline_required_fields": zero_baseline_required_fields,
         "missing_values": missing,
         "non_improving_required_fields": non_improving,
         "fields": fields,

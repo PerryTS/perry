@@ -478,6 +478,11 @@ jobs:
             --perf-counters off \
             --print-summary
 
+      - name: Gate typed feedback runtime evidence
+        env:
+          PERRY_BIN: ${{ github.workspace }}/target/debug/perry
+        run: python3 -m unittest tests.test_typed_feedback_runtime_evidence
+
       - name: Gate positive vectorization compiler output
         run: |
           python3 scripts/compiler_output_regression.py capture \

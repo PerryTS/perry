@@ -1116,6 +1116,24 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
     0
 }
 
+// These raw numeric-array helpers are called from generated code, so release/LTO
+// builds may otherwise internalize and strip the `#[no_mangle]` exports.
+#[used]
+static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern "C" fn(f64) -> f64 =
+    js_array_numeric_value_to_raw_f64;
+#[used]
+static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern "C" fn(*mut ArrayHeader) -> i32 =
+    js_array_mark_numeric_f64_layout;
+#[used]
+static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern "C" fn(*mut ArrayHeader) =
+    js_array_clear_numeric_layout;
+#[used]
+static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
+    js_array_note_numeric_write;
+#[used]
+static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) -> i32 =
+    js_array_is_numeric_f64_layout;
+
 /// Calculate the byte size for an array with N elements capacity
 #[inline]
 pub(crate) fn array_byte_size(capacity: usize) -> usize {

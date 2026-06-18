@@ -333,6 +333,29 @@ fn local_array_alias_length_set_blocks_length_and_bounds_proofs() {
 }
 
 #[test]
+fn direct_array_length_set_blocks_length_and_bounds_proofs() {
+    let body = vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        for_loop(
+            2,
+            length(1),
+            vec![
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(local(1)),
+                    property: "length".to_string(),
+                    value: Box::new(int(0)),
+                }),
+                array_set(1, local(2), local(2)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("array_length_set_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
 fn local_array_alias_generic_receiver_call_blocks_length_and_bounds_proofs() {
     let body = aliased_array_loop(call(
         Expr::PropertyGet {
@@ -343,6 +366,93 @@ fn local_array_alias_generic_receiver_call_blocks_length_and_bounds_proofs() {
     ));
 
     let ir = compile_ir("array_alias_generic_call_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn generic_call_blocks_length_and_bounds_proofs_even_without_direct_array_arg() {
+    let body = vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        for_loop(
+            2,
+            length(1),
+            vec![
+                Stmt::Expr(extern_call("native_touch", Vec::new(), Type::Void)),
+                array_set(1, local(2), local(2)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+    let opts = native_library_opts(vec![("native_touch", vec![], "void")]);
+
+    let ir = compile_ir_with_opts("array_unknown_call_blocks_loop_proof.ts", body, opts);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
+    let body = vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        for_loop(
+            2,
+            length(1),
+            vec![
+                Stmt::Expr(extern_call(
+                    "native_touch",
+                    vec![Expr::Array(vec![local(1)])],
+                    Type::Void,
+                )),
+                array_set(1, local(2), local(2)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+    let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
+
+    let ir = compile_ir_with_opts("array_nested_escape_call_blocks_loop_proof.ts", body, opts);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn object_nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
+    let body = vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        for_loop(
+            2,
+            length(1),
+            vec![
+                Stmt::Expr(extern_call(
+                    "native_touch",
+                    vec![Expr::Object(vec![("arr".to_string(), local(1))])],
+                    Type::Void,
+                )),
+                array_set(1, local(2), local(2)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+    let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
+
+    let ir = compile_ir_with_opts("array_object_escape_call_blocks_loop_proof.ts", body, opts);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn native_method_call_blocks_length_and_bounds_proofs() {
+    let body = vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        for_loop(
+            2,
+            length(1),
+            vec![
+                Stmt::Expr(native_module_call("process", "cwd", Vec::new())),
+                array_set(1, local(2), local(2)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("array_native_call_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 

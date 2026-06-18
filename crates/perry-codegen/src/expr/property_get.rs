@@ -267,20 +267,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(double_literal(len as f64))
         }
 
-        // TypedArray `.length` can be shadowed by an own property, so use
-        // the runtime length helper before the Buffer/Uint8Array inline path.
-        Expr::PropertyGet { object, property }
-            if property == "length"
-                && receiver_class_name(ctx, object)
-                    .as_deref()
-                    .is_some_and(is_numeric_typed_array_class) =>
-        {
-            let recv_box = lower_expr(ctx, object)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
-        }
-
         Expr::PropertyGet { object, property }
             if property == "length"
                 && matches!(object.as_ref(), Expr::LocalGet(id)
@@ -333,6 +319,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lowered,
                 MaterializationReason::FunctionAbi,
             ));
+        }
+
+        // TypedArray `.length` can be shadowed by an own property, so use
+        // the runtime length helper only when lowering has not already
+        // registered the receiver as a native Buffer/TypedArray view above.
+        Expr::PropertyGet { object, property }
+            if property == "length"
+                && receiver_class_name(ctx, object)
+                    .as_deref()
+                    .is_some_and(is_numeric_typed_array_class) =>
+        {
+            let recv_box = lower_expr(ctx, object)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_value_length_f64", &[(DOUBLE, &recv_box)]))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and

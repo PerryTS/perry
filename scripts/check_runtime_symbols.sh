@@ -29,6 +29,14 @@ fi
 SENTINELS=(
   js_gc_init
   perry_macos_bundle_chdir # added by #4833; absence = pre-#4833 stale archive
+  js_array_numeric_value_to_raw_f64
+  js_array_mark_numeric_f64_layout
+  js_array_clear_numeric_layout
+  js_array_note_numeric_write
+  js_array_is_numeric_f64_layout
+  js_array_numeric_get_f64_unboxed
+  js_array_numeric_set_f64_unboxed
+  js_array_numeric_push_f64_unboxed
 )
 
 # Tool preference: rustup's llvm-tools nm (matches rustc's LLVM, reads the
@@ -63,10 +71,21 @@ for lib in "$@"; do
     continue
   fi
   # `--print-armap` emits the archive symbol index ("sym in member.o") in
-  # addition to per-member listings; unreadable members only lose the
-  # latter. Tokenize, strip the Mach-O leading underscore, exact-match —
-  # no substring false positives (`foo_js_gc_init` ≠ `js_gc_init`).
-  tokens=$("$NM" --print-armap "$lib" 2>/dev/null | tr -d '\r' | tr ' \t' '\n\n' | sed 's/^_//' | sort -u || true)
+  # addition to per-member listings; unreadable members only lose the latter.
+  # Some llvm-nm builds under-report ELF archive indices for symbols kept alive
+  # via `#[used]` fn-pointer statics, while GNU nm reports the same archive
+  # correctly with `-s`. Merge both views when available, then exact-match — no
+  # substring false positives (`foo_js_gc_init` ≠ `js_gc_init`).
+  tokens=$(
+    {
+      "$NM" --print-armap "$lib" 2>/dev/null || true
+      "$NM" -g "$lib" 2>/dev/null || true
+      if command -v nm >/dev/null 2>&1; then
+        nm -s "$lib" 2>/dev/null || true
+        nm -g "$lib" 2>/dev/null || true
+      fi
+    } | tr -d '\r' | tr ' \t' '\n\n' | sed 's/^_//' | sort -u
+  )
   missing=0
   for sym in "${SENTINELS[@]}"; do
     if ! grep -qx "$sym" <<<"$tokens"; then

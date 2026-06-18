@@ -881,6 +881,115 @@ fn typed_feedback_numeric_array_push_guard_requires_room_numeric_value_and_layou
 }
 
 #[test]
+fn typed_feedback_numeric_array_push_guard_rejects_mutability_restricted_arrays() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(72, TypedFeedbackSiteKind::ArrayElement, "arr.push");
+
+    let assert_rejected = |site_id, arr: *mut crate::array::ArrayHeader| {
+        assert_eq!(crate::array::js_array_mark_numeric_f64_layout(arr), 1);
+        let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+        assert_eq!(
+            js_typed_feedback_numeric_array_push_guard(site_id, arr_box, 4.0),
+            0
+        );
+    };
+
+    let frozen = crate::array::js_array_alloc(4);
+    crate::object::js_object_freeze(crate::value::js_nanbox_pointer(frozen as i64));
+    assert_rejected(72, frozen);
+
+    let sealed = crate::array::js_array_alloc(4);
+    crate::object::js_object_seal(crate::value::js_nanbox_pointer(sealed as i64));
+    assert_rejected(72, sealed);
+
+    let no_extend = crate::array::js_array_alloc(4);
+    crate::object::js_object_prevent_extensions(crate::value::js_nanbox_pointer(no_extend as i64));
+    assert_rejected(72, no_extend);
+
+    let non_writable_length = crate::array::js_array_alloc(4);
+    let descriptor = crate::object::js_object_alloc(0, 0);
+    let writable_key = crate::string::js_string_from_bytes(b"writable".as_ptr(), 8);
+    crate::object::js_object_set_field_by_name(
+        descriptor,
+        writable_key,
+        f64::from_bits(crate::value::TAG_FALSE),
+    );
+    crate::object::js_object_define_property(
+        crate::value::js_nanbox_pointer(non_writable_length as i64),
+        crate::value::js_nanbox_string(
+            crate::string::js_string_from_bytes(b"length".as_ptr(), 6) as i64
+        ),
+        crate::value::js_nanbox_pointer(descriptor as i64),
+    );
+    assert_rejected(72, non_writable_length);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 0);
+    assert_eq!(site.guard_failures, 4);
+    assert_eq!(site.fallback_calls, 0);
+}
+
+#[test]
+fn numeric_array_helpers_have_lto_keepalive_anchors() {
+    let header = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/array/header.rs"));
+    let indexing = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/array/indexing.rs"
+    ));
+    let push_pop = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/array/push_pop.rs"
+    ));
+
+    for (src, signature, target) in [
+        (
+            header,
+            "static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern \"C\" fn(f64) -> f64",
+            "js_array_numeric_value_to_raw_f64",
+        ),
+        (
+            header,
+            "static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern \"C\" fn(*mut ArrayHeader) -> i32",
+            "js_array_mark_numeric_f64_layout",
+        ),
+        (
+            header,
+            "static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern \"C\" fn(*mut ArrayHeader)",
+            "js_array_clear_numeric_layout",
+        ),
+        (
+            header,
+            "static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern \"C\" fn(*mut ArrayHeader, u64)",
+            "js_array_note_numeric_write",
+        ),
+        (
+            header,
+            "static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern \"C\" fn(*const ArrayHeader) -> i32",
+            "js_array_is_numeric_f64_layout",
+        ),
+        (
+            indexing,
+            "static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern \"C\" fn(*mut ArrayHeader, u32) -> f64",
+            "js_array_numeric_get_f64_unboxed",
+        ),
+        (
+            indexing,
+            "static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern \"C\" fn(*mut ArrayHeader, u32, f64) -> i32",
+            "js_array_numeric_set_f64_unboxed",
+        ),
+        (
+            push_pop,
+            "static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern \"C\" fn(",
+            "js_array_numeric_push_f64_unboxed",
+        ),
+    ] {
+        assert!(src.contains(signature), "missing signature for {target}");
+        assert!(src.contains(target), "missing keepalive target {target}");
+    }
+}
+
+#[test]
 fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();

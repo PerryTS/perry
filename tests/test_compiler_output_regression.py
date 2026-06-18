@@ -1134,6 +1134,46 @@ idxset.bounded_numeric_merge.5:
         )
         self.assertIn("Gate native-ABI proof compiler output", workflow)
         self.assertIn("--suite native-abi-proof", workflow)
+        self.assertIn("Gate typed feedback runtime evidence", workflow)
+        self.assertIn("tests.test_typed_feedback_runtime_evidence", workflow)
+
+    def test_release_sweep_wires_native_abi_evidence_packet_smoke(self):
+        release_sweep = (REPO_ROOT / "scripts" / "release_sweep.sh").read_text(
+            encoding="utf-8"
+        )
+        tier = (
+            REPO_ROOT
+            / "scripts"
+            / "release_sweep_tiers"
+            / "tier13_native_abi_evidence.sh"
+        ).read_text(encoding="utf-8")
+        smoke = (
+            REPO_ROOT / "tests" / "test_native_abi_evidence_packet_smoke.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "13|native_abi_evidence|all|native ABI evidence packet smoke gate",
+            release_sweep,
+        )
+        self.assertIn("tests/test_native_abi_evidence_packet_smoke.sh", tier)
+        self.assertIn("PERRY_BIN", tier)
+        self.assertIn("--gate", smoke)
+
+    def test_runtime_symbol_guard_roots_numeric_array_helpers(self):
+        guard = (REPO_ROOT / "scripts" / "check_runtime_symbols.sh").read_text(
+            encoding="utf-8"
+        )
+        for symbol in (
+            "js_array_numeric_value_to_raw_f64",
+            "js_array_mark_numeric_f64_layout",
+            "js_array_clear_numeric_layout",
+            "js_array_note_numeric_write",
+            "js_array_is_numeric_f64_layout",
+            "js_array_numeric_get_f64_unboxed",
+            "js_array_numeric_set_f64_unboxed",
+            "js_array_numeric_push_f64_unboxed",
+        ):
+            self.assertIn(symbol, guard)
+        self.assertIn("nm -s", guard)
 
     def test_workload_spec_rejects_missing_required_fields(self):
         with self.assertRaises(HARNESS.HarnessError):

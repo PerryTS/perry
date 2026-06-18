@@ -1189,6 +1189,22 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         let arr = raw_addr as *const ArrayHeader;
         let len = (*arr).length;
         let cap = (*arr).capacity;
+        let flags = (*header)._reserved;
+        if flags
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_SEALED
+                | crate::gc::OBJ_FLAG_NO_EXTEND
+                | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+            != 0
+        {
+            return false;
+        }
+        if crate::object::get_property_attrs(raw_addr, "length")
+            .map(|attrs| !attrs.writable())
+            .unwrap_or(false)
+        {
+            return false;
+        }
         len <= 16_000_000
             && cap <= 16_000_000
             && len < cap

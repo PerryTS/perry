@@ -1503,6 +1503,42 @@ fn artifact_records_buffer_length_as_buffer_len_and_unsigned_materialization() {
     );
 }
 
+#[test]
+fn artifact_records_uint8array_buffer_alloc_length_as_native_buffer_len() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "bytes".to_string(),
+            ty: Type::Named("Uint8Array".to_string()),
+            mutable: false,
+            init: Some(Expr::BufferAlloc {
+                size: Box::new(int(8)),
+                fill: None,
+                encoding: None,
+            }),
+        },
+        Stmt::Return(Some(length(1))),
+    ];
+
+    let ir = compile_ir("artifact_uint8array_buffer_alloc_length.ts", body.clone());
+    assert!(
+        !ir.contains("call double @js_value_length_f64"),
+        "native buffer-view length should not use the typed-array runtime length helper:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json("artifact_uint8array_buffer_alloc_length.ts", body);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Buffer.length"
+                && record["consumer"] == "Buffer.length.native_buffer_len"
+                && record["native_rep_name"] == "buffer_len"
+                && record["llvm_ty"] == "i32"
+        }),
+        "expected Uint8Array-typed BufferAlloc length to use native BufferLen record:\n{artifact:#}"
+    );
+}
+
 fn record_has_raw_f64_layout_fact(record: &serde_json::Value, list: &str, state: &str) -> bool {
     record[list].as_array().is_some_and(|facts| {
         facts

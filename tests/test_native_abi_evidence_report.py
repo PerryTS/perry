@@ -219,6 +219,32 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             self.assertEqual(fields["buffer_slow_path_accesses_static"]["delta"], -8.0)
             self.assertEqual(fields["median_wall_ms"]["delta_pct"], -60.0)
 
+    def test_zero_baseline_allocation_delta_is_informational_when_static_fields_improve(self):
+        temp, root, repo_root = self.make_packet()
+        with temp:
+            for workload in ("native_abi_packet_typed", "native_abi_packet_control"):
+                manifest_path = (
+                    root
+                    / "compiler-output"
+                    / "native-abi-proof"
+                    / workload
+                    / "manifest.json"
+                )
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["runtime_counter_summary"]["allocations_traced"] = 0
+                write_json(manifest_path, manifest)
+
+            packet = REPORT.build_packet(root, root / "metadata.json", repo_root, gate=True)
+            self.assertEqual(packet["status"], "pass", packet["errors"])
+            self.assertIn(
+                "allocations_traced",
+                packet["benchmark_deltas"]["zero_baseline_required_fields"],
+            )
+            self.assertIn(
+                "buffer_slow_path_accesses_static",
+                packet["benchmark_deltas"]["positive_required_improvements"],
+            )
+
     def test_required_allocation_deltas_must_improve(self):
         temp, root, repo_root = self.make_packet()
         with temp:

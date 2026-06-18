@@ -1402,6 +1402,9 @@ fn classify_for_length_hoist(
         },
         _ => return None,
     };
+    if !array_length_receiver_is_loop_local(ctx, arr_id) {
+        return None;
+    }
     if guarded_array_has_local_alias(ctx, arr_id, update, body) {
         return None;
     }
@@ -1434,11 +1437,11 @@ fn classify_for_length_hoist(
     let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
     if !body
         .iter()
-        .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
+        .all(|s| stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound))
     {
         return None;
     }
-    if update.is_some_and(|e| !expr_preserves_array_length(e, arr_id, u32::MAX, false)) {
+    if update.is_some_and(|e| !expr_preserves_array_length(ctx, e, arr_id, u32::MAX, false)) {
         return None;
     }
     let buffer_bounds_width_units = match op {
@@ -1455,6 +1458,14 @@ fn classify_for_length_hoist(
         lhs_addend,
         buffer_bounds_width_units,
     })
+}
+
+fn array_length_receiver_is_loop_local(ctx: &crate::expr::FnCtx<'_>, arr_id: u32) -> bool {
+    ctx.locals.contains_key(&arr_id)
+        && !ctx.boxed_vars.contains(&arr_id)
+        && !ctx.module_globals.contains_key(&arr_id)
+        && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
+        && !ctx.native_facts.has_materialization_hazard(arr_id)
 }
 
 /// Inspect a `for` loop's condition and return `Some((counter_id, bound_id,
@@ -1832,6 +1843,7 @@ fn classify_for_counter_range(
 }
 
 pub(crate) fn stmt_preserves_array_length(
+    ctx: &crate::expr::FnCtx<'_>,
     s: &perry_hir::Stmt,
     arr_id: u32,
     bounded_idx_id: u32,
@@ -1840,33 +1852,39 @@ pub(crate) fn stmt_preserves_array_length(
     use perry_hir::Stmt;
     match s {
         Stmt::Expr(e) | Stmt::Throw(e) => {
-            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound)
         }
         Stmt::Return(opt) => opt.as_ref().is_none_or(|e| {
-            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound)
         }),
         Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| {
-            expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound)
         }),
         Stmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            expr_preserves_array_length(condition, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, condition, arr_id, bounded_idx_id, has_strict_bound)
                 && then_branch.iter().all(|s| {
-                    stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                    stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound)
                 })
                 && else_branch.as_ref().is_none_or(|b| {
                     b.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                        stmt_preserves_array_length(
+                            ctx,
+                            s,
+                            arr_id,
+                            bounded_idx_id,
+                            has_strict_bound,
+                        )
                     })
                 })
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_preserves_array_length(condition, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, condition, arr_id, bounded_idx_id, has_strict_bound)
                 && body.iter().all(|s| {
-                    stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                    stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound)
                 })
         }
         Stmt::For {
@@ -1876,63 +1894,112 @@ pub(crate) fn stmt_preserves_array_length(
             body,
         } => {
             init.as_ref().is_none_or(|s| {
-                stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound)
             }) && condition.as_ref().is_none_or(|e| {
-                expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+                expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound)
             }) && update.as_ref().is_none_or(|e| {
-                expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
-            }) && body
-                .iter()
-                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
+                expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound)
+            }) && body.iter().all(|s| {
+                stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound)
+            })
         }
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
-            body.iter()
-                .all(|s| stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound))
-                && catch.as_ref().is_none_or(|c| {
-                    c.body.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
-                    })
+            body.iter().all(|s| {
+                stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound)
+            }) && catch.as_ref().is_none_or(|c| {
+                c.body.iter().all(|s| {
+                    stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound)
                 })
-                && finally.as_ref().is_none_or(|b| {
-                    b.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
-                    })
+            }) && finally.as_ref().is_none_or(|b| {
+                b.iter().all(|s| {
+                    stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound)
                 })
+            })
         }
         Stmt::Switch {
             discriminant,
             cases,
         } => {
-            expr_preserves_array_length(discriminant, arr_id, bounded_idx_id, has_strict_bound)
+            expr_preserves_array_length(ctx, discriminant, arr_id, bounded_idx_id, has_strict_bound)
                 && cases.iter().all(|c| {
                     c.test.as_ref().is_none_or(|e| {
-                        expr_preserves_array_length(e, arr_id, bounded_idx_id, has_strict_bound)
+                        expr_preserves_array_length(
+                            ctx,
+                            e,
+                            arr_id,
+                            bounded_idx_id,
+                            has_strict_bound,
+                        )
                     }) && c.body.iter().all(|s| {
-                        stmt_preserves_array_length(s, arr_id, bounded_idx_id, has_strict_bound)
+                        stmt_preserves_array_length(
+                            ctx,
+                            s,
+                            arr_id,
+                            bounded_idx_id,
+                            has_strict_bound,
+                        )
                     })
                 })
         }
-        Stmt::Labeled { body, .. } => {
-            stmt_preserves_array_length(body.as_ref(), arr_id, bounded_idx_id, has_strict_bound)
-        }
+        Stmt::Labeled { body, .. } => stmt_preserves_array_length(
+            ctx,
+            body.as_ref(),
+            arr_id,
+            bounded_idx_id,
+            has_strict_bound,
+        ),
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
         Stmt::PreallocateBoxes(_) => true,
     }
 }
 
+fn is_static_buffer_receiver(ctx: &crate::expr::FnCtx<'_>, object: &perry_hir::Expr) -> bool {
+    matches!(
+        crate::type_analysis::static_type_of(ctx, object),
+        Some(perry_types::Type::Named(name)) if name == "Buffer"
+    )
+}
+
+fn is_buffer_numeric_read_method(method: &str) -> bool {
+    matches!(
+        method,
+        "readUInt8"
+            | "readUint8"
+            | "readInt8"
+            | "readUInt16BE"
+            | "readUint16BE"
+            | "readUInt16LE"
+            | "readUint16LE"
+            | "readInt16BE"
+            | "readInt16LE"
+            | "readUInt32BE"
+            | "readUint32BE"
+            | "readUInt32LE"
+            | "readUint32LE"
+            | "readInt32BE"
+            | "readInt32LE"
+            | "readFloatBE"
+            | "readFloatLE"
+            | "readDoubleBE"
+            | "readDoubleLE"
+    )
+}
+
 pub(crate) fn expr_preserves_array_length(
+    ctx: &crate::expr::FnCtx<'_>,
     e: &perry_hir::Expr,
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
 ) -> bool {
-    use perry_hir::{ArrayElement, CallArg, Expr};
-    let walk =
-        |sub: &Expr| expr_preserves_array_length(sub, arr_id, bounded_idx_id, has_strict_bound);
+    use perry_hir::{ArrayElement, Expr};
+    let walk = |sub: &Expr| {
+        expr_preserves_array_length(ctx, sub, arr_id, bounded_idx_id, has_strict_bound)
+    };
     match e {
         Expr::ArrayPush { array_id, value } => *array_id != arr_id && walk(value),
         Expr::ArrayPop(id) | Expr::ArrayShift(id) => *id != arr_id,
@@ -1999,54 +2066,32 @@ pub(crate) fn expr_preserves_array_length(
         // the loop-local inbounds proof. The normal `for` update expression is
         // outside the body and is checked separately before facts are emitted.
         Expr::Update { id, .. } => *id != arr_id && *id != bounded_idx_id,
-        Expr::NativeMethodCall { object, args, .. } => {
-            if let Some(o) = object {
-                if let Expr::LocalGet(id) = o.as_ref() {
-                    if *id == arr_id {
-                        return false;
-                    }
-                }
-                if !walk(o) {
-                    return false;
-                }
-            }
-            args.iter().all(&walk)
-        }
+        // Calls are dynamic boundaries until an effect summary proves the
+        // callee cannot mutate or expose the guarded array. Accepting
+        // `mutate([arr])`, `mutate({ arr })`, or a closure captured from an
+        // outer scope would make the cached length and bounded-index facts
+        // unsound.
         Expr::Call { callee, args, .. } => {
-            if !walk(callee) {
-                return false;
-            }
-            for a in args {
-                if let Expr::LocalGet(id) = a {
-                    if *id == arr_id {
-                        return false;
-                    }
-                }
-                if !walk(a) {
-                    return false;
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
+                {
+                    return walk(object) && args.iter().all(&walk);
                 }
             }
-            true
+            false
         }
-        Expr::CallSpread { callee, args, .. } => {
-            if !walk(callee) {
-                return false;
-            }
-            for a in args {
-                let inner = match a {
-                    CallArg::Expr(e) | CallArg::Spread(e) => e,
-                };
-                if let Expr::LocalGet(id) = inner {
-                    if *id == arr_id {
-                        return false;
-                    }
-                }
-                if !walk(inner) {
-                    return false;
-                }
-            }
-            true
+        Expr::NativeMethodCall {
+            object: Some(object),
+            method,
+            args,
+            ..
+        } => {
+            is_buffer_numeric_read_method(method)
+                && is_static_buffer_receiver(ctx, object)
+                && walk(object)
+                && args.iter().all(&walk)
         }
+        Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => false,
         Expr::Closure { .. } => false,
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
@@ -2066,7 +2111,11 @@ pub(crate) fn expr_preserves_array_length(
             else_expr,
         } => walk(condition) && walk(then_expr) && walk(else_expr),
         Expr::PropertyGet { object, .. } => walk(object),
-        Expr::PropertySet { object, value, .. } => walk(object) && walk(value),
+        // A property write can be `arr.length = ...`, can hit a setter, or can
+        // otherwise run dynamic object semantics. Keep length hoisting behind a
+        // future effect summary instead of assuming writes preserve the guarded
+        // array length.
+        Expr::PropertySet { .. } => false,
         Expr::IndexGet { object, index } => walk(object) && walk(index),
         // Buffer / Uint8Array reads + writes preserve the underlying array
         // length — Buffer.alloc allocates a fixed-capacity blob, and the
