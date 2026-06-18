@@ -57,6 +57,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_mark_numeric_f64_layout", I32, &[I64]);
     module.declare_function("js_array_is_numeric_f64_layout", I32, &[I64]);
     module.declare_function("js_array_clear_numeric_layout", VOID, &[I64]);
+    module.declare_function("js_array_numeric_value_to_raw_f64", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_note_numeric_write", VOID, &[I64, I64]);
     module.declare_function("js_array_length", I32, &[I64]);
     // Array.isArray runtime dispatch for values with indeterminate

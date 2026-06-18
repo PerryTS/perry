@@ -21,6 +21,7 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::MaterializationReason;
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -31,10 +32,10 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_string_literal_global,
-    emit_v8_export_call, emit_v8_member_method_call, emit_write_barrier,
-    emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, downgrade_buffer_aliases_in_expr,
+    emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
+    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
+    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
     lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
@@ -93,6 +94,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             use perry_hir::CallArg;
             let new_byte_offset = *byte_offset;
+            downgrade_buffer_aliases_in_expr(ctx, callee, MaterializationReason::UnknownCallEscape);
+            for arg in args {
+                match arg {
+                    CallArg::Expr(expr) | CallArg::Spread(expr) => {
+                        downgrade_buffer_aliases_in_expr(
+                            ctx,
+                            expr,
+                            MaterializationReason::UnknownCallEscape,
+                        )
+                    }
+                }
+            }
             let func_double = lower_expr(ctx, callee)?;
             let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
             for a in args {
@@ -593,6 +606,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     | Expr::Logical { .. }
             );
             if routes_through_function_construct {
+                downgrade_buffer_aliases_in_expr(
+                    ctx,
+                    callee,
+                    MaterializationReason::UnknownCallEscape,
+                );
+                for arg in args {
+                    downgrade_buffer_aliases_in_expr(
+                        ctx,
+                        arg,
+                        MaterializationReason::UnknownCallEscape,
+                    );
+                }
                 let func_double = lower_expr(ctx, callee)?;
                 let lowered_args: Vec<String> = args
                     .iter()
@@ -620,6 +645,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // back to the class_id=0 empty-object baseline inside the helper,
             // preserving the previous best-effort behavior for shapes the
             // compiler can't resolve statically.
+            downgrade_buffer_aliases_in_expr(ctx, callee, MaterializationReason::UnknownCallEscape);
+            for arg in args {
+                downgrade_buffer_aliases_in_expr(
+                    ctx,
+                    arg,
+                    MaterializationReason::UnknownCallEscape,
+                );
+            }
             let func_double = lower_expr(ctx, callee)?;
             let lowered_args: Vec<String> = args
                 .iter()

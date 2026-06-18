@@ -53,6 +53,22 @@ def validate_workload_spec(data: dict[str, Any]) -> None:
             )
         if not isinstance(workload.get("runtime_budgets"), dict):
             raise HarnessError(f"workload {name!r} runtime_budgets must be a table")
+        stdout_checks = workload.get("stdout_checks", [])
+        if not isinstance(stdout_checks, list):
+            raise HarnessError(f"workload {name!r} stdout_checks must be a list")
+        for check in stdout_checks:
+            if not isinstance(check, dict) or not check.get("name"):
+                raise HarnessError(f"workload {name!r} stdout_checks need names")
+            if any(key in check for key in ("contains", "contains_all", "contains_any")):
+                raise HarnessError(
+                    f"workload {name!r} stdout check {check['name']!r} must not use "
+                    "substring matching"
+                )
+            if "equals" not in check and "line_equals" not in check:
+                raise HarnessError(
+                    f"workload {name!r} stdout check {check['name']!r} must use "
+                    "equals or line_equals"
+                )
         native_rep_checks = workload.get("native_rep_checks")
         if native_rep_checks is not None:
             if not isinstance(native_rep_checks, dict):

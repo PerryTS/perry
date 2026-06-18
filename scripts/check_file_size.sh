@@ -304,6 +304,14 @@ crates/perry-ext-http-server/src/http2_server.rs
 # on/once iterator machinery into the existing `events/` submodule is tracked
 # under #1435 with the other module-size cleanups.
 crates/perry-stdlib/src/events.rs
+# Representation-aware type-lowering work (#5291). These crossed the 2000-line
+# gate as the raw-numeric fallback hardening + native-ABI hot-loop runtime gates
+# expanded the type-analysis surface and its native-region proof tests. Splitting
+# the per-concern analysis/verify helpers into sibling modules is tracked under
+# #1435 with the other codegen file-size cleanups.
+crates/perry-codegen/src/type_analysis.rs
+crates/perry-codegen/src/native_value/verify.rs
+crates/perry-codegen/tests/native_proof_regressions.rs
 EOF
 )
 

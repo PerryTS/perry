@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 /// existing native optimizations, and every consumer must keep the normal
 /// JSValue/NaN-boxed fallback at dynamic boundaries.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct NativeRegionFactGraph {
+pub(crate) struct TypeFacts {
     pub representation: RepresentationFacts,
     pub integer_range: IntegerRangeFacts,
     pub bounds: BoundsFacts,
@@ -26,6 +26,8 @@ pub(crate) struct NativeRegionFactGraph {
     pub shape_stability: ShapeStabilityFacts,
     pub materialization_hazards: MaterializationHazardFacts,
 }
+
+pub(crate) type NativeRegionFactGraph = TypeFacts;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RepresentationFacts {
@@ -83,7 +85,8 @@ pub(crate) struct MaterializationHazardFacts {
     pub initially_known_hazard_locals: HashSet<u32>,
 }
 
-impl NativeRegionFactGraph {
+#[allow(dead_code)]
+impl TypeFacts {
     pub(crate) fn integer_locals(&self) -> &HashSet<u32> {
         &self.representation.integer_locals
     }
@@ -131,6 +134,53 @@ impl NativeRegionFactGraph {
     pub(crate) fn materialization_hazard_locals(&self) -> &HashSet<u32> {
         &self.materialization_hazards.initially_known_hazard_locals
     }
+
+    pub(crate) fn proves_i32_lowering(&self, local_id: u32) -> bool {
+        self.representation.integer_locals.contains(&local_id)
+            || self
+                .integer_range
+                .strictly_i32_bounded_locals
+                .contains(&local_id)
+    }
+
+    pub(crate) fn proves_unsigned_i32_lowering(&self, local_id: u32) -> bool {
+        self.representation.unsigned_i32_locals.contains(&local_id)
+    }
+
+    pub(crate) fn proves_bounds_range_seed(&self, local_id: u32) -> bool {
+        self.bounds.range_seed_locals.contains(&local_id)
+    }
+
+    pub(crate) fn proves_noalias_buffer(&self, local_id: u32) -> bool {
+        self.alias_noalias
+            .known_noalias_buffer_locals
+            .contains(&local_id)
+    }
+
+    pub(crate) fn proves_pure_helper(&self, function_id: u32) -> bool {
+        self.purity.pure_helper_function_ids.contains(&function_id)
+    }
+
+    pub(crate) fn platform_constant(&self, local_id: u32) -> Option<f64> {
+        self.platform_constants.constants.get(&local_id).copied()
+    }
+
+    pub(crate) fn scalar_replaceable_object_locals(&self) -> &HashSet<u32> {
+        &self.shape_stability.scalar_replaceable_object_locals
+    }
+
+    pub(crate) fn proves_scalar_replacement(&self, local_id: u32) -> bool {
+        self.shape_stability
+            .scalar_replaceable_object_locals
+            .contains(&local_id)
+            || self.escape.non_escaping_arrays.contains_key(&local_id)
+    }
+
+    pub(crate) fn has_materialization_hazard(&self, local_id: u32) -> bool {
+        self.materialization_hazards
+            .initially_known_hazard_locals
+            .contains(&local_id)
+    }
 }
 
 /// Build the full native-region fact graph in one pass boundary.
@@ -139,7 +189,7 @@ impl NativeRegionFactGraph {
 /// function is the single contract used by codegen entry points so new native
 /// consumers do not need to rediscover facts independently.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collect_native_region_fact_graph(
+pub(crate) fn collect_type_facts(
     stmts: &[Stmt],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
@@ -148,7 +198,7 @@ pub(crate) fn collect_native_region_fact_graph(
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &perry_hir::Class>,
     compile_time_constants: &HashMap<u32, f64>,
-) -> NativeRegionFactGraph {
+) -> TypeFacts {
     let integer_locals = super::integer_locals::collect_integer_locals(
         stmts,
         flat_const_ids,
@@ -180,7 +230,7 @@ pub(crate) fn collect_native_region_fact_graph(
         .chain(non_escaping_object_literals.keys())
         .copied()
         .collect();
-    let graph = NativeRegionFactGraph {
+    let graph = TypeFacts {
         representation: RepresentationFacts {
             integer_locals: integer_locals.clone(),
             unsigned_i32_locals,
@@ -219,15 +269,38 @@ pub(crate) fn collect_native_region_fact_graph(
     graph
 }
 
-// #854: thin wrapper over collect_native_region_fact_graph, currently only
-// exercised by this module's unit tests; kept as the focused-collector entry seam.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_native_region_fact_graph(
+    stmts: &[Stmt],
+    flat_const_ids: &HashSet<u32>,
+    clamp_fn_ids: &HashSet<u32>,
+    arg_dependent_clamp_fn_ids: &HashSet<u32>,
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &perry_hir::Class>,
+    compile_time_constants: &HashMap<u32, f64>,
+) -> NativeRegionFactGraph {
+    collect_type_facts(
+        stmts,
+        flat_const_ids,
+        clamp_fn_ids,
+        arg_dependent_clamp_fn_ids,
+        boxed_vars,
+        module_globals,
+        classes,
+        compile_time_constants,
+    )
+}
+
+// #854: thin wrapper over collect_type_facts, currently only exercised by this
+// module's unit tests; kept as the focused-collector entry point.
 #[allow(dead_code)]
 pub(crate) fn collect_hir_facts(
     stmts: &[Stmt],
     flat_const_ids: &HashSet<u32>,
     clamp_fn_ids: &HashSet<u32>,
-) -> NativeRegionFactGraph {
-    collect_native_region_fact_graph(
+) -> TypeFacts {
+    collect_type_facts(
         stmts,
         flat_const_ids,
         clamp_fn_ids,
@@ -426,6 +499,7 @@ mod tests {
         );
 
         assert!(facts.unsigned_i32_locals().contains(&2));
+        assert!(facts.proves_unsigned_i32_lowering(2));
         assert!(!facts.integer_locals().contains(&2));
     }
 
@@ -472,8 +546,11 @@ mod tests {
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
+        assert!(graph.proves_noalias_buffer(1));
         assert_eq!(graph.compile_time_constants().get(&90), Some(&1.0));
+        assert_eq!(graph.platform_constant(90), Some(1.0));
         assert!(graph.purity.pure_helper_function_ids.contains(&7));
+        assert!(graph.proves_pure_helper(7));
     }
 
     #[test]
@@ -505,12 +582,17 @@ mod tests {
         );
 
         assert!(graph.integer_locals().contains(&1));
+        assert!(graph.proves_i32_lowering(1));
+        assert!(graph.proves_bounds_range_seed(1));
         assert!(graph.index_used_locals().contains(&1));
         assert!(graph.non_escaping_object_literals().contains_key(&3));
         assert!(graph
             .shape_stability
             .scalar_replaceable_object_locals
             .contains(&3));
+        assert!(graph.scalar_replaceable_object_locals().contains(&3));
+        assert!(graph.proves_scalar_replacement(3));
+        assert!(!graph.has_materialization_hazard(3));
     }
 
     // Regression: a mutable `let __d = undefined` seed (the shape the

@@ -22,7 +22,8 @@ use crate::lower_string_method::{
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
-    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+    BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
+    NativeRep, SemanticKind,
 };
 #[allow(unused_imports)]
 use crate::type_analysis::{
@@ -44,7 +45,7 @@ use super::{
     expr_has_numeric_pointer_free_array_layout, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32, lower_expr_native,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_typed_array_store, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
     nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
@@ -53,6 +54,30 @@ use super::{
     variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
     TypedFeedbackKind,
 };
+
+fn canonicalize_raw_f64_numeric_store_value(
+    blk: &mut crate::block::LlBlock,
+    value_double: &str,
+) -> String {
+    blk.call(
+        DOUBLE,
+        "js_array_numeric_value_to_raw_f64",
+        &[(DOUBLE, value_double)],
+    )
+}
+
+fn lower_value_for_optional_barrier(
+    ctx: &mut FnCtx<'_>,
+    value: &Expr,
+    write_barrier_needed: bool,
+) -> Result<(String, Option<String>)> {
+    if !write_barrier_needed {
+        return Ok((lower_expr(ctx, value)?, None));
+    }
+    let value_bits = lower_expr_native(ctx, value, ExpectedNativeRep::JsValueBits)?.value;
+    let value_double = ctx.block().bitcast_i64_to_double(&value_bits);
+    Ok((value_double, Some(value_bits)))
+}
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     matches!(
@@ -210,7 +235,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let arr_box = lower_expr(ctx, object)?;
                 let key_box = lower_expr(ctx, index)?;
                 let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
-                let val_double = lower_expr(ctx, value)?;
+                let (val_double, val_bits) =
+                    lower_value_for_optional_barrier(ctx, value, value_needs_barrier)?;
                 let (arr_handle, key_handle) = {
                     let blk = ctx.block();
                     let arr_handle = unbox_to_i64(blk, &arr_box);
@@ -234,8 +260,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ],
                 );
                 if value_needs_barrier {
-                    let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
                     let arr_bits = ctx.block().bitcast_double_to_i64(&arr_box);
+                    let val_bits =
+                        val_bits.unwrap_or_else(|| ctx.block().bitcast_double_to_i64(&val_double));
                     emit_write_barrier(ctx, &arr_bits, &val_bits);
                 }
                 return Ok(val_double);
@@ -340,15 +367,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let require_numeric_layout = value_is_numeric
                             && expr_has_numeric_pointer_free_array_layout(ctx, object);
                         let arr_box = lower_expr(ctx, object)?;
-                        let val_double = lower_expr(ctx, value)?;
+                        let idx_double = lower_expr(ctx, index)?;
                         // Grab i32 slot name before mutably borrowing ctx for block().
                         let i32_slot_opt = ctx.i32_counter_slots.get(idx_id).cloned();
                         let idx_i32 = if let Some(ref i32_slot) = i32_slot_opt {
                             ctx.block().load(I32, i32_slot)
                         } else {
-                            let idx_double = lower_expr(ctx, index)?;
                             ctx.block().fptosi(DOUBLE, &idx_double, I32)
                         };
+                        let val_double = lower_expr(ctx, value)?;
                         if require_numeric_layout {
                             let feedback_site_id = emit_typed_feedback_register_site(
                                 ctx,
@@ -388,7 +415,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &[
                                         (I64, &feedback_site_id),
                                         (DOUBLE, &arr_box),
-                                        (I32, &idx_i32),
+                                        (DOUBLE, &idx_double),
                                         (DOUBLE, &val_double),
                                     ],
                                 );
@@ -439,11 +466,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 let blk = ctx.block();
                                 let arr_bits = blk.bitcast_double_to_i64(&arr_box);
                                 let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                                blk.call(
-                                    I32,
-                                    "js_array_numeric_set_f64_unboxed",
-                                    &[(I64, &arr_handle), (I32, &idx_i32), (DOUBLE, &val_double)],
-                                );
+                                // The numeric-array set guard above was called with
+                                // `in_bounds=true`, so it has already proved a live,
+                                // non-forwarded plain Array in raw-f64 layout, a numeric
+                                // RHS, and an in-bounds index. Store the f64 slot inline
+                                // instead of calling the helper that re-validates the same
+                                // facts before doing this store.
+                                let idx_i64 = blk.zext(I32, &idx_i32, I64);
+                                let byte_offset = blk.shl(I64, &idx_i64, "3");
+                                let with_header = blk.add(I64, &byte_offset, "8");
+                                let element_addr = blk.add(I64, &arr_handle, &with_header);
+                                let element_ptr = blk.inttoptr(I64, &element_addr);
+                                let numeric_value =
+                                    canonicalize_raw_f64_numeric_store_value(blk, &val_double);
+                                // GC_STORE_AUDIT(POINTER_FREE): guarded raw-f64
+                                // numeric store — the canonicalized value is a
+                                // plain f64, never a GC pointer, so no barrier.
+                                blk.store(DOUBLE, &numeric_value, &element_ptr);
                                 blk.br(&merge_label);
                             }
                             let stored = LoweredValue {
