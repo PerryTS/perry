@@ -1,5 +1,8 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
-use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
+use perry_hir::{
+    BinaryOp, Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt,
+    UpdateOp,
+};
 use perry_types::{FunctionType, Type};
 
 /// Serializes env-mutating tests so a concurrent test never observes a
@@ -546,4 +549,52 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
     // inline (a direct `load double` from the element address).
     assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
     assert!(ir.contains("load double"));
+}
+
+#[test]
+fn typed_feedback_guards_computed_numeric_array_index_uses_i32_loop_bound() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let ir = ir_for(module(
+        "typed_feedback_loop_bound_computed_array.ts",
+        vec![param(1, "xs", array_ty), param(2, "size", Type::Number)],
+        Type::Number,
+        vec![Stmt::For {
+            init: Some(Box::new(Stmt::Let {
+                id: 3,
+                name: "i".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            })),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(3)),
+                right: Box::new(Expr::LocalGet(2)),
+            }),
+            update: Some(Expr::Update {
+                id: 3,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::Binary {
+                        op: BinaryOp::Mul,
+                        left: Box::new(Expr::LocalGet(3)),
+                        right: Box::new(Expr::LocalGet(2)),
+                    }),
+                    right: Box::new(Expr::Integer(1)),
+                }),
+            }))],
+        }],
+    ));
+
+    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
+    assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
+    assert!(ir.contains("mul i32"), "{ir}");
+    assert!(ir.contains("add i32"), "{ir}");
+    assert!(!ir.contains("fmul double"), "{ir}");
+    assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
 }
