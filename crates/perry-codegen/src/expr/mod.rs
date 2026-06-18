@@ -612,6 +612,13 @@ pub(crate) struct FnCtx<'a> {
     pub preguarded_numeric_array_index_gets:
         std::collections::HashMap<(u32, u32), PreguardedNumericArrayIndexGet>,
 
+    /// Loop-local guards for numeric array writes where the loop condition
+    /// proves every visited index is in bounds and the stored expression is
+    /// statically numeric. Keyed as `(array_local_id, index_local_id)` and
+    /// active only while lowering that loop body.
+    pub preguarded_numeric_array_index_sets:
+        std::collections::HashMap<(u32, u32), PreguardedNumericArrayIndexSet>,
+
     /// Loop-local guards for numeric array reads with affine computed indices
     /// where a local-bound loop prebody guarded the maximum visited index.
     /// Active only while lowering that loop body.
@@ -1060,6 +1067,12 @@ pub(crate) struct BoundedIndexPair {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreguardedNumericArrayIndexGet {
+    pub site_id: String,
+    pub guard_ok_slot: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreguardedNumericArrayIndexSet {
     pub site_id: String,
     pub guard_ok_slot: String,
 }
