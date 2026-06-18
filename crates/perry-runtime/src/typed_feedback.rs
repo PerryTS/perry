@@ -7,8 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 #[cfg(any(feature = "diagnostics", test))]
 use std::sync::atomic::AtomicBool;
-#[cfg(any(feature = "diagnostics", test))]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::array::ArrayHeader;
@@ -19,11 +18,20 @@ use crate::value::{
 };
 
 const POLYMORPHIC_CAP: usize = 4;
+const ARRAY_GUARD_FAST_CACHE_SIZE: usize = 4096;
+const ARRAY_GUARD_FAST_CACHE_ENABLED: u8 = 1;
+const ARRAY_GUARD_FAST_CACHE_DISABLED: u8 = 2;
 
 static REGISTRY: LazyLock<Mutex<TypedFeedbackRegistry>> =
     LazyLock::new(|| Mutex::new(TypedFeedbackRegistry::default()));
 #[cfg(any(feature = "diagnostics", test))]
 static TRACE_DUMPED: AtomicBool = AtomicBool::new(false);
+static ARRAY_GUARD_FAST_CACHE: LazyLock<Box<[ArrayGuardFastCacheEntry]>> = LazyLock::new(|| {
+    (0..ARRAY_GUARD_FAST_CACHE_SIZE)
+        .map(|_| ArrayGuardFastCacheEntry::default())
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
+});
 
 #[cfg(not(test))]
 static TYPED_FEEDBACK_ENABLED: LazyLock<bool> = LazyLock::new(|| {
@@ -329,8 +337,10 @@ pub struct GuardCounterSnapshot {
 }
 
 impl GuardCounterSnapshot {
-    fn add_site(&mut self, site: &TypedFeedbackSite) {
-        self.passes = self.passes.saturating_add(site.guard_passes);
+    fn add_site(&mut self, site: &TypedFeedbackSite, extra_guard_passes: u64) {
+        self.passes = self
+            .passes
+            .saturating_add(site.guard_passes.saturating_add(extra_guard_passes));
         self.failures = self.failures.saturating_add(site.guard_failures);
         self.fallback_calls = self.fallback_calls.saturating_add(site.fallback_calls);
     }
@@ -368,6 +378,122 @@ fn read_static_str(ptr: *const u8, len: usize) -> String {
 
 fn registry() -> crate::gc::GcRootRegistryGuard<'static, TypedFeedbackRegistry> {
     crate::gc::lock_gc_root_registry(&REGISTRY)
+}
+
+#[derive(Default)]
+struct ArrayGuardFastCacheEntry {
+    site_id: AtomicU64,
+    packed: AtomicU64,
+    aux: AtomicU64,
+    fast_passes: AtomicU64,
+    state: AtomicU8,
+}
+
+fn array_guard_cache_index(site_id: u64) -> usize {
+    let mixed = site_id ^ (site_id >> 32) ^ (site_id >> 17);
+    (mixed as usize) & (ARRAY_GUARD_FAST_CACHE_SIZE - 1)
+}
+
+fn pack_array_guard_observation(observation: &Observation) -> Option<(u64, u64)> {
+    if observation.source != ObservationSource::Array || observation.shape_addr != 0 {
+        return None;
+    }
+    Some((
+        (observation.class_id as u64)
+            | ((observation.heap_type as u64) << 32)
+            | ((observation.value_tag as u64) << 48),
+        observation.aux,
+    ))
+}
+
+fn array_guard_fast_pass(site_id: u64, observation: &Observation, contract_valid: bool) -> bool {
+    if site_id == 0 || !contract_valid {
+        return false;
+    }
+    let Some((packed, aux)) = pack_array_guard_observation(observation) else {
+        return false;
+    };
+    let entry = &ARRAY_GUARD_FAST_CACHE[array_guard_cache_index(site_id)];
+    if entry.state.load(Ordering::Acquire) != ARRAY_GUARD_FAST_CACHE_ENABLED {
+        return false;
+    }
+    if entry.site_id.load(Ordering::Relaxed) != site_id {
+        return false;
+    }
+    if entry.packed.load(Ordering::Relaxed) == packed && entry.aux.load(Ordering::Relaxed) == aux {
+        entry.fast_passes.fetch_add(1, Ordering::Relaxed);
+        return true;
+    }
+    false
+}
+
+fn note_array_guard_cache_slow_observation(
+    site_id: u64,
+    observation: &Observation,
+    site: &TypedFeedbackSite,
+) {
+    if site_id == 0 {
+        return;
+    }
+    let Some((packed, aux)) = pack_array_guard_observation(observation) else {
+        return;
+    };
+    let entry = &ARRAY_GUARD_FAST_CACHE[array_guard_cache_index(site_id)];
+    let existing_site = entry.site_id.load(Ordering::Acquire);
+    if existing_site != site_id {
+        if existing_site != 0 {
+            return;
+        }
+        if entry
+            .site_id
+            .compare_exchange(0, site_id, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+    }
+    if site.megamorphic {
+        entry
+            .state
+            .store(ARRAY_GUARD_FAST_CACHE_DISABLED, Ordering::Release);
+        return;
+    }
+    if site
+        .observations
+        .iter()
+        .any(|seen| seen.same_feedback_key(observation))
+    {
+        entry.packed.store(packed, Ordering::Relaxed);
+        entry.aux.store(aux, Ordering::Relaxed);
+        entry
+            .state
+            .store(ARRAY_GUARD_FAST_CACHE_ENABLED, Ordering::Release);
+    }
+}
+
+fn array_guard_cache_fast_passes(site_id: u64) -> u64 {
+    if site_id == 0 {
+        return 0;
+    }
+    let entry = &ARRAY_GUARD_FAST_CACHE[array_guard_cache_index(site_id)];
+    if entry.site_id.load(Ordering::Acquire) == site_id {
+        entry.fast_passes.load(Ordering::Relaxed)
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+fn reset_array_guard_fast_cache_for_tests() {
+    for entry in ARRAY_GUARD_FAST_CACHE.iter() {
+        entry
+            .state
+            .store(ARRAY_GUARD_FAST_CACHE_DISABLED, Ordering::Release);
+        entry.site_id.store(0, Ordering::Release);
+        entry.packed.store(0, Ordering::Relaxed);
+        entry.aux.store(0, Ordering::Relaxed);
+        entry.fast_passes.store(0, Ordering::Relaxed);
+    }
 }
 
 #[no_mangle]
@@ -730,6 +856,7 @@ fn observe(site_id: u64, fallback_kind: TypedFeedbackSiteKind, observation: Obse
         )
     });
     site.observe(observation);
+    note_array_guard_cache_slow_observation(site_id, &observation, site);
 }
 
 fn site_entry(
@@ -762,6 +889,9 @@ fn guard_observe(
     if site_id == 0 || !typed_feedback_enabled() {
         return contract_valid;
     }
+    if array_guard_fast_pass(site_id, &observation, contract_valid) {
+        return true;
+    }
     let mut reg = registry();
     let site = site_entry(&mut reg, site_id, fallback_kind);
     let guard_passed = contract_valid
@@ -777,6 +907,7 @@ fn guard_observe(
         site.guard_failures = site.guard_failures.saturating_add(1);
     }
     site.observe(observation);
+    note_array_guard_cache_slow_observation(site_id, &observation, site);
     guard_passed
 }
 
@@ -1863,6 +1994,7 @@ pub fn scan_typed_feedback_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
 #[cfg(test)]
 pub(crate) fn reset_typed_feedback_for_tests() {
     TRACE_DUMPED.store(false, Ordering::Release);
+    reset_array_guard_fast_cache_for_tests();
     let mut reg = registry();
     *reg = TypedFeedbackRegistry::default();
 }

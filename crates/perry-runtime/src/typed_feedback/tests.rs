@@ -506,6 +506,90 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
 }
 
 #[test]
+fn typed_feedback_numeric_array_guard_fast_path_preserves_snapshot_counts() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(29, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
+
+    let values = [1.0, 2.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_get_guard(29, arr_box, 0.0, 0, 1),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_get_guard(29, arr_box, 0.0, 0, 1),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_get_guard(29, arr_box, 0.0, 0, 1),
+        1
+    );
+    assert_eq!(array_guard_cache_fast_passes(29), 2);
+
+    let snapshot = typed_feedback_snapshot();
+    let site = &snapshot.sites[0];
+    assert_eq!(site.guard_passes, 3);
+    assert_eq!(site.guard_failures, 0);
+    assert_eq!(site.observed_count, 3);
+    assert_eq!(site.observation_count, 1);
+}
+
+#[test]
+fn typed_feedback_numeric_array_guard_fast_path_respects_megamorphic_state() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(30, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
+
+    let values = [1.0, 2.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_get_guard(30, arr_box, 0.0, 0, 1),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_get_guard(30, arr_box, 0.0, 0, 1),
+        1
+    );
+    assert_eq!(array_guard_cache_fast_passes(30), 1);
+
+    for class_id in 1..=POLYMORPHIC_CAP {
+        observe(
+            30,
+            TypedFeedbackSiteKind::ArrayElement,
+            Observation {
+                source: ObservationSource::Array,
+                object_addr: 0,
+                shape_addr: 0,
+                key_hash: 0,
+                class_id: class_id as u32,
+                heap_type: crate::gc::GC_TYPE_ARRAY as u16,
+                aux: pack_array_aux(
+                    ARRAY_ACCESS_INDEXED_IN_BOUNDS,
+                    ARRAY_LAYOUT_POINTER_FREE,
+                    STABLE_VALUE_NUMBER,
+                    0,
+                ),
+                value_tag: STABLE_VALUE_NUMBER,
+            },
+        );
+    }
+
+    let guard = js_typed_feedback_numeric_array_index_get_guard(30, arr_box, 0.0, 0, 1);
+    assert_eq!(guard, 0);
+
+    let snapshot = typed_feedback_snapshot();
+    let site = &snapshot.sites[0];
+    assert_eq!(site.state, "megamorphic");
+    assert_eq!(site.guard_passes, 2);
+    assert_eq!(site.guard_failures, 1);
+}
+
+#[test]
 fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();
