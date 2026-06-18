@@ -604,6 +604,28 @@ mod tests {
     }
 
     #[test]
+    fn stringify_full_without_replacer_matches_simple_path() {
+        let input = br#"{"a":1,"b":"x"}"#;
+        let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let value = unsafe { js_json_parse(text) };
+        let boxed = f64::from_bits(value.bits());
+        let null = f64::from_bits(TAG_NULL);
+
+        let simple = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
+        let full_bits = unsafe { js_json_stringify_full(boxed, null, null) as u64 };
+        let full_ptr = (full_bits & POINTER_MASK) as *const StringHeader;
+        let simple_str = unsafe { str_from_header(simple).unwrap() };
+        let full_str = unsafe { str_from_header(full_ptr).unwrap() };
+
+        assert_eq!(full_str, simple_str);
+        assert_eq!(full_str, r#"{"a":1,"b":"x"}"#);
+        assert_eq!(
+            unsafe { js_json_stringify_full(f64::from_bits(TAG_UNDEFINED), null, null) as u64 },
+            TAG_UNDEFINED
+        );
+    }
+
+    #[test]
     fn typed_parse_layout_only_object_field_writes_preserve_layout() {
         let input = br#"[{"id":1,"name":"item_1","nested":{"x":1,"y":2}},{"id":2,"name":"item_2","nested":{"x":2,"y":4}}]"#;
         let packed_keys = b"id\0name\0nested\0";

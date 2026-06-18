@@ -868,6 +868,8 @@ pub unsafe extern "C" fn js_json_stringify_full(
         if let Some(ptr) = try_stringify_lazy_array(value) {
             return JSValue::string_ptr(ptr).bits() as i64;
         }
+        let ptr = js_json_stringify(value, TYPE_UNKNOWN);
+        return JSValue::string_ptr(ptr).bits() as i64;
     }
     // Lazy-but-materialized: the fast path's `materialized.is_null()`
     // check above returns None; fall back to the tree walk, but
