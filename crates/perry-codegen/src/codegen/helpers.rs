@@ -179,6 +179,34 @@ pub(crate) fn decide_full_outline_ic(callable_count: usize) -> bool {
     callable_count >= threshold
 }
 
+/// Decide how many codegen units to split a module's object compilation into
+/// (#5391). A single huge translation unit makes `clang -c` OOM (~15GB on the
+/// 13MB bundle); splitting bounds peak compiler memory to roughly whole/N.
+///
+/// `PERRY_CODEGEN_UNITS=N` forces exactly N units (1 disables splitting).
+/// Otherwise auto: 1 unit until the module's callable count crosses a floor,
+/// then `ceil(callables / target_per_unit)`, capped — so ordinary per-file
+/// modules stay on the single-unit path (default 1, zero behavior change).
+/// `PERRY_CODEGEN_UNIT_SIZE` overrides the target callables-per-unit.
+pub(crate) fn decide_codegen_units(callable_count: usize) -> usize {
+    if let Ok(v) = std::env::var("PERRY_CODEGEN_UNITS") {
+        if let Ok(n) = v.parse::<usize>() {
+            return n.max(1);
+        }
+    }
+    const MIN_CALLABLES_TO_SPLIT: usize = 8000;
+    const MAX_UNITS: usize = 48;
+    let target = std::env::var("PERRY_CODEGEN_UNIT_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(6000);
+    if callable_count < MIN_CALLABLES_TO_SPLIT {
+        return 1;
+    }
+    callable_count.div_ceil(target).clamp(1, MAX_UNITS)
+}
+
 pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     // Use the INJECTIVE sanitizer (same as scoped_static_method_name): plain
     // `sanitize` maps every non-`[A-Za-z0-9_]` char to `_`, so distinct minified

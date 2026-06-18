@@ -361,6 +361,20 @@ impl LlFunction {
         self.blocks.last().map(|b| b.label.as_str())
     }
 
+    /// Cheap estimate of this function's rendered IR size in bytes, used to
+    /// balance codegen-unit partitioning (#5391) without rendering twice. Sums
+    /// the byte length of every instruction + entry alloca (the dominant terms);
+    /// block labels/headers are a small fixed overhead per block.
+    pub fn estimated_ir_bytes(&self) -> usize {
+        let body: usize = self
+            .blocks
+            .iter()
+            .map(|b| b.instructions_iter().map(|i| i.len() + 1).sum::<usize>() + b.label.len() + 4)
+            .sum();
+        let allocas: usize = self.entry_allocas.iter().map(|a| a.len() + 1).sum();
+        body + allocas + self.name.len() + 64
+    }
+
     pub fn to_ir(&self) -> String {
         let param_str = self
             .params

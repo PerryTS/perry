@@ -134,6 +134,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I64, I64, I32, I32],
     );
+    // #5391 path 2: class-field-GET inline cache, FULLY outlined. For oversized
+    // modules the whole get diamond collapses to one call returning the field
+    // value. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // field_index, require_raw_f64). Same signature as the get guard (+ f64 ret).
+    module.declare_function(
+        "js_class_field_get_ic",
+        DOUBLE,
+        &[I64, DOUBLE, I32, I64, I64, I32, I32],
+    );
     module.declare_function(
         "js_typed_feedback_native_call_method",
         DOUBLE,

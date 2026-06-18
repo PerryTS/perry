@@ -58,8 +58,8 @@ use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
     check_eval_function_call, try_bare_regexp_call, try_builtin_prototype_method_apply_call,
-    try_embed_wasm, try_function_return_this, try_iife_call_rewrite, try_iterator_from,
-    try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
+    try_dynamic_require, try_embed_wasm, try_function_return_this, try_iife_call_rewrite,
+    try_iterator_from, try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
     try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
     try_pod_layout_constants, try_precompile, try_require_literal,
     try_strict_eval_arguments_assignment,
@@ -172,6 +172,12 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     // Compile-time intrinsics + legacy CJS/UMD bare-callee shapes
     // (require/embedWasm/IIFE.call/Function('return this')/RegExp).
     if let Some(expr) = try_require_literal(ctx, call)? {
+        return Ok(expr);
+    }
+    // #5389 Tier 2: a computed `require(expr)` in a compiled external module
+    // lowers to a synchronous dynamic-require node (resolved + dispatched like
+    // dynamic `import()`, but returning the namespace value directly).
+    if let Some(expr) = try_dynamic_require(ctx, call)? {
         return Ok(expr);
     }
     if let Some(expr) = try_embed_wasm(ctx, call)? {
@@ -664,6 +670,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                 arg: Box::new(arg),
                 byte_offset: call.span.lo.0,
                 deferred_error: None,
+                synchronous: false,
             })
         }
     }

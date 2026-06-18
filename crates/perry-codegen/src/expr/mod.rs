@@ -795,6 +795,8 @@ pub(crate) struct FnCtx<'a> {
     /// `let arr = [a, b, c]` and emit per-index allocas instead of a
     /// heap array, and by `.length` reads to fold to the constant.
     pub non_escaping_arrays: std::collections::HashMap<u32, u32>,
+    pub non_escaping_array_used_indices:
+        std::collections::HashMap<u32, std::collections::HashSet<u32>>,
 
     /// Non-escaping object literals identified by escape analysis. Maps
     /// local_id → field names (declaration order, deduplicated). Used by
@@ -803,6 +805,8 @@ pub(crate) struct FnCtx<'a> {
     /// already resolve through `scalar_replaced`, so no separate read path
     /// is required.
     pub non_escaping_object_literals: std::collections::HashMap<u32, Vec<String>>,
+    pub non_escaping_object_literal_used_fields:
+        std::collections::HashMap<u32, std::collections::HashSet<String>>,
 
     /// (Issue #50) Module-level const 2D int arrays folded into a flat
     /// `[N x i32]` LLVM constant. Maps local_id → (flat_global_name, rows,
