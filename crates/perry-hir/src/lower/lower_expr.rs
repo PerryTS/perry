@@ -890,28 +890,23 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                             None
                         }
                     }
-                    ast::Expr::Member(member) => {
-                        let native_module = if let ast::Expr::Ident(obj_ident) = member.obj.as_ref()
-                        {
-                            let obj_name = obj_ident.sym.as_ref();
-                            // `Temporal.<X>` constructors dispatch via brand arms,
-                            // not a class chain, so route them through the runtime
-                            // dynamic path (`js_instanceof_dynamic` →
-                            // `temporal_ctor_kind`) by lowering the constructor to
-                            // its closure value here.
-                            obj_name == "Temporal"
-                                || ctx.lookup_builtin_module_alias(obj_name).is_some()
-                                || matches!(ctx.lookup_native_module(obj_name), Some((_, None)))
-                        } else {
-                            false
-                        };
-                        if native_module {
-                            match lower_expr(ctx, &bin.right) {
-                                Ok(e) => Some(Box::new(e)),
-                                Err(_) => None,
-                            }
-                        } else {
-                            None
+                    ast::Expr::Member(_member) => {
+                        // Lower the member RHS to its value and route through
+                        // `js_instanceof_dynamic`. The pre-fix code only did this
+                        // for native modules (`Temporal.X`, builtin aliases) and
+                        // otherwise left codegen with the static `ty = "obj.prop"`
+                        // string, which it can't resolve to a class id for a
+                        // user-module member (`x instanceof sv.SemVer` where `sv`
+                        // is a default/namespace import) → class_id 0 → instanceof
+                        // always false (semver's `new SemVer(semVerObj)` clone path
+                        // hit this: `version instanceof SemVer` was false, so the
+                        // ctor mis-parsed the object as a string). `sv.SemVer`
+                        // lowers to the same class-ref value `const C = sv.SemVer`
+                        // produces, which the dynamic path resolves correctly; for
+                        // native modules it still derives the brand/synthetic id.
+                        match lower_expr(ctx, &bin.right) {
+                            Ok(e) => Some(Box::new(e)),
+                            Err(_) => None,
                         }
                     }
                     // Any other right-hand side (a primitive literal like
