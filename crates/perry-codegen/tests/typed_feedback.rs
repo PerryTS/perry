@@ -434,6 +434,73 @@ fn typed_feedback_preguards_bounded_numeric_array_writes() {
 }
 
 #[test]
+fn typed_feedback_preguarded_numeric_array_self_add_skips_get_guard() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let ir = ir_for(module(
+        "typed_feedback_range_array_numeric_self_add.ts",
+        vec![param(1, "xs", array_ty.clone())],
+        array_ty,
+        vec![
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "length".to_string(),
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(2)),
+                    value: Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(1)),
+                            index: Box::new(Expr::LocalGet(2)),
+                        }),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(1))),
+        ],
+    ));
+
+    assert!(ir.contains("range_set_preguard.fast"), "{ir}");
+    assert!(ir.contains("idxset.numeric_f64_self_add.fast"), "{ir}");
+    assert!(ir.contains("idxset.numeric_f64_self_add.fallback"), "{ir}");
+    assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
+    assert!(ir.contains("call double @js_dynamic_string_or_number_add"));
+    assert_eq!(
+        ir.matches("call i32 @js_typed_feedback_numeric_array_index_set_guard")
+            .count(),
+        1,
+        "{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+        "{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard_i32"),
+        "{ir}"
+    );
+}
+
+#[test]
 fn typed_feedback_preguards_plain_array_writes_with_length_bound() {
     let array_ty = Type::Array(Box::new(Type::Any));
     let ir = ir_for(module(
