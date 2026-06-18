@@ -19,9 +19,54 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Once;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("canonicalize workspace root")
+}
+
+fn target_debug_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("target"))
+        .join("debug")
+}
+
+/// `PERRY_NO_AUTO_OPTIMIZE=1` (below) skips the per-app runtime rebuild and
+/// links the prebuilt `libperry_runtime.a`. Under `cargo test` the staticlib
+/// crate-type is not produced as a side effect of building the test binary
+/// (only the rlib is), so build it explicitly once and point the compiler at
+/// `target/debug` via `PERRY_RUNTIME_DIR`. Mirrors `module_import_forms.rs`.
+fn ensure_runtime_archive() {
+    static BUILD_RUNTIME: Once = Once::new();
+    BUILD_RUNTIME.call_once(|| {
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let build = Command::new(cargo)
+            .current_dir(workspace_root())
+            .arg("build")
+            .arg("-p")
+            .arg("perry-runtime")
+            .output()
+            .expect("run cargo build -p perry-runtime");
+        assert!(
+            build.status.success(),
+            "cargo build -p perry-runtime failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+    });
+}
+
+fn runtime_dir() -> PathBuf {
+    ensure_runtime_archive();
+    target_debug_dir()
 }
 
 /// Write `files` (relative path -> contents) into `dir`, compile `entry`
@@ -45,6 +90,7 @@ fn compile_and_run(dir: &Path, files: &[(&str, &str)], entry: &str) -> String {
         .arg("-o")
         .arg(&output)
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
+        .env("PERRY_RUNTIME_DIR", runtime_dir())
         .output()
         .expect("run perry compile");
     assert!(
