@@ -120,6 +120,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         ctx.shadow_native_instance_if_present(&param_name);
+                    ctx.shadow_native_module_if_present(&param_name);
         let is_rest = is_rest_param(&param.pat);
         params.push(Param {
             id: param_id,

@@ -47,6 +47,42 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 ctx.shadow_native_instance(name.clone());
             }
 
+            // #wall5: same scope-leak for native MODULES. `native_modules_index`
+            // is module-global + first-match-wins (no scope tracking), so a
+            // local re-bind of a name a top-level `const url = require('url')`
+            // registered (e.g. undici's `const util = require('./util')`, or a
+            // local `const url = []` / a URL object) would mis-resolve
+            // `util.isStream` / `url.push` through the node-module dispatch and
+            // fire the unimplemented-API gate (Next.js app-page-turbo: 88× url.push,
+            // 84× util.destroy, the url.o render throw). Shadow the module here —
+            // UNLESS this very decl IS the native-module binding (`= require('url')`
+            // of a node-core module), which must keep resolving as the module.
+            if ctx.lookup_native_module(&name).is_some() {
+                let binds_native_module = decl.init.as_deref().is_some_and(|init| {
+                    if let ast::Expr::Call(call) = init {
+                        if let ast::Callee::Expr(callee) = &call.callee {
+                            if let ast::Expr::Ident(id) = callee.as_ref() {
+                                if &*id.sym == "require" {
+                                    if let Some(ast::Expr::Lit(ast::Lit::Str(s))) =
+                                        call.args.first().map(|a| a.expr.as_ref())
+                                    {
+                                        if let Some(spec) = s.value.as_str() {
+                                            let bare =
+                                                spec.strip_prefix("node:").unwrap_or(spec);
+                                            return perry_api_manifest::is_node_core_module(bare);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    false
+                });
+                if !binds_native_module {
+                    ctx.shadow_native_module_if_present(&name);
+                }
+            }
+
             // #809: tag locals provably bound to a plain object (an object
             // literal or `Object.create(...)`). `static_receiver_class`
             // consults this so `x.toJSON()` / `.toString()` / `.valueOf()`

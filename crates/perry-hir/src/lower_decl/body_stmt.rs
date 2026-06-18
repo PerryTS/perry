@@ -733,6 +733,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     let param_name = get_pat_name(pat)?;
                     let param_id = ctx.define_local(param_name.clone(), Type::Any);
                     ctx.shadow_native_instance_if_present(&param_name);
+                    ctx.shadow_native_module_if_present(&param_name);
                     // Destructured catch binding — `catch ([a, b = d()])` /
                     // `catch ({ message })`: bind the pattern leaves off the
                     // exception value before the user body runs.

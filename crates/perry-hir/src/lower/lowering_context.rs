@@ -298,6 +298,10 @@ pub struct LoweringContext {
     /// Function-body var prebinding uses the top mark to distinguish
     /// parameters/current-scope locals from outer captures with the same name.
     pub(crate) scope_local_marks: Vec<usize>,
+    /// #wall5: per-scope marks into `module_shadow_stack`, pushed in
+    /// `enter_scope` and popped in `exit_scope` to restore native-module
+    /// shadowing when a scope that re-bound a module name exits.
+    pub(crate) scope_module_shadow_marks: Vec<usize>,
     /// Block scope nesting counter (for bare `{}`, `if`, loops, try/finally).
     /// A local only counts as module-level when both `scope_depth == 0` and
     /// `inside_block_scope == 0`; `const captured = i` inside a top-level for
@@ -407,6 +411,12 @@ pub struct LoweringContext {
     /// `lookup_native_module` scanned FORWARD (first-match-wins), so the index
     /// keeps the FIRST pushed index per name (`entry().or_insert`).
     pub(crate) native_modules_index: HashMap<String, usize>,
+    /// #wall5: scope-stack of native-module names currently SHADOWED by a local
+    /// binding (param / `const`) of the same name. `lookup_native_module`
+    /// returns `None` for shadowed names so a local `url`/`util`/etc. resolves
+    /// as a value, not the node module. Pushed at param/var-decl sites, truncated
+    /// at scope exit (parallel to `native_instances` scoping).
+    pub(crate) module_shadow_stack: Vec<String>,
     /// Perf index for `class_statics` (push-only, never truncated). The old
     /// `has_static_method`/`has_static_field` scanned FORWARD (first-match-wins),
     /// so the index keeps the FIRST pushed index per class name.
