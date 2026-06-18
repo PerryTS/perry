@@ -191,6 +191,14 @@ impl LlModule {
         self.functions.get_mut(idx)
     }
 
+    /// Number of functions defined so far. Used to recover the index of a
+    /// just-`define_function`ed function (whose `&mut` borrow must be released
+    /// before the index can be read) when emitting a sequence of functions —
+    /// e.g. the chunked string-pool init (#5391 function splitting).
+    pub fn function_count(&self) -> usize {
+        self.functions.len()
+    }
+
     /// True if a function with the given name has already been *defined*
     /// in this module. Used by the #461 export-stub pass to avoid
     /// redefining a symbol that an earlier emission path (function body,
