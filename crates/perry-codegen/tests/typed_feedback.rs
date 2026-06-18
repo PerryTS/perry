@@ -308,6 +308,45 @@ fn typed_feedback_guards_direct_class_field_specialization() {
 }
 
 #[test]
+fn class_field_set_elides_write_barrier_for_nonpointer_value() {
+    // #5334 lever D: storing a value that is a non-pointer by construction
+    // into a BOXED class field (a String slot — only Number is raw-f64) skips
+    // the generational write barrier, since the store creates no parent→child
+    // heap reference. The layout note still fires (it tracks the slot's
+    // pointer-ness). A value that may be a heap pointer keeps the barrier.
+    let build = |val: Expr| {
+        let c = class(140, "Bx", vec![field("s", Type::String)]);
+        module_with_classes(
+            "lever_d_field_barrier.ts",
+            vec![c],
+            vec![
+                param(1, "o", Type::Named("Bx".to_string())),
+                param(2, "p", Type::String),
+            ],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "s".to_string(),
+                    value: Box::new(val),
+                }),
+                Stmt::Return(Some(Expr::Number(0.0))),
+            ],
+        )
+    };
+
+    // A numeric-by-construction value takes the boxed class-field fast store
+    // but needs no write barrier.
+    let ir_num = ir_for(build(Expr::Number(7.0)));
+    assert!(ir_num.contains("class_field_set.fast"));
+    assert!(!ir_num.contains("call void @js_write_barrier_slot"));
+
+    // A definite heap pointer (string literal) keeps the slot barrier.
+    let ir_ptr = ir_for(build(Expr::String("hi".to_string())));
+    assert!(ir_ptr.contains("call void @js_write_barrier_slot"));
+}
+
+#[test]
 fn typed_feedback_guards_direct_class_method_specialization() {
     let mut point = class(103, "Point", vec![field("x", Type::Number)]);
     point.methods.push(Function {
