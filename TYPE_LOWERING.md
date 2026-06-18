@@ -1,18 +1,53 @@
-# Perry: Type Lowering & Native Runtime Support — Full Findings & Gaps
+# Perry: Type Lowering & Native Runtime Support — Findings, Landed Scope, and Gaps
 
 ---
 
+## 0. Landed Scope for This Branch
+
+This branch landed selected native/region-local type lowering, not a general
+typed function, method, or closure ABI. User function and method entry points
+still use the generic `double`/NaN-box ABI for parameters and returns; closure
+bodies still use `i64 this_closure` plus `double` arguments and return
+`double`. The new native facts are collected for module init, function, method,
+static-method, and closure bodies, then consumed inside those bodies where a
+specific proof exists.
+
+Compiler evidence for this branch covers:
+
+- region-local integer facts (`i32`/`u32`) and selected JS-number native reps;
+- Buffer/Uint8Array `BufferView`/`U8` fast paths with explicit bounds and alias
+  proof records;
+- packed-`f64` array loop versioning guarded by typed-feedback/runtime layout
+  checks;
+- raw numeric class-field get/set paths guarded by layout and field facts;
+- selected native binding descriptors such as scalar numbers, `buffer+len`,
+  POD records/views, native handles, and promise boundaries;
+- `JsValueBits` as an internal bit-pattern representation with explicit bitcast
+  transitions at materialization boundaries.
+
+Still follow-up unless separately implemented:
+
+- generic typed function/method/closure clone generation;
+- public generic trampolines that dispatch to typed clones;
+- a closure capture/call ABI redesign;
+- a broad typed object or array ABI beyond the verified fast paths and native
+  binding descriptors listed above.
+
 ## 1. Type Lowering Pipeline
 
-Perry's type system flows from TypeScript annotations through HIR to native code. Types are **erased** before final machine code, but they drive optimization decisions throughout the pipeline.
+Perry's type system flows from TypeScript annotations through HIR to native
+code. Type annotations are erased before JS-visible behavior, but selected type
+facts drive optimization decisions. In this branch, those facts feed
+region-local lowering and native-representation records; they do not create a
+general typed call ABI.
 
 ### HIR Type Representation
 
 The `LoweringContext` in `perry-hir` infers types during AST→HIR lowering via `infer_type_from_expr`:
 
-| TypeScript Type | HIR Type | Runtime Representation |
+| TypeScript Type | HIR Type | Default ABI / Runtime Representation |
 |---|---|---|
-| `number` | `Type::Number` | Raw `f64` (IEEE 754 double) |
+| `number` | `Type::Number` | JS number in the generic `double`/NaN-box ABI; selected regions may keep raw `F64`, `I32`, `U32`, or related native reps internally |
 | `string` | `Type::String` | Pointer to `StringHeader` (NaN-boxed `STRING_TAG 0x7FFF`) |
 | `boolean` | `Type::Boolean` | `TAG_TRUE/TAG_FALSE` singletons |
 | `bigint` | `Type::BigInt` | Pointer to `BigIntHeader` (`BIGINT_TAG 0x7FFA`) |
@@ -23,7 +58,12 @@ The `LoweringContext` in `perry-hir` infers types during AST→HIR lowering via 
 
 ### Generics: Monomorphization
 
-Perry implements generics via monomorphization — each unique type instantiation produces a specialized function/class with mangled names (e.g., `identity$number`). The `MonomorphizationContext` uses work queues to recursively specialize dependencies. [3](#0-2)
+Perry has HIR-level monomorphization for generic declarations: unique type
+instantiations can produce specialized function/class definitions with mangled
+names (for example, `identity$number`). That is not the same thing as a typed
+native call ABI. The specialized definitions still compile through Perry's
+generic JSValue/`double` function, method, and closure call signatures unless a
+separate region-local lowering proof applies inside the body. [3](#0-2)
 
 ---
 
@@ -53,14 +93,21 @@ Bits 47-0:  Payload (pointer / integer / SSO bytes)
 
 ### Codegen Fast Paths from Types
 
-When the compiler knows a value's type statically, it bypasses the full NaN-boxing overhead:
+When the compiler has a specific local proof, selected expression and loop sites
+can bypass part of the generic NaN-boxing overhead:
 
 - **i32 fast path**: Locals proven to be integer-valued (via `collect_integer_locals`, `collect_strictly_i32_bounded_locals`) get a parallel `i32` alloca slot. Loop counters, bitwise ops, and `| 0` coercions qualify. This eliminates `fptosi/sitofp` round-trips per iteration.
 - **Bounds elimination**: `for (let i = 0; i < arr.length; i++) arr[i]` — the compiler caches `arr.length` once and records `(i, arr)` in `bounded_index_pairs`, emitting raw `getelementptr + load` without runtime bounds checks.
 - **Integer modulo**: `%` on provably-integer operands emits `fptosi → srem → sitofp` instead of `fmod` (a libm call on ARM — ~30ns vs ~1 cycle).
 - **Inline `.length`**: `PropertyGet` for `.length` on arrays/strings unboxes the pointer and loads from offset 0 directly.
 - **Numeric class fields**: `this.value + 1` where `value: number` skips `js_number_coerce` wrapping, enabling LLVM GVN/LICM.
-- **Scalar replacement**: Non-escaping object literals, array literals, and `new` expressions are decomposed into per-field stack allocas — zero heap allocation. [5](#0-4) [6](#0-5) [7](#0-6) [8](#0-7)
+- **Packed-`f64` loop versioning**: selected numeric-array loops can use a
+  guarded raw-`f64` element path. General array calls and unproven regions stay
+  on boxed/generic paths.
+- **Scalar replacement**: Non-escaping object literals, array literals, and
+  `new` expressions are decomposed only when the local escape/use pattern is
+  proven safe. Method calls and other escapes still force heap/generic paths.
+  [5](#0-4) [6](#0-5) [7](#0-6) [8](#0-7)
 
 ---
 
@@ -78,7 +125,8 @@ When the compiler knows a value's type statically, it bypasses the full NaN-boxi
 
 - Inline elements (NaN-boxed `f64`) follow the header in memory.
 - `length` and `capacity` at fixed offsets for inline codegen.
-- Numeric arrays can be "downgraded" to typed `f64[]` for SIMD vectorization.
+- Selected packed numeric-array loops can be versioned to guarded raw-`f64`
+  loads/stores; this is not a general typed-array object ABI.
 
 ### BigInt (`BigIntHeader`)
 
@@ -154,7 +202,7 @@ Every allocation is preceded by an 8-byte `GcHeader`: `obj_type` (u8), `gc_flags
 
 ### Closures
 
-`ClosureHeader`: `func_ptr` (usize), `capture_count` (u32, high bit = `CAPTURES_THIS_FLAG`), `type_tag` (`CLOSURE_MAGIC 0x434C_4F53`), variadic `captures[]` (u64 slots). Mutable captures are heap-boxed. Side-tables: `CLOSURE_REST_REGISTRY`, `CLOSURE_ARITY_REGISTRY`, `DISPATCH_CACHE`.
+`ClosureHeader`: `func_ptr` (usize), `capture_count` (u32, high bit = `CAPTURES_THIS_FLAG`), `type_tag` (`CLOSURE_MAGIC 0x434C_4F53`), variadic `captures[]` (u64 slots). Mutable captures are heap-boxed. Side-tables: `CLOSURE_REST_REGISTRY`, `CLOSURE_ARITY_REGISTRY`, `DISPATCH_CACHE`. Closure bodies may consume region-local native facts, but the closure call/capture ABI is still the generic closure pointer plus boxed `double` argument/return model.
 
 ### Async/Await
 
@@ -250,6 +298,16 @@ Lone surrogate handling in WTF-8 strings is a known categorical gap. The `STRING
 
 `Error` and basic `throw`/`catch` work, but custom error subclasses have limited support. [35](#0-34)
 
+### P. General Typed Function/Method/Closure ABI — Follow-up
+
+This branch does not implement typed clones or generic trampolines for user
+functions, methods, static methods, or closures. Function and method lowering
+still defines `double` parameters and `double` returns. Closure body lowering
+still defines `i64 this_closure`, then `double` parameters and a `double`
+return. Native fact collection now runs for these bodies, so selected regions
+inside them can use native reps, but call boundaries remain the generic
+JSValue/NaN-box ABI.
+
 ---
 
 ## Summary Diagram
@@ -263,8 +321,8 @@ graph TD
         D["Promise + Microtask Queue"]
         E["String/Array/Map/Set/Buffer/BigInt/Date/Symbol/RegExp"]
         F["Threading (parallelMap/spawn, shared-nothing)"]
-        G["Type-driven i32/i64 fast paths"]
-        H["Scalar replacement (non-escaping objects)"]
+        G["Selected region-local i32/u32/f64 fast paths"]
+        H["Selected Buffer/Uint8Array native access proofs"]
         I["VTable dynamic dispatch"]
         J["JS interop escape hatch (V8/QuickJS)"]
     end
@@ -275,6 +333,7 @@ graph TD
         M["Decorator runtime metadata (legacy only)"]
         N["node:stream surface"]
         O["WTF-8 lone surrogates"]
+        AA["Scalar replacement and packed-f64 paths (limited proof shapes)"]
     end
 
     subgraph "Not Supported (Architectural)"
@@ -285,6 +344,7 @@ graph TD
         T["Regex lookbehind (Rust regex crate)"]
         U["Computed property keys in object literals"]
         V["Precise GC (conservative scan only → no moving GC)"]
+        W["General typed clones/trampolines for function/method/closure ABI"]
     end
 ```
 

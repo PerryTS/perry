@@ -249,6 +249,126 @@ fn inclusive_array_length_write_uses_extension_capable_index_set_path() {
     );
 }
 
+fn array_alias_let(id: u32, name: &str, source_id: u32) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Array(Box::new(Type::Number)),
+        mutable: false,
+        init: Some(local(source_id)),
+    }
+}
+
+fn assert_array_alias_blocks_loop_proof(ir: &str) {
+    let cond_ir = block_between(ir, "\nfor.cond.", "\nfor.body.");
+    assert!(
+        cond_ir.contains("plen."),
+        "aliased array loop must keep a live length read in the condition:\n{cond_ir}"
+    );
+    assert!(
+        ir.contains("\nidxset.check_cap."),
+        "aliased array loop must keep the checked IndexSet path:\n{ir}"
+    );
+    assert!(
+        !ir.contains("\nidxset.bounded_numeric_fast."),
+        "aliased array loop must not install bounded-index facts:\n{ir}"
+    );
+}
+
+fn aliased_array_loop(mutator: Expr) -> Vec<Stmt> {
+    vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        array_alias_let(2, "alias", 1),
+        for_loop(
+            3,
+            length(1),
+            vec![Stmt::Expr(mutator), array_set(1, local(3), local(3))],
+        ),
+        Stmt::Return(Some(int(0))),
+    ]
+}
+
+#[test]
+fn local_array_alias_push_blocks_length_and_bounds_proofs() {
+    let body = aliased_array_loop(Expr::ArrayPush {
+        array_id: 2,
+        value: Box::new(int(1)),
+    });
+
+    let ir = compile_ir("array_alias_push_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn local_array_alias_pop_blocks_length_and_bounds_proofs() {
+    let body = aliased_array_loop(Expr::ArrayPop(2));
+
+    let ir = compile_ir("array_alias_pop_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn local_array_alias_splice_blocks_length_and_bounds_proofs() {
+    let body = aliased_array_loop(Expr::ArraySplice {
+        array_id: 2,
+        start: Box::new(int(0)),
+        delete_count: Some(Box::new(int(0))),
+        items: vec![int(1)],
+    });
+
+    let ir = compile_ir("array_alias_splice_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn local_array_alias_length_set_blocks_length_and_bounds_proofs() {
+    let body = aliased_array_loop(Expr::PropertySet {
+        object: Box::new(local(2)),
+        property: "length".to_string(),
+        value: Box::new(int(0)),
+    });
+
+    let ir = compile_ir("array_alias_length_set_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn local_array_alias_generic_receiver_call_blocks_length_and_bounds_proofs() {
+    let body = aliased_array_loop(call(
+        Expr::PropertyGet {
+            object: Box::new(local(2)),
+            property: "push".to_string(),
+        },
+        vec![int(1)],
+    ));
+
+    let ir = compile_ir("array_alias_generic_call_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
+#[test]
+fn loop_local_array_alias_blocks_length_and_bounds_proofs() {
+    let body = vec![
+        number_array_let(1, "arr", vec![0, 0, 0]),
+        for_loop(
+            2,
+            length(1),
+            vec![
+                array_alias_let(3, "alias", 1),
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: 3,
+                    value: Box::new(int(1)),
+                }),
+                array_set(1, local(2), local(2)),
+            ],
+        ),
+        Stmt::Return(Some(int(0))),
+    ];
+
+    let ir = compile_ir("loop_local_array_alias_blocks_loop_proof.ts", body);
+    assert_array_alias_blocks_loop_proof(&ir);
+}
+
 #[test]
 fn inclusive_local_length_bound_does_not_use_local_length_bound_fact() {
     let body = vec![

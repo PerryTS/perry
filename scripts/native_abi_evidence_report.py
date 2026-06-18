@@ -12,9 +12,20 @@ from typing import Any, Optional
 
 SCHEMA_VERSION = 1
 
+SCOPE = {
+    "summary": (
+        "Evidence covers selected native binding descriptors and region-local "
+        "native type lowering."
+    ),
+    "not_covered": (
+        "This packet does not claim a general typed function/method/closure "
+        "ABI, typed clones, or generic trampoline dispatch."
+    ),
+}
+
 REQUIRED_CORRECTNESS = {
     "native_abi_contract": {
-        "label": "Native ABI contract",
+        "label": "Selected native ABI contract",
         "dir": "native-abi-contract",
         "stdout": "PASS",
         "tokens": (
@@ -471,6 +482,7 @@ def build_packet(root: Path, metadata_path: Path, repo_root: Path, *, gate: bool
             },
             "compiler_suite_report": compiler.get("suite_report"),
         },
+        "scope": SCOPE,
         "correctness": correctness,
         "native_call_lowering": compiler,
         "gc_root_safety": runtime,
@@ -482,12 +494,18 @@ def build_packet(root: Path, metadata_path: Path, repo_root: Path, *, gate: bool
 def markdown_for_packet(packet: dict[str, Any], repo_root: Path) -> str:
     status = str(packet.get("status", "missing")).upper()
     lines = [
-        f"# Native ABI Evidence Packet: {status}",
+        f"# Selected Native / Region-Local Evidence Packet: {status}",
         "",
         f"- Generated: `{packet.get('generated_at', '')}`",
         f"- Root: `{packet.get('root', '')}`",
         f"- Gate: `{packet.get('gate')}`",
     ]
+    scope = packet.get("scope", {})
+    if isinstance(scope, dict):
+        lines.append("")
+        lines.append("## Scope")
+        lines.append(f"- {scope.get('summary', SCOPE['summary'])}")
+        lines.append(f"- {scope.get('not_covered', SCOPE['not_covered'])}")
     if packet.get("errors"):
         lines.append("")
         lines.append("## Gate Failures")
@@ -502,7 +520,7 @@ def markdown_for_packet(packet: dict[str, Any], repo_root: Path) -> str:
         )
 
     lines.append("")
-    lines.append("## Native Call Lowering")
+    lines.append("## Selected Native / Region-Local Lowering")
     lowering = packet.get("native_call_lowering", {})
     lines.append(f"- Suite: `{lowering.get('status', 'missing')}` report=`{lowering.get('suite_report', '')}`")
     for name, row in lowering.get("workloads", {}).items():

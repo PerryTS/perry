@@ -46,6 +46,10 @@ fn register(site_id: u64, kind: TypedFeedbackSiteKind, op: &'static str) {
     );
 }
 
+fn assert_undefined(value: f64) {
+    assert_eq!(value.to_bits(), crate::value::TAG_UNDEFINED);
+}
+
 fn class_instance(
     class_id: u32,
     key_name: &'static [u8],
@@ -534,6 +538,216 @@ fn typed_feedback_array_set_boxed_fallback_preserves_original_index_value() {
         crate::object::js_object_get_field_by_name_f64(obj, zero_key).to_bits(),
         crate::value::TAG_UNDEFINED
     );
+}
+
+#[test]
+fn typed_feedback_boxed_fallback_preserves_fractional_keys_for_array_like_receivers() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(73, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
+
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_box = crate::value::js_nanbox_pointer(buf as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, buf_box, 1.0),
+        22.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, buf_box, 1.5,
+    ));
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_box = crate::value::js_nanbox_pointer(ta as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, ta_box, 1.0),
+        33.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, ta_box, 1.5,
+    ));
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_box = crate::value::js_nanbox_pointer(set as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, set_box, 1.0),
+        20.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, set_box, 1.5,
+    ));
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_box = crate::value::js_nanbox_pointer(map as i64);
+    assert_eq!(
+        js_typed_feedback_array_index_get_fallback_boxed(73, map_box, 1.0),
+        20.0
+    );
+    assert_undefined(js_typed_feedback_array_index_get_fallback_boxed(
+        73, map_box, 1.5,
+    ));
+
+    let site = typed_feedback_snapshot()
+        .sites
+        .into_iter()
+        .find(|site| site.site_id == 73)
+        .expect("site 73");
+    assert_eq!(site.fallback_calls, 8);
+}
+
+#[test]
+fn typed_feedback_boxed_set_fallback_does_not_truncate_fractional_array_like_keys() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(74, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
+
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_box = crate::value::js_nanbox_pointer(buf as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.5, 99.0);
+    assert_eq!(crate::buffer::js_buffer_get(buf, 1), 22);
+    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.0, 99.0);
+    assert_eq!(crate::buffer::js_buffer_get(buf, 1), 99);
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_box = crate::value::js_nanbox_pointer(ta as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.5, 88.0);
+    assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 33.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.0, 88.0);
+    assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 88.0);
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_box = crate::value::js_nanbox_pointer(set as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, set_box, 1.5, 77.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_box = crate::value::js_nanbox_pointer(map as i64);
+    js_typed_feedback_array_index_set_fallback_boxed(74, map_box, 1.5, 66.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
+
+    let map_handle = map_box.to_bits() as i64;
+    js_typed_feedback_object_set_index_polymorphic(74, map_handle, 1.5, 55.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
+
+    let set_handle = set_box.to_bits() as i64;
+    js_typed_feedback_object_set_index_polymorphic(74, set_handle, 1.5, 44.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let site = typed_feedback_snapshot()
+        .sites
+        .into_iter()
+        .find(|site| site.site_id == 74)
+        .expect("site 74");
+    assert_eq!(site.fallback_calls, 8);
+}
+
+#[test]
+fn runtime_dynamic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers() {
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_box = crate::value::js_nanbox_pointer(buf as i64);
+    assert_eq!(crate::value::js_dyn_index_get(buf_box, 1.0), 22.0);
+    assert_undefined(crate::value::js_dyn_index_get(buf_box, 1.5));
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_box = crate::value::js_nanbox_pointer(ta as i64);
+    assert_eq!(crate::value::js_dyn_index_get(ta_box, 1.0), 33.0);
+    assert_undefined(crate::value::js_dyn_index_get(ta_box, 1.5));
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_box = crate::value::js_nanbox_pointer(set as i64);
+    assert_eq!(crate::value::js_dyn_index_get(set_box, 1.0), 20.0);
+    assert_undefined(crate::value::js_dyn_index_get(set_box, 1.5));
+    crate::value::js_dyn_index_set(set_box, 1.5, 99.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_box = crate::value::js_nanbox_pointer(map as i64);
+    assert_eq!(crate::value::js_dyn_index_get(map_box, 1.0), 20.0);
+    assert_undefined(crate::value::js_dyn_index_get(map_box, 1.5));
+    crate::value::js_dyn_index_set(map_box, 1.5, 88.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
+}
+
+#[test]
+fn polymorphic_index_fallbacks_preserve_fractional_keys_for_array_like_receivers() {
+    let buf = crate::buffer::js_buffer_alloc(3, 0);
+    crate::buffer::js_buffer_set(buf, 1, 22);
+    let buf_handle = crate::value::js_nanbox_pointer(buf as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(buf_handle, 1.0),
+        22.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        buf_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(buf_handle, 1.5, 99.0);
+    assert_eq!(crate::buffer::js_buffer_get(buf, 1), 22);
+
+    let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
+    crate::typedarray::js_typed_array_set(ta, 1, 33.0);
+    let ta_handle = crate::value::js_nanbox_pointer(ta as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(ta_handle, 1.0),
+        33.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        ta_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(ta_handle, 1.5, 88.0);
+    assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 33.0);
+
+    let set = crate::set::js_set_alloc(4);
+    crate::set::js_set_add(set, 10.0);
+    crate::set::js_set_add(set, 20.0);
+    let set_handle = crate::value::js_nanbox_pointer(set as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(set_handle, 1.0),
+        20.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        set_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(set_handle, 1.5, 77.0);
+    assert_eq!(crate::set::js_set_size(set), 2);
+    assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
+
+    let map = crate::map::js_map_alloc(4);
+    crate::map::js_map_set(map, 10.0, 100.0);
+    crate::map::js_map_set(map, 20.0, 200.0);
+    let map_handle = crate::value::js_nanbox_pointer(map as i64).to_bits() as i64;
+    assert_eq!(
+        crate::object::js_object_get_index_polymorphic(map_handle, 1.0),
+        20.0
+    );
+    assert_undefined(crate::object::js_object_get_index_polymorphic(
+        map_handle, 1.5,
+    ));
+    crate::object::js_object_set_index_polymorphic(map_handle, 1.5, 66.0);
+    assert_eq!(crate::map::js_map_size(map), 2);
+    assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
 }
 
 #[test]

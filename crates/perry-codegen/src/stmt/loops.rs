@@ -377,10 +377,10 @@ fn match_packed_f64_versioned_loop(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Option<PackedF64VersionedLoop> {
-    if ctx.pending_label.is_some() {
+    if !ctx.pending_labels.is_empty() {
         return None;
     }
-    let hoist = condition.and_then(|cond| classify_for_length_hoist(cond, update, body))?;
+    let hoist = condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))?;
     if !matches!(hoist.op, perry_hir::CompareOp::Lt) || hoist.lhs_addend != 0 {
         return None;
     }
@@ -479,27 +479,10 @@ fn expr_is_packed_f64_loop_safe(
         Expr::IndexGet { object, index } => {
             is_packed_f64_loop_index(object, index, arr_id, counter_id)
         }
-        Expr::IndexSet {
-            object,
-            index,
-            value,
-        } => {
-            is_packed_f64_loop_index(object, index, arr_id, counter_id)
-                && packed_f64_loop_store_value_is_safe(ctx, value, arr_id, counter_id)
-        }
-        Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } => {
-            matches!(
-                (target.as_ref(), receiver.as_ref()),
-                (Expr::LocalGet(a), Expr::LocalGet(b)) if *a == arr_id && a == b
-            ) && is_packed_f64_loop_index(target, key, arr_id, counter_id)
-                && packed_f64_loop_store_value_is_safe(ctx, value, arr_id, counter_id)
-        }
+        // A numeric-store fallback can downgrade/invalidate raw-f64 layout.
+        // Without a loop restart, later packed-loop loads would keep using the
+        // loop-entry raw-f64 proof, so store-bearing loops stay on guarded paths.
+        Expr::IndexSet { .. } | Expr::PutValueSet { .. } => false,
         Expr::LocalSet(id, value) => {
             *id != arr_id
                 && *id != counter_id
@@ -576,94 +559,6 @@ fn expr_is_packed_f64_loop_safe(
         | Expr::ArraySplice { .. } => false,
         _ => false,
     }
-}
-
-fn packed_f64_loop_store_value_is_safe(
-    ctx: &FnCtx<'_>,
-    value: &perry_hir::Expr,
-    arr_id: u32,
-    counter_id: u32,
-) -> bool {
-    packed_f64_loop_store_value_is_numeric(ctx, value, arr_id, counter_id)
-        && expr_is_packed_f64_loop_safe(ctx, value, arr_id, counter_id)
-        && !expr_contains_boxed_raw_f64_fallback(ctx, value, arr_id, counter_id)
-}
-
-fn packed_f64_loop_store_value_is_numeric(
-    ctx: &FnCtx<'_>,
-    expr: &perry_hir::Expr,
-    arr_id: u32,
-    counter_id: u32,
-) -> bool {
-    use perry_hir::Expr;
-    match expr {
-        Expr::Integer(_) | Expr::Number(_) => true,
-        Expr::LocalGet(id) if *id == counter_id => true,
-        Expr::LocalGet(id) => matches!(
-            ctx.local_types.get(id),
-            Some(perry_types::Type::Number | perry_types::Type::Int32)
-        ),
-        Expr::IndexGet { object, index } => {
-            is_packed_f64_loop_index(object, index, arr_id, counter_id)
-        }
-        Expr::Binary { left, right, .. }
-        | Expr::MathImul(left, right)
-        | Expr::MathPow(left, right) => {
-            packed_f64_loop_store_value_is_numeric(ctx, left, arr_id, counter_id)
-                && packed_f64_loop_store_value_is_numeric(ctx, right, arr_id, counter_id)
-        }
-        Expr::Unary { operand, .. } | Expr::NumberCoerce(operand) => {
-            packed_f64_loop_store_value_is_numeric(ctx, operand, arr_id, counter_id)
-        }
-        Expr::Conditional {
-            condition: _,
-            then_expr,
-            else_expr,
-        } => {
-            packed_f64_loop_store_value_is_numeric(ctx, then_expr, arr_id, counter_id)
-                && packed_f64_loop_store_value_is_numeric(ctx, else_expr, arr_id, counter_id)
-        }
-        Expr::MathMin(values) | Expr::MathMax(values) => values
-            .iter()
-            .all(|expr| packed_f64_loop_store_value_is_numeric(ctx, expr, arr_id, counter_id)),
-        Expr::MathAbs(value)
-        | Expr::MathSqrt(value)
-        | Expr::MathFloor(value)
-        | Expr::MathCeil(value)
-        | Expr::MathRound(value)
-        | Expr::MathTrunc(value)
-        | Expr::MathSign(value)
-        | Expr::MathF16round(value) => {
-            packed_f64_loop_store_value_is_numeric(ctx, value, arr_id, counter_id)
-        }
-        _ => crate::type_analysis::is_numeric_expr(ctx, expr),
-    }
-}
-
-fn expr_contains_boxed_raw_f64_fallback(
-    ctx: &FnCtx<'_>,
-    expr: &perry_hir::Expr,
-    arr_id: u32,
-    counter_id: u32,
-) -> bool {
-    use perry_hir::Expr;
-    if matches!(
-        expr,
-        Expr::IndexGet { object, index }
-            if is_packed_f64_loop_index(object, index, arr_id, counter_id)
-    ) {
-        return false;
-    }
-    if crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
-        return true;
-    }
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |child| {
-        if !found && expr_contains_boxed_raw_f64_fallback(ctx, child, arr_id, counter_id) {
-            found = true;
-        }
-    });
-    found
 }
 
 fn is_packed_f64_loop_index(
@@ -844,7 +739,7 @@ fn lower_for_after_init(
     // and `for (let i = 0; i < arr.length; i++) for (let j = 0; j <
     // arr.length; j++) ...` patterns.
     let hoist_classification: Option<LengthHoist> = condition
-        .and_then(|cond| classify_for_length_hoist(cond, update, body))
+        .and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
         // `__arr_N` is the for-of desugar's holder — an ALIAS of the user's
         // iterable local. Body mutations go through the user's name
         // (`array.push(1)` → ArrayPush on the user id), so the walker above
@@ -1275,6 +1170,197 @@ pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
     emit_shadow_slot_clears(ctx, &slots);
 }
 
+fn guarded_array_has_local_alias(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    update: Option<&perry_hir::Expr>,
+    body: &[perry_hir::Stmt],
+) -> bool {
+    if guarded_array_has_prior_local_alias(ctx, arr_id) {
+        return true;
+    }
+
+    let mut aliases = std::collections::HashSet::new();
+    aliases.insert(arr_id);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        if let Some(update) = update {
+            changed |= collect_guarded_array_aliases_in_expr(ctx, arr_id, update, &mut aliases);
+        }
+        changed |= collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, &mut aliases);
+    }
+    aliases.len() > 1
+}
+
+fn guarded_array_has_prior_local_alias(ctx: &crate::expr::FnCtx<'_>, arr_id: u32) -> bool {
+    let guarded_root = crate::expr::local_value_alias_root(ctx, arr_id);
+    if guarded_root != arr_id {
+        return true;
+    }
+    ctx.local_value_aliases.keys().any(|alias_id| {
+        *alias_id != arr_id && crate::expr::local_value_alias_root(ctx, *alias_id) == guarded_root
+    })
+}
+
+fn local_may_alias_guarded_array(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    local_id: u32,
+    aliases: &std::collections::HashSet<u32>,
+) -> bool {
+    aliases.contains(&local_id) || crate::expr::local_value_alias_root(ctx, local_id) == arr_id
+}
+
+fn expr_may_resolve_to_guarded_array_alias(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    expr: &perry_hir::Expr,
+    aliases: &std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::LocalGet(id) => local_may_alias_guarded_array(ctx, arr_id, *id, aliases),
+        Expr::LocalSet(_, value) => {
+            expr_may_resolve_to_guarded_array_alias(ctx, arr_id, value, aliases)
+        }
+        Expr::Sequence(exprs) => exprs.last().is_some_and(|expr| {
+            expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases)
+        }),
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => {
+            expr_may_resolve_to_guarded_array_alias(ctx, arr_id, then_expr, aliases)
+                || expr_may_resolve_to_guarded_array_alias(ctx, arr_id, else_expr, aliases)
+        }
+        _ => false,
+    }
+}
+
+fn collect_guarded_array_alias_for_local_write(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    target_id: u32,
+    value: &perry_hir::Expr,
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    target_id != arr_id
+        && expr_may_resolve_to_guarded_array_alias(ctx, arr_id, value, aliases)
+        && aliases.insert(target_id)
+}
+
+fn collect_guarded_array_aliases_in_stmts(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    stmts: &[perry_hir::Stmt],
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| collect_guarded_array_aliases_in_stmt(ctx, arr_id, stmt, aliases))
+}
+
+fn collect_guarded_array_aliases_in_stmt(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    stmt: &perry_hir::Stmt,
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Stmt;
+    match stmt {
+        Stmt::Let { id, init, .. } => init.as_ref().is_some_and(|expr| {
+            collect_guarded_array_alias_for_local_write(ctx, arr_id, *id, expr, aliases)
+                | collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+        }),
+        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+        }
+        Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_) => false,
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, condition, aliases)
+                | collect_guarded_array_aliases_in_stmts(ctx, arr_id, then_branch, aliases)
+                | else_branch.as_ref().is_some_and(|body| {
+                    collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+                })
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, condition, aliases)
+                | collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref().is_some_and(|stmt| {
+                collect_guarded_array_aliases_in_stmt(ctx, arr_id, stmt, aliases)
+            }) | condition.as_ref().is_some_and(|expr| {
+                collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+            }) | update.as_ref().is_some_and(|expr| {
+                collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+            }) | collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+                | catch.as_ref().is_some_and(|catch| {
+                    collect_guarded_array_aliases_in_stmts(ctx, arr_id, &catch.body, aliases)
+                })
+                | finally.as_ref().is_some_and(|body| {
+                    collect_guarded_array_aliases_in_stmts(ctx, arr_id, body, aliases)
+                })
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            collect_guarded_array_aliases_in_expr(ctx, arr_id, discriminant, aliases)
+                | cases.iter().any(|case| {
+                    case.test.as_ref().is_some_and(|expr| {
+                        collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
+                    }) | collect_guarded_array_aliases_in_stmts(ctx, arr_id, &case.body, aliases)
+                })
+        }
+        Stmt::Labeled { body, .. } => {
+            collect_guarded_array_aliases_in_stmt(ctx, arr_id, body.as_ref(), aliases)
+        }
+    }
+}
+
+fn collect_guarded_array_aliases_in_expr(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+    expr: &perry_hir::Expr,
+    aliases: &mut std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Expr;
+    let mut changed = match expr {
+        Expr::LocalSet(id, value) => {
+            collect_guarded_array_alias_for_local_write(ctx, arr_id, *id, value, aliases)
+        }
+        _ => false,
+    };
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        changed |= collect_guarded_array_aliases_in_expr(ctx, arr_id, child, aliases);
+    });
+    changed
+}
+
 /// Inspect a `for` loop's condition expression and body, and return
 /// `Some(...)` if the loop is the well-known shape
 /// `for (let i = ...; i < <arr>.length; ...) { body }` (or `<=`) AND the
@@ -1289,7 +1375,14 @@ pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
 /// inbounds and therefore can't trigger the realloc slow path that would
 /// extend `arr.length`. Under `<=`, `i == arr.length` is reachable, so
 /// array writes must go through the normal extension-capable path.
+///
+/// The proof is intentionally disabled when the guarded array has a local alias
+/// in scope, or when the loop/update creates one. The existing walker reasons
+/// about one local id; accepting `const alias = arr; alias.push(...)` would let
+/// a length mutation bypass both the cached-length slot and the derived
+/// bounded-index facts.
 fn classify_for_length_hoist(
+    ctx: &crate::expr::FnCtx<'_>,
     cond: &perry_hir::Expr,
     update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
@@ -1309,6 +1402,9 @@ fn classify_for_length_hoist(
         },
         _ => return None,
     };
+    if guarded_array_has_local_alias(ctx, arr_id, update, body) {
+        return None;
+    }
     let (bounded_idx_id, lhs_addend) = match left {
         Expr::LocalGet(id) => (*id, 0),
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {

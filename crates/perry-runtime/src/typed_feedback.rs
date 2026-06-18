@@ -1030,6 +1030,32 @@ fn is_numeric_value_bits(bits: u64) -> bool {
     crate::array::value_bits_to_number(bits).is_some()
 }
 
+fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
+    let bits = index.to_bits();
+    if (bits & TAG_MASK) == INT32_TAG {
+        let index = crate::value::JSValue::from_bits(bits).as_int32();
+        return (index >= 0).then_some(index as u32);
+    }
+    if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index < u32::MAX as f64 {
+        Some(index as u32)
+    } else {
+        None
+    }
+}
+
+fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
+    let bits = index.to_bits();
+    if (bits & TAG_MASK) == INT32_TAG {
+        let index = crate::value::JSValue::from_bits(bits).as_int32();
+        return (index >= 0).then_some(index);
+    }
+    if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index <= i32::MAX as f64 {
+        Some(index as i32)
+    } else {
+        None
+    }
+}
+
 fn gc_header_for_user_addr(addr: usize) -> Option<*const crate::gc::GcHeader> {
     if addr < crate::gc::GC_HEADER_SIZE + 0x1000
         || (addr as u64) >> 48 != 0
@@ -1415,15 +1441,30 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         return f64::from_bits(TAG_UNDEFINED);
     }
 
-    if crate::buffer::is_registered_buffer(raw_addr)
-        || crate::typedarray::lookup_typed_array_kind(raw_addr).is_some()
-        || crate::set::is_registered_set(raw_addr)
-        || crate::map::is_registered_map(raw_addr)
-    {
-        if !index.is_finite() || index < 0.0 {
+    if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
+        return crate::typedarray::js_typed_array_index_get_dynamic(
+            raw_addr as *const crate::typedarray::TypedArrayHeader,
+            index,
+        );
+    }
+
+    if crate::buffer::is_registered_buffer(raw_addr) {
+        let Some(index) = finite_nonnegative_i32_index(index) else {
+            return f64::from_bits(TAG_UNDEFINED);
+        };
+        let buf = raw_addr as *const crate::buffer::BufferHeader;
+        let len = unsafe { (*buf).length };
+        if (index as u32) >= len {
             return f64::from_bits(TAG_UNDEFINED);
         }
-        return crate::array::js_array_get_f64(raw_addr as *const ArrayHeader, index as u32);
+        return crate::buffer::js_buffer_get(buf, index) as f64;
+    }
+
+    if crate::set::is_registered_set(raw_addr) || crate::map::is_registered_map(raw_addr) {
+        let Some(index) = finite_nonnegative_u32_index(index) else {
+            return f64::from_bits(TAG_UNDEFINED);
+        };
+        return crate::array::js_array_get_f64(raw_addr as *const ArrayHeader, index);
     }
 
     if !crate::object::is_valid_obj_ptr(raw_addr as *const u8) {
@@ -1710,10 +1751,23 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         return receiver;
     }
 
-    if crate::buffer::is_registered_buffer(raw_addr)
-        || crate::typedarray::lookup_typed_array_kind(raw_addr).is_some()
-    {
-        crate::array::js_array_set_index_or_string(raw_addr as *mut ArrayHeader, index, value);
+    if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
+        crate::typedarray_props::js_typed_array_index_set_dynamic(
+            raw_addr as *mut crate::typedarray::TypedArrayHeader,
+            index,
+            value,
+        );
+        return receiver;
+    }
+
+    if crate::buffer::is_registered_buffer(raw_addr) {
+        if let Some(index) = finite_nonnegative_i32_index(index) {
+            crate::buffer::js_buffer_set(
+                raw_addr as *mut crate::buffer::BufferHeader,
+                index,
+                value as i32,
+            );
+        }
         return receiver;
     }
 
@@ -1784,11 +1838,7 @@ pub extern "C" fn js_typed_feedback_array_set_index_or_string(
     idx: f64,
     value: f64,
 ) -> *mut ArrayHeader {
-    let index = if idx.is_finite() && idx >= 0.0 && idx <= u32::MAX as f64 {
-        idx as u32
-    } else {
-        u32::MAX
-    };
+    let index = finite_nonnegative_u32_index(idx).unwrap_or(u32::MAX);
     observe_array(site_id, arr, index);
     if index == u32::MAX {
         record_guard_fail(site_id);
@@ -1806,11 +1856,7 @@ pub extern "C" fn js_typed_feedback_object_set_index_polymorphic(
     idx: f64,
     value: f64,
 ) {
-    let index = if idx.is_finite() && idx >= 0.0 && idx <= u32::MAX as f64 {
-        idx as u32
-    } else {
-        u32::MAX
-    };
+    let index = finite_nonnegative_u32_index(idx).unwrap_or(u32::MAX);
     observe_array(site_id, obj_handle as *const ArrayHeader, index);
     record_guard_fail(site_id);
     record_fallback_call(site_id);

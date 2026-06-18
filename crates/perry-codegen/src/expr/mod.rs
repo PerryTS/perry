@@ -107,8 +107,9 @@ pub(crate) use pod_record::{
 pub(crate) use range_facts::{
     bounds_for_buffer_access, bounds_for_buffer_access_width, effective_alias_state_for_access,
     guarded_buffer_indices_for_condition, int_range_expr, invalidate_local_write_facts,
-    record_int_facts_for_let, record_int_facts_for_local_set, record_int_facts_for_update,
-    while_condition_range_fact, IntRange, IntRangeFact,
+    local_value_alias_root, record_int_facts_for_let, record_int_facts_for_local_set,
+    record_int_facts_for_update, record_local_value_alias_for_write, while_condition_range_fact,
+    IntRange, IntRangeFact,
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
@@ -735,6 +736,14 @@ pub(crate) struct FnCtx<'a> {
     /// check `ctx.local_class_aliases` (which is keyed by name).
     /// Populated by Stmt::Let alongside `ctx.local_class_aliases`.
     pub local_id_to_name: std::collections::HashMap<u32, String>,
+
+    /// Local value aliases created by `let alias = local` or `alias = local`.
+    /// The value is the canonical source local at the time of the write. Loop
+    /// cached-length and bounded-index proofs use this to conservatively reject
+    /// `arr.length` proofs when `arr` has another local name that can mutate the
+    /// same array through `alias.push()`, `alias.length = ...`, or generic
+    /// receiver calls.
+    pub local_value_aliases: std::collections::HashMap<u32, u32>,
 
     /// Names of imports that are exported variables (not functions).
     /// When an ExternFuncRef with one of these names appears as a value,

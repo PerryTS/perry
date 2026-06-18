@@ -236,6 +236,7 @@ pub(super) fn compile_function(
         local_class_aliases: HashMap::new(),
         local_class_field_aliases: HashMap::new(),
         local_id_to_name: HashMap::new(),
+        local_value_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,

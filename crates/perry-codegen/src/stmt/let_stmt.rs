@@ -79,12 +79,15 @@ pub(crate) fn lower_let(
         }
     }
     if let Some(init_expr) = init {
+        crate::expr::record_local_value_alias_for_write(ctx, id, init_expr);
         if let Some(source_id) = native_i32_alias_source(init_expr) {
             ctx.native_i32_aliases.insert(id, source_id);
         }
         if let Some(buffer_ids) = math_min_length_buffer_ids(init_expr) {
             ctx.min_length_bounds.insert(id, buffer_ids);
         }
+    } else {
+        ctx.local_value_aliases.remove(&id);
     }
     crate::expr::record_int_facts_for_let(ctx, id, init, mutable);
     // Class alias detection. Two shapes:

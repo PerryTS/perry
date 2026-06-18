@@ -180,6 +180,17 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             packet = REPORT.build_packet(root, root / "metadata.json", repo_root, gate=True)
             self.assertEqual(packet["status"], "pass", packet["errors"])
             self.assertEqual(packet["benchmark_deltas"]["status"], "pass")
+            self.assertIn("region-local native type lowering", packet["scope"]["summary"])
+            self.assertIn(
+                "does not claim a general typed function/method/closure ABI",
+                packet["scope"]["not_covered"],
+            )
+
+            markdown = REPORT.markdown_for_packet(packet, repo_root)
+            self.assertIn("# Selected Native / Region-Local Evidence Packet: PASS", markdown)
+            self.assertIn("## Scope", markdown)
+            self.assertIn("typed clones, or generic trampoline dispatch", markdown)
+            self.assertIn("## Selected Native / Region-Local Lowering", markdown)
 
     def test_missing_artifact_fails_gate(self):
         temp, root, repo_root = self.make_packet()

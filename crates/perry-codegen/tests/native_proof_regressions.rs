@@ -2082,6 +2082,83 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
 }
 
 #[test]
+fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
+    let module = module_with_classes_and_params(
+        "packed_f64_store_fallback_then_read.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Number)],
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![1, 2, 3]),
+            number_let(3, "sum", true, int(0)),
+            for_loop(
+                4,
+                length(1),
+                vec![
+                    array_set(1, local(4), local(2)),
+                    Stmt::Expr(Expr::LocalSet(
+                        3,
+                        Box::new(add(local(3), index_get(1, local(4)))),
+                    )),
+                ],
+            ),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "store-bearing loops must not get a packed-f64 clone whose store fallback can invalidate later raw loads:\n{ir}"
+    );
+    assert!(
+        !ir.contains("for.packed_f64_fast"),
+        "store-bearing loop body must not be emitted under the packed-f64 fast clone:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "test must exercise the guarded numeric array store path:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_typed_feedback_array_index_set_fallback_boxed"),
+        "numeric store must retain the boxed fallback that invalidates raw-f64 layout:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"),
+        "later read should be guarded independently after the fallback-capable store:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            matches!(
+                record["expr_kind"].as_str(),
+                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+            )
+        }),
+        "store-bearing loop should not record packed-f64 loop facts:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NumericArrayIndexSet"
+                && record["consumer"] == "js_typed_feedback_array_index_set_fallback_boxed"
+                && record["access_mode"] == "dynamic_fallback"
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
+        }),
+        "numeric store fallback must invalidate raw-f64 layout:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NumericArrayIndexGet"
+                && record["consumer"] == "js_array_numeric_get_f64_unboxed"
+                && record["access_mode"] == "checked_native"
+        }),
+        "later read should use its own guarded numeric-array get, not a packed-loop raw load:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn artifact_records_write_barrier_child_js_value_bits() {
     let module = module_with_classes_and_params(
         "artifact_write_barrier_js_value_bits.ts",

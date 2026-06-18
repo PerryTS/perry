@@ -525,6 +525,7 @@ allowed_hot_loop_runtime_calls = [
   "js_number_coerce",
   "js_uint8array_get",
   "js_uint8array_set",
+  "js_value_length_f64",
 ]
 
 [workloads.h1_buffer_alias_negative.vectorization]
@@ -837,6 +838,7 @@ rejected_fact_reason = "runtime_api"
 [workloads.packed_f64_loop_versioning]
 source = "benchmarks/compiler_output/fixtures/packed_f64_loop_versioning.ts"
 kind = "packed_f64_loop_versioning"
+allow_dynamic_property_runtime = true
 allow_hot_loop_conversions = true
 allowed_hot_loop_runtime_calls = [
   "js_typed_feedback_numeric_array_index_get_guard",
@@ -871,7 +873,7 @@ buffer_slow_path_accesses_static = 0
 
 [[workloads.packed_f64_loop_versioning.ir_checks]]
 name = "packed_f64_loop_guard_emitted"
-contains = "js_typed_feedback_packed_f64_array_loop_guard"
+contains = "call i32 @js_typed_feedback_packed_f64_array_loop_guard"
 detail = "loop versioning emits one packed-f64 array guard before the cloned loops"
 
 [[workloads.packed_f64_loop_versioning.ir_checks]]
@@ -885,17 +887,18 @@ regex_none = [
 detail = "fast clone loads raw f64 array slots without per-access guards or numeric coercion"
 
 [[workloads.packed_f64_loop_versioning.ir_checks]]
-name = "packed_f64_fast_loop_raw_store"
-contains = "js_typed_feedback_numeric_array_index_set_guard"
-regex = '''packed_f64_loop_store\.fast\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_array_numeric_value_to_raw_f64[\s\S]*?\bstore double\b'''
+name = "packed_f64_store_loop_not_cloned"
+contains = "call i32 @js_typed_feedback_numeric_array_index_set_guard"
 regex_none = [
-  '''packed_f64_loop_store\.fast\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_typed_feedback_array_index_set_fallback_boxed''',
+  '''packed_f64_loop_store\.fast''',
+  '''packed_f64_loop_store\.fallback''',
+  '''array\[packed_f64_loop\]=''',
 ]
-detail = "fast clone stores raw f64 array slots only after the packed-loop store guard and raw-f64 canonicalization"
+detail = "store-bearing loops stay out of the packed-f64 clone; guarded numeric store fallback handles invalidation"
 
 [[workloads.packed_f64_loop_versioning.stdout_checks]]
 name = "packed_f64_loop_versioning_checksum"
-equals = "70\n"
+equals = "73\n"
 detail = "packed-f64 loop versioning fixture stdout checksum"
 
 [[workloads.packed_f64_loop_versioning.named_regions]]
@@ -908,12 +911,12 @@ allowed_runtime_calls = [
 ]
 
 [[workloads.packed_f64_loop_versioning.named_regions.selectors]]
-label_prefix_any = ["for.packed_f64_fast.body", "packed_f64_loop_store.fast"]
+label_prefix_any = ["for.packed_f64_fast.body"]
 
 [[workloads.packed_f64_loop_versioning.named_regions.checks]]
-name = "packed_f64_fast_loop_raw_double_accesses"
-min = { load_f64 = 1, store_f64 = 1 }
-detail = "fast clone contains raw double load/store instructions"
+name = "packed_f64_fast_loop_raw_double_loads"
+min = { load_f64 = 1 }
+detail = "fast clone contains raw double loads for read-only packed loops"
 
 [[workloads.packed_f64_loop_versioning.named_regions.checks]]
 name = "packed_f64_fast_loop_no_fp_int_conversions"
@@ -956,43 +959,24 @@ consumed_fact_state = "consumed"
 notes_contains = "index_range=nonnegative_i32"
 
 [[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
-name = "packed_f64_loop_store_fast_f64"
-expr_kind = "PackedF64LoopStore"
-consumer = "packed_f64_loop_store"
+name = "numeric_array_store_guarded_f64"
+expr_kind = "NumericArrayIndexSet"
+consumer = "js_array_numeric_set_f64_unboxed"
 native_rep_name = "f64"
 access_mode = "checked_native"
 bounds_state = "proven_or_guarded"
-consumed_fact_kind = "array_kind"
+consumed_fact_kind = "raw_f64_layout"
 consumed_fact_state = "consumed"
-notes_contains = "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64"
 
 [[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
-name = "packed_f64_loop_store_rhs_guard"
-expr_kind = "PackedF64LoopStore"
-consumer = "packed_f64_loop_store"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-notes_contains = "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard"
-
-[[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
-name = "packed_f64_loop_store_safepoint_reload"
-expr_kind = "PackedF64LoopStore"
-consumer = "packed_f64_loop_store"
-native_rep_name = "f64"
-access_mode = "checked_native"
-bounds_state = "proven_or_guarded"
-notes_contains = "array_reloaded_after_canonicalization=1"
-
-[[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
-name = "packed_f64_loop_store_dynamic_rhs_fallback"
-expr_kind = "PackedF64LoopStore"
+name = "numeric_array_store_fallback_invalidates_raw_layout"
+expr_kind = "NumericArrayIndexSet"
 consumer = "js_typed_feedback_array_index_set_fallback_boxed"
 access_mode = "dynamic_fallback"
 materialization_reason = "runtime_api"
 fallback_reason = "runtime_api"
 rejected_fact_kind = "raw_f64_layout"
-rejected_fact_state = "rejected"
+rejected_fact_state = "invalidated"
 rejected_fact_reason = "runtime_api"
 
 [[workloads.packed_f64_loop_versioning.native_rep_checks.require_records]]
@@ -1066,7 +1050,7 @@ detail = "holey, sparse, frozen/sealed/no-extend, accessor, non-number, any, unk
 
 [[workloads.packed_f64_loop_versioning_negative.stdout_checks]]
 name = "packed_f64_loop_versioning_negative_checksum"
-equals = "141\n"
+equals = "145\n"
 detail = "packed-f64 loop versioning negative fixture preserves the existing generic fallback behavior"
 
 [workloads.dynamic_fractional_array_index]

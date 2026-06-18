@@ -32,8 +32,26 @@ function dynamicRhsPackedStore(value: number): number {
   return score;
 }
 
+function storeFallbackInvalidatesBeforeRead(value: number): number {
+  const values: number[] = [1, 2, 3];
+
+  let stringReads = 0;
+  for (let i = 0; i < values.length; i++) {
+    values[i] = value;
+    const observed: any = values[i];
+    if (typeof observed === "string") {
+      stringReads = stringReads + observed.length;
+    }
+  }
+
+  return stringReads;
+}
+
 const rhsFromAny: any = 2;
+const nonNumberRhs: any = "x";
 
 console.log(
-  packedF64LoopVersioningChecksum() + dynamicRhsPackedStore(rhsFromAny as number)
+  packedF64LoopVersioningChecksum() +
+    dynamicRhsPackedStore(rhsFromAny as number) +
+    storeFallbackInvalidatesBeforeRead(nonNumberRhs as number)
 );

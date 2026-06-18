@@ -490,6 +490,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // on bench_string_ops.
         Expr::LocalSet(id, value) => {
             super::invalidate_local_write_facts(ctx, *id);
+            super::record_local_value_alias_for_write(ctx, *id, value.as_ref());
             if let Some(v) = lower_pod_local_reassignment(ctx, *id, value)? {
                 super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                 return Ok(v);
