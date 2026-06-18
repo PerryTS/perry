@@ -81,6 +81,12 @@ struct AccumulatorClosedForm {
     final_acc: i64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct AffineAccumulatorAddend {
+    coeff: i128,
+    constant: i128,
+}
+
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
 ///
 /// ```text
@@ -498,6 +504,15 @@ pub(crate) fn lower_for(
             body,
             acc,
         )
+        .or_else(|| {
+            classify_affine_accumulator_closed_form(
+                ctx,
+                local_bound_classification,
+                update,
+                body,
+                acc,
+            )
+        })
         .or_else(|| {
             classify_modulo_accumulator_closed_form(
                 ctx,
@@ -1298,6 +1313,126 @@ fn classify_constant_accumulator_closed_form(
         final_counter,
         final_acc: final_acc as i64,
     })
+}
+
+fn classify_affine_accumulator_closed_form(
+    ctx: &FnCtx<'_>,
+    local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    acc: &I64LoopAccumulator,
+) -> Option<AccumulatorClosedForm> {
+    let (counter_id, bound_id, op) = local_bound_classification?;
+    if !matches!(op, perry_hir::CompareOp::Lt)
+        || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+    {
+        return None;
+    }
+
+    let [Stmt::Expr(perry_hir::Expr::LocalSet(acc_id, value))] = body else {
+        return None;
+    };
+    if *acc_id != acc.local_id {
+        return None;
+    }
+    let addend = affine_accumulator_addend(
+        counter_id,
+        self_add_accumulator_addend(acc.local_id, value.as_ref())?,
+    )?;
+    let start = *ctx.exact_safe_integer_locals.get(&counter_id)?;
+    let bound = *ctx.exact_safe_integer_locals.get(&bound_id)?;
+    let initial_acc = *ctx.exact_safe_integer_locals.get(&acc.local_id)?;
+    if start < 0 || bound < 0 || initial_acc < 0 {
+        return None;
+    }
+    let final_counter = if start < bound { bound } else { start };
+    i32::try_from(final_counter).ok()?;
+
+    let iterations = if start < bound {
+        (bound as i128).checked_sub(start as i128)?
+    } else {
+        0
+    };
+    let counter_sum = arithmetic_series_sum(start as i128, final_counter as i128)?;
+    let delta = addend
+        .coeff
+        .checked_mul(counter_sum)?
+        .checked_add(addend.constant.checked_mul(iterations)?)?;
+    let final_acc = (initial_acc as i128).checked_add(delta)?;
+    if final_acc < 0 || final_acc > MAX_SAFE_INTEGER_I64 as i128 {
+        return None;
+    }
+
+    Some(AccumulatorClosedForm {
+        acc_local_id: acc.local_id,
+        counter_local_id: counter_id,
+        final_counter,
+        final_acc: final_acc as i64,
+    })
+}
+
+fn affine_accumulator_addend(
+    counter_id: u32,
+    expr: &perry_hir::Expr,
+) -> Option<AffineAccumulatorAddend> {
+    if let Some(value) = exact_nonnegative_integer_const(expr) {
+        return Some(AffineAccumulatorAddend {
+            coeff: 0,
+            constant: value as i128,
+        });
+    }
+
+    match expr {
+        perry_hir::Expr::LocalGet(id) if *id == counter_id => Some(AffineAccumulatorAddend {
+            coeff: 1,
+            constant: 0,
+        }),
+        perry_hir::Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left,
+            right,
+        } => {
+            let left = affine_accumulator_addend(counter_id, left)?;
+            let right = affine_accumulator_addend(counter_id, right)?;
+            Some(AffineAccumulatorAddend {
+                coeff: left.coeff.checked_add(right.coeff)?,
+                constant: left.constant.checked_add(right.constant)?,
+            })
+        }
+        perry_hir::Expr::Binary {
+            op: perry_hir::BinaryOp::Mul,
+            left,
+            right,
+        } => {
+            let left = affine_accumulator_addend(counter_id, left)?;
+            let right = affine_accumulator_addend(counter_id, right)?;
+            match (left.coeff == 0, right.coeff == 0) {
+                (true, true) => left.scale(right.constant),
+                (true, false) => right.scale(left.constant),
+                (false, true) => left.scale(right.constant),
+                (false, false) => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+impl AffineAccumulatorAddend {
+    fn scale(self, factor: i128) -> Option<Self> {
+        Some(Self {
+            coeff: self.coeff.checked_mul(factor)?,
+            constant: self.constant.checked_mul(factor)?,
+        })
+    }
+}
+
+fn arithmetic_series_sum(start: i128, end_exclusive: i128) -> Option<i128> {
+    if start >= end_exclusive {
+        return Some(0);
+    }
+    let terms = end_exclusive.checked_sub(start)?;
+    let last = end_exclusive.checked_sub(1)?;
+    start.checked_add(last)?.checked_mul(terms)?.checked_div(2)
 }
 
 fn modulo_accumulator_addend(acc_id: u32, counter_id: u32, value: &perry_hir::Expr) -> Option<i64> {
