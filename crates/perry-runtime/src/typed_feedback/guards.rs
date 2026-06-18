@@ -635,6 +635,84 @@ pub extern "C" fn js_class_field_set_fallback(
     );
 }
 
+/// Class-field-SET inline cache, FULLY OUTLINED (#5334, lever B).
+///
+/// For pathologically-large modules (which are forced to `clang -O0`, where the
+/// inline IC diamond's ~15-line-per-site expansion is never optimized away),
+/// codegen replaces the ENTIRE diamond — guard call, fast slot store, and
+/// fallback arm — with a single `call @js_class_field_set_ic(...)`. This trades
+/// a function-call frame on the (cold, startup-dominated) field-set path for a
+/// large reduction in emitted IR, so clang can actually compile the module.
+///
+/// The body reproduces the diamond's exact semantics:
+///   1. run the same `js_typed_feedback_class_field_set_guard`;
+///   2. on a guard PASS, do the same slot store the inline fast block would —
+///      a bare `f64` store for a `require_raw_f64` slot (pointer-free by typed
+///      shape, no barrier), or `js_object_set_field` for a boxed slot (slot
+///      write + layout note + write barrier);
+///   3. on a guard FAIL, record the fallback and route the write by name
+///      (handles frozen / accessor / non-writable / setter-in-chain).
+///
+/// Frozen/accessor/writable/setter handling all live behind the guard, so no
+/// special-casing here. NB: the boxed store always emits the write barrier
+/// (via `js_object_set_field`) — the compile-time non-pointer barrier elision
+/// (#5334 lever D) does not apply on this path, an acceptable cost since the
+/// full-outline path is gated to oversized, startup-dominated modules.
+#[no_mangle]
+pub extern "C" fn js_class_field_set_ic(
+    site_id: u64,
+    receiver: f64,
+    expected_class_id: u32,
+    expected_keys: *const ArrayHeader,
+    key: *const crate::StringHeader,
+    expected_field_index: u32,
+    value: f64,
+    require_raw_f64: i32,
+) {
+    let guard_ok = js_typed_feedback_class_field_set_guard(
+        site_id,
+        receiver,
+        expected_class_id,
+        expected_keys,
+        key,
+        expected_field_index,
+        value,
+        require_raw_f64,
+    );
+
+    if guard_ok != 0 {
+        let object_addr = normalize_raw_object_addr(receiver.to_bits());
+        if require_raw_f64 != 0 {
+            // Pointer-free raw-f64 slot: bare store, no GC barrier.
+            unsafe {
+                let fields_ptr =
+                    (object_addr as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut f64;
+                let slot = fields_ptr.add(expected_field_index as usize);
+                // GC_STORE_AUDIT(POINTER_FREE): a passing guard with
+                // require_raw_f64 proved the slot is pointer-free by typed-shape
+                // descriptor and the value is a plain number — identical to the
+                // inline `class_field_set.fast` raw-f64 store, which is barrier-free.
+                std::ptr::write(slot, value);
+            }
+        } else {
+            // Boxed slot: slot write + layout note + write barrier.
+            crate::object::js_object_set_field(
+                object_addr as *mut ObjectHeader,
+                expected_field_index,
+                crate::value::JSValue::from_bits(value.to_bits()),
+            );
+        }
+        return;
+    }
+
+    // Guard FAIL → identical to the cold guard-miss arm. Delegate to the shared
+    // fallback helper so by-name routing (frozen / accessor / setter-in-chain)
+    // stays defined in exactly one place.
+    let obj_bits = receiver.to_bits();
+    let key_raw = key as u64 & crate::value::POINTER_MASK;
+    js_class_field_set_fallback(site_id, obj_bits, key_raw, value);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_typed_feedback_native_call_method(
     site_id: u64,
@@ -872,6 +950,7 @@ mod keep_guard_symbols {
     #[used] static G0: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, i32) -> i32 = js_typed_feedback_class_field_get_guard;
     #[used] static G1: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) -> i32 = js_typed_feedback_class_field_set_guard;
     #[used] static G1C: extern "C" fn(u64, u64, u64, f64) = js_class_field_set_fallback;
+    #[used] static G1D: extern "C" fn(u64, f64, u32, *const ArrayHeader, *const crate::StringHeader, u32, f64, i32) = js_class_field_set_ic;
     #[used] static G2: unsafe extern "C" fn(u64, f64, u32, *const ArrayHeader, *const i8, usize, *const u8) -> i32 = js_typed_feedback_method_direct_call_guard;
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
 }

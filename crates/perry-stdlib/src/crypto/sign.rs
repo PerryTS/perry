@@ -354,10 +354,30 @@ pub unsafe extern "C" fn js_crypto_create_public_key(
 pub unsafe extern "C" fn js_crypto_create_private_key_value(key_bits: f64) -> *mut StringHeader {
     let pem = match crypto_key_input_to_private_pem(key_bits.to_bits()) {
         Some(pem) => pem,
-        None => return std::ptr::null_mut(),
+        None => {
+            perry_runtime::fs::validate::throw_type_error_with_code(
+                "Invalid key object type, expected private key material",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        }
     };
+    let asym_type = classify_private_key_surrogate(&pem);
+    // Node validates key material: `createPrivateKey("not a pem")` THROWS, it
+    // does NOT produce a key with `type === undefined`. jsonwebtoken's sign()
+    // relies on this — it `try { createPrivateKey(secret) } catch { createSecretKey(...) }`,
+    // so a string HMAC secret must make createPrivateKey throw to reach the
+    // createSecretKey fallback. Accept only inputs we can classify as a real
+    // private key, or that carry a PEM `-----BEGIN ... PRIVATE KEY-----` header
+    // (covers encrypted / DER-in-PEM forms the surrogate parsers may not cover);
+    // reject everything else.
+    if asym_type.is_none() && !pem.contains("PRIVATE KEY") {
+        perry_runtime::fs::validate::throw_type_error_with_code(
+            "Invalid PEM formatted message.",
+            "ERR_OSSL_PEM_NO_START_LINE",
+        );
+    }
     let ptr = js_string_from_bytes(pem.as_ptr(), pem.len() as u32);
-    if let Some(asym_type) = classify_private_key_surrogate(&pem) {
+    if let Some(asym_type) = asym_type {
         mark_keyobject_string(ptr, KeyKind::Private, asym_type);
     }
     ptr
@@ -367,10 +387,29 @@ pub unsafe extern "C" fn js_crypto_create_private_key_value(key_bits: f64) -> *m
 pub unsafe extern "C" fn js_crypto_create_public_key_value(key_bits: f64) -> *mut StringHeader {
     let pem = match crypto_key_input_to_public_pem(key_bits.to_bits()) {
         Some(pem) => pem,
-        None => return std::ptr::null_mut(),
+        None => {
+            perry_runtime::fs::validate::throw_type_error_with_code(
+                "Invalid key object type, expected public key material",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        }
     };
+    let asym_type = classify_public_key_surrogate(&pem);
+    // Mirror `createPrivateKey`: Node throws on non-key material rather than
+    // producing a `type === undefined` key. jsonwebtoken's verify() does
+    // `try { createPublicKey(secret) } catch { createSecretKey(...) }`, so a
+    // string HMAC secret must make createPublicKey throw to reach the
+    // createSecretKey fallback (otherwise verify picks PUB_KEY_ALGS and rejects
+    // an HS256 token with "invalid algorithm"). Accept only classifiable public
+    // keys or PEM-headed input; reject everything else.
+    if asym_type.is_none() && !pem.contains("PUBLIC KEY") && !pem.contains("PRIVATE KEY") {
+        perry_runtime::fs::validate::throw_type_error_with_code(
+            "Invalid PEM formatted message.",
+            "ERR_OSSL_PEM_NO_START_LINE",
+        );
+    }
     let ptr = js_string_from_bytes(pem.as_ptr(), pem.len() as u32);
-    if let Some(asym_type) = classify_public_key_surrogate(&pem) {
+    if let Some(asym_type) = asym_type {
         mark_keyobject_string(ptr, KeyKind::Public, asym_type);
     }
     ptr

@@ -45,6 +45,7 @@ People are building real apps with Perry today. Here are some highlights:
 | Project | What it is | Platforms |
 |---------|-----------|-----------|
 | [**Bloom Engine**](https://bloomengine.dev) | Native TypeScript game engine — Metal, DirectX 12, Vulkan, OpenGL. Write games in TS, ship native. | macOS, Windows, Linux, iOS, tvOS, Android |
+| [**Bloom Jump**](https://bloomengine.dev/showcase) | Free retro pixel platformer — five hand-crafted levels, 60 FPS, original chiptune soundtrack. Built entirely with Bloom Engine. | iOS, iPadOS, macOS, tvOS, visionOS, watchOS, Android |
 | [**Mango**](https://github.com/MangoQuery/app) | Native MongoDB GUI. ~7 MB binary, <100 MB RAM, sub-second cold start. | macOS, Windows, Linux, iOS, Android |
 | [**Hone**](https://hone.codes) | AI-powered native code editor with built-in terminal, Git, and LSP. | macOS, Windows, Linux, iOS, Android, Web |
 | [**Pry**](https://github.com/PerryTS/pry) | Fast, native JSON viewer with tree navigation and search. | macOS, iOS, Android |
@@ -55,19 +56,35 @@ People are building real apps with Perry today. Here are some highlights:
 **Mango** — Native MongoDB GUI ([source](https://github.com/MangoQuery/app))
 
 <p align="center">
-  <img src="docs/images/showcase/mango-explorer.png" width="720" alt="Mango — database explorer view" />
-</p>
-<p align="center">
-  <img src="docs/images/showcase/mango-editor.png" width="720" alt="Mango — document editor view" />
+  <img src="docs/images/showcase/mango-explorer.png" width="400" alt="Mango — database explorer view" />
+  <img src="docs/images/showcase/mango-editor.png" width="400" alt="Mango — document editor view" />
 </p>
 
-**Hone** — AI-powered native code editor ([hone.codes](https://hone.codes))
+**Hone** — AI-powered native code editor ([hone.codes](https://hone.codes)) &nbsp;·&nbsp; **Bloom Jump** — retro pixel platformer ([showcase](https://bloomengine.dev/showcase))
 
 <p align="center">
-  <img src="https://hone.codes/screenshot.png" width="720" alt="Hone — AI code editor built with Perry" />
+  <img src="https://hone.codes/screenshot.png" width="400" alt="Hone — AI code editor built with Perry" />
+  <img src="docs/images/showcase/bloom-jump.webp" width="400" alt="Bloom Jump — retro pixel platformer built with Bloom Engine" />
 </p>
 
 > Have something you've built with Perry? Open a PR to add it here!
+
+---
+
+## Sponsored by
+
+Perry's development is backed by our sponsors. 🙏
+
+<p align="center">
+  <a href="https://www.skelpo.com">
+    <img src="docs/images/sponsors/skelpo-logo.svg" width="360" alt="Skelpo — premium sponsor" />
+  </a>
+</p>
+<p align="center">
+  <strong>💎 <a href="https://www.skelpo.com">Skelpo</a> — Premium Sponsor</strong>
+</p>
+
+> Want to support Perry and see your logo here? Get in touch via [perryts.com](https://perryts.com).
 
 ---
 

@@ -50,7 +50,10 @@ mod opts;
 mod string_pool;
 
 pub use helpers::resolve_target_triple;
-pub(crate) use helpers::{default_target_triple, write_barriers_enabled};
+pub(crate) use helpers::{
+    decide_full_outline_ic, default_target_triple, full_outline_ic_enabled, module_callable_count,
+    set_full_outline_ic, write_barriers_enabled,
+};
 pub use opts::{
     AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
 };
@@ -91,6 +94,13 @@ pub(crate) fn static_method_registry_key(method_name: &str) -> String {
 pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> {
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
+
+    // #5334 lever B: decide ONCE, up front, whether this module is large enough
+    // to full-outline its class-field IC diamonds (read per-site during
+    // lowering via `full_outline_ic_enabled()`). Thread-local, so it must be set
+    // afresh for every module — including the `false` case, to clear any prior
+    // module's decision on this thread.
+    set_full_outline_ic(decide_full_outline_ic(module_callable_count(hir)));
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
     // Null guard global: a zeroed i32 used as a safe dereference target
