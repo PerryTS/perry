@@ -1948,7 +1948,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let synthetic_name = format!("__anon_class_{}", ctx.fresh_class());
                 let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
                 ctx.pending_classes.push(class);
-                let args = new_expr
+                let mut args: Vec<Expr> = new_expr
                     .args
                     .as_ref()
                     .map(|args| {
@@ -1958,6 +1958,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
+                // Issue #212 (anon-class-expression parity): a class expression
+                // nested in a function may capture enclosing-scope locals.
+                // `lower_class_from_ast` → `synthesize_class_captures` extended
+                // the synthesized constructor with one param per captured id and
+                // rewrote the METHOD bodies to read `this.__perry_cap_<id>`. The
+                // named-class `new C()` path above forwards those captures as
+                // `LocalGet(id)`; the directly-constructed anonymous form
+                // (`new class { m() { return outer } }()`) must do the same, or
+                // the cap params receive `undefined` and every method that reads
+                // a captured local sees `undefined`. Refs Next.js bundled tracer
+                // (`getActiveScopeSpan` → `trace.getSpan` on undefined `trace`).
+                let class_captures: Vec<LocalId> = ctx
+                    .lookup_class_captures(&synthetic_name)
+                    .map(|c| c.to_vec())
+                    .unwrap_or_default();
+                for cid in class_captures {
+                    args.push(Expr::LocalGet(cid));
+                }
                 let type_args = new_expr
                     .type_args
                     .as_ref()
