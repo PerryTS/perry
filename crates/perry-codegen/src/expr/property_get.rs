@@ -1656,6 +1656,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
+                        // #5391 path 2: oversized modules full-outline the entire
+                        // class-field-GET diamond (guard + fast load + fallback +
+                        // phi) to a single `js_class_field_get_ic(...)` call that
+                        // returns the field value. This shrinks large minified
+                        // user functions enough for clang -O0 to compile them
+                        // (the per-function compile time is superlinear in size).
+                        // Mirrors the field-SET full-outline (#5334 lever B).
+                        if crate::codegen::full_outline_ic_enabled() {
+                            let (key_raw, expected_keys) = {
+                                let blk = ctx.block();
+                                let key_box = blk.load(DOUBLE, &key_handle_global);
+                                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                let expected_keys =
+                                    blk.load(I64, &format!("@{}", keys_global_name));
+                                (key_raw, expected_keys)
+                            };
+                            let val = ctx.block().call(
+                                DOUBLE,
+                                "js_class_field_get_ic",
+                                &[
+                                    (I64, &site_id),
+                                    (DOUBLE, &recv_box),
+                                    (I32, &expected_class_id_str),
+                                    (I64, &expected_keys),
+                                    (I64, &key_raw),
+                                    (I32, &field_idx_str),
+                                    (I32, requires_raw_f64_str),
+                                ],
+                            );
+                            return Ok(val);
+                        }
                         // #5093: build the guard operands once, up front, so both
                         // the inline shape pre-check and the guard-call fallback
                         // can reference them.
