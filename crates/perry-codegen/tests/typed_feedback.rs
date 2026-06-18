@@ -600,6 +600,133 @@ fn typed_feedback_guards_computed_numeric_array_index_uses_i32_loop_bound() {
 }
 
 #[test]
+fn typed_feedback_preguards_affine_numeric_array_reads_in_local_bound_loop() {
+    let array_ty = Type::Array(Box::new(Type::Number));
+    let a_ik = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(1)),
+        index: Box::new(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(Expr::LocalGet(5)),
+                right: Box::new(Expr::LocalGet(3)),
+            }),
+            right: Box::new(Expr::LocalGet(7)),
+        }),
+    };
+    let b_kj = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(2)),
+        index: Box::new(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::Mul,
+                left: Box::new(Expr::LocalGet(7)),
+                right: Box::new(Expr::LocalGet(3)),
+            }),
+            right: Box::new(Expr::LocalGet(6)),
+        }),
+    };
+    let ir = ir_for(module(
+        "typed_feedback_affine_array_preguard.ts",
+        vec![
+            param(1, "a", array_ty.clone()),
+            param(2, "b", array_ty),
+            param(3, "size", Type::Number),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 4,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 5,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(5)),
+                    right: Box::new(Expr::LocalGet(3)),
+                }),
+                update: Some(Expr::Update {
+                    id: 5,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::For {
+                    init: Some(Box::new(Stmt::Let {
+                        id: 6,
+                        name: "j".to_string(),
+                        ty: Type::Number,
+                        mutable: true,
+                        init: Some(Expr::Integer(0)),
+                    })),
+                    condition: Some(Expr::Compare {
+                        op: CompareOp::Lt,
+                        left: Box::new(Expr::LocalGet(6)),
+                        right: Box::new(Expr::LocalGet(3)),
+                    }),
+                    update: Some(Expr::Update {
+                        id: 6,
+                        op: UpdateOp::Increment,
+                        prefix: false,
+                    }),
+                    body: vec![Stmt::For {
+                        init: Some(Box::new(Stmt::Let {
+                            id: 7,
+                            name: "k".to_string(),
+                            ty: Type::Number,
+                            mutable: true,
+                            init: Some(Expr::Integer(0)),
+                        })),
+                        condition: Some(Expr::Compare {
+                            op: CompareOp::Lt,
+                            left: Box::new(Expr::LocalGet(7)),
+                            right: Box::new(Expr::LocalGet(3)),
+                        }),
+                        update: Some(Expr::Update {
+                            id: 7,
+                            op: UpdateOp::Increment,
+                            prefix: false,
+                        }),
+                        body: vec![Stmt::Expr(Expr::LocalSet(
+                            4,
+                            Box::new(Expr::Binary {
+                                op: BinaryOp::Add,
+                                left: Box::new(Expr::LocalGet(4)),
+                                right: Box::new(Expr::Binary {
+                                    op: BinaryOp::Mul,
+                                    left: Box::new(a_ik),
+                                    right: Box::new(b_kj),
+                                }),
+                            }),
+                        ))],
+                    }],
+                }],
+            },
+            Stmt::Return(Some(Expr::LocalGet(4))),
+        ],
+    ));
+
+    assert!(ir.contains("affine_preguard.fast"), "{ir}");
+    assert!(ir.contains("bidx.preguarded.fast"), "{ir}");
+    assert!(ir.contains("bidx.preguarded.fallback"), "{ir}");
+    assert!(
+        ir.contains("call void @js_typed_feedback_record_array_guard_fast_passes"),
+        "{ir}"
+    );
+    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard_i32"));
+    assert!(!ir.contains("arr.fast"), "{ir}");
+}
+
+#[test]
 fn typed_feedback_hoists_invariant_numeric_array_get_out_of_inner_loop() {
     let array_ty = Type::Array(Box::new(Type::Number));
     let arr_i = Expr::IndexGet {

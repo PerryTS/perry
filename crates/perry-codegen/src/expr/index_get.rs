@@ -48,8 +48,8 @@ use super::{
     nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
     raw_f64_layout_fact, try_flat_const_2d_int, try_lower_flat_const_index_get,
     try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
-    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, PreguardedAffineIndexExpr,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -590,6 +590,67 @@ fn lower_preguarded_numeric_array_index_get(
     ))
 }
 
+fn affine_index_expr_matches(expr: &Expr, pattern: &PreguardedAffineIndexExpr) -> bool {
+    fn local(expr: &Expr) -> Option<u32> {
+        match expr {
+            Expr::LocalGet(id) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn mul_pair(expr: &Expr) -> Option<(u32, u32)> {
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                left,
+                right,
+            } => Some((local(left.as_ref())?, local(right.as_ref())?)),
+            _ => None,
+        }
+    }
+
+    fn mul_matches(pair: (u32, u32), a: u32, b: u32) -> bool {
+        (pair.0 == a && pair.1 == b) || (pair.0 == b && pair.1 == a)
+    }
+
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    else {
+        return false;
+    };
+
+    let candidates = [
+        (mul_pair(left.as_ref()), local(right.as_ref())),
+        (mul_pair(right.as_ref()), local(left.as_ref())),
+    ];
+    candidates
+        .into_iter()
+        .any(|(mul, add)| match (mul, add, pattern) {
+            (
+                Some(pair),
+                Some(add_id),
+                PreguardedAffineIndexExpr::MulLocalBoundPlusCounter {
+                    mul_local_id,
+                    bound_local_id,
+                    counter_local_id,
+                },
+            ) => add_id == *counter_local_id && mul_matches(pair, *mul_local_id, *bound_local_id),
+            (
+                Some(pair),
+                Some(add_id),
+                PreguardedAffineIndexExpr::CounterTimesBoundPlusLocal {
+                    counter_local_id,
+                    bound_local_id,
+                    add_local_id,
+                },
+            ) => add_id == *add_local_id && mul_matches(pair, *counter_local_id, *bound_local_id),
+            _ => false,
+        })
+}
+
 fn lower_legacy_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -1035,7 +1096,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.i32_identity_functions,
                 );
                 if use_i32_index && require_numeric_layout {
+                    let preguard = if let Expr::LocalGet(arr_id) = object.as_ref() {
+                        ctx.preguarded_numeric_array_affine_index_gets
+                            .iter()
+                            .find(|preguard| {
+                                preguard.array_local_id == *arr_id
+                                    && affine_index_expr_matches(index, &preguard.index)
+                            })
+                            .cloned()
+                    } else {
+                        None
+                    };
                     let idx_i32 = lower_expr_as_i32(ctx, index)?;
+                    if let Some(preguard) = preguard {
+                        return lower_preguarded_numeric_array_index_get(
+                            ctx,
+                            &arr_box,
+                            &idx_i32,
+                            &preguard.site_id,
+                            &preguard.guard_ok_slot,
+                        );
+                    }
                     return lower_guarded_array_index_get_trusted_i32(
                         ctx, &arr_box, &idx_i32, "arr", None,
                     );

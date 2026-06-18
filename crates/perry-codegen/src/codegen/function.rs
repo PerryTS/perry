@@ -227,6 +227,7 @@ pub(super) fn compile_function(
         cached_lengths: HashMap::new(),
         hoisted_array_index_gets: HashMap::new(),
         preguarded_numeric_array_index_gets: HashMap::new(),
+        preguarded_numeric_array_affine_index_gets: Vec::new(),
         bounded_index_pairs: Vec::new(),
         i32_counter_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
