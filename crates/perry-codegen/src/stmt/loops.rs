@@ -46,6 +46,7 @@ struct RangePlainArrayIndexSetPreguard {
     array_local_id: u32,
     index_local_id: u32,
     max_index: PlainArraySetMaxIndex,
+    f64_numeric_update: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1084,9 +1085,23 @@ fn emit_range_plain_array_index_set_preguard(
     ctx.block()
         .store(I32, &pointer_free_result, &pointer_free_range_slot);
 
+    let f64_numeric_range_slot = if preguard.f64_numeric_update {
+        let numeric_result = ctx.block().call(
+            I32,
+            "js_plain_array_f64_number_range_guard",
+            &[(DOUBLE, &arr_box), (I32, &counter_i32), (I32, &max_i32)],
+        );
+        let slot = ctx.func.alloca_entry(I32);
+        ctx.block().store(I32, &numeric_result, &slot);
+        Some(slot)
+    } else {
+        None
+    };
+
     Ok(PreguardedPlainArrayIndexSet {
         guard_ok_slot,
         pointer_free_range_slot: Some(pointer_free_range_slot),
+        f64_numeric_range_slot,
     })
 }
 
@@ -1545,11 +1560,43 @@ fn classify_range_plain_array_index_set_preguard_for_bounds(
     if !expr_preserves_invariant_array_read(value, arr_id, counter_id) {
         return None;
     }
+    let f64_numeric_update = plain_array_set_value_is_self_f64_add(value, arr_id, counter_id);
     Some(RangePlainArrayIndexSetPreguard {
         array_local_id: arr_id,
         index_local_id: counter_id,
         max_index,
+        f64_numeric_update,
     })
+}
+
+fn plain_array_set_value_is_self_f64_add(
+    value: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::{BinaryOp, Expr};
+
+    fn is_self_index_get(expr: &Expr, arr_id: u32, counter_id: u32) -> bool {
+        matches!(
+            expr,
+            Expr::IndexGet { object, index }
+                if matches!(object.as_ref(), Expr::LocalGet(candidate_arr) if *candidate_arr == arr_id)
+                    && matches!(index.as_ref(), Expr::LocalGet(candidate_idx) if *candidate_idx == counter_id)
+        )
+    }
+
+    fn is_numeric_literal(expr: &Expr) -> bool {
+        matches!(expr, Expr::Integer(_) | Expr::Number(_))
+    }
+
+    let Expr::Binary { op, left, right } = value else {
+        return false;
+    };
+    if !matches!(op, BinaryOp::Add) {
+        return false;
+    }
+    (is_self_index_get(left, arr_id, counter_id) && is_numeric_literal(right))
+        || (is_self_index_get(right, arr_id, counter_id) && is_numeric_literal(left))
 }
 
 fn classify_range_plain_array_index_set_preguard_for_condition(

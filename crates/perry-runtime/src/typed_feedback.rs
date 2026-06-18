@@ -1222,6 +1222,38 @@ pub extern "C" fn js_plain_array_inbounds_pointer_free_range_guard(
     }
 }
 
+#[inline]
+fn is_plain_f64_number_slot(value_bits: u64) -> bool {
+    let tag = value_bits & TAG_MASK;
+    !(SHORT_STRING_TAG..=STRING_TAG).contains(&tag)
+}
+
+#[no_mangle]
+pub extern "C" fn js_plain_array_f64_number_range_guard(
+    receiver: f64,
+    first_index: i32,
+    last_index: i32,
+) -> i32 {
+    if first_index < 0 || last_index < first_index {
+        return 0;
+    }
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !plain_array_index_guard(raw_addr as *const ArrayHeader, last_index as u32, true) {
+        return 0;
+    }
+
+    unsafe {
+        let arr = raw_addr as *const ArrayHeader;
+        let elements = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+        for index in first_index as usize..=last_index as usize {
+            if !is_plain_f64_number_slot(*elements.add(index)) {
+                return 0;
+            }
+        }
+    }
+    1
+}
+
 fn numeric_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bounds: bool) -> bool {
     plain_array_index_guard(arr, index, require_in_bounds)
         && crate::array::js_array_is_numeric_f64_layout(arr) != 0

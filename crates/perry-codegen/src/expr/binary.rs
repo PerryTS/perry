@@ -46,6 +46,94 @@ use super::{
     I18nLowerCtx,
 };
 
+fn try_lower_preguarded_plain_array_f64_add(
+    ctx: &mut FnCtx<'_>,
+    array_expr: &Expr,
+    other_expr: &Expr,
+    array_is_left: bool,
+) -> Result<Option<String>> {
+    if !matches!(other_expr, Expr::Integer(_) | Expr::Number(_)) {
+        return Ok(None);
+    }
+
+    let Expr::IndexGet { object, index } = array_expr else {
+        return Ok(None);
+    };
+    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
+        return Ok(None);
+    };
+    let Some(guard_ok_slot) = ctx
+        .preguarded_plain_array_index_sets
+        .get(&(*arr_id, *idx_id))
+        .and_then(|preguard| preguard.f64_numeric_range_slot.clone())
+    else {
+        return Ok(None);
+    };
+
+    let arr_box = lower_expr(ctx, object)?;
+    let idx_i32 = if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+        ctx.block().load(I32, &i32_slot)
+    } else {
+        let idx_double = lower_expr(ctx, index)?;
+        ctx.block().fptosi(DOUBLE, &idx_double, I32)
+    };
+    let other_fast = lower_expr(ctx, other_expr)?;
+
+    let fast_idx = ctx.new_block("plain_f64_add.fast");
+    let fallback_idx = ctx.new_block("plain_f64_add.fallback");
+    let merge_idx = ctx.new_block("plain_f64_add.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let guard_ok_i32 = ctx.block().load(I32, &guard_ok_slot);
+    let guard_ok = ctx.block().icmp_ne(I32, &guard_ok_i32, "0");
+    ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+    ctx.current_block = fallback_idx;
+    let fallback_array = lower_expr(ctx, array_expr)?;
+    let fallback_other = lower_expr(ctx, other_expr)?;
+    let (fallback_left, fallback_right) = if array_is_left {
+        (&fallback_array, &fallback_other)
+    } else {
+        (&fallback_other, &fallback_array)
+    };
+    let fallback_val = ctx.block().call(
+        DOUBLE,
+        "js_dynamic_string_or_number_add",
+        &[(DOUBLE, fallback_left), (DOUBLE, fallback_right)],
+    );
+    let fallback_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fast_idx;
+    let fast_blk = ctx.block();
+    let arr_bits = fast_blk.bitcast_double_to_i64(&arr_box);
+    let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
+    let idx_i64 = fast_blk.zext(I32, &idx_i32, I64);
+    let byte_offset = fast_blk.shl(I64, &idx_i64, "3");
+    let with_header = fast_blk.add(I64, &byte_offset, "8");
+    let element_addr = fast_blk.add(I64, &arr_handle, &with_header);
+    let element_ptr = fast_blk.inttoptr(I64, &element_addr);
+    let array_fast = fast_blk.load(DOUBLE, &element_ptr);
+    let fast_val = if array_is_left {
+        fast_blk.fadd(&array_fast, &other_fast)
+    } else {
+        fast_blk.fadd(&other_fast, &array_fast)
+    };
+    let fast_end_label = fast_blk.label.clone();
+    fast_blk.br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Ok(Some(ctx.block().phi(
+        DOUBLE,
+        &[
+            (&fast_val, &fast_end_label),
+            (&fallback_val, &fallback_end_label),
+        ],
+    )))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Binary { op, left, right } => {
@@ -125,6 +213,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let r_known_non_str =
                     crate::type_analysis::is_numeric_expr(ctx, right) || is_bigint_expr(ctx, right);
                 if !(l_known_non_str && r_known_non_str) {
+                    if let Some(value) =
+                        try_lower_preguarded_plain_array_f64_add(ctx, left, right, true)?
+                    {
+                        return Ok(value);
+                    }
+                    if let Some(value) =
+                        try_lower_preguarded_plain_array_f64_add(ctx, right, left, false)?
+                    {
+                        return Ok(value);
+                    }
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
                     return Ok(ctx.block().call(

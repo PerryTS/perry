@@ -148,6 +148,27 @@ fn unique_temp_dir(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn plain_array_f64_number_range_guard_rejects_mixed_slots() {
+    let mut arr = crate::array::js_array_alloc(0);
+    arr = crate::array::js_array_push_f64(arr, 1.0);
+    arr = crate::array::js_array_push_f64(arr, f64::NAN);
+    arr = crate::array::js_array_push_f64(arr, 3.0);
+    let receiver = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert_eq!(js_plain_array_f64_number_range_guard(receiver, 0, 2), 1);
+    assert_eq!(js_plain_array_f64_number_range_guard(receiver, -1, 2), 0);
+    assert_eq!(js_plain_array_f64_number_range_guard(receiver, 2, 1), 0);
+    assert_eq!(js_plain_array_f64_number_range_guard(receiver, 0, 3), 0);
+
+    let str_ptr = crate::string::js_string_from_bytes(b"mixed".as_ptr(), 5);
+    let str_value = f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits());
+    crate::array::js_array_set_f64(arr, 1, str_value);
+
+    assert_eq!(js_plain_array_f64_number_range_guard(receiver, 0, 2), 0);
+    assert_eq!(js_plain_array_f64_number_range_guard(receiver, 0, 0), 1);
+}
+
+#[test]
 fn typed_feedback_registers_source_attribution() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();

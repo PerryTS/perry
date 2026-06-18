@@ -490,6 +490,12 @@ fn typed_feedback_preguards_plain_array_writes_with_length_bound() {
         ir.contains("call i32 @js_plain_array_inbounds_pointer_free_range_guard"),
         "{ir}"
     );
+    assert!(
+        ir.contains("call i32 @js_plain_array_f64_number_range_guard"),
+        "{ir}"
+    );
+    assert!(ir.contains("plain_f64_add.fast"), "{ir}");
+    assert!(ir.contains("plain_f64_add.fallback"), "{ir}");
     assert!(ir.contains("idxset.preguarded_plain_fast"), "{ir}");
     assert!(ir.contains("idxset.preguarded_plain_fallback"), "{ir}");
     assert!(ir.contains("idxset.preguarded_plain_layout_note"), "{ir}");
@@ -557,6 +563,12 @@ fn typed_feedback_preguards_plain_array_writes_with_local_bound() {
         ir.contains("call i32 @js_plain_array_inbounds_pointer_free_range_guard"),
         "{ir}"
     );
+    assert!(
+        ir.contains("call i32 @js_plain_array_f64_number_range_guard"),
+        "{ir}"
+    );
+    assert!(ir.contains("plain_f64_add.fast"), "{ir}");
+    assert!(ir.contains("plain_f64_add.fallback"), "{ir}");
     assert!(ir.contains("idxset.preguarded_plain_fast"), "{ir}");
     assert!(ir.contains("idxset.preguarded_plain_fallback"), "{ir}");
     assert!(ir.contains("idxset.preguarded_plain_layout_note"), "{ir}");
