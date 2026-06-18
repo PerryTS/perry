@@ -1184,7 +1184,7 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
         let arr = raw_addr as *const ArrayHeader;
         let len = (*arr).length;
         let cap = (*arr).capacity;
-        if len > 16_000_000 || cap > 16_000_000 || len > cap {
+        if len > 16_000_000 || len > cap {
             return false;
         }
         !require_in_bounds || index < len
@@ -1212,7 +1212,7 @@ fn numeric_array_fast_observation(
         let arr = raw_addr as *const ArrayHeader;
         let len = (*arr).length;
         let cap = (*arr).capacity;
-        if len > 16_000_000 || cap > 16_000_000 || len > cap {
+        if len > 16_000_000 || len > cap {
             return None;
         }
         let in_bounds = index < len;
@@ -1265,7 +1265,6 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         let len = (*arr).length;
         let cap = (*arr).capacity;
         len <= 16_000_000
-            && cap <= 16_000_000
             && len < cap
             && is_numeric_value_bits(value.to_bits())
             && crate::array::js_array_is_numeric_f64_layout(arr) != 0

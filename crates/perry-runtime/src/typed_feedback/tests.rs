@@ -672,6 +672,37 @@ fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
 }
 
 #[test]
+fn typed_feedback_numeric_array_guards_allow_overallocated_capacity_below_live_limit() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(67, TypedFeedbackSiteKind::ArrayElement, "arr[i]");
+    register(68, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
+    register(69, TypedFeedbackSiteKind::ArrayElement, "arr.push");
+
+    let mut arr = crate::array::js_array_alloc(0);
+    arr = crate::array::js_array_push_f64(arr, 1.0);
+    unsafe {
+        // Models a dense numeric array grown to 10M elements: doubling can
+        // leave capacity above 16M while the live length remains below it.
+        (*arr).capacity = 16_777_216;
+    }
+    let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_get_guard_i32(67, arr_box, 0, 1),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_numeric_array_index_set_guard(68, arr_box, 0, 2.0, 1),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_numeric_array_push_guard(69, arr_box, 3.0),
+        1
+    );
+}
+
+#[test]
 fn typed_feedback_numeric_array_push_guard_requires_room_numeric_value_and_layout() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();

@@ -793,7 +793,7 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
     }
     let length = (*arr).length;
     let capacity = (*arr).capacity;
-    if length >= capacity || length > 16_000_000 || capacity > 16_000_000 {
+    if length >= capacity || length > 16_000_000 {
         return false;
     }
 
