@@ -1,220 +1,23 @@
-//! `new ClassName(args…)` lowering + recursive field-initializer application.
+//! `new ClassName(args…)` lowering.
 //!
 //! Extracted from `lower_call.rs` (#1099, part of #1097) — pure move,
-//! no behavior change. Holds `lower_new` (Phase C.1 constructor inlining),
-//! the `FieldInitMode` enum, and `apply_field_initializers_recursive`.
+//! no behavior change. Holds `lower_new` (Phase C.1 constructor inlining).
+//! The `FieldInitMode` enum and `apply_field_initializers_recursive` live
+//! in the sibling `field_init` module.
 
 use anyhow::Result;
 use perry_hir::{Expr, Param};
 use perry_types::Type as HirType;
 
+use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
 use super::lower_builtin_new;
+use super::new_helpers::{
+    collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
+    ctor_body_has_value_return, ctor_body_uses_this, node_stream_parent_kind,
+};
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
-
-/// Generic "does any statement in this ctor body satisfy `stmt_pred` or
-/// contain an expression satisfying `expr_pred`" walker, shared by the
-/// no-super static-throw heuristics below.
-fn ctor_body_any(
-    body: &[perry_hir::Stmt],
-    expr_pred: &dyn Fn(&Expr) -> bool,
-    stmt_pred: &dyn Fn(&perry_hir::Stmt) -> bool,
-) -> bool {
-    body.iter().any(|s| stmt_any(s, expr_pred, stmt_pred))
-}
-
-fn stmt_any(
-    stmt: &perry_hir::Stmt,
-    expr_pred: &dyn Fn(&Expr) -> bool,
-    stmt_pred: &dyn Fn(&perry_hir::Stmt) -> bool,
-) -> bool {
-    use perry_hir::Stmt;
-    if stmt_pred(stmt) {
-        return true;
-    }
-    match stmt {
-        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_pred),
-        Stmt::Expr(e) | Stmt::Throw(e) => expr_pred(e),
-        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_pred),
-        Stmt::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            expr_pred(condition)
-                || ctor_body_any(then_branch, expr_pred, stmt_pred)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|b| ctor_body_any(b, expr_pred, stmt_pred))
-        }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_pred(condition) || ctor_body_any(body, expr_pred, stmt_pred)
-        }
-        Stmt::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_deref()
-                .is_some_and(|s| stmt_any(s, expr_pred, stmt_pred))
-                || condition.as_ref().is_some_and(expr_pred)
-                || update.as_ref().is_some_and(expr_pred)
-                || ctor_body_any(body, expr_pred, stmt_pred)
-        }
-        Stmt::Labeled { body, .. } => stmt_any(body, expr_pred, stmt_pred),
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            ctor_body_any(body, expr_pred, stmt_pred)
-                || catch
-                    .as_ref()
-                    .is_some_and(|c| ctor_body_any(&c.body, expr_pred, stmt_pred))
-                || finally
-                    .as_ref()
-                    .is_some_and(|f| ctor_body_any(f, expr_pred, stmt_pred))
-        }
-        Stmt::Switch {
-            discriminant,
-            cases,
-        } => {
-            expr_pred(discriminant)
-                || cases.iter().any(|c| {
-                    c.test.as_ref().is_some_and(expr_pred)
-                        || ctor_body_any(&c.body, expr_pred, stmt_pred)
-                })
-        }
-        Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_) => false,
-    }
-}
-
-const NO_STMT_PRED: &dyn Fn(&perry_hir::Stmt) -> bool = &|_| false;
-
-/// True when a DIRECT `super(...)` call appears in this constructor body
-/// (`walk_expr_children` does not descend into `Expr::Closure` bodies). A
-/// derived constructor that never calls `super()` leaves `this`
-/// uninitialized — ECMAScript then throws ReferenceError at the implicit
-/// `return this`. We detect the static no-super case at compile time so
-/// `new Sub()` throws instead of returning a half-built object.
-fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
-    ctor_body_any(body, &expr_calls_super, NO_STMT_PRED)
-}
-
-fn expr_calls_super(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
-        return true;
-    }
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |child| {
-        if !found && expr_calls_super(child) {
-            found = true;
-        }
-    });
-    found
-}
-
-/// True when a closure (arrow) created in the ctor body contains a
-/// `super(...)` call. Such an arrow can run DURING construction (e.g.
-/// stored on an iterator and invoked from its `return()` while the ctor's
-/// for-of is still iterating), so the static no-super throw must not fire —
-/// unless the body also dereferences `this` directly (see the call site).
-/// Refs class/subclass/derived-class-return-override-{for-of,finally-super}-arrow.
-fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
-    ctor_body_any(body, &expr_calls_super_incl_closures, NO_STMT_PRED)
-}
-
-fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
-        return true;
-    }
-    if let Expr::Closure { body, .. } = expr {
-        return ctor_body_any(body, &expr_calls_super_incl_closures, NO_STMT_PRED);
-    }
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |child| {
-        if !found && expr_calls_super_incl_closures(child) {
-            found = true;
-        }
-    });
-    found
-}
-
-/// True when the ctor body dereferences `this` OUTSIDE nested closures.
-/// Combined with `ctor_body_closure_calls_super`: a direct `this` access in
-/// a no-direct-super derived ctor throws ReferenceError per spec before any
-/// closure could run `super()`, so the static entry throw stays correct
-/// (test262 class/elements/privatefieldset-evaluation-order-1).
-fn ctor_body_uses_this(body: &[perry_hir::Stmt]) -> bool {
-    ctor_body_any(body, &expr_uses_this_direct, NO_STMT_PRED)
-}
-
-fn expr_uses_this_direct(expr: &Expr) -> bool {
-    if matches!(expr, Expr::This) {
-        return true;
-    }
-    if matches!(expr, Expr::Closure { .. }) {
-        return false;
-    }
-    let mut found = false;
-    perry_hir::walker::walk_expr_children(expr, &mut |child| {
-        if !found && expr_uses_this_direct(child) {
-            found = true;
-        }
-    });
-    found
-}
-
-/// True when the constructor body contains a value-bearing `return` in its
-/// own body (closures excluded; a bare `return undefined` does NOT count —
-/// spec falls back to the uninitialized `this` and still throws). The
-/// return-override path initializes the `new` expression's value without
-/// `super()`, so the static no-super ReferenceError must not fire —
-/// `js_ctor_return_override` still enforces the derived-ctor rules on the
-/// returned value at runtime. Refs
-/// class/subclass/class-definition-null-proto-contains-return-override and
-/// class/subclass/builtin-objects/Object/constructor-return-undefined-throws.
-fn ctor_body_has_value_return(body: &[perry_hir::Stmt]) -> bool {
-    ctor_body_any(
-        body,
-        &|_| false,
-        &|s| matches!(s, perry_hir::Stmt::Return(Some(e)) if !matches!(e, Expr::Undefined)),
-    )
-}
-
-fn node_stream_parent_kind(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<&'static str> {
-    let mut cur = class.extends_name.as_deref();
-    let mut depth = 0usize;
-    while let Some(name) = cur {
-        match name {
-            "Readable" => return Some("readable"),
-            "Duplex" => return Some("duplex"),
-            "Transform" => return Some("transform"),
-            _ => {}
-        }
-        if ctx.imported_class_ctors.contains_key(name) {
-            return None;
-        }
-        let Some(parent) = ctx.classes.get(name).copied() else {
-            return None;
-        };
-        if parent.constructor.is_some() {
-            return None;
-        }
-        cur = parent.extends_name.as_deref();
-        depth += 1;
-        if depth > 32 {
-            break;
-        }
-    }
-    None
-}
 
 pub(crate) struct InlineConstructorScope {
     locals: std::collections::HashMap<u32, String>,
@@ -367,64 +170,6 @@ fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) ->
     let ctor_method_name = format!("{}_constructor", class.name);
     ctx.methods
         .contains_key(&(class.name.clone(), ctor_method_name))
-}
-
-/// Collect every LocalId DECLARED (via `Stmt::Let`, incl. nested in compound
-/// statements) within a constructor body. Used to detect the wall-44 inline
-/// collision: a ctor local whose id is also a capture of the enclosing closure.
-/// Mirrors `collect_let_ids` in `class_members.rs`.
-fn collect_decl_local_ids(stmts: &[perry_hir::Stmt], out: &mut std::collections::HashSet<u32>) {
-    use perry_hir::Stmt;
-    for s in stmts {
-        match s {
-            Stmt::Let { id, .. } => {
-                out.insert(*id);
-            }
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                collect_decl_local_ids(then_branch, out);
-                if let Some(e) = else_branch {
-                    collect_decl_local_ids(e, out);
-                }
-            }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_decl_local_ids(body, out)
-            }
-            Stmt::For { init, body, .. } => {
-                if let Some(init_stmt) = init {
-                    if let Stmt::Let { id, .. } = init_stmt.as_ref() {
-                        out.insert(*id);
-                    }
-                }
-                collect_decl_local_ids(body, out);
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                collect_decl_local_ids(body, out);
-                if let Some(c) = catch {
-                    collect_decl_local_ids(&c.body, out);
-                }
-                if let Some(f) = finally {
-                    collect_decl_local_ids(f, out);
-                }
-            }
-            Stmt::Switch { cases, .. } => {
-                for case in cases {
-                    collect_decl_local_ids(&case.body, out);
-                }
-            }
-            Stmt::Labeled { body, .. } => {
-                collect_decl_local_ids(std::slice::from_ref(body.as_ref()), out)
-            }
-            _ => {}
-        }
-    }
 }
 
 fn call_local_constructor_symbol(
@@ -822,171 +567,209 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             ],
         )
     } else if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-        // Compile-time layout constants.
-        const GC_HEADER_SIZE: u64 = 8;
-        const OBJECT_HEADER_SIZE: u64 = 24;
-        const FIELD_SLOT_SIZE: u64 = 8;
-        const MIN_FIELD_SLOTS: u64 = 8;
-        const GC_TYPE_OBJECT: u64 = 2;
-        const GC_FLAG_ARENA: u64 = 0x02;
-        // PR #1146: pointer-free hint for inline-allocated regular
-        // objects. The field-store sites issue per-slot
-        // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
-        // slots regardless of this initial tag.
-        const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-        const OBJECT_TYPE_REGULAR: u64 = 1;
-
-        let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
-        let payload_size = OBJECT_HEADER_SIZE + alloc_field_count * FIELD_SLOT_SIZE;
-        let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
-        let total_size_str = total_size.to_string();
-
-        // Lazy: allocate the per-function arena-state slot on the
-        // first `new` we see. The slot init (`call @js_inline_arena_state`
-        // + store) lives in the entry block via `entry_init_call_ptr`,
-        // so it dominates every reachable use.
-        let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
-            slot
+        if std::env::var_os("PERRY_INLINE_NEW").is_none() {
+            // [#bloat] Default: outline the per-`new`-site allocator. Opt back
+            // into the old inline bump-allocator with PERRY_INLINE_NEW=1.
+            // Measured win-win vs inline: −45 IR lines/site AND ~17% faster on an
+            // 8M-allocation loop (the inline bump bloated the hot loop, hurting
+            // icache/regalloc more than the saved call). Outline the per-`new`-site
+            // inline bump-allocator (~145 lines of per-class-constant IR) into a
+            // single call to the runtime `js_object_alloc_class_inline_keys`,
+            // which performs the identical bump alloc + header init + slot
+            // zero-fill and returns the same user pointer (as i64). Cuts ~145 IR
+            // lines per `new` site to ~3. Only the per-class keys-array global is
+            // loaded (cached per function, same as the inline path).
+            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
+                s
+            } else {
+                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                ctx.class_keys_slots
+                    .insert(class_name.to_string(), s.clone());
+                s
+            };
+            let keys_ptr = ctx.block().load(I64, &keys_slot);
+            ctx.pending_declares.push((
+                "js_object_alloc_class_inline_keys".to_string(),
+                I64,
+                vec![I32, I32, I32, I64],
+            ));
+            ctx.block().call(
+                I64,
+                "js_object_alloc_class_inline_keys",
+                &[
+                    (I32, &cid_str),
+                    (I32, &parent_cid_str),
+                    (I32, &field_count.to_string()),
+                    (I64, &keys_ptr),
+                ],
+            )
         } else {
-            let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
-            ctx.arena_state_slot = Some(slot.clone());
-            slot
-        };
+            // Compile-time layout constants.
+            const GC_HEADER_SIZE: u64 = 8;
+            const OBJECT_HEADER_SIZE: u64 = 24;
+            const FIELD_SLOT_SIZE: u64 = 8;
+            const MIN_FIELD_SLOTS: u64 = 8;
+            const GC_TYPE_OBJECT: u64 = 2;
+            const GC_FLAG_ARENA: u64 = 0x02;
+            // PR #1146: pointer-free hint for inline-allocated regular
+            // objects. The field-store sites issue per-slot
+            // `js_gc_note_slot_layout` so the GC sees real pointer-bearing
+            // slots regardless of this initial tag.
+            const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+            const OBJECT_TYPE_REGULAR: u64 = 1;
 
-        // Hoist the per-class `keys_array` global load to the function
-        // entry block (cached in a stack slot per class). Without this
-        // hoisting, LLVM would reload `@perry_class_keys_<class>` on
-        // every loop iteration, because the loop body's `call
-        // @js_inline_arena_slow_alloc` blocks LICM — LLVM can't prove
-        // the call doesn't modify the global.
-        let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
-            s
-        } else {
-            let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
-            ctx.class_keys_slots
-                .insert(class_name.to_string(), s.clone());
-            s
-        };
-        let keys_ptr = ctx.block().load(I64, &keys_slot);
+            let alloc_field_count = std::cmp::max(field_count as u64, MIN_FIELD_SLOTS);
+            let payload_size = OBJECT_HEADER_SIZE + alloc_field_count * FIELD_SLOT_SIZE;
+            let total_size = GC_HEADER_SIZE + payload_size; // e.g. 96 for any class with ≤8 fields
+            let total_size_str = total_size.to_string();
 
-        // Inline bump-allocator IR.
-        let blk = ctx.block();
-        let state_ptr = blk.load(PTR, &arena_state_slot);
+            // Lazy: allocate the per-function arena-state slot on the
+            // first `new` we see. The slot init (`call @js_inline_arena_state`
+            // + store) lives in the entry block via `entry_init_call_ptr`,
+            // so it dominates every reachable use.
+            let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
+                slot
+            } else {
+                let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
+                ctx.arena_state_slot = Some(slot.clone());
+                slot
+            };
 
-        // offset = state.offset (at byte offset 8 in InlineArenaState).
-        // The offset is invariant 8-aligned: arena blocks start at offset 0
-        // (8-aligned), every allocation is a multiple of 8 (`total_size`
-        // includes the 8-byte GcHeader and `MIN_FIELD_SLOTS=8` slots ×
-        // 8 bytes), and `js_inline_arena_slow_alloc` only ever swings the
-        // state to `block.offset` which is also always 8-aligned. So we
-        // skip the `(offset + 7) & -8` align-up step entirely — saves
-        // 2 instructions per iter on the hot path.
-        let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-        let offset_val = blk.load(I64, &offset_field_ptr);
-        let aligned_off = offset_val.clone();
+            // Hoist the per-class `keys_array` global load to the function
+            // entry block (cached in a stack slot per class). Without this
+            // hoisting, LLVM would reload `@perry_class_keys_<class>` on
+            // every loop iteration, because the loop body's `call
+            // @js_inline_arena_slow_alloc` blocks LICM — LLVM can't prove
+            // the call doesn't modify the global.
+            let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
+                s
+            } else {
+                let s = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                ctx.class_keys_slots
+                    .insert(class_name.to_string(), s.clone());
+                s
+            };
+            let keys_ptr = ctx.block().load(I64, &keys_slot);
 
-        // new_offset = aligned + total_size
-        let new_offset = blk.add(I64, &aligned_off, &total_size_str);
+            // Inline bump-allocator IR.
+            let blk = ctx.block();
+            let state_ptr = blk.load(PTR, &arena_state_slot);
 
-        // size = state.size (at byte offset 16)
-        let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-        let size_val = blk.load(I64, &size_field_ptr);
+            // offset = state.offset (at byte offset 8 in InlineArenaState).
+            // The offset is invariant 8-aligned: arena blocks start at offset 0
+            // (8-aligned), every allocation is a multiple of 8 (`total_size`
+            // includes the 8-byte GcHeader and `MIN_FIELD_SLOTS=8` slots ×
+            // 8 bytes), and `js_inline_arena_slow_alloc` only ever swings the
+            // state to `block.offset` which is also always 8-aligned. So we
+            // skip the `(offset + 7) & -8` align-up step entirely — saves
+            // 2 instructions per iter on the hot path.
+            let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
+            let offset_val = blk.load(I64, &offset_field_ptr);
+            let aligned_off = offset_val.clone();
 
-        // fits = new_offset <= size
-        let fits = blk.icmp_ule(I64, &new_offset, &size_val);
+            // new_offset = aligned + total_size
+            let new_offset = blk.add(I64, &aligned_off, &total_size_str);
 
-        // Set up fast/slow/merge basic blocks.
-        let fast_idx = ctx.new_block("alloc.fast");
-        let slow_idx = ctx.new_block("alloc.slow");
-        let merge_idx = ctx.new_block("alloc.merge");
-        let fast_label = ctx.block_label(fast_idx);
-        let slow_label = ctx.block_label(slow_idx);
-        let merge_label = ctx.block_label(merge_idx);
+            // size = state.size (at byte offset 16)
+            let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
+            let size_val = blk.load(I64, &size_field_ptr);
 
-        ctx.block().cond_br(&fits, &fast_label, &slow_label);
+            // fits = new_offset <= size
+            let fits = blk.icmp_ule(I64, &new_offset, &size_val);
 
-        // ---- Fast path: bump and return data + aligned ----
-        ctx.current_block = fast_idx;
-        let blk = ctx.block();
-        // GC_STORE_AUDIT(INIT): inline arena bump offset is allocator metadata, not a JS heap edge.
-        blk.store(I64, &new_offset, &offset_field_ptr);
-        // data ptr is at byte offset 0 in InlineArenaState
-        let data_ptr = blk.load(PTR, &state_ptr);
-        let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-        let fast_pred_label = blk.label.clone();
-        blk.br(&merge_label);
+            // Set up fast/slow/merge basic blocks.
+            let fast_idx = ctx.new_block("alloc.fast");
+            let slow_idx = ctx.new_block("alloc.slow");
+            let merge_idx = ctx.new_block("alloc.merge");
+            let fast_label = ctx.block_label(fast_idx);
+            let slow_label = ctx.block_label(slow_idx);
+            let merge_label = ctx.block_label(merge_idx);
 
-        // ---- Slow path: call into the runtime ----
-        ctx.current_block = slow_idx;
-        let raw_slow = ctx.block().call(
-            PTR,
-            "js_inline_arena_slow_alloc",
-            &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
-        );
-        let slow_pred_label = ctx.block().label.clone();
-        ctx.block().br(&merge_label);
+            ctx.block().cond_br(&fits, &fast_label, &slow_label);
 
-        // ---- Merge: phi the raw pointer, write headers, NaN-box ----
-        ctx.current_block = merge_idx;
-        let blk = ctx.block();
-        let raw = blk.phi(
-            PTR,
-            &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
-        );
+            // ---- Fast path: bump and return data + aligned ----
+            ctx.current_block = fast_idx;
+            let blk = ctx.block();
+            // GC_STORE_AUDIT(INIT): inline arena bump offset is allocator metadata, not a JS heap edge.
+            blk.store(I64, &new_offset, &offset_field_ptr);
+            // data ptr is at byte offset 0 in InlineArenaState
+            let data_ptr = blk.load(PTR, &state_ptr);
+            let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
+            let fast_pred_label = blk.label.clone();
+            blk.br(&merge_label);
 
-        // Write GcHeader (8 bytes) as a single i64 store. Field
-        // packing (little-endian):
-        //   bits  0..7   = obj_type (u8)
-        //   bits  8..15  = gc_flags (u8)
-        //   bits 16..31  = _reserved (u16)
-        //   bits 32..63  = size (u32)
-        let gc_packed: u64 = GC_TYPE_OBJECT
-            | (GC_FLAG_ARENA << 8)
-            | (GC_LAYOUT_POINTER_FREE << 16)
-            | ((total_size as u64) << 32);
-        // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
-        blk.store(I64, &gc_packed.to_string(), &raw);
+            // ---- Slow path: call into the runtime ----
+            ctx.current_block = slow_idx;
+            let raw_slow = ctx.block().call(
+                PTR,
+                "js_inline_arena_slow_alloc",
+                &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
+            );
+            let slow_pred_label = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
 
-        // Write ObjectHeader at raw + 8.
-        // First 8 bytes: object_type (u32, low) | class_id (u32, high)
-        let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
-        let oh_word_1: u64 = OBJECT_TYPE_REGULAR | ((cid as u64) << 32);
-        blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
+            // ---- Merge: phi the raw pointer, write headers, NaN-box ----
+            ctx.current_block = merge_idx;
+            let blk = ctx.block();
+            let raw = blk.phi(
+                PTR,
+                &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
+            );
 
-        // Second 8 bytes: parent_class_id (u32, low) | field_count (u32, high)
-        let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
-        let oh_word_2: u64 = (parent_cid as u64) | ((field_count as u64) << 32);
-        blk.store(I64, &oh_word_2.to_string(), &oh_addr_2);
+            // Write GcHeader (8 bytes) as a single i64 store. Field
+            // packing (little-endian):
+            //   bits  0..7   = obj_type (u8)
+            //   bits  8..15  = gc_flags (u8)
+            //   bits 16..31  = _reserved (u16)
+            //   bits 32..63  = size (u32)
+            let gc_packed: u64 = GC_TYPE_OBJECT
+                | (GC_FLAG_ARENA << 8)
+                | (GC_LAYOUT_POINTER_FREE << 16)
+                | ((total_size as u64) << 32);
+            // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
+            blk.store(I64, &gc_packed.to_string(), &raw);
 
-        // Third 8 bytes: keys_array pointer. The keys_ptr we loaded
-        // above is an i64 (carries the ArrayHeader address); store as
-        // i64 since the underlying memory is 8 bytes either way.
-        let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
-        // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
-        blk.store(I64, &keys_ptr, &oh_addr_3);
+            // Write ObjectHeader at raw + 8.
+            // First 8 bytes: object_type (u32, low) | class_id (u32, high)
+            let oh_addr_1 = blk.gep(I8, &raw, &[(I64, "8")]);
+            let oh_word_1: u64 = OBJECT_TYPE_REGULAR | ((cid as u64) << 32);
+            blk.store(I64, &oh_word_1.to_string(), &oh_addr_1);
 
-        // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
-        // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately
-        // initializes ALL `max(field_count, 8)` slots "to prevent stale data from
-        // previously freed GC objects from bleeding through." This inline bump path
-        // wrote only the headers and left the slots uninitialized, so a field
-        // read-before-write — or a GC that scans the still-constructing instance —
-        // observed stale arena bytes. When those bytes were a previously-freed
-        // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
-        // crashed with "Cannot read properties of undefined". Slots start at
-        // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
-        for i in 0..alloc_field_count {
-            let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
-            let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
-            // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
-            blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+            // Second 8 bytes: parent_class_id (u32, low) | field_count (u32, high)
+            let oh_addr_2 = blk.gep(I8, &raw, &[(I64, "16")]);
+            let oh_word_2: u64 = (parent_cid as u64) | ((field_count as u64) << 32);
+            blk.store(I64, &oh_word_2.to_string(), &oh_addr_2);
+
+            // Third 8 bytes: keys_array pointer. The keys_ptr we loaded
+            // above is an i64 (carries the ArrayHeader address); store as
+            // i64 since the underlying memory is 8 bytes either way.
+            let oh_addr_3 = blk.gep(I8, &raw, &[(I64, "24")]);
+            // GC_STORE_AUDIT(INIT): keys_array edge is installed before publishing the new object.
+            blk.store(I64, &keys_ptr, &oh_addr_3);
+
+            // PerryTS/perry#4717: zero-fill the field slots with `undefined`, mirroring
+            // `js_object_alloc_with_parent` (runtime object/alloc.rs), which deliberately
+            // initializes ALL `max(field_count, 8)` slots "to prevent stale data from
+            // previously freed GC objects from bleeding through." This inline bump path
+            // wrote only the headers and left the slots uninitialized, so a field
+            // read-before-write — or a GC that scans the still-constructing instance —
+            // observed stale arena bytes. When those bytes were a previously-freed
+            // `undefined`/pointer (e.g. `marked`'s `this.defaults`), the constructor
+            // crashed with "Cannot read properties of undefined". Slots start at
+            // raw + GcHeader(8) + ObjectHeader(24) = raw + 32.
+            for i in 0..alloc_field_count {
+                let slot_off = GC_HEADER_SIZE + OBJECT_HEADER_SIZE + i * FIELD_SLOT_SIZE;
+                let slot_ptr = blk.gep(I8, &raw, &[(I64, &slot_off.to_string())]);
+                // GC_STORE_AUDIT(INIT): freshly allocated inline object slot initialized to undefined.
+                blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot_ptr);
+            }
+
+            // User pointer = raw + 8 (the ObjectHeader address — what the
+            // function-call path returned). Convert to i64 to match what
+            // the existing nanbox_pointer_inline expects.
+            let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
+            blk.ptrtoint(&user_ptr, I64)
         }
-
-        // User pointer = raw + 8 (the ObjectHeader address — what the
-        // function-call path returned). Convert to i64 to match what
-        // the existing nanbox_pointer_inline expects.
-        let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-        blk.ptrtoint(&user_ptr, I64)
     } else {
         // Fallback: build the packed-keys string at this site and
         // call the slower SHAPE_CACHE-aware allocator. Used when the
@@ -1070,7 +853,24 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
             collect_decl_local_ids(&c.body, &mut ids);
             ids.iter().any(|id| ctx.closure_captures.contains_key(id))
         });
-    if ctx.class_stack.iter().any(|active| active == class_name) || ctor_alias_collision {
+    // [#bloat] Default: CALL the shared standalone-symbol constructor instead of
+    // inlining the constructor body at every `new` site. The inlined ctor body
+    // (field-init stores etc.) is the dominant per-`new`-site IR after the
+    // allocator (~136 lines/site); calling the shared ctor symbol emits it once.
+    // Measured win-win vs inlining: ~2.5x FASTER on an 8M construct-heavy loop
+    // AND much smaller IR. Opt back into inlining with PERRY_INLINE_CTOR=1.
+    // Restricted to classes with their OWN constructor: a no-own-ctor subclass
+    // (`class C extends B {}`) gets a synthesized symbol, but the symbol-call
+    // path doesn't reproduce the inline path's leaf-keys/shape setup, so by-name
+    // field reads on the instance return undefined. Own-ctor classes (incl. ones
+    // with `super(...)`/rest params) round-trip correctly through the call.
+    let force_ctor_call = std::env::var_os("PERRY_INLINE_CTOR").is_none()
+        && class.constructor.is_some()
+        && local_constructor_symbol_exists(ctx, class);
+    if ctx.class_stack.iter().any(|active| active == class_name)
+        || ctor_alias_collision
+        || force_ctor_call
+    {
         call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args);
         return Ok(obj_box);
     }
@@ -1695,306 +1495,4 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     ctx.this_stack.pop();
     ctx.class_stack.pop();
     Ok(final_box)
-}
-
-/// Walk the inheritance chain from the root down and apply each class's
-/// field initializers to `this`. Call this inside `lower_new` after the
-/// `this` slot is pushed but before the constructor body is inlined.
-///
-/// Initializers run in declaration order: root parent first, then each
-/// child, matching JavaScript / TypeScript class semantics where fields
-/// are initialized before user-written constructor code executes (field
-/// initializers are conceptually prepended to the constructor body).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum FieldInitMode {
-    /// Apply field initializers for the entire chain root → leaf.
-    All,
-    /// Apply only the ancestors' field initializers (skip the leaf class).
-    /// Used to set up parent fields before a parent ctor body runs.
-    AncestorsOnly,
-    /// Apply only the named class's own field initializers (skip ancestors).
-    /// Used after a parent ctor body has run to install the leaf's fields,
-    /// which may reference state set by the parent body (e.g.
-    /// `enumValues = this.config.enumValues` in drizzle's PgText). Refs #420.
-    SelfOnly,
-    /// Issue #631-followup: apply fields for the chain root → `stop_at`
-    /// (inclusive). Used in the no-own-ctor path BEFORE the inherited-
-    /// ctor body runs, so only the inherited-ctor class's chain has its
-    /// fields set up. Intermediate classes between `stop_at` and the leaf
-    /// (e.g. SQLiteBaseInteger between SQLiteColumn and SQLiteInteger)
-    /// have their fields applied AFTER the inherited-ctor body, via
-    /// `BetweenExclusiveTo`.
-    UpToInclusive(String),
-    /// Apply fields for chain (`stop_at` exclusive) → leaf (inclusive).
-    /// Mirror of `UpToInclusive` for the post-body chain. Skips
-    /// `stop_at` itself because that class's SelfOnly fields are
-    /// applied via the SuperCall site inside the inlined body.
-    BetweenExclusiveTo(String),
-    /// Apply every class after the root ancestor through the leaf. Used
-    /// when a default-derived constructor chain has no explicit inherited
-    /// constructor body, so there is no SuperCall site to apply intermediate
-    /// class fields.
-    AfterRoot,
-}
-
-pub(crate) fn apply_field_initializers_recursive(
-    ctx: &mut FnCtx<'_>,
-    class_name: &str,
-    mode: FieldInitMode,
-) -> Result<()> {
-    // Issue #26 / #321: prefer the authoritative, source-prefix-disambiguated
-    // ancestor chain (built once in `compile_module` alongside the per-class
-    // keys global). Walking `ctx.classes` by `extends_name` mis-resolves
-    // same-named cross-module parents (effect's `Type` in SchemaAST.ts vs
-    // ParseResult.ts) and writes that wrong parent's fields onto the instance
-    // as `undefined`, surfacing as spurious enumerable keys (`_tag,ast,actual,
-    // message` on a `PropertySignature`). The authoritative chain is root →
-    // leaf and carries each ancestor's resolved fields, so we use both its
-    // ORDER (for the mode filter) and its FIELDS (per class below).
-    let mut chain_field_override: std::collections::HashMap<String, Vec<perry_hir::ClassField>> =
-        std::collections::HashMap::new();
-    // Collect the inheritance chain from root down.
-    let mut chain: Vec<String> = Vec::new();
-    if let Some(auth) = ctx.class_init_chains.get(class_name) {
-        for (name, fields) in auth {
-            chain.push(name.clone());
-            chain_field_override.insert(name.clone(), fields.clone());
-        }
-    } else {
-        let mut cur = Some(class_name.to_string());
-        while let Some(c) = cur {
-            let Some(class) = ctx.classes.get(&c).copied() else {
-                break;
-            };
-            chain.push(c.clone());
-            cur = class.extends_name.clone();
-        }
-        chain.reverse();
-    }
-
-    // Apply mode filter:
-    //   All: keep entire chain
-    //   AncestorsOnly: drop the leaf (last entry)
-    //   SelfOnly: keep only the leaf
-    //   UpToInclusive(stop_at): keep chain[0..=index_of(stop_at)]
-    //   BetweenExclusiveTo(stop_at): keep chain[index_of(stop_at)+1..]
-    //   AfterRoot: keep chain[1..]
-    let chain: Vec<String> = match &mode {
-        FieldInitMode::All => chain,
-        FieldInitMode::AncestorsOnly => {
-            // Issue #631-followup: keep only the ROOT class's fields.
-            // Per ECMAScript spec, derived-class field initializers run
-            // AFTER super() returns (so they may depend on parent body
-            // state, e.g. drizzle's `class SQLiteBaseInteger extends
-            // SQLiteColumn { autoIncrement = this.config.autoIncrement }`
-            // — `this.config` is set by Column's body two levels up).
-            // Pre-#631 this kept all-ancestors-but-leaf which incorrectly
-            // ran SQLiteBaseInteger's init before Column's body.
-            //
-            // Each intermediate class's fields are applied via the
-            // SuperCall site (`expr.rs::Expr::SuperCall`'s post-body
-            // intermediate-walk added in this commit). Root's fields
-            // need to be applied here because root has no super() and
-            // its body may reference its own fields directly.
-            if chain.len() <= 1 {
-                Vec::new()
-            } else {
-                vec![chain[0].clone()]
-            }
-        }
-        FieldInitMode::SelfOnly => {
-            if let Some(last) = chain.last().cloned() {
-                vec![last]
-            } else {
-                Vec::new()
-            }
-        }
-        FieldInitMode::UpToInclusive(stop_at) => {
-            if let Some(idx) = chain.iter().position(|n| n == stop_at) {
-                chain[..=idx].to_vec()
-            } else {
-                Vec::new()
-            }
-        }
-        FieldInitMode::BetweenExclusiveTo(stop_at) => {
-            if let Some(idx) = chain.iter().position(|n| n == stop_at) {
-                if idx + 1 < chain.len() {
-                    chain[idx + 1..].to_vec()
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
-        FieldInitMode::AfterRoot => {
-            if chain.len() > 1 {
-                chain[1..].to_vec()
-            } else {
-                Vec::new()
-            }
-        }
-    };
-
-    for class_name_in_chain in chain {
-        // Issue #26: prefer the authoritative chain's resolved fields for this
-        // class (correct cross-module parent layout); fall back to the
-        // name-keyed `ctx.classes` only when no authoritative entry exists.
-        // Local classes carry their real init exprs here; imported/inherited
-        // fields carry `init: None` (→ `undefined`), exactly as before — just
-        // resolved against the RIGHT parent.
-        let class_fields: Vec<perry_hir::ClassField> =
-            if let Some(fields) = chain_field_override.get(&class_name_in_chain) {
-                fields.clone()
-            } else {
-                match ctx.classes.get(&class_name_in_chain).copied() {
-                    Some(c) => c.fields.clone(),
-                    None => continue,
-                }
-            };
-        // Collect (property_name, init_expr) pairs up-front to avoid
-        // holding an immutable borrow of ctx.classes across lower_expr.
-        // Computed-key fields (`[Symbol.for("k")]` etc.) live in a parallel
-        // list since their key is an expression that needs runtime evaluation.
-        //
-        // Fields declared without an initializer (`#x;` / `x: any;`) must
-        // still be written in the constructor as `undefined` — JS semantics
-        // is `new C().x === undefined`, not zero-bytes from the allocator.
-        // Without the explicit write, regular methods see `undefined` (the
-        // field-by-name dispatcher returns undefined for absent fields),
-        // but arrow-class-field bodies that load `this.x` through the
-        // captured-this slot read raw zero bytes — `0 ?? fallback` then
-        // takes the wrong branch (0 is falsy but not nullish), breaking
-        // common patterns like `this.#preparedHeaders ?? new Headers()`
-        // in hono's Context. Lower the missing-init case to
-        // `Expr::Undefined` so the constructor writes the spec-correct
-        // value into the field slot. Refs #486.
-        let mut init_pairs: Vec<(String, Expr)> = Vec::new();
-        let mut init_pairs_computed: Vec<(Expr, Expr)> = Vec::new();
-        for field in &class_fields {
-            // Wall 46: synthesized capture fields (`__perry_cap_*`) are populated
-            // EXCLUSIVELY by the constructor's capture-param assignments — for a
-            // class constructed directly, by its own ctor; for a subclass of an
-            // (inherited) dynamic parent, by super()'s parent-ctor run. They carry
-            // `init: None`, so the default `Expr::Undefined` write below would
-            // re-initialize them to `undefined` during the derived field-init
-            // phase (which runs AFTER super()), CLOBBERING the real captured value
-            // super already stored. That is the Next.js `NextNodeServer extends
-            // _baseserver.default` failure: base-server's `_iserror`/`_utils`/
-            // `_log` read `undefined` in inherited methods. Field-init must never
-            // touch these — skip them so the ctor param assignment is the sole
-            // writer (verified: captures are correct at the parent ctor end and
-            // only vanish during the derived ctor's post-super field-init).
-            if field.key_expr.is_none() && field.name.starts_with("__perry_cap_") {
-                continue;
-            }
-            let init = match &field.init {
-                Some(e) => e.clone(),
-                None => Expr::Undefined,
-            };
-            match &field.key_expr {
-                Some(key) => init_pairs_computed.push((key.clone(), init)),
-                None => init_pairs.push((field.name.clone(), init)),
-            }
-        }
-        if init_pairs.is_empty() && init_pairs_computed.is_empty() {
-            continue;
-        }
-
-        // Temporarily swap class_stack so `this.field` in the init
-        // resolves against the correct class.
-        ctx.class_stack.push(class_name_in_chain.clone());
-        for (prop, init_expr) in init_pairs {
-            // Issue #263: arrow-function class fields like
-            // `arrowField = () => this.value` need their reserved `this`
-            // capture slot patched with the constructor's `this` AFTER
-            // the closure is built — same pattern `lower_object_literal`
-            // already uses for object-literal methods. Without this, the
-            // arrow's body reads slot `auto_captures.len()` of the
-            // closure's capture array (initialized to 0.0 by the
-            // closure-build site at expr.rs:3294-3304), then `this.value`
-            // dereferences address 0 and SIGSEGVs.
-            if let Expr::Closure {
-                params: cparams,
-                body: cbody,
-                captures: ccaps,
-                captures_this: true,
-                ..
-            } = &init_expr
-            {
-                let auto_caps =
-                    crate::type_analysis::compute_auto_captures(ctx, cparams, cbody, ccaps);
-                let this_idx = auto_caps.len() as u32;
-
-                // Lower the closure expression to a NaN-boxed pointer.
-                let closure_val = lower_expr(ctx, &init_expr)?;
-
-                // Read the current `this` from the constructor's this_stack.
-                let this_val = if let Some(slot) = ctx.this_stack.last().cloned() {
-                    ctx.block().load(DOUBLE, &slot)
-                } else {
-                    double_literal(0.0)
-                };
-
-                // Patch the closure's reserved this-slot in-place, then
-                // store the closure as the field via the runtime FFI.
-                let blk = ctx.block();
-                let bits = blk.bitcast_double_to_i64(&closure_val);
-                let closure_handle = blk.and(I64, &bits, POINTER_MASK_I64);
-                let idx_str = this_idx.to_string();
-                blk.call_void(
-                    "js_closure_set_capture_f64",
-                    &[(I64, &closure_handle), (I32, &idx_str), (DOUBLE, &this_val)],
-                );
-
-                // Now store the patched closure as the field. Emit the
-                // property-write call directly, mirroring PropertySet's
-                // codegen path (expr.rs:2559+) — we can't go through
-                // `lower_expr` again because that would re-lower the
-                // closure expression and produce a fresh, unpatched
-                // closure pointer.
-                let key_idx = ctx.strings.intern(&prop);
-                let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let blk = ctx.block();
-                let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                let this_bits = blk.bitcast_double_to_i64(&this_val);
-                let this_raw = blk.and(I64, &this_bits, POINTER_MASK_I64);
-                blk.call_void(
-                    "js_object_set_field_by_name",
-                    &[(I64, &this_raw), (I64, &key_raw), (DOUBLE, &closure_val)],
-                );
-                continue;
-            }
-
-            // Non-closure (or non-this-capturing closure) initializer:
-            // build a PropertySet { this, prop, init_expr } and lower
-            // through the existing path.
-            let set_expr = Expr::PropertySet {
-                object: Box::new(Expr::This),
-                property: prop,
-                value: Box::new(init_expr),
-            };
-            let _ = lower_expr(ctx, &set_expr)?;
-        }
-
-        // Computed-key fields: `[Parent.Symbol.X] = init` lowers to
-        // `this[Parent.Symbol.X] = init`. The key expression is evaluated
-        // at construction time per ES spec — `Object.defineProperty(this, k, …)`
-        // semantics through the IndexSet path. arrow-with-this-capture is
-        // unusual on a computed-key field; if it ever surfaces in real code
-        // we extend this branch the same way the string-keyed loop above
-        // does.
-        for (key_expr, init_expr) in init_pairs_computed {
-            let set_expr = Expr::IndexSet {
-                object: Box::new(Expr::This),
-                index: Box::new(key_expr),
-                value: Box::new(init_expr),
-            };
-            let _ = lower_expr(ctx, &set_expr)?;
-        }
-        ctx.class_stack.pop();
-    }
-    Ok(())
 }

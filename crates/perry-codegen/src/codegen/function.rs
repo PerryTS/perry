@@ -163,7 +163,7 @@ pub(super) fn compile_function(
         strings,
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
-        pending_label: None,
+        pending_labels: Vec::new(),
         classes,
         this_stack: Vec::new(),
         inline_ctor_return: Vec::new(),

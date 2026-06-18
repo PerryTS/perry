@@ -23,54 +23,23 @@ use super::*;
 use crate::ir::*;
 use crate::lower_types::extract_ts_type_with_ctx;
 
-/// Maximum `lower_expr` recursion depth before lowering bails with a
+/// Maximum overall `lower_expr` recursion depth before lowering bails with a
 /// diagnostic instead of overflowing the native stack (#5259).
 ///
-/// Expression lowering is recursive: a left-nested `a+b+c+…` chain, an
-/// `o.a.a.…a` member chain, or an `a||a||…` logical chain each recurses once
-/// per operator/segment. Bundler/minifier output occasionally emits chains
-/// thousands of nodes deep; left unguarded these overflow the stack and
-/// SIGABRT (exit 134) with no diagnostic at all. The compiler runs its
-/// collect/lower walk on a 128 MB stack (`perry-main`, see `crates/perry/
-/// src/main.rs`), and the heaviest shape (member chains) consumes on the
-/// order of ~16 KB of stack per level, so this ceiling keeps worst-case
-/// lowering depth well under ~32 MB — far below the stack limit — while still
-/// sitting far above anything hand-written code or a reasonable build emits.
-/// The only inputs it rejects are the degenerate ones that would otherwise
-/// crash, and they now get a clean "nested too deeply" diagnostic instead.
-pub(crate) const MAX_EXPR_LOWER_DEPTH: u32 = 2000;
+/// Object-literal lowering intentionally supports very deep nested shapes
+/// (see `nested_object_literal_lowers_in_linear_time`). Keep this broad cap
+/// high enough for those fixtures; stack-heavy chain forms are guarded by the
+/// lower `MAX_EXPR_CHAIN_LOWER_DEPTH` limit below.
+pub(crate) const MAX_EXPR_LOWER_DEPTH: u32 = 8192;
 
-fn class_computed_member_registration_expr(class_name: &str, member: &ClassComputedMember) -> Expr {
-    match member.kind {
-        ClassComputedMemberKind::Method => Expr::RegisterClassComputedMethod {
-            class_name: class_name.to_string(),
-            key_expr: Box::new(member.key_expr.clone()),
-            method_name: member.function.name.clone(),
-            is_static: member.is_static,
-            param_count: member.function.params.len() as u32,
-            has_rest: member
-                .function
-                .params
-                .last()
-                .map(|p| p.is_rest)
-                .unwrap_or(false),
-        },
-        ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
-            class_name: class_name.to_string(),
-            key_expr: Box::new(member.key_expr.clone()),
-            getter_name: Some(member.function.name.clone()),
-            setter_name: None,
-            is_static: member.is_static,
-        },
-        ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
-            class_name: class_name.to_string(),
-            key_expr: Box::new(member.key_expr.clone()),
-            getter_name: None,
-            setter_name: Some(member.function.name.clone()),
-            is_static: member.is_static,
-        },
-    }
-}
+/// Stack-heavy expression chains (`1+1+…`, `o.a.a.…`, `a||a||…`) recurse with
+/// larger lowerer frames than object literals. This lower shape-specific cap
+/// converts degenerate chain input into a diagnostic before debug/CI stacks can
+/// overflow, without rejecting supported deep object-literal fixtures.
+pub(crate) const MAX_EXPR_CHAIN_LOWER_DEPTH: u32 = 512;
+
+const EXPR_LOWER_STACK_RED_ZONE: usize = 256 * 1024;
+const EXPR_LOWER_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
 pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     Expr::Call {
@@ -490,7 +459,72 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
     Expr::NativeModuleRef(module_name.to_string())
 }
 
+fn expr_uses_stack_heavy_chain_lowering(expr: &ast::Expr) -> bool {
+    matches!(expr, ast::Expr::Bin(_) | ast::Expr::Member(_))
+}
+
+/// Re-lowering diagnostics, fully gated behind the `PERRY_TRACE_RELOWER` env
+/// var (zero overhead unless set). Counts every `lower_expr` invocation keyed
+/// by source span, so a span lowered far more than once flags redundant
+/// re-lowering (the classic source of super-linear HIR-lowering blowup on
+/// minified bundles). On every N-million calls — and so still on a kill — it
+/// dumps the total/distinct counts and the top re-lowered spans to stderr.
+/// Kept (env-gated) as a standing diagnostic for future lowering perf work.
+pub(crate) mod relower_trace {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    static ENABLED: AtomicBool = AtomicBool::new(false);
+    static INIT: AtomicBool = AtomicBool::new(false);
+    static TOTAL: AtomicU64 = AtomicU64::new(0);
+
+    thread_local! {
+        static SPANS: RefCell<HashMap<(u32, u32), u32>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn enabled() -> bool {
+        if !INIT.load(Ordering::Relaxed) {
+            let on = std::env::var("PERRY_TRACE_RELOWER").is_ok();
+            ENABLED.store(on, Ordering::Relaxed);
+            INIT.store(true, Ordering::Relaxed);
+        }
+        ENABLED.load(Ordering::Relaxed)
+    }
+
+    pub fn record(lo: u32, hi: u32) {
+        let n = TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+        SPANS.with(|m| {
+            *m.borrow_mut().entry((lo, hi)).or_insert(0) += 1;
+        });
+        if n % 5_000_000 == 0 {
+            dump(&format!("periodic@{n}"));
+        }
+    }
+
+    fn dump(tag: &str) {
+        SPANS.with(|m| {
+            let m = m.borrow();
+            let total = TOTAL.load(Ordering::Relaxed);
+            let distinct = m.len();
+            let mut v: Vec<_> = m.iter().map(|(k, c)| (*c, *k)).collect();
+            v.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            eprintln!(
+                "RELOWER[{tag}] total={total} distinct={distinct} ratio={:.2}",
+                total as f64 / distinct.max(1) as f64
+            );
+            for (c, (lo, hi)) in v.into_iter().take(20) {
+                eprintln!("RELOWER  span {lo}..{hi} count={c}");
+            }
+        });
+    }
+}
+
 pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> {
+    if relower_trace::enabled() {
+        let sp = expr.span();
+        relower_trace::record(sp.lo.0, sp.hi.0);
+    }
     // #5259: guard the recursive descent. Without this, a pathologically
     // nested expression (`1+1+…`, `o.a.a.…`, `a||a||…`) overflows the native
     // stack and SIGABRTs with no diagnostic. The depth counter turns that into
@@ -498,16 +532,23 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
     // including the error returns inside `lower_expr_impl`, so a recoverable
     // lowering error elsewhere doesn't leave the depth permanently inflated.
     ctx.expr_lower_depth += 1;
-    if ctx.expr_lower_depth > MAX_EXPR_LOWER_DEPTH {
+    let max_depth = if expr_uses_stack_heavy_chain_lowering(expr) {
+        MAX_EXPR_CHAIN_LOWER_DEPTH
+    } else {
+        MAX_EXPR_LOWER_DEPTH
+    };
+    if ctx.expr_lower_depth > max_depth {
         ctx.expr_lower_depth -= 1;
         crate::lower_bail!(
             expr.span(),
             "expression nested too deeply (exceeded {} levels); split the \
              chain across statements or intermediate variables",
-            MAX_EXPR_LOWER_DEPTH
+            max_depth
         );
     }
-    let result = lower_expr_impl(ctx, expr);
+    let result = stacker::maybe_grow(EXPR_LOWER_STACK_RED_ZONE, EXPR_LOWER_STACK_SEGMENT, || {
+        lower_expr_impl(ctx, expr)
+    });
     ctx.expr_lower_depth -= 1;
     result
 }

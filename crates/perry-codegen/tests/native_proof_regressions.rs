@@ -55,6 +55,7 @@ fn empty_opts() -> CompileOptions {
         is_dynamic_import_target: false,
         debug_locations: false,
         module_source: None,
+        debug_source_line_offset: 0,
     }
 }
 
@@ -962,8 +963,14 @@ fn pod_layout_constants_specialize_generic_layout_type_params() {
     module.functions.retain(|func| func.type_params.is_empty());
     module.init.clear();
     let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
-    let tiny_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout_Tiny");
-    let wide_ir = function_ir_section(&ir, "perry_fn_pod_layout_specialization_ts__layout_Wide");
+    let tiny_ir = function_ir_section(
+        &ir,
+        "perry_fn_pod_layout_specialization_ts__u_layout_24_Tiny",
+    );
+    let wide_ir = function_ir_section(
+        &ir,
+        "perry_fn_pod_layout_specialization_ts__u_layout_24_Wide",
+    );
 
     assert!(
         tiny_ir.contains("8.0") && tiny_ir.contains("4.0") && !tiny_ir.contains("16.0"),
@@ -1002,8 +1009,14 @@ fn native_pod_view_specializes_generic_layout_type_params() {
     module.functions.retain(|func| func.type_params.is_empty());
     module.init.clear();
     let ir = compile_ir_for_module_with_opts(module, pod_layout_specialization_opts()).unwrap();
-    let tiny_ir = function_ir_section(&ir, "perry_fn_native_pod_view_specialization_ts__view_Tiny");
-    let wide_ir = function_ir_section(&ir, "perry_fn_native_pod_view_specialization_ts__view_Wide");
+    let tiny_ir = function_ir_section(
+        &ir,
+        "perry_fn_native_pod_view_specialization_ts__u_view_24_Tiny",
+    );
+    let wide_ir = function_ir_section(
+        &ir,
+        "perry_fn_native_pod_view_specialization_ts__u_view_24_Wide",
+    );
 
     assert!(
         tiny_ir.contains("call i64 @js_native_pod_view") && tiny_ir.contains("i64 8, i64 4"),

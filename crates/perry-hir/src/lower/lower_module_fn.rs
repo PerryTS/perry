@@ -269,6 +269,7 @@ pub fn lower_module_with_class_id_types_and_seed(
         start_class_id,
         resolved_types,
         imported_class_fields,
+        None,
         false,
     )
 }
@@ -284,6 +285,7 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
 ) -> Result<(Module, ClassId)> {
     lower_module_full(
@@ -293,6 +295,7 @@ pub fn lower_module_with_class_id_types_seed_and_entry(
         start_class_id,
         resolved_types,
         imported_class_fields,
+        imported_class_accessors,
         is_entry_module,
         false,
     )
@@ -335,6 +338,7 @@ pub fn lower_module_full(
     start_class_id: ClassId,
     resolved_types: Option<std::collections::HashMap<u32, Type>>,
     imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
     is_entry_module: bool,
     is_external_module: bool,
 ) -> Result<(Module, ClassId)> {
@@ -346,6 +350,9 @@ pub fn lower_module_full(
     ctx.current_strict = ctx.module_strict;
     if let Some(seed) = imported_class_fields {
         ctx.seed_imported_class_fields(seed);
+    }
+    if let Some(seed) = imported_class_accessors {
+        ctx.seed_imported_class_accessors(seed);
     }
     let mut module = Module::new(name);
 
@@ -550,6 +557,28 @@ pub fn lower_module_full(
                                 .insert(ident.id.sym.to_string());
                         }
                     }
+                } else if matches!(&decl.name, ast::Pat::Object(_) | ast::Pat::Array(_)) {
+                    // #5358: a module-level DESTRUCTURING binding
+                    // (`const { src, t } = require('./re.js')`) declared after
+                    // code that references those names — the canonical CJS
+                    // "require at the bottom for cyclic deps" pattern — must
+                    // pre-register each destructured leaf so a class/function
+                    // body lowered earlier resolves `src`/`t` to the module
+                    // slot, not an undefined implicit global. Without this the
+                    // destructuring leaf later allocates a *fresh* id and the
+                    // earlier reference points at the wrong (undefined) slot.
+                    // (The simple-ident arm above already handles `const x =`.)
+                    let mut leaf_names = Vec::new();
+                    crate::lower_patterns::collect_binding_names(&decl.name, &mut leaf_names);
+                    for name in leaf_names {
+                        if ctx.lookup_local(&name).is_none() {
+                            ctx.define_local(name.clone(), Type::Any);
+                            ctx.pre_registered_module_vars.insert(name.clone());
+                            if var_decl.kind == ast::VarDeclKind::Var {
+                                ctx.pre_registered_module_var_decls.insert(name);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -598,6 +627,63 @@ pub fn lower_module_full(
                     init: Some(Expr::Undefined),
                 });
             }
+        }
+    }
+
+    // Annex B B.3.3 (#5297): in sloppy (non-strict) global code, a block-nested
+    // `function f(){}` also creates a global `var f` (undefined until the
+    // declaration runs). Mirror the function-body pre-pass: register one hoisted
+    // slot per such name, emit an undefined-initialised entry, and record name
+    // -> slot in `annexb_block_fn_var_ids` so the block-nested declaration
+    // (lowered via `lower_nested_fn_decl`) writes the closure into it while
+    // keeping its block-local binding independent.
+    if !ctx.module_strict {
+        let body_stmts: Vec<ast::Stmt> = ast_module
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                ast::ModuleItem::Stmt(stmt) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect();
+        // Forbidden: the program's own top-level lexical names make `var f` an
+        // early error; `arguments` is excluded. There are no parameters at
+        // program scope. Nested blocks add their own lexical names while
+        // descending.
+        let mut forbidden = std::collections::HashSet::new();
+        crate::lower_decl::collect_lexical_decl_names(&body_stmts, &mut forbidden);
+        forbidden.insert("arguments".to_string());
+
+        let mut all_names = Vec::new();
+        let mut names = Vec::new();
+        crate::lower_decl::collect_annexb_block_fn_decl_names(
+            &body_stmts,
+            &forbidden,
+            &mut all_names,
+            &mut names,
+        );
+        ctx.annexb_block_fn_names_all.extend(all_names);
+        names.sort();
+        names.dedup();
+        for name in names {
+            // Reuse an existing global `var`, else mint a fresh hoisted slot;
+            // either way emit an undefined-init entry slot so the block's B.3.3
+            // write (which runs before any source-position `var f = …`) has
+            // storage to target.
+            let id = if let Some(existing) = ctx.lookup_local(&name) {
+                existing
+            } else {
+                ctx.define_local(name.clone(), Type::Any)
+            };
+            module.init.push(Stmt::Let {
+                id,
+                name: name.clone(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+            ctx.var_hoisted_ids.insert(id);
+            ctx.annexb_block_fn_var_ids.insert(name, id);
         }
     }
 
@@ -661,7 +747,7 @@ pub fn lower_module_full(
                     {
                         static_method_names.push(format!("#{}", method.key.name));
                     }
-                    ast::ClassMember::ClassProp(prop) if prop.is_static => {
+                    ast::ClassMember::ClassProp(prop) if prop.is_static && !prop.declare => {
                         if let ast::PropName::Ident(ident) = &prop.key {
                             static_field_names.push(ident.sym.to_string());
                         }

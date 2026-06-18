@@ -284,6 +284,7 @@ crates/perry-runtime/src/plugin.rs:
   - perry_plugin_list_tools
   - perry_plugin_load
   - perry_plugin_log
+  - perry_plugin_off
   - perry_plugin_on
   - perry_plugin_register_hook
   - perry_plugin_register_hook_ex
@@ -293,6 +294,10 @@ crates/perry-runtime/src/plugin.rs:
   - perry_plugin_set_config
   - perry_plugin_set_metadata
   - perry_plugin_unload
+  - perry_plugin_unregister_hook
+  - perry_plugin_unregister_route
+  - perry_plugin_unregister_service
+  - perry_plugin_unregister_tool
 crates/perry-runtime/src/process.rs:
   - js_process_env
   - js_process_exit

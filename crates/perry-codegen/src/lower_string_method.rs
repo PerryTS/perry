@@ -310,12 +310,11 @@ pub(crate) fn lower_string_method(
         }
         // Unary string-returning methods (no args).
         "toLowerCase" | "toUpperCase" | "trim" | "trimStart" | "trimEnd" => {
-            if !args.is_empty() {
-                bail!(
-                    "perry-codegen: String.{} takes no args, got {}",
-                    property,
-                    args.len()
-                );
+            // These methods take no args; JS ignores any extras but still
+            // evaluates them for side effects (ECMA-262 argument evaluation
+            // precedes the call). Evaluate then discard.
+            for extra in args.iter() {
+                let _ = lower_expr(ctx, extra)?;
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -900,11 +899,9 @@ pub(crate) fn lower_string_method(
             Ok(nanbox_pointer_inline(blk, &result))
         }
         "isWellFormed" => {
-            if !args.is_empty() {
-                bail!(
-                    "perry-codegen: String.isWellFormed takes no args, got {}",
-                    args.len()
-                );
+            // No-arg method; extras are evaluated for side effects then ignored.
+            for extra in args.iter() {
+                let _ = lower_expr(ctx, extra)?;
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
@@ -912,11 +909,9 @@ pub(crate) fn lower_string_method(
             Ok(blk.call(DOUBLE, "js_string_is_well_formed", &[(I64, &recv_handle)]))
         }
         "toWellFormed" => {
-            if !args.is_empty() {
-                bail!(
-                    "perry-codegen: String.toWellFormed takes no args, got {}",
-                    args.len()
-                );
+            // No-arg method; extras are evaluated for side effects then ignored.
+            for extra in args.iter() {
+                let _ = lower_expr(ctx, extra)?;
             }
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);

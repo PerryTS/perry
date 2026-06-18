@@ -47,10 +47,11 @@ pub(self) use detect::is_js_reserved_word;
 pub(self) use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
+    module_reexport_specs,
 };
 pub(self) use extract_requires::{
     extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
-    function_local_specs, identifier_is_reassigned,
+    function_local_specs, identifier_is_declared_binding, identifier_is_reassigned,
 };
 pub(self) use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,
@@ -59,7 +60,7 @@ pub(self) use hoist_classes::{
 
 // Public API consumed by `compile.rs` / `collect_modules.rs`.
 pub(super) use detect::is_commonjs;
-pub(super) use wrap::wrap_commonjs_for_target;
+pub(super) use wrap::{wrap_commonjs_for_target, wrap_commonjs_with_body_offset};
 
 #[cfg(test)]
 mod tests {
@@ -67,14 +68,45 @@ mod tests {
     use super::extract_exports::{
         extract_exports_from_source, extract_named_exports_from_require,
         extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
+        module_reexport_specs,
     };
     use super::extract_requires::{
         extract_require_aliases_with_ranges, extract_require_specifiers,
     };
-    use super::hoist_classes::{source_has_top_level_return, top_level_class_names};
-    use super::wrap::{wrap_commonjs, wrap_commonjs_for_target};
+    use super::hoist_classes::{
+        extract_top_level_class_decls, source_has_top_level_return, top_level_class_names,
+    };
+    use super::wrap::{wrap_commonjs, wrap_commonjs_for_target, wrap_commonjs_with_body_offset};
     use std::fs;
     use std::path::PathBuf;
+
+    // #5247: the wrapped output must report where the ORIGINAL body begins, and
+    // because blanking/hoisting preserve newlines, the prefix line count lets a
+    // wrapped body line map back to its original-source line. This is the unit
+    // that backs the `--debug-symbols` CJS-wrap coordinate correction.
+    #[test]
+    fn cjs_wrap_body_offset_maps_back_to_original_line() {
+        // Original body: `function f(){...}` on line 1, `module.exports = f`
+        // on line 3. A throw inside f (wrapped line L) must map to original
+        // line `L - prefix_line_count`.
+        let original = "function f() {\n  return new Nope();\n}\nmodule.exports = f;\n";
+        let path = PathBuf::from("/tmp/x/index.js");
+        let (wrapped, body_off) = wrap_commonjs_with_body_offset(original, &path, None);
+        let body_off = body_off.expect("body should be locatable in wrapped output");
+        // Prefix line count = newlines before the body in the wrapped output.
+        let prefix_lines = wrapped.as_bytes()[..body_off]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
+        // The `return new Nope();` line is original line 2. Find its wrapped
+        // line and confirm subtracting the prefix recovers line 2.
+        let needle_off = wrapped.find("return new Nope();").unwrap();
+        let wrapped_line = 1 + wrapped.as_bytes()[..needle_off]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
+        assert_eq!(wrapped_line - prefix_lines, 2);
+    }
 
     #[test]
     fn detects_module_exports_assignment() {
@@ -466,6 +498,120 @@ module.exports = inner;
     }
 
     #[test]
+    fn wrap_does_not_adopt_alias_that_collides_with_named_export() {
+        // Regression: pino.js does `const symbols = require('./lib/symbols')`
+        // AND `module.exports.symbols = symbols`. Adopting the `symbols` alias
+        // as the import local (`import symbols from './lib/symbols';`) collided
+        // with the module-scope `export const symbols = _cjs.symbols;` the wrap
+        // emits for the named export. HIR bound the IIFE-body reference
+        // `const { ... } = symbols` to the `export const` (value `_cjs.symbols`,
+        // `undefined` until the IIFE returns), so the top-level destructure
+        // threw `Cannot convert undefined or null to object` (pino.js:23).
+        //
+        // The fix refuses to adopt an alias whose name is also a plain named
+        // export: the spec stays on `_req_N`, the body's `const symbols =
+        // require(...)` survives as an IIFE-local, and the module-scope
+        // `export const symbols` no longer collides.
+        let src = "const symbols = require('./lib/symbols');\n\
+                   const { aSym, bSym } = symbols;\n\
+                   function build() { return [aSym, bSym]; }\n\
+                   module.exports = build;\n\
+                   module.exports.symbols = symbols;";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/index.js"));
+        // Alias NOT adopted — import keeps the `_req_N` placeholder name...
+        assert!(
+            wrapped.contains("import _req_0 from './lib/symbols';"),
+            "expected non-adopted _req_0 import (no `import symbols`), got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("import symbols from './lib/symbols';"),
+            "must NOT adopt the colliding `symbols` alias as the import local, got:\n{}",
+            wrapped
+        );
+        // ...the require dispatches through it...
+        assert!(
+            wrapped.contains("if (specifier === './lib/symbols') return _req_0;"),
+            "expected require dispatch through _req_0, got:\n{}",
+            wrapped
+        );
+        // ...the original `const symbols = require(...)` survives in the IIFE
+        // body (NOT blanked) so the destructure reads the real value...
+        assert!(
+            wrapped.contains("const symbols = require('./lib/symbols');"),
+            "expected the alias declaration to survive as an IIFE-local, got:\n{}",
+            wrapped
+        );
+        // ...and the named export still surfaces.
+        assert!(
+            wrapped.contains("export const symbols = _cjs.symbols;"),
+            "expected the named export to be preserved, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_does_not_shadow_global_builtin_named_export() {
+        // Regression (bluebird errors.js): `module.exports = { Error: Error,
+        // TypeError: _TypeError, ... }`. The export KEY `Error` is a global
+        // builtin; the body has no `function/var/let/const/class Error`. Emitting
+        // `export const Error = _cjs.Error;` at module scope put an `Error`
+        // binding ahead of the global, so the IIFE body's free `Error`
+        // (`inherits(SubError, Error)`) resolved to the `export const` — value
+        // `_cjs.Error`, `undefined` until the IIFE returns — and reading
+        // `Error.prototype` threw `Cannot read properties of undefined (reading
+        // 'prototype')`. Fix: surface such builtin-named exports through a
+        // MANGLED module binding (`const __cjsexp_Error = _cjs.Error; export {
+        // __cjsexp_Error as Error };`) so no `Error` binding shadows the global.
+        let src = "var inherits = require('./util').inherits;\n\
+                   function subError() { function SubError() {} inherits(SubError, Error); return SubError; }\n\
+                   var Warning = subError();\n\
+                   module.exports = { Error: Error, Warning: Warning };";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/index.js"));
+        // `Error` (global builtin, undeclared in body) must NOT get a plain
+        // `export const Error` that shadows the global.
+        assert!(
+            !wrapped.contains("export const Error = _cjs.Error;"),
+            "must NOT emit a shadowing `export const Error`, got:\n{}",
+            wrapped
+        );
+        // It is surfaced via a mangled re-export instead.
+        assert!(
+            wrapped.contains("const __cjsexp_Error = _cjs.Error;")
+                && wrapped.contains("export { __cjsexp_Error as Error };"),
+            "expected mangled re-export of the builtin-named export, got:\n{}",
+            wrapped
+        );
+        // A NON-builtin named export (`Warning`, also undeclared as a body
+        // binding — it's a `var`) keeps the ordinary `export const` form.
+        assert!(
+            wrapped.contains("export const Warning = _cjs.Warning;"),
+            "expected ordinary `export const Warning`, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
+    fn wrap_keeps_export_const_for_builtin_name_declared_in_body() {
+        // A name that collides with a builtin but IS a real module binding
+        // (`function Error() {}`) is a genuine local export — keep the ordinary
+        // `export const Error = _cjs.Error;` (no global to shadow).
+        let src = "function Error() { this.x = 1; }\n\
+                   module.exports = { Error: Error };";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/pkg/index.js"));
+        assert!(
+            wrapped.contains("export const Error = _cjs.Error;"),
+            "a body-declared `Error` must keep the plain export const, got:\n{}",
+            wrapped
+        );
+        assert!(
+            !wrapped.contains("__cjsexp_Error"),
+            "must NOT mangle a body-declared export name, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn identifier_is_reassigned_distinguishes_declaration_from_write() {
         use super::extract_requires::identifier_is_reassigned;
         // Pure read-only alias: declaration + member reads only.
@@ -487,6 +633,31 @@ module.exports = inner;
         assert!(!identifier_is_reassigned(
             "var s = require('./d'); if (s === other) {} obj.s = 1; cb(() => s);",
             "s"
+        ));
+    }
+
+    #[test]
+    fn identifier_is_declared_binding_detects_module_bindings() {
+        use super::extract_requires::identifier_is_declared_binding;
+        // Each declaration keyword form.
+        assert!(identifier_is_declared_binding(
+            "function Error() {}",
+            "Error"
+        ));
+        assert!(identifier_is_declared_binding("class Error {}", "Error"));
+        assert!(identifier_is_declared_binding("var Error = 1;", "Error"));
+        assert!(identifier_is_declared_binding("let Error = 1;", "Error"));
+        assert!(identifier_is_declared_binding("const Error = 1;", "Error"));
+        // A bare free reference / member access is NOT a declaration.
+        assert!(!identifier_is_declared_binding(
+            "inherits(SubError, Error); var x = Error.prototype;",
+            "Error"
+        ));
+        assert!(!identifier_is_declared_binding("obj.Error = 1;", "Error"));
+        // Substring of a longer identifier must not match.
+        assert!(!identifier_is_declared_binding(
+            "var ErrorType = 1;",
+            "Error"
         ));
     }
 
@@ -1511,6 +1682,129 @@ module.exports = SafeBuffer;"#;
             class_pos < iife_open,
             "self-contained class must still hoist above the IIFE; got:\n{}",
             wrapped
+        );
+    }
+
+    /// `module_reexport_specs` recognizes the trivial re-export wrapper
+    /// shape (`module.exports = require('./X')`, incl. conditional / bare
+    /// `exports =`) and ONLY that shape — a module that requires a sibling
+    /// for its own use must not be treated as a re-export of it.
+    #[test]
+    fn module_reexport_specs_only_for_true_reexports() {
+        // Trivial re-export wrappers.
+        assert_eq!(
+            module_reexport_specs("module.exports = require('./lib/index');"),
+            vec!["./lib/index".to_string()]
+        );
+        assert_eq!(
+            module_reexport_specs(
+                "if (process.env.NODE_ENV === 'production') { module.exports = require('./prod'); } else { module.exports = require('./dev'); }"
+            ),
+            vec!["./prod".to_string(), "./dev".to_string()]
+        );
+        assert_eq!(
+            module_reexport_specs("exports = require('./x');"),
+            vec!["./x".to_string()]
+        );
+
+        // NOT re-export wrappers — semver's comparator.js shape: require a
+        // sibling for internal use, then export a class. Forwarding ./re's
+        // names here is exactly the `reading 'COMPARATOR'` bug.
+        assert!(module_reexport_specs(
+            "const { safeRe: re, t } = require('../internal/re');\nclass Comparator { parse() { return re[t.COMPARATOR]; } }\nmodule.exports = Comparator;"
+        )
+        .is_empty());
+        // Member access / object-spread on the require result are not pure
+        // re-exports either.
+        assert!(module_reexport_specs("module.exports = require('./x').foo;").is_empty());
+        assert!(module_reexport_specs("module.exports = { ...require('./x') };").is_empty());
+    }
+
+    /// Regression for the semver `Cannot read properties of undefined
+    /// (reading 'COMPARATOR')` root: a module that requires a sibling for
+    /// internal use (NOT a re-export wrapper) must not get the sibling's
+    /// export names forwarded as spurious `export const X = _cjs.X;`
+    /// declarations. Those both shadow the module's own destructured
+    /// bindings and resolve to `undefined`.
+    #[test]
+    fn internal_require_does_not_forward_sibling_exports() {
+        let dir =
+            std::env::temp_dir().join(format!("perry_cjs_reexport_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        // The required sibling exposes a `t` table (semver internal/re.js shape).
+        fs::write(
+            dir.join("re.js"),
+            "module.exports = { t: { COMPARATOR: 0 } };",
+        )
+        .unwrap();
+        let consumer = "const { t } = require('./re');\nclass Comparator { constructor() { this.r = t.COMPARATOR; } }\nmodule.exports = Comparator;\n";
+        let wrapped = wrap_commonjs(consumer, &dir.join("comparator.js"));
+        assert!(
+            !wrapped.contains("export const t = _cjs.t;"),
+            "internal require('./re') must NOT forward re.js's `t` export, got:\n{}",
+            wrapped
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `collect_top_level_let_const_var_names` (via the #2310 hoist guard)
+    /// must recognize destructured top-level bindings so a class closing
+    /// over them is not hoisted out of the IIFE (which would sever the
+    /// closure). Indirectly asserted through the wrap: a class referencing
+    /// a destructured IIFE-local stays inside the IIFE.
+    #[test]
+    fn destructured_iife_local_keeps_class_in_iife() {
+        // `module.exports = { C }` (object aggregator, not a single-class
+        // default) so the flat-emit path is NOT taken — exercising the
+        // hoist-guard path specifically.
+        let src = "const { tbl } = require('./re');\n\
+                   class C { method() { return tbl.X; } }\n\
+                   module.exports = { C };\n";
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/cmp.js"));
+        // The class must NOT be hoisted above the IIFE — it closes over the
+        // destructured `tbl`.
+        if let Some(iife_open) = wrapped.find("const _cjs = (function()") {
+            if let Some(class_pos) = wrapped.find("class C ") {
+                assert!(
+                    class_pos > iife_open,
+                    "class closing over destructured IIFE-local `tbl` must stay inside the IIFE; got:\n{}",
+                    wrapped
+                );
+            }
+        }
+    }
+
+    /// Chain-aware hoist: a class that does NOT itself reference an IIFE-local
+    /// but `extends` a sibling class that IS kept in the IIFE must ALSO stay in
+    /// the IIFE — hoisting only the child out would leave its `extends <Parent>`
+    /// unable to see the IIFE-local parent (ajv `codegen/index.js`'s
+    /// `class AssignOp extends Assign` where `Assign` refs `code_1`). Asserts
+    /// `extract_top_level_class_decls` hoists NEITHER class.
+    #[test]
+    fn hoist_keeps_inheritance_chain_with_iife_local_parent_together() {
+        let src = "const code_1 = require('./code');\n\
+                   class Node { kind() { return code_1.tag; } }\n\
+                   class Assign extends Node { render() { return code_1.name; } }\n\
+                   class AssignOp extends Assign {}\n\
+                   module.exports = { AssignOp };\n";
+        let (_blocks, hoisted_names, _rest) = extract_top_level_class_decls(src);
+        // `Node`/`Assign` ref `code_1` (kept); `AssignOp` extends the kept
+        // `Assign` so it must be kept too — none should be hoisted.
+        assert!(
+            hoisted_names.is_empty(),
+            "no class should be hoisted (chain anchored to IIFE-local `code_1`); hoisted: {:?}",
+            hoisted_names
+        );
+        // Control: a self-contained class with no IIFE-local refs and no kept
+        // parent IS still hoistable.
+        let src2 = "const code_1 = require('./code');\n\
+                    class Plain {}\n\
+                    module.exports = { Plain };\n";
+        let (_b2, hoisted2, _r2) = extract_top_level_class_decls(src2);
+        assert!(
+            hoisted2.contains(&"Plain".to_string()),
+            "a class with no IIFE-local ref and no kept parent should still hoist; hoisted: {:?}",
+            hoisted2
         );
     }
 }

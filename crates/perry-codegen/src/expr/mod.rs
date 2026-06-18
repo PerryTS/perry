@@ -192,11 +192,14 @@ pub(crate) struct FnCtx<'a> {
     /// `Stmt::LabeledBreak`/`LabeledContinue`. Third field balances try frames
     /// as in `loop_targets`.
     pub label_targets: std::collections::HashMap<String, (String, String, usize)>,
-    /// Pending label set by `Stmt::Labeled` just before lowering the body.
-    /// The next loop that runs (`for`/`while`/`do-while`) consumes it and
-    /// registers itself in `label_targets` so `break label;` /
-    /// `continue label;` can jump to the right blocks.
-    pub pending_label: Option<String>,
+    /// Pending labels set by enclosing `Stmt::Labeled` nodes just before
+    /// lowering the body. A label *chain* like `outer: inner: for (...)`
+    /// stacks both labels here (outer pushed first, then inner) before the
+    /// loop is reached. The next loop/switch that runs consumes *all* of
+    /// them and registers each in `label_targets`, so `break outer` /
+    /// `continue inner` both resolve to that same loop's blocks. Stored
+    /// outermost-first; the innermost label is `.last()`.
+    pub pending_labels: Vec<String>,
     /// Map from class name → HIR Class definition. Built once in
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.

@@ -16,6 +16,13 @@ pub fn compute_max_local_id(module: &Module) -> LocalId {
     }
     for global in &module.globals {
         max_id = max_id.max(global.id);
+        // #5293: a module-global initializer (`const f = (x) => ...`) holds a
+        // closure whose params/body live in this LocalId namespace. The
+        // de-duplicated copies that routed through here did not all scan it,
+        // so fold it in — a too-high max is always safe, a missed id collides.
+        if let Some(init) = &global.init {
+            scan_expr_for_max_local(init, &mut max_id);
+        }
     }
     // Also scan class member bodies — they share the LocalId namespace.
     // The v0.5.323 issue #212 fix allocates method-local rebind ids per
@@ -155,6 +162,12 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
         } => {
             scan_expr_for_max_local(discriminant, max_id);
             for case in cases {
+                // #5293: `case (() => x)():` / `case foo[i]:` test exprs carry
+                // their own LocalIds (and nested closures). The merged copies
+                // scanned these; the canonical must too.
+                if let Some(test) = &case.test {
+                    scan_expr_for_max_local(test, max_id);
+                }
                 scan_stmts_for_max_local(&case.body, max_id);
             }
         }
@@ -237,6 +250,14 @@ pub fn compute_max_func_id(module: &Module) -> FuncId {
     }
     for stmt in &module.init {
         scan_stmt_for_max_func(stmt, &mut max_id);
+    }
+    // #5293: module-global initializers (`const f = () => ...`) hold closures
+    // whose FuncIds live in this namespace. `async_to_generator`'s merged copy
+    // scanned global inits; fold it in so the canonical is a true superset.
+    for global in &module.globals {
+        if let Some(init) = &global.init {
+            scan_expr_for_max_func(init, &mut max_id);
+        }
     }
     // Issue #154: class member bodies share the FuncId namespace — their
     // nested closures (executors, callbacks, dispose-method bodies)
@@ -358,6 +379,11 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
         } => {
             scan_expr_for_max_func(discriminant, max_id);
             for case in cases {
+                // #5293: a closure in a switch case test (`case (() => 1)():`)
+                // carries a FuncId the merged copies scanned; mirror them here.
+                if let Some(test) = &case.test {
+                    scan_expr_for_max_func(test, max_id);
+                }
                 scan_stmts_for_max_func(&case.body, max_id);
             }
         }

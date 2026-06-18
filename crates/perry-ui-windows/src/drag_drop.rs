@@ -153,9 +153,9 @@ fn has_any_drag_source(key: usize) -> bool {
 #[cfg(target_os = "windows")]
 mod imp {
     use super::*;
-    use windows::core::{implement, PCWSTR};
+    use windows::core::{implement, BOOL, PCWSTR};
     use windows::Win32::Foundation::{
-        BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
+        DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
         DV_E_TYMED, E_NOTIMPL, HGLOBAL, HWND, LPARAM, LRESULT, OLE_E_ADVISENOTSUPPORTED, POINT,
         POINTL, S_OK, WPARAM,
     };
@@ -307,7 +307,7 @@ mod imp {
             &self,
             _pformatetc: *const FORMATETC,
             _advf: u32,
-            _padvsink: Option<&IAdviseSink>,
+            _padvsink: windows::core::Ref<'_, IAdviseSink>,
         ) -> windows::core::Result<u32> {
             Err(OLE_E_ADVISENOTSUPPORTED.into())
         }
@@ -365,7 +365,7 @@ mod imp {
     impl IDropTarget_Impl for PerryDropTarget_Impl {
         fn DragEnter(
             &self,
-            _pdataobj: Option<&IDataObject>,
+            _pdataobj: windows::core::Ref<'_, IDataObject>,
             _grfkeystate: MODIFIERKEYS_FLAGS,
             _pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
@@ -398,7 +398,7 @@ mod imp {
 
         fn Drop(
             &self,
-            pdataobj: Option<&IDataObject>,
+            pdataobj: windows::core::Ref<'_, IDataObject>,
             _grfkeystate: MODIFIERKEYS_FLAGS,
             _pt: &POINTL,
             pdweffect: *mut DROPEFFECT,
@@ -412,7 +412,7 @@ mod imp {
             let Some(cb) = cb else {
                 return Ok(());
             };
-            let Some(data) = pdataobj else {
+            let Some(data) = pdataobj.as_ref() else {
                 return Ok(());
             };
             unsafe {

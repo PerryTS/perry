@@ -254,7 +254,7 @@ pub(super) fn compile_closure(
         strings,
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
-        pending_label: None,
+        pending_labels: Vec::new(),
         classes,
         this_stack,
         new_target_stack,

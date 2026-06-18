@@ -855,6 +855,7 @@ static RUNTIME_CALLBACK_ROOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex:
 
 struct RuntimeCallbackRootGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
+    _plugin_lock: std::sync::MutexGuard<'static, ()>,
 }
 
 impl RuntimeCallbackRootGuard {
@@ -862,8 +863,14 @@ impl RuntimeCallbackRootGuard {
         let lock = RUNTIME_CALLBACK_ROOT_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let plugin_lock = crate::plugin::PLUGIN_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clear_runtime_callback_roots_for_test();
-        Self { _lock: lock }
+        Self {
+            _lock: lock,
+            _plugin_lock: plugin_lock,
+        }
     }
 }
 

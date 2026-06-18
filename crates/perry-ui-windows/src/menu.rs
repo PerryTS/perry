@@ -332,7 +332,7 @@ fn attach_menubar_to_hwnd(bar_handle: i64, hwnd: HWND) {
         let bar_idx = (bar_handle - 1) as usize;
         if bar_idx < bars.len() {
             unsafe {
-                let _ = SetMenu(hwnd, bars[bar_idx].hmenu);
+                let _ = SetMenu(hwnd, Some(bars[bar_idx].hmenu));
                 let _ = DrawMenuBar(hwnd);
             }
         }
@@ -392,7 +392,7 @@ pub fn handle_context_menu(parent_hwnd: HWND, child_hwnd: HWND, x: i32, y: i32) 
                     TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
                     x,
                     y,
-                    0,
+                    Some(0),
                     parent_hwnd,
                     None,
                 );
@@ -420,7 +420,7 @@ pub fn clear(menu_handle: i64) {
             {
                 let hmenu = menus[idx].hmenu;
                 unsafe {
-                    while GetMenuItemCount(hmenu) > 0 {
+                    while GetMenuItemCount(Some(hmenu)) > 0 {
                         let _ = RemoveMenu(hmenu, 0, MF_BYPOSITION);
                     }
                 }

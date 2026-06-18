@@ -36,6 +36,10 @@ pub(crate) fn attach_stream_legacy_prototype(constructor_value: f64) {
         b"constructor\0".len() as u32,
     );
     js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    // readable-stream's `Readable.prototype.on` borrows `Stream.prototype.on`
+    // via `.call(this)`; expose the EventEmitter methods on the legacy
+    // `Stream.prototype` as receiver-from-`this` values so the borrow works.
+    crate::node_stream::install_event_emitter_prototype_methods(proto);
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
         let mut protos = protos.borrow_mut();
@@ -79,6 +83,11 @@ pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: 
         b"constructor\0".len() as u32,
     );
     js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    // `Readable`/`Writable`/`Duplex`/`Transform`/`PassThrough` also chain their
+    // own prototype methods onto `<Ctor>.prototype.<m>.call(this, …)` (e.g.
+    // `Duplex.prototype.on` ↔ readable-stream borrows). Expose the EventEmitter
+    // methods on these prototypes too.
+    crate::node_stream::install_event_emitter_prototype_methods(proto);
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
         let mut protos = protos.borrow_mut();

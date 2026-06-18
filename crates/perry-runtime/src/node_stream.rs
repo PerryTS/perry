@@ -148,7 +148,18 @@ fn this_value(closure: *const ClosureHeader) -> f64 {
     // host object value cast to i64; reverse the cast.
     if !closure.is_null() {
         let bits = js_closure_get_capture_ptr(closure, 0) as u64;
-        return f64::from_bits(bits);
+        // A `TAG_UNDEFINED` slot-0 marks a *prototype-method value* (e.g.
+        // `Stream.prototype.on`, installed by `attach_event_emitter_prototype_methods`)
+        // rather than an instance-bound method: it has no fixed receiver and must
+        // read the call-site `this` (set by `Function.prototype.call`/`apply` into
+        // IMPLICIT_THIS), so `Stream.prototype.on.call(streamInstance, ev, fn)`
+        // — readable-stream's `Readable.prototype.on` wrapper — registers the
+        // listener on the instance, not on the prototype. `build_object` always
+        // captures a real object pointer, so existing instance-bound closures
+        // never hit this branch.
+        if bits != crate::value::TAG_UNDEFINED {
+            return f64::from_bits(bits);
+        }
     }
     crate::object::js_implicit_this_get()
 }

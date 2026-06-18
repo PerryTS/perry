@@ -10,6 +10,7 @@ use perry_types::{FuncId, GlobalId, LocalId, Type, TypeParam};
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::*;
+use crate::ClassAccessorNames;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WithEnvFrame {
@@ -107,7 +108,7 @@ pub struct LoweringContext {
     /// avoiding the creation of shadow fields that cause later index shift bugs after
     /// inheritance resolution in codegen.
     pub(crate) class_field_names: Vec<(String, Vec<String>)>,
-    /// Issue #665 (sixth pass): per-class set of getter+setter property names.
+    /// Issue #665 (sixth pass): per-class set of getter and setter property names.
     /// Used by the "infer fields from ctor body `this.x = ...`" pass to avoid
     /// mis-categorising a setter assignment as an own data field — the
     /// rate-limiter-flexible `set points(v)` / `this.points = opts.points`
@@ -117,7 +118,7 @@ pub struct LoweringContext {
     /// Populated alongside `register_class_field_names`; looked up via
     /// `lookup_class_accessor_names` and walked across the parent chain when
     /// processing a subclass's ctor body.
-    pub(crate) class_accessor_names: Vec<(String, Vec<String>)>,
+    pub(crate) class_accessor_names: Vec<(String, ClassAccessorNames)>,
     /// Issue #562: class name → `(module, class)` tuple from
     /// `native_extends`. Populated when lowering each class, consumed by
     /// `destructuring.rs` to register `let x = new SubclassOfStream()`
@@ -350,6 +351,23 @@ pub struct LoweringContext {
     /// continue to lexically shadow the object environment.
     pub(crate) with_env_stack: Vec<WithEnvFrame>,
     pub(crate) var_hoisted_ids: HashSet<LocalId>,
+    /// Annex B B.3.3 (#5297): for the function/program scope currently being
+    /// lowered, maps each name declared by a *block-nested* `function f(){}`
+    /// (legacy sloppy-mode block-level function declaration) to the enclosing-
+    /// scope `var`-style binding it must also write at its declaration point.
+    /// `lower_nested_fn_decl` consults this (only when `inside_block_scope > 0`
+    /// and the enclosing scope is sloppy) to keep the block-local binding
+    /// independent of the hoisted outer `var`, then assigns the closure into the
+    /// outer slot. Saved/restored across nested function bodies.
+    pub(crate) annexb_block_fn_var_ids: HashMap<String, LocalId>,
+    /// Annex B (#5297): names of ALL block-nested function declarations in the
+    /// scope currently being lowered (superset of `annexb_block_fn_var_ids`
+    /// keys — includes those whose legacy `var` is suppressed by a parameter or
+    /// lexical conflict). Every block-level function declaration is block-scoped,
+    /// so `lower_nested_fn_decl` gives one a fresh block-local instead of
+    /// reusing an enclosing same-named binding (e.g. a parameter). Saved/restored
+    /// across nested function bodies alongside `annexb_block_fn_var_ids`.
+    pub(crate) annexb_block_fn_names_all: HashSet<String>,
     /// #4973: top-of-function-body `let`/`const` Ident bindings pre-registered
     /// by the function-body hoist pass so hoisted sibling FUNCTIONS that
     /// reference them before their lexical position bind the (boxed) local
@@ -367,6 +385,32 @@ pub struct LoweringContext {
     pub(crate) imported_functions_index: HashMap<String, usize>,
     /// Shadow index: local alias name -> index in `builtin_module_aliases` Vec
     pub(crate) builtin_module_aliases_index: HashMap<String, usize>,
+    /// Perf index for `native_instances` (which is scope-stack-like: pushed on
+    /// scope entry, truncated on scope exit). Maps name -> STACK of indices into
+    /// the `native_instances` Vec, innermost (last) on top. `lookup_native_instance`
+    /// reads the top index for O(1) last-match-wins resolution (mirrors the old
+    /// reverse scan's shadowing); on `truncate(mark)` every index >= mark is
+    /// popped off each name's stack (and empty stacks removed), so an inner
+    /// binding stops shadowing the moment its scope pops. See
+    /// `register_native_instance` / `truncate_native_instances`.
+    pub(crate) native_instances_index: HashMap<String, Vec<usize>>,
+    /// Perf index for `module_native_instances` (module-level, push-only, never
+    /// truncated). Scanned in reverse (last-match-wins) by
+    /// `lookup_native_instance`'s fallback arm, so the index stores the LAST
+    /// pushed index per name (overwritten on every push). O(1) lookup.
+    pub(crate) module_native_instances_index: HashMap<String, usize>,
+    /// Perf index for `func_return_native_instances` (push-only, never
+    /// truncated). The old lookup scanned FORWARD (first-match-wins), so the
+    /// index keeps the FIRST pushed index per name (`entry().or_insert`).
+    pub(crate) func_return_native_instances_index: HashMap<String, usize>,
+    /// Perf index for `native_modules` (push-only, never truncated). The old
+    /// `lookup_native_module` scanned FORWARD (first-match-wins), so the index
+    /// keeps the FIRST pushed index per name (`entry().or_insert`).
+    pub(crate) native_modules_index: HashMap<String, usize>,
+    /// Perf index for `class_statics` (push-only, never truncated). The old
+    /// `has_static_method`/`has_static_field` scanned FORWARD (first-match-wins),
+    /// so the index keeps the FIRST pushed index per class name.
+    pub(crate) class_statics_index: HashMap<String, usize>,
     /// Local names bound to a `path` sub-namespace (`const w = path.win32`).
     /// Maps the local name -> (root identifier name, sub "win32"|"posix").
     /// Resolution of the root identifier to the `path` module is deferred to
@@ -621,9 +665,25 @@ pub struct LoweringContext {
     /// `lower_module_full`; consumed by `const_fold_fn`.
     pub(crate) fn_ctor_env: super::fn_ctor_env::FnCtorEnv,
     /// Current recursion depth of `lower_expr` (#5259). Incremented on entry,
-    /// decremented on exit. Once it exceeds `MAX_EXPR_LOWER_DEPTH`, lowering
-    /// bails with a clean "nested too deeply" diagnostic instead of letting a
-    /// pathologically-nested expression chain (bundler/minifier output like
-    /// `1+1+…+1` or `o.a.a.…a`) overflow the native stack and SIGABRT.
+    /// decremented on exit. Once it exceeds either the broad
+    /// `MAX_EXPR_LOWER_DEPTH` ceiling or the lower stack-heavy chain ceiling,
+    /// lowering bails with a clean "nested too deeply" diagnostic instead of
+    /// letting pathologically-nested expressions overflow the native stack and
+    /// SIGABRT.
     pub(crate) expr_lower_depth: u32,
+    /// Perf: a single-slot memo of an already-lowered member receiver, keyed by
+    /// its source span `(lo, hi)`. Set by the chained-native-method dispatch
+    /// helper (`try_static_method_and_instance`) just before it returns
+    /// `Err(args)` after lowering `member.obj` to inspect it; consumed once by
+    /// `lower_member_inner` when the `lower_call_inner` fall-through tail
+    /// re-lowers the same member callee. Without it, a long native-fluent
+    /// method chain (`K.name(..).description(..).option(..)…` — commander/minified
+    /// CLI builders) re-lowers the entire receiver prefix at every chain level
+    /// (the helper lowers it, finds the inner result is not a `NativeMethodCall`,
+    /// discards it, and the tail lowers it again — compounding to exponential
+    /// blowup). The memo lets the tail reuse the helper's lowering, so each
+    /// receiver subtree is lowered exactly once. Lowering a receiver is
+    /// idempotent w.r.t. the value produced (the fluent-success path already
+    /// reuses the same lowered receiver), so reusing it is semantics-preserving.
+    pub(crate) prelowered_member_receiver: Option<((u32, u32), Expr)>,
 }

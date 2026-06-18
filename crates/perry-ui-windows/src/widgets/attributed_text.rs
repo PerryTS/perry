@@ -139,9 +139,9 @@ pub fn create() -> i64 {
                 0,
                 200,
                 40,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             );
             let Ok(hwnd) = hwnd else {
@@ -197,18 +197,19 @@ pub fn append(
 
         unsafe {
             // Move caret to end-of-text and insert the new substring.
-            let end_total: isize = SendMessageW(hwnd, EM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0;
+            let end_total: isize =
+                SendMessageW(hwnd, EM_GETTEXTLENGTH, Some(WPARAM(0)), Some(LPARAM(0))).0;
             SendMessageW(
                 hwnd,
                 EM_SETSEL,
-                WPARAM(end_total as usize),
-                LPARAM(end_total),
+                Some(WPARAM(end_total as usize)),
+                Some(LPARAM(end_total)),
             );
             SendMessageW(
                 hwnd,
                 EM_REPLACESEL,
-                WPARAM(0),
-                LPARAM(wide.as_ptr() as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(wide.as_ptr() as isize)),
             );
 
             // Re-select the just-appended range and apply the attributes.
@@ -219,8 +220,8 @@ pub fn append(
             SendMessageW(
                 hwnd,
                 EM_EXSETSEL,
-                WPARAM(0),
-                LPARAM(&range as *const _ as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(&range as *const _ as isize)),
             );
 
             let mut cf = CharFormat2W::default();
@@ -252,8 +253,8 @@ pub fn append(
                 SendMessageW(
                     hwnd,
                     EM_SETCHARFORMAT,
-                    WPARAM(SCF_SELECTION as usize),
-                    LPARAM(&cf as *const _ as isize),
+                    Some(WPARAM(SCF_SELECTION as usize)),
+                    Some(LPARAM(&cf as *const _ as isize)),
                 );
             }
 
@@ -262,8 +263,8 @@ pub fn append(
             SendMessageW(
                 hwnd,
                 EM_SETSEL,
-                WPARAM(new_end as usize),
-                LPARAM(new_end as isize),
+                Some(WPARAM(new_end as usize)),
+                Some(LPARAM(new_end as isize)),
             );
         }
 
@@ -287,13 +288,13 @@ pub fn clear(handle: i64) {
         };
         unsafe {
             // Select-all + replace-with-empty.
-            SendMessageW(hwnd, EM_SETSEL, WPARAM(0), LPARAM(-1));
+            SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
             let empty: [u16; 1] = [0];
             SendMessageW(
                 hwnd,
                 EM_REPLACESEL,
-                WPARAM(0),
-                LPARAM(empty.as_ptr() as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(empty.as_ptr() as isize)),
             );
         }
         LENGTHS.with(|l| {

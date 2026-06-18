@@ -143,12 +143,21 @@ pub(super) fn lower_call(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Res
     // are likewise out of scope once we unwind past their owning
     // call). `truncate` is a no-op when nothing was added.
     if ctx.native_instances.len() > ni_mark {
-        ctx.native_instances.truncate(ni_mark);
+        ctx.truncate_native_instances(ni_mark);
     }
     result
 }
 
 fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<Expr> {
+    // Safety net for the receiver-lowering memo (see
+    // `LoweringContext::prelowered_member_receiver`): the memo is set by
+    // `try_static_method_and_instance` only to be consumed by the immediately
+    // following fall-through tail's `lower_member_inner`. It is single-shot and
+    // span-keyed, but in case a code path sets it without the tail consuming it,
+    // drop any stale entry here so it can never leak across calls. This runs
+    // before the callee tail (which lowers a Member, not a Call), so it never
+    // clobbers an in-flight memo for the call currently being lowered.
+    ctx.prelowered_member_receiver = None;
     // Check if any argument has spread
     let has_spread = call.args.iter().any(|arg| arg.spread.is_some());
 

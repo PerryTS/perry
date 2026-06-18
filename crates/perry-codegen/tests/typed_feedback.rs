@@ -81,6 +81,7 @@ fn empty_opts() -> CompileOptions {
         is_dynamic_import_target: false,
         debug_locations: false,
         module_source: None,
+        debug_source_line_offset: 0,
     }
 }
 
@@ -297,9 +298,54 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     assert!(ir.contains("class_field_get.fallback"));
     assert!(ir.contains("store double"));
     assert!(!ir.contains("call void @js_gc_note_slot_layout"));
+    // #5334 lever A: the SET fallback arm collapses to one outlined call; the
+    // by-name SET it replaced is no longer emitted at the set site.
+    assert!(ir.contains("call void @js_class_field_set_fallback"));
+    assert!(!ir.contains("call void @js_object_set_field_by_name"));
+    // `record_fallback_call` is still present — but from the class-field-GET
+    // fallback block below, not the SET site (the SET copy is now folded into
+    // js_class_field_set_fallback).
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
-    assert!(ir.contains("call void @js_object_set_field_by_name"));
     assert!(ir.contains("call double @js_object_get_field_by_name_f64"));
+}
+
+#[test]
+fn class_field_set_elides_write_barrier_for_nonpointer_value() {
+    // #5334 lever D: storing a value that is a non-pointer by construction
+    // into a BOXED class field (a String slot — only Number is raw-f64) skips
+    // the generational write barrier, since the store creates no parent→child
+    // heap reference. The layout note still fires (it tracks the slot's
+    // pointer-ness). A value that may be a heap pointer keeps the barrier.
+    let build = |val: Expr| {
+        let c = class(140, "Bx", vec![field("s", Type::String)]);
+        module_with_classes(
+            "lever_d_field_barrier.ts",
+            vec![c],
+            vec![
+                param(1, "o", Type::Named("Bx".to_string())),
+                param(2, "p", Type::String),
+            ],
+            Type::Number,
+            vec![
+                Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "s".to_string(),
+                    value: Box::new(val),
+                }),
+                Stmt::Return(Some(Expr::Number(0.0))),
+            ],
+        )
+    };
+
+    // A numeric-by-construction value takes the boxed class-field fast store
+    // but needs no write barrier.
+    let ir_num = ir_for(build(Expr::Number(7.0)));
+    assert!(ir_num.contains("class_field_set.fast"));
+    assert!(!ir_num.contains("call void @js_write_barrier_slot"));
+
+    // A definite heap pointer (string literal) keeps the slot barrier.
+    let ir_ptr = ir_for(build(Expr::String("hi".to_string())));
+    assert!(ir_ptr.contains("call void @js_write_barrier_slot"));
 }
 
 #[test]
@@ -341,7 +387,12 @@ fn typed_feedback_guards_direct_class_method_specialization() {
     assert!(ir.contains("js_typed_feedback_method_direct_call_guard"));
     assert!(ir.contains("method_direct.fast"));
     assert!(ir.contains("method_direct.fallback"));
-    assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
+    // #5334 lever A: this class has a field `x` whose synthesized field-set
+    // routes its guard-miss arm through the outlined fallback. (The
+    // method-direct fallback only records when its site_id is Some, which it
+    // isn't here — the old `record_fallback_call` assertion was incidentally
+    // satisfied by the field-set fallback that is now folded into this call.)
+    assert!(ir.contains("call void @js_class_field_set_fallback"));
     assert!(ir.contains("call double @js_native_call_method"));
 }
 

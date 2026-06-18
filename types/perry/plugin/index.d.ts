@@ -93,6 +93,50 @@ export interface PluginApi {
      * @param data   Payload forwarded to every subscriber.
      */
     emit(event: string, data: unknown): void;
+
+    /**
+     * Unregister a previously-registered hook handler.
+     * Removes the single entry whose closure matches `handler` (identity
+     * compare via NaN-boxed closure bits). No-op if the caller did not
+     * register the hook or no entry matches. Hooks registered with
+     * `registerHookEx` can be removed with `unregisterHook` — the same
+     * closure bits are stored regardless of priority/mode.
+     * @param hookName  Name of the hook.
+     * @param handler   The exact closure passed to `registerHook` / `registerHookEx`.
+     */
+    unregisterHook(hookName: string, handler: (ctx: unknown) => unknown): void;
+
+    /**
+     * Unregister a tool by name. No-op if the caller did not register it
+     * (the host also purges all of a plugin's registrations when the plugin
+     * is unloaded, so explicit cleanup is only needed for long-lived
+     * plugins that re-register at runtime).
+     * @param name  Tool name as passed to `registerTool`.
+     */
+    unregisterTool(name: string): void;
+
+    /**
+     * Unregister a service by name. The service's `stopFn` is invoked
+     * before the entry is removed (matching the `registerService` lifecycle
+     * contract: `startFn` was called at registration time, `stopFn` at
+     * unregistration). No-op if the caller did not register it.
+     * @param name  Service name as passed to `registerService`.
+     */
+    unregisterService(name: string): void;
+
+    /**
+     * Unregister an HTTP route by path. No-op if the caller did not register it.
+     * @param path  Route path as passed to `registerRoute`.
+     */
+    unregisterRoute(path: string): void;
+
+    /**
+     * Unsubscribe from an event on the host event bus. Removes the single
+     * subscription whose closure matches `handler`. No-op otherwise.
+     * @param event    Event name.
+     * @param handler  The exact closure passed to `on`.
+     */
+    off(event: string, handler: (data: unknown) => void): void;
 }
 
 // ---------------------------------------------------------------------------

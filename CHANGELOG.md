@@ -1,3 +1,216 @@
+## v0.5.1182 — fix(hir): native-builtin require destructuring stranded on a pre-registered module-var slot (#5364 × #5216 merge skew)
+
+`const { createInterface } = require("readline")` (and every destructured
+native/Node-builtin `require`) regressed to `undefined` for the bound leaf on
+`main` after v0.5.1180 — a merge-skew interaction between two independently-green
+PRs:
+
+- **#5216** lowers `const { x } = require("<native>")` by registering each
+  destructured leaf as a *native-module alias* (`register_native_module`) and
+  skipping the runtime local, so `x` / `typeof x` resolves through the static
+  native table — exact `import { x } from "<native>"` parity.
+- **#5364** taught the module-level forward-declaration pass to *pre-register*
+  destructuring leaves as module-var locals (fixing semver's bottom-of-file
+  cyclic `const { safeRe, t } = require('../internal/re')`).
+
+Together, the native-alias leaf now also had a pre-registered module-var local
+that was never written (its runtime destructuring is skipped). A bare `x` read
+resolved to that stale `undefined` local and shadowed the native alias →
+`typeof createInterface === "undefined"`. The `require_native_builtin_lowers_like_namespace_import`
+gap test (correct as written) caught it; each PR was green on its own base, so
+it slipped in only at the merged HEAD and failed the `cargo-test` gate, blocking
+the v0.5.1181 publish.
+
+Fix (`destructuring/var_decl_sources.rs`): in the native-alias branches
+(generic resolvable-native modules + `net`'s skipped factory leaves), drop the
+pre-registered module-var local via `ctx.remove_local_binding(&binding)` — the
+same thing the simple-ident `register_require_namespace_binding` path already
+does — so the leaf resolves to the native table, not a stranded local. The
+relative/file-require path that #5364 targets (`require('../internal/re')`) is
+not a resolvable native specifier, so it never enters these branches and keeps
+#5364's behavior unchanged. Verified: all 6 `module_import_forms` tests pass and
+#5364's `test_cjs_module_destructure_after_class.sh` still passes.
+
+## v0.5.1181 — fix(perry-ui-windows): migrate to windows / windows-core 0.62 (unblock Windows release publish)
+
+The v0.5.1180 release packaged macOS, Linux and Android, but **published
+nothing**: every publish job in `release-packages.yml` (`npm-publish`,
+`homebrew`, `apt`, `apt-repo`, `winget`, `update-workers`) is `needs: build`,
+and the `build` matrix's Windows leg failed to compile, collapsing the whole
+`build` job to `failure` and skipping all publishers. Only the GitHub Release
+page (notes + source tarball) shipped.
+
+Root cause: Dependabot PR #5300-era bump `c0f46f07e` raised `webview2-com` to
+`=0.39`, which resolves `windows` / `windows-core` to **0.62.2** — but
+`crates/perry-ui-windows/Cargo.toml` still pinned `windows` / `windows-core` at
+`0.58`. The webview2 COM interfaces (`ICoreWebView2`, etc.) were then a
+different crate version than perry's own `HWND` / `RECT` / `PCWSTR` / `PWSTR` /
+`Interface` types, so the WebView2 boundary in `widgets/webview.rs` failed to
+type-check (the in-file comment had warned this exact skew would break the
+build).
+
+Fix: align `perry-ui-windows` to `windows` / `windows-core` `0.62` and migrate
+the crate's source to the 0.62 API surface. This is a mechanical,
+behavior-preserving migration across ~47 files:
+
+- **`Option<HANDLE>` parameters**: many Win32 calls now take `Option<…>`
+  (`SendMessageW`/`PostMessageW` WPARAM/LPARAM, `InvalidateRect` / `SetParent`
+  / `ReleaseDC` / `SetFocus` / `SetWindowPos` / `CreateWindowExW` /
+  `SetTimer` / … HWND/HMENU/HINSTANCE) — present handles wrapped in `Some(…)`.
+- **GDI objects**: `DeleteObject` / `SelectObject` / `GetObjectW` now take
+  `HGDIOBJ`; `HBRUSH`/`HPEN`/`HFONT`/`HBITMAP` converted via `.into()`.
+- **`CreateFontW`**: charset / precision / quality integer args wrapped in
+  their 0.62 newtypes (`FONT_CHARSET` / `FONT_OUTPUT_PRECISION` /
+  `FONT_CLIP_PRECISION` / `FONT_QUALITY`).
+- **`BOOL`** moved from `windows::Win32::Foundation` to `windows::core`.
+- **`#[implement]` COM authoring** (`drag_drop.rs`) and a winrt
+  `TypedEventHandler` (`media_playback.rs`): 0.62 passes interface args as
+  `windows::core::Ref<'_, T>` instead of `Option<&T>`; signatures + bodies
+  (`pdataobj.as_ref()`) updated accordingly.
+- **`widgets/webview.rs`**: `#[implement]` macros now come from
+  `windows-core`'s re-export (the `windows` `implement` feature was removed in
+  0.62); `Error::from_win32()` replaced with
+  `Error::from(HRESULT::from_win32(GetLastError().0))`; event-registration
+  tokens are now `i64` (`add_NavigationStarting` / `add_NavigationCompleted`
+  take `*mut i64`).
+
+Verified by cross-compiling the crate to `x86_64-pc-windows-msvc` from macOS
+via `cargo-xwin` (`cargo xwin check -p perry-ui-windows --target
+x86_64-pc-windows-msvc` → clean) — the Windows build is not exercised by the
+PR `Tests` matrix (only by `release-packages.yml` on a tag), so local
+cross-check is the pre-merge gate. `perry-ui-windows` was the sole failing
+crate in the v0.5.1180 Windows build, so this restores both the
+`build (windows)` and `build-cross (perry-ui-windows)` legs and lets the
+publish jobs run.
+
+## v0.5.1180 — ci: warm the main-scoped CI cache so PRs stop building cold
+
+Follow-up to v0.5.1179. Moving sccache to a persisted disk cache was necessary
+but not sufficient: `test.yml` runs only on pull_request + version tags, never
+on push to main. GitHub Actions cache scoping lets a run restore caches from its
+own branch or the default branch (main) — but never another PR's — so with
+nothing running the cache-producing build on main, no main-scoped cache ever
+existed and every PR started cold. (The same flaw silently disabled
+`Swatinem/rust-cache`: its `save-if: refs/heads/main` never fired because
+test.yml doesn't run on main, so target/ was never saved either.)
+
+New `cache-warm.yml`: on every push to main that touches Rust (`crates/**`,
+`Cargo.toml`, `Cargo.lock`), compile — `--no-run` — the test binaries of the
+heaviest crates (`perry-runtime`, `perry-stdlib`, `perry-codegen`, `perry`),
+which pull in essentially the whole dependency graph. It saves under the SAME
+`rust-cache` shared-key (`<os>-perry`) and sccache key prefix
+(`sccache-<os>-perry-`) that test.yml's jobs restore, so the main-scoped caches
+now exist for every PR to pick up. The job is `continue-on-error` (a cache warm,
+never a gate), prunes test binaries between crates to stay within the runner
+disk budget, and uses `concurrency` to cancel superseded warms.
+
+Expected effect: after the first warm run lands on main, PR `cargo-test` should
+restore a warm cache and run ~50-60 min instead of ~90-103 min cold. No
+production code changes.
+
+## v0.5.1179 — ci: move sccache off the GHA backend onto a persisted disk cache (fix cargo-test timeouts)
+
+The `cargo-test` gate was timing out at its 120-min cap on PRs that touch
+`perry-runtime`/`perry-codegen`, and even successful runs were taking 90-103 min
+(not the "~45-50 min" the stale comment claimed). Root cause: sccache was using
+the GitHub Actions cache backend (`SCCACHE_GHA_ENABLED=true`), which stores one
+cache object per compilation unit. GitHub's cache service throttled and
+LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k objects
+(≈35 min of write time) yet the next run got essentially **zero** Rust cache
+hits (measured on a timed-out run: 3 hits / 3209 misses, 613 write errors). Every
+run effectively recompiled the whole dependency graph cold. `SCCACHE_CACHE_SIZE`
+was a silent no-op under the GHA backend, so the old `2G` never mattered.
+
+Changes (all three sccache jobs — `cargo-test`, `api-docs-drift`,
+`compiler-output-regression` — which compile overlapping crate graphs):
+
+- Switch sccache to a **local disk cache** (`SCCACHE_DIR`, `SCCACHE_GHA_ENABLED=false`,
+  `SCCACHE_CACHE_SIZE=12G`) persisted as a single tarball via `actions/cache@v4`.
+  The cache key is `sccache-<os>-perry-<job>-<run_id>` with a shared
+  `sccache-<os>-perry-` restore-keys prefix, so every run (PRs included) saves
+  its own entry while restoring the most recent one from any of the three jobs —
+  the object cache warms continuously and cross-pollinates instead of starting
+  cold each run.
+- Raise the `cargo-test` `timeout-minutes` 120 → 180 as headroom while the disk
+  cache warms (cold runs are ~90-103 min); can be lowered once warm hit rates are
+  confirmed.
+
+No production code changes.
+
+## v0.5.1178 — perf(codegen): outline per-new-site inline allocator (smaller IR + faster)
+
+`new ClassName(...)` previously emitted the full object-allocation prologue
+inline at every call site. That bloated the IR (and the resulting binary) and
+slowed codegen/compile. The allocation now calls the outlined runtime helper
+`js_object_alloc_class_inline_keys`, so each new-site shrinks to a single call.
+Complementary to #5304 (which outlined the constructor *call*); this outlines
+the *allocation*. The two touch different regions of `lower_call/new.rs`.
+
+Two supporting changes:
+
+- **Runtime (#4717):** folded the field-slot zero-fill into
+  `js_object_alloc_class_inline_keys`. The allocation moved out of per-site
+  codegen, where callers used to zero-fill `max(field_count, 8)` slots by hand;
+  doing it inside the helper keeps every caller — including the outlined `new C()`
+  path — correct by construction. Without it, a field read-before-write or a GC
+  scan of the still-constructing instance could observe stale recycled arena
+  bytes.
+- Split the `FieldInitMode` enum + `apply_field_initializers_recursive` walker
+  out of `lower_call/new.rs` into a sibling `field_init.rs` (pure move) to keep
+  the file under the 2,000-LOC CI size gate.
+
+## v0.5.1177 — fix(codegen): injective function-symbol names (distinct names that sanitize alike)
+
+Two distinct module-level functions could mangle to the same LLVM symbol, so
+clang rejected the module with "invalid redefinition of function". Two root
+causes, both fixed:
+
+- `scoped_fn_name` used the lossy `sanitize` (every non-`[A-Za-z0-9_]` byte →
+  `_`), so minified names like `$Z5` and `_Z5` both became
+  `perry_fn_<mod>___Z5`. Switched to the injective `sanitize_member` (the same
+  mangler `scoped_static_method_name` already uses); byte-identical for the
+  common `[A-Za-z0-9_]` case. `func_names` is keyed by func id and every call
+  site resolves through it, so changing the mangling stays consistent.
+- Minified code reuses short names (`function A`) across scopes, and perry
+  lambda-lifts nested functions to module level, so two module functions can
+  legitimately share a name. `compile_module` now disambiguates collisions
+  with a `__dupN` suffix keyed by the mangled symbol. Exported functions are
+  referenced cross-module by their canonical `scoped_fn_name`, so they reserve
+  their name first and never get suffixed.
+
+Sibling fix to the per-class class-keys-global disambiguation (5ac457967).
+
+## v0.5.1176 — fix(runtime): loose equality (`==`) now treats SSO short strings as strings
+
+`js_jsvalue_loose_equals` (the helper behind `assert.equal`/`assert.deepEqual`
+loose comparison) detected string operands with `is_string()`, which only
+matches heap `STRING_TAG` values and **not** `SHORT_STRING_TAG` SSO-inlined
+strings (length ≤ 5). When both operands were short strings, the function
+matched no arm — not number, not string, not bool — and fell through to
+`return 0`, so `"ab" == "ab"` and loose `assert.equal` on JSON-parsed short
+strings wrongly reported not-equal. The `to_number` coercion helper had the
+same `is_string()` gap, so `"5" == 5` also failed for SSO operands.
+
+Both sites now use `is_any_string()` and decode operands via
+`str_bytes_from_jsvalue` (a stack scratch buffer that handles SSO + heap),
+mirroring the strict-equality (`===`) path, which was already SSO-aware. This
+is a runtime-only change: codegen routes most `==` through other helpers
+(`js_loose_eq`, `js_dynamic_string_equals`), so the user-visible symptom was
+`assert.equal`/`assert.deepEqual` on short strings reporting inequality.
+
+Repro (failed before, passes now, matches `node --experimental-strip-types`):
+
+```ts
+import assert from "node:assert";
+const j: any = JSON.parse('{"k":"ab"}');
+assert.equal(j.k, "ab");                       // was: "Expected values to be loosely equal"
+assert.deepEqual({ x: "ab" }, JSON.parse('{"x":"ab"}'));
+```
+
+Found via an external code audit; verified reproducible before fixing.
+Added `value::equality::loose_eq_sso_tests` (SSO==SSO, SSO==heap, SSO vs
+number, empty-string coercion).
+
 ## v0.5.1175 — fix(http): `IncomingMessage.resume()`/`.pause()` return `this` so `res.resume().on('end', …)` chains (#4975)
 
 Part of the node:http/https behavioral-parity tail (#4975). `Readable.pause()`

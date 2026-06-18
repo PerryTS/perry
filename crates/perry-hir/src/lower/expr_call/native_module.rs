@@ -26,6 +26,22 @@ fn path_submodule_name(module_name: &str) -> Option<&'static str> {
     }
 }
 
+fn is_cluster_default_event_emitter_method(method_name: &str) -> bool {
+    matches!(
+        method_name,
+        "on" | "addListener"
+            | "once"
+            | "prependListener"
+            | "prependOnceListener"
+            | "emit"
+            | "eventNames"
+            | "listenerCount"
+            | "removeListener"
+            | "off"
+            | "removeAllListeners"
+    )
+}
+
 /// Peel runtime-transparent TypeScript wrappers (`as`, `as const`, `!`,
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
@@ -43,6 +59,32 @@ fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
             _ => return cur,
         }
     }
+}
+
+fn require_literal_native_module(ctx: &LoweringContext, expr: &ast::Expr) -> Option<String> {
+    let ast::Expr::Call(call) = unwrap_ts_wrappers(expr) else {
+        return None;
+    };
+    let ast::Callee::Expr(callee_expr) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Ident(ident) = callee_expr.as_ref() else {
+        return None;
+    };
+    if ident.sym.as_ref() != "require"
+        || ctx.lookup_local("require").is_some()
+        || ctx.lookup_func("require").is_some()
+        || ctx.lookup_imported_func("require").is_some()
+        || call.args.len() != 1
+        || call.args[0].spread.is_some()
+    {
+        return None;
+    }
+    let ast::Expr::Lit(ast::Lit::Str(s)) = call.args[0].expr.as_ref() else {
+        return None;
+    };
+    let spec = s.value.as_str().unwrap_or("");
+    crate::destructuring::resolvable_native_module_for_spec(spec)
 }
 
 fn is_node_stream_class_name(name: &str) -> bool {
@@ -81,6 +123,41 @@ fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
     Expr::Sequence(exprs)
 }
 
+fn lower_os_module_method_call(
+    call: &ast::CallExpr,
+    method_name: &str,
+    args: &[Expr],
+) -> Option<Expr> {
+    match method_name {
+        "availableParallelism" => Some(Expr::OsAvailableParallelism),
+        "platform" => Some(Expr::OsPlatform),
+        "arch" => Some(Expr::OsArch),
+        "endianness" => Some(Expr::OsEndianness),
+        "hostname" => Some(Expr::OsHostname),
+        "homedir" => Some(Expr::OsHomedir),
+        "tmpdir" => Some(Expr::OsTmpdir),
+        "loadavg" => Some(Expr::OsLoadavg),
+        "machine" => Some(Expr::OsMachine),
+        "totalmem" => Some(Expr::OsTotalmem),
+        "freemem" => Some(Expr::OsFreemem),
+        "uptime" => Some(Expr::OsUptime),
+        "type" => Some(Expr::OsType),
+        "release" => Some(Expr::OsRelease),
+        "version" => Some(Expr::OsVersion),
+        "cpus" => Some(Expr::OsCpus),
+        "networkInterfaces" => Some(Expr::OsNetworkInterfaces),
+        "userInfo" => Some(user_info_expr_for_call(call, args.to_vec())),
+        "getPriority" | "setPriority" => Some(Expr::NativeMethodCall {
+            module: "os".to_string(),
+            class_name: None,
+            object: None,
+            method: method_name.to_string(),
+            args: args.to_vec(),
+        }),
+        _ => None,
+    }
+}
+
 pub(super) fn try_native_module_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -89,6 +166,20 @@ pub(super) fn try_native_module_methods(
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // Check for native module method calls (e.g., mysql.createConnection())
     if let ast::Expr::Member(member) = expr {
+        // Inline `require("node:os").platform()` reaches this outer member
+        // call before the inner bare `require(...)` lowering can produce a
+        // NativeModuleRef. Recognize the same literal-native namespace shape
+        // here so it dispatches like `import * as os from "node:os"`.
+        if require_literal_native_module(ctx, member.obj.as_ref()).as_deref() == Some("os") {
+            if let ast::MemberProp::Ident(method_ident) = &member.prop {
+                if let Some(expr) =
+                    lower_os_module_method_call(call, method_ident.sym.as_ref(), &args)
+                {
+                    return Ok(Ok(expr));
+                }
+            }
+        }
+
         // #1534/#1540/#1541: the stream acceptance tests deliberately cast
         // the class / namespace before a static call —
         // `(Readable as any).isErrored(r)`, `(Readable as any).toWeb(r)`,
@@ -500,36 +591,10 @@ pub(super) fn try_native_module_methods(
                 obj_name == "os" || ctx.lookup_builtin_module_alias(&obj_name) == Some("os");
             if is_os_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
-                    match method_name {
-                        "availableParallelism" => return Ok(Ok(Expr::OsAvailableParallelism)),
-                        "platform" => return Ok(Ok(Expr::OsPlatform)),
-                        "arch" => return Ok(Ok(Expr::OsArch)),
-                        "endianness" => return Ok(Ok(Expr::OsEndianness)),
-                        "hostname" => return Ok(Ok(Expr::OsHostname)),
-                        "homedir" => return Ok(Ok(Expr::OsHomedir)),
-                        "tmpdir" => return Ok(Ok(Expr::OsTmpdir)),
-                        "loadavg" => return Ok(Ok(Expr::OsLoadavg)),
-                        "machine" => return Ok(Ok(Expr::OsMachine)),
-                        "totalmem" => return Ok(Ok(Expr::OsTotalmem)),
-                        "freemem" => return Ok(Ok(Expr::OsFreemem)),
-                        "uptime" => return Ok(Ok(Expr::OsUptime)),
-                        "type" => return Ok(Ok(Expr::OsType)),
-                        "release" => return Ok(Ok(Expr::OsRelease)),
-                        "version" => return Ok(Ok(Expr::OsVersion)),
-                        "cpus" => return Ok(Ok(Expr::OsCpus)),
-                        "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
-                        "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
-                        "getPriority" | "setPriority" => {
-                            return Ok(Ok(Expr::NativeMethodCall {
-                                module: "os".to_string(),
-                                class_name: None,
-                                object: None,
-                                method: method_name.to_string(),
-                                args,
-                            }));
-                        }
-                        _ => {} // Fall through to generic handling
+                    if let Some(expr) =
+                        lower_os_module_method_call(call, method_ident.sym.as_ref(), &args)
+                    {
+                        return Ok(Ok(expr));
                     }
                 }
             }
@@ -1480,6 +1545,18 @@ pub(super) fn try_native_module_methods(
                         }
                         let normalized_module =
                             module_name.strip_prefix("node:").unwrap_or(module_name);
+                        if normalized_module == "cluster"
+                            && matches!(imported_method, Some("default"))
+                            && is_cluster_default_event_emitter_method(&method_name)
+                        {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: module_name.to_string(),
+                                class_name: None,
+                                object: None,
+                                method: method_name,
+                                args,
+                            }));
+                        }
                         if method_name == "call" {
                             if normalized_module == "stream"
                                 && matches!(imported_method, None | Some("Stream"))

@@ -109,7 +109,14 @@ pub(crate) fn write_barriers_enabled() -> bool {
 }
 
 pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
-    format!("perry_fn_{}__{}", module_prefix, sanitize(hir_name))
+    // Use the INJECTIVE sanitizer (same as scoped_static_method_name): plain
+    // `sanitize` maps every non-`[A-Za-z0-9_]` char to `_`, so distinct minified
+    // function names like `$Z5` and `_Z5` both became `perry_fn_<mod>___Z5` and
+    // clang rejected the module with "invalid redefinition of function". `func_names`
+    // is keyed by func id and every reference resolves through it, so changing the
+    // mangling here keeps all local-function call sites consistent. Byte-identical
+    // to `sanitize` for plain `[A-Za-z0-9_]` names (the overwhelming common case).
+    format!("perry_fn_{}__{}", module_prefix, sanitize_member(hir_name))
 }
 
 pub(super) fn scoped_static_method_name(

@@ -34,6 +34,65 @@ pub fn extract_single_module_exports_assignment(source: &str) -> Option<String> 
     found
 }
 
+/// Return the set of specs `SPEC` for which this module is a *trivial
+/// re-export wrapper* — i.e. it contains a `module.exports = require('SPEC')`
+/// (or bare `exports = require('SPEC')`) assignment, optionally inside a
+/// conditional (`if (...) module.exports = require('SPEC')`). Such a module
+/// has no exports of its own; its public surface IS the target's, so the
+/// wrap layer must forward the target's named exports.
+///
+/// Crucially, a module that merely `require()`s a sibling for its OWN use
+/// (`const { t } = require('./re')`, then defines a class) is NOT a
+/// re-export wrapper of `./re` and must NOT inherit `./re`'s export names —
+/// doing so emits a spurious `export const t = _cjs.t;` that both shadows
+/// the module's own `t` binding and resolves to `undefined` (the target's
+/// names aren't on THIS module's `exports`). This is the semver
+/// `Cannot read properties of undefined (reading 'COMPARATOR')` root:
+/// `classes/comparator.js` requires `../internal/re` for `re`/`t`, and the
+/// old unconditional recursion forwarded re.js's `t`/`re`/`src`/`safeRe`
+/// names as undefined module-scope consts.
+pub fn module_reexport_specs(source: &str) -> Vec<String> {
+    // `module.exports = require('SPEC')` or `exports = require('SPEC')`.
+    // Allow leading whitespace (conditional bodies are indented) and an
+    // optional one-line `if (...)` / `else` prefix on the same line. The
+    // RHS must be EXACTLY a `require(...)` call (no member access /
+    // additional operators), so `module.exports = require('x').foo` or
+    // `module.exports = { ...require('x') }` are excluded — those are not
+    // pure re-exports.
+    // The require(...) call must be the ENTIRE right-hand side. The regex
+    // matches `(?:module.)?exports = require('SPEC')` with an optional
+    // trailing `;`; the capture group 0's end is then checked to ensure the
+    // next non-whitespace byte is a statement boundary (`;`, `}`, newline, or
+    // end of source) — so `module.exports = require('x').foo` and
+    // `module.exports = { ...require('x') }` are rejected (a `.` / `}` from a
+    // surrounding object would follow without an intervening boundary). The
+    // `regex` crate has no lookahead, hence the post-match boundary probe.
+    let re = regex::Regex::new(
+        r#"(?m)(?:^|[;{}]|\belse\b|\)\s*)\s*(?:module\.)?exports\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)\s*;?"#,
+    )
+    .unwrap();
+    let bytes = source.as_bytes();
+    let mut specs: Vec<String> = Vec::new();
+    for cap in re.captures_iter(source) {
+        let Some(spec) = cap.get(1) else { continue };
+        let whole = cap.get(0).unwrap();
+        // Probe the first non-whitespace byte after the match.
+        let mut e = whole.end();
+        while e < bytes.len() && (bytes[e] == b' ' || bytes[e] == b'\t') {
+            e += 1;
+        }
+        let boundary = e >= bytes.len() || matches!(bytes[e], b';' | b'}' | b'\n' | b'\r');
+        if !boundary {
+            continue;
+        }
+        let s = spec.as_str().to_string();
+        if !specs.contains(&s) {
+            specs.push(s);
+        }
+    }
+    specs
+}
+
 /// Issue #665 follow-up: detect `(?:module\.)?exports\.NAME = require('SPEC')`
 /// patterns and return `(name, spec)` pairs. Order is preserved and duplicates
 /// (same NAME) are dropped on the first occurrence. If the same NAME also

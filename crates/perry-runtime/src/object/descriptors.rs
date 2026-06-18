@@ -169,9 +169,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 .unwrap_or(PropertyAttrs::new(true, true, true));
             if let Some((get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key)
             {
+                // A `0` get/set means "absent half" — surface it as `undefined`
+                // (not the number `0`) so a get-only accessor reflects
+                // `{ get, set: undefined }`.
+                let undef = crate::value::TAG_UNDEFINED;
                 return build_accessor_descriptor(
-                    f64::from_bits(get),
-                    f64::from_bits(set),
+                    f64::from_bits(if get == 0 { undef } else { get }),
+                    f64::from_bits(if set == 0 { undef } else { set }),
                     attrs.enumerable(),
                     attrs.configurable(),
                 );

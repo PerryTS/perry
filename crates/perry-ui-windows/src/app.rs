@@ -219,7 +219,7 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 h,
                 None,
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -277,7 +277,7 @@ pub fn app_set_body(app_handle: i64, root_handle: i64) {
                 // Set the root widget's HWND as a child of the main window
                 if let Some(child_hwnd) = crate::widgets::get_hwnd(root_handle) {
                     unsafe {
-                        let _ = SetParent(child_hwnd, hwnd);
+                        let _ = SetParent(child_hwnd, Some(hwnd));
                         let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
                         SetWindowLongW(child_hwnd, GWL_STYLE, (style | WS_CHILD.0) as i32);
                         // Trigger initial layout
@@ -336,7 +336,7 @@ pub fn app_run(app_handle: i64) {
                                 let r = mi.rcMonitor;
                                 let _ = SetWindowPos(
                                     hwnd,
-                                    HWND_TOP,
+                                    Some(HWND_TOP),
                                     r.left,
                                     r.top,
                                     r.right - r.left,
@@ -364,7 +364,7 @@ pub fn app_run(app_handle: i64) {
             let idx = (app_handle - 1) as usize;
             if idx < apps.len() {
                 unsafe {
-                    let _ = SetTimer(apps[idx].hwnd, TICK_TIMER_ID, 50, None);
+                    let _ = SetTimer(Some(apps[idx].hwnd), TICK_TIMER_ID, 50, None);
                 }
             }
         });
@@ -378,7 +378,7 @@ pub fn app_run(app_handle: i64) {
                 if idx < apps.len() {
                     unsafe {
                         let _ = SetTimer(
-                            apps[idx].hwnd,
+                            Some(apps[idx].hwnd),
                             TEST_EXIT_TIMER_ID,
                             perry_ui_testkit::exit_delay_ms(),
                             None,
@@ -754,7 +754,15 @@ pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
                         "modal" => HWND_TOPMOST,
                         _ => HWND_NOTOPMOST,
                     };
-                    let _ = SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(insert_after),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE,
+                    );
                 }
             }
         });
@@ -894,7 +902,7 @@ pub fn set_timer(interval_ms: f64, callback: f64) {
                 let apps = apps.borrow();
                 if let Some(app) = apps.first() {
                     unsafe {
-                        let _ = SetTimer(app.hwnd, timer_id, ms, None);
+                        let _ = SetTimer(Some(app.hwnd), timer_id, ms, None);
                     }
                 }
             });
@@ -936,7 +944,7 @@ pub fn handle_timer(hwnd: HWND, timer_id: usize) {
     // PERRY_UI_TEST_MODE exit: capture screenshot (if configured), then exit.
     if timer_id == TEST_EXIT_TIMER_ID {
         unsafe {
-            let _ = KillTimer(hwnd, TEST_EXIT_TIMER_ID);
+            let _ = KillTimer(Some(hwnd), TEST_EXIT_TIMER_ID);
         }
         if let Some(path) = perry_ui_testkit::screenshot_path() {
             let mut len: usize = 0;
@@ -1027,7 +1035,7 @@ pub fn request_layout() {
             if let Some(app) = apps.first() {
                 if app.root_widget.is_some() {
                     unsafe {
-                        let _ = PostMessageW(app.hwnd, WM_PERRY_LAYOUT, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(app.hwnd), WM_PERRY_LAYOUT, WPARAM(0), LPARAM(0));
                     }
                 }
             }
@@ -1051,7 +1059,7 @@ fn do_layout() {
                                 let _ = MoveWindow(child_hwnd, 0, 0, rect.right, rect.bottom, true);
                                 crate::layout::layout_widget(root, rect.right, rect.bottom);
                             }
-                            let _ = InvalidateRect(app.hwnd, None, true);
+                            let _ = InvalidateRect(Some(app.hwnd), None, true);
                         }
                     }
                 }
@@ -1081,7 +1089,7 @@ unsafe extern "system" fn wnd_proc(
                     let _ = MoveWindow(child_hwnd, 0, 0, width, height, true);
                     crate::layout::layout_widget(root, width, height);
                     // Set a one-shot timer to force repaint
-                    let _ = SetTimer(hwnd, 9999, 500, None);
+                    let _ = SetTimer(Some(hwnd), 9999, 500, None);
                 }
             }
             LRESULT(0)
@@ -1144,7 +1152,7 @@ unsafe extern "system" fn wnd_proc(
             };
             let target = WindowFromPoint(cursor_pos);
             if !target.is_invalid() && target != hwnd {
-                return SendMessageW(target, msg, wparam, lparam);
+                return SendMessageW(target, msg, Some(wparam), Some(lparam));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -1228,7 +1236,7 @@ unsafe extern "system" fn wnd_proc(
         WM_TIMER => {
             let timer_id = wparam.0;
             if timer_id == 9999 {
-                let _ = KillTimer(hwnd, 9999);
+                let _ = KillTimer(Some(hwnd), 9999);
                 if let Some(root) = get_root_widget(1) {
                     crate::layout::force_paint_backgrounds(root);
                 }

@@ -652,13 +652,15 @@ pub(crate) fn lower_for(
 
     // If this for-loop has a pending label (from an enclosing Stmt::Labeled),
     // register it so `break label;` / `continue label;` resolve here.
-    let consumed_label = ctx.pending_label.take();
+    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
     let previous_region_id = ctx.active_region_id.clone();
-    if let Some(ref lbl) = consumed_label {
+    for lbl in &consumed_labels {
         ctx.label_targets.insert(
             lbl.clone(),
             (update_label.clone(), exit_label.clone(), ctx.try_depth),
         );
+    }
+    if let Some(lbl) = consumed_labels.last() {
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
@@ -1430,13 +1432,15 @@ pub(crate) fn lower_while(
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_label = ctx.pending_label.take();
+    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
     let previous_region_id = ctx.active_region_id.clone();
-    if let Some(ref lbl) = consumed_label {
+    for lbl in &consumed_labels {
         ctx.label_targets.insert(
             lbl.clone(),
             (cond_label.clone(), exit_label.clone(), ctx.try_depth),
         );
+    }
+    if let Some(lbl) = consumed_labels.last() {
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
@@ -1494,13 +1498,15 @@ pub(crate) fn lower_do_while(
         .push((cond_label.clone(), exit_label.clone(), ctx.try_depth));
 
     // Consume pending label (from enclosing Stmt::Labeled).
-    let consumed_label = ctx.pending_label.take();
+    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
     let previous_region_id = ctx.active_region_id.clone();
-    if let Some(ref lbl) = consumed_label {
+    for lbl in &consumed_labels {
         ctx.label_targets.insert(
             lbl.clone(),
             (cond_label.clone(), exit_label.clone(), ctx.try_depth),
         );
+    }
+    if let Some(lbl) = consumed_labels.last() {
         ctx.active_region_id = Some(ctx.region_id_for_label(lbl));
     }
 
