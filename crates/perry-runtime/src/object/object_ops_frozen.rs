@@ -149,6 +149,22 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
             {
                 return obj_value;
             }
+            // Map / Set instances are NOT plain `ObjectHeader`s: their entries
+            // live in a dedicated backing registered in the map/set tables, and
+            // the `keys_array` slot the walk below reads is not a real key array.
+            // `mark_all_keys` would dereference that garbage and corrupt the
+            // backing — after `Object.freeze(map)`, a later `map.get(k)` /
+            // `map.values()` then read a bad pointer and SIGSEGV (mime's
+            // `_freeze()` froze its `#typeToExtensions` Map-of-Sets). Per spec,
+            // freezing a Map/Set only makes the object non-extensible; its
+            // entries stay mutable through the collection methods. So set the
+            // integrity GC flags (already done above) and stop — same shape as
+            // the TypedArray arm.
+            if crate::map::is_registered_map(obj as usize)
+                || crate::set::is_registered_set(obj as usize)
+            {
+                return obj_value;
+            }
             // Closures: own props are `name`/`length` + dynamic props — the
             // keys_array walk below would read garbage off the ClosureHeader.
             // Record explicit non-writable/non-configurable attrs.
@@ -243,6 +259,13 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
             // TypedArray receivers: GC flags only — see `js_object_freeze`.
             if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
                 || crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some()
+            {
+                return obj_value;
+            }
+            // Map / Set: GC integrity flags only — the `keys_array` walk would
+            // corrupt their backing. See the matching arm in `js_object_freeze`.
+            if crate::map::is_registered_map(obj as usize)
+                || crate::set::is_registered_set(obj as usize)
             {
                 return obj_value;
             }

@@ -1172,6 +1172,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         param_count: ic.constructor_param_count,
                         has_own_constructor: ic.has_own_constructor,
                         has_instance_fields: ic.has_instance_fields,
+                        has_rest: ic.constructor_has_rest,
                     },
                 )
             })
@@ -1912,13 +1913,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
 
         // Constructor: declared as
-        // `<source_prefix>__<class>_constructor(i64 this, double arg0, …) → void`
+        // `<source_prefix>__<class>_constructor(double this, double arg0, …) → double`.
+        // The source module's standalone ctor symbol returns DOUBLE — the
+        // ECMAScript constructor return-override value (an explicit
+        // `return <obj/fn>`) or `undefined` for an ordinary ctor. Declaring it
+        // VOID discarded a returned object/function, so `new Chalk(opts)` (whose
+        // ctor `return chalkFactory(opts)`) yielded the empty instance instead of
+        // the factory. The dispatch in `lower_new` applies `js_ctor_return_override`
+        // to this value.
         let ctor_fn = format!("{}__{}_constructor", sanitize(src), sanitize(&ic.name),);
         let mut ctor_params: Vec<crate::types::LlvmType> = vec![DOUBLE];
         for _ in 0..ic.constructor_param_count {
             ctor_params.push(DOUBLE);
         }
-        llmod.declare_function(&ctor_fn, VOID, &ctor_params);
+        llmod.declare_function(&ctor_fn, DOUBLE, &ctor_params);
 
         // Cross-module static methods. Source modules emit these as static
         // functions with no `this` receiver, normally qualified by the source
