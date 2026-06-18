@@ -129,8 +129,9 @@ pub(crate) fn set_full_outline_ic(enabled: bool) {
 }
 
 /// Total number of LLVM functions a module will emit — top-level functions
-/// plus every class callable (constructor, instance/static methods, accessor
-/// get/set bodies). Used as the lever-B size proxy: class methods and closures
+/// plus every class callable (constructor, instance/static methods, computed
+/// members, accessor get/set bodies). Used as the lever-B size proxy: class
+/// methods and closures
 /// do NOT live in `hir.functions`, so a class-heavy minified bundle (the exact
 /// pathology lever B targets) can have a small `functions.len()` yet emit tens
 /// of thousands of LLVM functions. Counting class callables keeps the gate from
@@ -143,6 +144,7 @@ pub(crate) fn module_callable_count(hir: &perry_hir::Module) -> usize {
             usize::from(c.constructor.is_some())
                 + c.methods.len()
                 + c.static_methods.len()
+                + c.computed_members.len()
                 + c.getters.len()
                 + c.setters.len()
         })
