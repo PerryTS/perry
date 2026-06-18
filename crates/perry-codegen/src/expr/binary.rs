@@ -134,6 +134,56 @@ fn try_lower_preguarded_plain_array_f64_add(
     )))
 }
 
+fn integer_const_i64(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::Integer(n) => Some(*n),
+        Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+            let value = *n as i64;
+            ((value as f64) == *n).then_some(value)
+        }
+        _ => None,
+    }
+}
+
+fn srem_safe_integer_const_i64(expr: &Expr) -> Option<i64> {
+    let value = integer_const_i64(expr)?;
+    if matches!(value, 0 | -1)
+        || !(-super::MAX_SAFE_INTEGER_I64..=super::MAX_SAFE_INTEGER_I64).contains(&value)
+    {
+        return None;
+    }
+    Some(value)
+}
+
+fn srem_safe_integer_const_i32(expr: &Expr) -> Option<i32> {
+    let value = srem_safe_integer_const_i64(expr)?;
+    i32::try_from(value).ok()
+}
+
+fn try_lower_i32_local_mod_const(
+    ctx: &mut FnCtx<'_>,
+    left: &Expr,
+    right: &Expr,
+) -> Result<Option<String>> {
+    let Expr::LocalGet(id) = left else {
+        return Ok(None);
+    };
+    if ctx.unsigned_i32_locals.contains(id) {
+        return Ok(None);
+    }
+    let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() else {
+        return Ok(None);
+    };
+    let Some(divisor) = srem_safe_integer_const_i32(right) else {
+        return Ok(None);
+    };
+
+    let blk = ctx.block();
+    let lhs = blk.load(I32, &i32_slot);
+    let rem = blk.srem(I32, &lhs, &divisor.to_string());
+    Ok(Some(blk.sitofp(I32, &rem, DOUBLE)))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Binary { op, left, right } => {
@@ -282,6 +332,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
                 }
             }
+            if matches!(op, BinaryOp::Mod) {
+                if let Some(v) = try_lower_i32_local_mod_const(ctx, left, right)? {
+                    return Ok(v);
+                }
+            }
             // Fast path: `<integer-valued> % <integer literal>` (the
             // factorial / `i % 1000` loop shape). `frem double` lowers
             // to a libm `fmod()` call on ARM — no hardware instruction
@@ -301,13 +356,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if matches!(op, BinaryOp::Mod)
                 && crate::type_analysis::is_integer_valued_expr(ctx, left)
                 && crate::type_analysis::is_integer_valued_expr(ctx, right)
+                && srem_safe_integer_const_i64(right).is_some()
             {
                 let l_raw = lower_expr(ctx, left)?;
-                let r_raw = lower_expr(ctx, right)?;
+                let r_const =
+                    srem_safe_integer_const_i64(right).expect("checked static modulo divisor");
                 let blk = ctx.block();
                 let li = blk.fptosi(DOUBLE, &l_raw, I64);
-                let ri = blk.fptosi(DOUBLE, &r_raw, I64);
-                let m = blk.srem(I64, &li, &ri);
+                let m = blk.srem(I64, &li, &r_const.to_string());
                 return Ok(blk.sitofp(I64, &m, DOUBLE));
             }
 

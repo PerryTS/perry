@@ -8,13 +8,13 @@ use crate::expr::{
     PreguardedAffineIndexExpr, PreguardedModuloIndexExpr, PreguardedNumericArrayAffineIndexGet,
     PreguardedNumericArrayAffineIndexSet, PreguardedNumericArrayIndexGet,
     PreguardedNumericArrayIndexSet, PreguardedNumericArrayModuloIndexGet,
-    PreguardedPlainArrayIndexSet, TypedFeedbackContract, TypedFeedbackKind,
+    PreguardedPlainArrayIndexSet, TypedFeedbackContract, TypedFeedbackKind, MAX_SAFE_INTEGER_I64,
 };
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
 use crate::native_value::{BoundedBufferIndex, BoundsProof, BoundsState, LengthSource};
 use crate::type_analysis::{is_array_expr, is_numeric_expr};
-use crate::types::{I32, I64};
+use crate::types::{DOUBLE, I32, I64};
 
 #[derive(Clone, Copy, Debug)]
 struct InvariantArrayIndexGetHoist {
@@ -65,6 +65,12 @@ struct ModuloNumericArrayIndexGetPreguard {
 struct AffineNumericArrayIndexSetPreguard {
     array_local_id: u32,
     index: PreguardedAffineIndexExpr,
+}
+
+#[derive(Clone, Debug)]
+struct I64LoopAccumulator {
+    local_id: u32,
+    slot: String,
 }
 
 /// For-loop lowering: classic init / cond / body / update / exit CFG.
@@ -473,6 +479,9 @@ pub(crate) fn lower_for(
         || !affine_array_get_preguards.is_empty()
         || !modulo_array_get_preguards.is_empty()
         || !affine_array_set_preguards.is_empty();
+    let i32_only_counter_update = classify_i32_only_counter_update(ctx, init, update, body);
+    let i64_loop_accumulator =
+        prepare_i64_loop_accumulator(ctx, local_bound_classification, update, body);
 
     let cond_idx = ctx.new_block("for.cond");
     let prebody_idx = if has_loop_prebody {
@@ -724,7 +733,19 @@ pub(crate) fn lower_for(
     let affine_set_preguard_base_len = ctx.preguarded_numeric_array_affine_index_sets.len();
     ctx.preguarded_numeric_array_affine_index_sets
         .extend(affine_set_preguard_runtime.iter().cloned());
+    let previous_i64_loop_accumulator = i64_loop_accumulator.as_ref().map(|acc| {
+        ctx.i64_loop_accumulator_slots
+            .insert(acc.local_id, acc.slot.clone())
+    });
     let lower_result = lower_stmts(ctx, body);
+    if let Some(acc) = i64_loop_accumulator.as_ref() {
+        if let Some(previous) = previous_i64_loop_accumulator.flatten() {
+            ctx.i64_loop_accumulator_slots
+                .insert(acc.local_id, previous);
+        } else {
+            ctx.i64_loop_accumulator_slots.remove(&acc.local_id);
+        }
+    }
     ctx.preguarded_numeric_array_affine_index_sets
         .truncate(affine_set_preguard_base_len);
     ctx.preguarded_numeric_array_modulo_index_gets
@@ -771,7 +792,13 @@ pub(crate) fn lower_for(
     // calls bracketing the loop end up adjacent in the binary and
     // report 0ms wall-clock. The barrier emits zero machine
     // instructions but is opaque to IndVarSimplify.
-    if !ctx.block().is_terminated() && body_needs_asm_barrier(body) {
+    // The i64 accumulator shadow makes loops like `sum = sum + 1` exact
+    // enough for LLVM to derive the closed-form result and remove the loop.
+    // Keep Date.now-bracketed benchmark loops observable, matching the
+    // existing pure-loop preservation path.
+    if !ctx.block().is_terminated()
+        && (body_needs_asm_barrier(body) || i64_loop_accumulator.is_some())
+    {
         ctx.block().asm_sideeffect_barrier();
     }
     if !ctx.block().is_terminated() {
@@ -781,7 +808,20 @@ pub(crate) fn lower_for(
     // Update block.
     ctx.current_block = update_idx;
     if let Some(update_expr) = update {
-        let _ = lower_expr(ctx, update_expr)?;
+        let inserted_i32_only_update = i32_only_counter_update
+            .map(|counter_id| ctx.i32_only_counter_updates.insert(counter_id));
+        let previous_discard_expr_value = ctx.discard_expr_value;
+        if i32_only_counter_update.is_some() {
+            ctx.discard_expr_value = true;
+        }
+        let update_result = lower_expr(ctx, update_expr);
+        ctx.discard_expr_value = previous_discard_expr_value;
+        if let Some(counter_id) = i32_only_counter_update {
+            if inserted_i32_only_update == Some(true) {
+                ctx.i32_only_counter_updates.remove(&counter_id);
+            }
+        }
+        let _ = update_result?;
     }
     if !ctx.block().is_terminated() {
         ctx.block()
@@ -828,6 +868,15 @@ pub(crate) fn lower_for(
             ctx.block().br(&body_label);
         }
     }
+    // Exit block — subsequent statements continue here. Sync before popping
+    // loop-local i32 slots so after-loop reads observe the final counter.
+    ctx.current_block = exit_idx;
+    if let Some(counter_id) = i32_only_counter_update {
+        sync_i32_counter_to_double_slot(ctx, counter_id);
+    }
+    if let Some(acc) = i64_loop_accumulator.as_ref() {
+        sync_i64_accumulator_to_double_slot(ctx, acc);
+    }
     ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();
@@ -863,10 +912,224 @@ pub(crate) fn lower_for(
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
     ctx.int_range_facts
         .retain(|fact| fact.scope_id != loop_proof_scope_id);
-
-    // Exit block — subsequent statements continue here.
-    ctx.current_block = exit_idx;
     Ok(())
+}
+
+fn classify_i32_only_counter_update(
+    ctx: &FnCtx<'_>,
+    init: Option<&Stmt>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<u32> {
+    let perry_hir::Expr::Update { id, .. } = update? else {
+        return None;
+    };
+    if !matches!(init, Some(Stmt::Let { id: init_id, mutable: true, .. }) if init_id == id) {
+        return None;
+    }
+    if let_init_is_negative_zero(init, *id) {
+        return None;
+    }
+    if ctx.boxed_vars.contains(id)
+        || ctx.module_globals.contains_key(id)
+        || ctx.closure_captures.contains_key(id)
+        || ctx.unsigned_i32_locals.contains(id)
+        || !ctx.i32_counter_slots.contains_key(id)
+        || !loop_counter_bounds_are_safe(ctx, *id, update, body)
+    {
+        return None;
+    }
+    Some(*id)
+}
+
+fn let_init_is_negative_zero(init: Option<&Stmt>, local_id: u32) -> bool {
+    matches!(
+        init,
+        Some(Stmt::Let {
+            id,
+            init: Some(perry_hir::Expr::Number(n)),
+            ..
+        }) if *id == local_id && *n == 0.0 && n.is_sign_negative()
+    )
+}
+
+fn sync_i32_counter_to_double_slot(ctx: &mut FnCtx<'_>, counter_id: u32) {
+    let (Some(i32_slot), Some(double_slot)) = (
+        ctx.i32_counter_slots.get(&counter_id).cloned(),
+        ctx.locals.get(&counter_id).cloned(),
+    ) else {
+        return;
+    };
+    let i32_value = ctx.block().load(I32, &i32_slot);
+    let double_value = ctx.block().sitofp(I32, &i32_value, DOUBLE);
+    ctx.block().store(DOUBLE, &double_value, &double_slot);
+}
+
+fn prepare_i64_loop_accumulator(
+    ctx: &mut FnCtx<'_>,
+    local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<I64LoopAccumulator> {
+    let local_id = classify_i64_loop_accumulator(ctx, local_bound_classification, update, body)?;
+    let initial = *ctx.exact_safe_integer_locals.get(&local_id)?;
+    let slot = ctx.func.alloca_entry(I64);
+    ctx.block().store(I64, &initial.to_string(), &slot);
+    Some(I64LoopAccumulator { local_id, slot })
+}
+
+fn classify_i64_loop_accumulator(
+    ctx: &FnCtx<'_>,
+    local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<u32> {
+    let (counter_id, bound_id, op) = local_bound_classification?;
+    if !matches!(op, perry_hir::CompareOp::Lt)
+        || !ctx.i32_counter_slots.contains_key(&counter_id)
+        || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
+    {
+        return None;
+    }
+
+    let [Stmt::Expr(perry_hir::Expr::LocalSet(acc_id, value))] = body else {
+        return None;
+    };
+    if *acc_id == counter_id
+        || ctx.i32_counter_slots.contains_key(acc_id)
+        || ctx.boxed_vars.contains(acc_id)
+        || ctx.module_globals.contains_key(acc_id)
+        || ctx.closure_captures.contains_key(acc_id)
+        || ctx.buffer_view_slots.contains_key(acc_id)
+        || !ctx.locals.contains_key(acc_id)
+    {
+        return None;
+    }
+
+    let initial = *ctx.exact_safe_integer_locals.get(acc_id)?;
+    if initial < 0 {
+        return None;
+    }
+    let addend = self_add_accumulator_addend(*acc_id, value.as_ref())?;
+    let addend_max = nonnegative_i64_addend_max(ctx, counter_id, addend)?;
+    let start = *ctx.exact_safe_integer_locals.get(&counter_id)?;
+    if start < 0 {
+        return None;
+    }
+    let bound_range = crate::expr::int_range_expr(ctx, &perry_hir::Expr::LocalGet(bound_id))?;
+    let iterations = bound_range.max.checked_sub(start)?.max(0);
+    let growth = iterations.checked_mul(addend_max)?;
+    let max_value = initial.checked_add(growth)?;
+    (max_value <= MAX_SAFE_INTEGER_I64).then_some(*acc_id)
+}
+
+fn self_add_accumulator_addend<'a>(
+    acc_id: u32,
+    value: &'a perry_hir::Expr,
+) -> Option<&'a perry_hir::Expr> {
+    let perry_hir::Expr::Binary {
+        op: perry_hir::BinaryOp::Add,
+        left,
+        right,
+    } = value
+    else {
+        return None;
+    };
+    match (left.as_ref(), right.as_ref()) {
+        (perry_hir::Expr::LocalGet(left_id), addend) if *left_id == acc_id => Some(addend),
+        (addend, perry_hir::Expr::LocalGet(right_id)) if *right_id == acc_id => Some(addend),
+        _ => None,
+    }
+}
+
+fn exact_nonnegative_integer_const(expr: &perry_hir::Expr) -> Option<i64> {
+    let value = match expr {
+        perry_hir::Expr::Integer(n) => *n,
+        perry_hir::Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+            if *n == 0.0 && n.is_sign_negative() {
+                return None;
+            }
+            let value = *n as i64;
+            if (value as f64) != *n {
+                return None;
+            }
+            value
+        }
+        _ => return None,
+    };
+    (0..=MAX_SAFE_INTEGER_I64).contains(&value).then_some(value)
+}
+
+fn bounded_byte_get_addend_max(
+    ctx: &FnCtx<'_>,
+    counter_id: u32,
+    buffer: &perry_hir::Expr,
+    index: &perry_hir::Expr,
+) -> Option<i64> {
+    let perry_hir::Expr::LocalGet(index_id) = index else {
+        return None;
+    };
+    if *index_id != counter_id {
+        return None;
+    }
+    let perry_hir::Expr::LocalGet(buffer_id) = buffer else {
+        return None;
+    };
+    if !ctx.buffer_view_slots.contains_key(buffer_id) {
+        return None;
+    }
+    crate::expr::bounds_for_buffer_access_width(ctx, *buffer_id, index, 1)
+        .allows_inbounds()
+        .then_some(255)
+}
+
+fn nonnegative_i64_addend_max(
+    ctx: &FnCtx<'_>,
+    counter_id: u32,
+    expr: &perry_hir::Expr,
+) -> Option<i64> {
+    if let Some(value) = exact_nonnegative_integer_const(expr) {
+        return Some(value);
+    }
+    match expr {
+        perry_hir::Expr::LocalGet(id)
+            if *id == counter_id
+                && crate::expr::int_range_expr(ctx, expr).is_some_and(|range| range.min >= 0) =>
+        {
+            crate::expr::int_range_expr(ctx, expr).map(|range| range.max)
+        }
+        perry_hir::Expr::Binary {
+            op: perry_hir::BinaryOp::Mod,
+            left,
+            right,
+        } => {
+            let perry_hir::Expr::LocalGet(id) = left.as_ref() else {
+                return None;
+            };
+            if *id != counter_id {
+                return None;
+            }
+            let divisor = exact_nonnegative_integer_const(right.as_ref())?;
+            (divisor > 0).then_some(divisor - 1)
+        }
+        perry_hir::Expr::Uint8ArrayGet { array, index } => {
+            bounded_byte_get_addend_max(ctx, counter_id, array, index)
+        }
+        perry_hir::Expr::BufferIndexGet { buffer, index } => {
+            bounded_byte_get_addend_max(ctx, counter_id, buffer, index)
+        }
+        _ => None,
+    }
+}
+
+fn sync_i64_accumulator_to_double_slot(ctx: &mut FnCtx<'_>, acc: &I64LoopAccumulator) {
+    let Some(double_slot) = ctx.locals.get(&acc.local_id).cloned() else {
+        return;
+    };
+    let i64_value = ctx.block().load(I64, &acc.slot);
+    let double_value = ctx.block().sitofp(I64, &i64_value, DOUBLE);
+    ctx.block().store(DOUBLE, &double_value, &double_slot);
+    ctx.exact_safe_integer_locals.remove(&acc.local_id);
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {

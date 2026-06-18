@@ -892,6 +892,595 @@ fn typed_feedback_guards_computed_numeric_array_write_uses_i32_loop_bound() {
 }
 
 #[test]
+fn numeric_modulo_loop_counter_by_const_uses_i32_srem() {
+    let modulo = Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(Expr::LocalGet(3)),
+        right: Box::new(Expr::Integer(7)),
+    };
+    let ir = ir_for(module(
+        "i32_counter_mod_const.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(100)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(modulo),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+
+    assert!(ir.contains("srem i32"), "{ir}");
+    assert!(!ir.contains("srem i64"), "{ir}");
+}
+
+#[test]
+fn numeric_modulo_by_zero_keeps_double_frem_fallback() {
+    let modulo = Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(Expr::LocalGet(3)),
+        right: Box::new(Expr::Integer(0)),
+    };
+    let ir = ir_for(module(
+        "i32_counter_mod_zero.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(100)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(modulo),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+
+    assert!(!ir.contains("srem i32"), "{ir}");
+    assert!(!ir.contains("srem i64"), "{ir}");
+    assert!(ir.contains("frem double"), "{ir}");
+}
+
+#[test]
+fn numeric_modulo_by_unsafe_integer_keeps_double_frem_fallback() {
+    let modulo = Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(Expr::LocalGet(3)),
+        right: Box::new(Expr::Number(9_007_199_254_740_992.0)),
+    };
+    let ir = ir_for(module(
+        "i32_counter_mod_unsafe_integer.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(100)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(modulo),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+
+    assert!(!ir.contains("srem i32"), "{ir}");
+    assert!(!ir.contains("srem i64"), "{ir}");
+    assert!(ir.contains("frem double"), "{ir}");
+}
+
+#[test]
+fn i32_for_update_skips_per_iteration_double_counter_store() {
+    let ir = ir_for(module(
+        "i32_for_update_counter.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(100)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(3))),
+        ],
+    ));
+    let update_start = ir.find("\nfor.update.").expect("for update block");
+    let update_end = ir[update_start..]
+        .find("\nfor.exit.")
+        .map(|offset| update_start + offset)
+        .expect("for exit block");
+    let update_ir = &ir[update_start..update_end];
+    let exit_ir = &ir[update_end..];
+
+    assert!(update_ir.contains("add i32"), "{update_ir}");
+    assert!(!update_ir.contains("fadd double"), "{update_ir}");
+    assert!(!update_ir.contains("store double"), "{update_ir}");
+    assert!(exit_ir.contains("sitofp i32"), "{exit_ir}");
+    assert!(exit_ir.contains("store double"), "{exit_ir}");
+}
+
+#[test]
+fn i32_for_update_keeps_double_counter_store_for_negative_zero_init() {
+    let ir = ir_for(module(
+        "i32_for_update_negative_zero_counter.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 2,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Number(-0.0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 2,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: Vec::new(),
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+    let update_start = ir.find("\nfor.update.").expect("for update block");
+    let update_end = ir[update_start..]
+        .find("\nfor.exit.")
+        .map(|offset| update_start + offset)
+        .expect("for exit block");
+    let update_ir = &ir[update_start..update_end];
+    let exit_ir = &ir[update_end..];
+
+    assert!(update_ir.contains("fadd double"), "{update_ir}");
+    assert!(update_ir.contains("store double"), "{update_ir}");
+    assert!(!exit_ir.contains("sitofp i32"), "{exit_ir}");
+}
+
+#[test]
+fn i64_loop_accumulator_syncs_once_for_self_add_body() {
+    let modulo = Expr::Binary {
+        op: BinaryOp::Mod,
+        left: Box::new(Expr::LocalGet(3)),
+        right: Box::new(Expr::Integer(10)),
+    };
+    let ir = ir_for(module(
+        "i64_loop_accumulator.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(100)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(modulo),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+    let body_start = ir.find("\nfor.body.").expect("for body block");
+    let body_end = ir[body_start..]
+        .find("\nfor.update.")
+        .map(|offset| body_start + offset)
+        .expect("for update block");
+    let exit_start = ir.find("\nfor.exit.").expect("for exit block");
+    let body_ir = &ir[body_start..body_end];
+    let exit_ir = &ir[exit_start..];
+
+    assert!(body_ir.contains("srem i32"), "{body_ir}");
+    assert!(body_ir.contains("add i64"), "{body_ir}");
+    assert!(body_ir.contains("store i64"), "{body_ir}");
+    assert!(!body_ir.contains("fadd double"), "{body_ir}");
+    assert!(!body_ir.contains("store double"), "{body_ir}");
+    assert!(exit_ir.contains("sitofp i64"), "{exit_ir}");
+    assert!(exit_ir.contains("store double"), "{exit_ir}");
+}
+
+#[test]
+fn i64_loop_accumulator_uses_uint8array_byte_addend() {
+    let byte_get = Expr::Uint8ArrayGet {
+        array: Box::new(Expr::LocalGet(2)),
+        index: Box::new(Expr::LocalGet(4)),
+    };
+    let ir = ir_for(module(
+        "i64_loop_accumulator_uint8array_get.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "size".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(16)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "bytes".to_string(),
+                ty: Type::Named("Uint8Array".to_string()),
+                mutable: false,
+                init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(1))))),
+            },
+            Stmt::Let {
+                id: 3,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 4,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(4)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 4,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    3,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(3)),
+                        right: Box::new(byte_get),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(3))),
+        ],
+    ));
+    let body_start = ir.find("\nfor.body.").expect("for body block");
+    let body_end = ir[body_start..]
+        .find("\nfor.update.")
+        .map(|offset| body_start + offset)
+        .expect("for update block");
+    let exit_start = ir.find("\nfor.exit.").expect("for exit block");
+    let body_ir = &ir[body_start..body_end];
+    let exit_ir = &ir[exit_start..];
+
+    assert!(body_ir.contains("load i8"), "{body_ir}");
+    assert!(body_ir.contains("zext i8"), "{body_ir}");
+    assert!(body_ir.contains("zext i32"), "{body_ir}");
+    assert!(body_ir.contains("add i64"), "{body_ir}");
+    assert!(body_ir.contains("store i64"), "{body_ir}");
+    assert!(!body_ir.contains("fadd double"), "{body_ir}");
+    assert!(!body_ir.contains("store double"), "{body_ir}");
+    assert!(
+        !body_ir.contains("call i32 @js_uint8array_get"),
+        "{body_ir}"
+    );
+    assert!(exit_ir.contains("sitofp i64"), "{exit_ir}");
+    assert!(exit_ir.contains("store double"), "{exit_ir}");
+}
+
+#[test]
+fn i64_loop_accumulator_rejects_negative_zero_initial_value() {
+    let ir = ir_for(module(
+        "i64_loop_accumulator_negative_zero.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(2)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(-0.0)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+    let body_start = ir.find("\nfor.body.").expect("for body block");
+    let body_end = ir[body_start..]
+        .find("\nfor.update.")
+        .map(|offset| body_start + offset)
+        .expect("for update block");
+    let body_ir = &ir[body_start..body_end];
+
+    assert!(!body_ir.contains("add i64"), "{body_ir}");
+    assert!(!body_ir.contains("store i64"), "{body_ir}");
+    assert!(body_ir.contains("fadd double"), "{body_ir}");
+    assert!(body_ir.contains("store double"), "{body_ir}");
+}
+
+#[test]
+fn i64_loop_accumulator_rejects_growth_past_safe_integer() {
+    let ir = ir_for(module(
+        "i64_loop_accumulator_overflow.ts",
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Integer(2)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "sum".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(9_007_199_254_740_991)),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: 3,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(3)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }),
+                update: Some(Expr::Update {
+                    id: 3,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(2)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                ))],
+            },
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+    ));
+    let body_start = ir.find("\nfor.body.").expect("for body block");
+    let body_end = ir[body_start..]
+        .find("\nfor.update.")
+        .map(|offset| body_start + offset)
+        .expect("for update block");
+    let body_ir = &ir[body_start..body_end];
+
+    assert!(!body_ir.contains("add i64"), "{body_ir}");
+    assert!(!body_ir.contains("store i64"), "{body_ir}");
+    assert!(body_ir.contains("fadd double"), "{body_ir}");
+    assert!(body_ir.contains("store double"), "{body_ir}");
+}
+
+#[test]
 fn typed_feedback_preguards_modulo_numeric_array_reads_in_local_bound_loop() {
     let array_ty = Type::Array(Box::new(Type::Number));
     let first_read = Expr::IndexGet {

@@ -107,7 +107,7 @@ pub(crate) use range_facts::{
     bounds_for_buffer_access, bounds_for_buffer_access_width, effective_alias_state_for_access,
     guarded_buffer_indices_for_condition, int_range_expr, invalidate_local_write_facts,
     record_int_facts_for_let, record_int_facts_for_local_set, record_int_facts_for_update,
-    while_condition_range_fact, IntRange, IntRangeFact,
+    while_condition_range_fact, IntRange, IntRangeFact, MAX_SAFE_INTEGER_I64,
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
@@ -613,6 +613,22 @@ pub(crate) struct FnCtx<'a> {
     /// on hot array-walking loops like `for (let i = 0; i < arr.length;
     /// i++) arr[i] = expr`.
     pub i32_counter_slots: std::collections::HashMap<u32, String>,
+
+    /// Loop counters whose current `for.update` can update only the i32
+    /// shadow slot. `lower_for` syncs the double slot once in the exit block,
+    /// preserving after-loop reads without paying a double load/add/store on
+    /// every iteration.
+    pub i32_only_counter_updates: std::collections::HashSet<u32>,
+
+    /// Locals whose current value is known exactly and remains within JS's
+    /// safe-integer range. Used to authorize loop-local i64 accumulator shadows
+    /// without changing general number semantics.
+    pub exact_safe_integer_locals: std::collections::HashMap<u32, i64>,
+
+    /// Loop-local i64 accumulator shadows active while lowering a narrowly
+    /// classified `sum = sum + rhs` body. The double slot is synced once at the
+    /// loop exit.
+    pub i64_loop_accumulator_slots: std::collections::HashMap<u32, String>,
 
     /// LocalIds that appear anywhere inside an `index` subexpression of an
     /// array/buffer/typed-array access (`arr[i]`, `buf[k+1]`, `uint8[j]`,

@@ -145,6 +145,132 @@ fn fs_lchmod_callable_on_target(target_triple: &str) -> bool {
         || target.contains("dragonfly")
 }
 
+fn exact_safe_integer_const(expr: &Expr) -> Option<i64> {
+    let value = match expr {
+        Expr::Integer(n) => *n,
+        Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+            let value = *n as i64;
+            if (value as f64) != *n {
+                return None;
+            }
+            value
+        }
+        _ => return None,
+    };
+    (-super::MAX_SAFE_INTEGER_I64..=super::MAX_SAFE_INTEGER_I64)
+        .contains(&value)
+        .then_some(value)
+}
+
+fn local_is_nonnegative(ctx: &FnCtx<'_>, id: u32) -> bool {
+    ctx.nonnegative_integer_locals.contains(&id)
+        || super::int_range_expr(ctx, &Expr::LocalGet(id)).is_some_and(|range| range.min >= 0)
+}
+
+fn self_add_addend(id: u32, value: &Expr) -> Option<&Expr> {
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = value
+    else {
+        return None;
+    };
+    match (left.as_ref(), right.as_ref()) {
+        (Expr::LocalGet(left_id), addend) if *left_id == id => Some(addend),
+        (addend, Expr::LocalGet(right_id)) if *right_id == id => Some(addend),
+        _ => None,
+    }
+}
+
+fn lower_nonnegative_i64_addend(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
+    if let Some(value) = exact_safe_integer_const(expr) {
+        return Ok((value >= 0).then(|| value.to_string()));
+    }
+
+    match expr {
+        Expr::LocalGet(id) if local_is_nonnegative(ctx, *id) => {
+            let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() else {
+                return Ok(None);
+            };
+            let i32_value = ctx.block().load(I32, &i32_slot);
+            Ok(Some(ctx.block().sext(I32, &i32_value, I64)))
+        }
+        Expr::Binary {
+            op: BinaryOp::Mod,
+            left,
+            right,
+        } => {
+            let Expr::LocalGet(id) = left.as_ref() else {
+                return Ok(None);
+            };
+            if !local_is_nonnegative(ctx, *id) || ctx.unsigned_i32_locals.contains(id) {
+                return Ok(None);
+            }
+            let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() else {
+                return Ok(None);
+            };
+            let Some(divisor) = exact_safe_integer_const(right.as_ref()) else {
+                return Ok(None);
+            };
+            let Ok(divisor_i32) = i32::try_from(divisor) else {
+                return Ok(None);
+            };
+            if divisor_i32 <= 0 {
+                return Ok(None);
+            }
+            let blk = ctx.block();
+            let i32_value = blk.load(I32, &i32_slot);
+            let rem = blk.srem(I32, &i32_value, &divisor_i32.to_string());
+            Ok(Some(blk.sext(I32, &rem, I64)))
+        }
+        Expr::Uint8ArrayGet { array, index } => {
+            let byte_i32 = super::arrays_finds::lower_uint8array_get_i32(ctx, array, index)?.value;
+            Ok(Some(ctx.block().zext(I32, &byte_i32, I64)))
+        }
+        Expr::BufferIndexGet { buffer, index } => {
+            let byte_i32 =
+                super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?.value;
+            Ok(Some(ctx.block().zext(I32, &byte_i32, I64)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn try_lower_i64_loop_accumulator_set(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    value: &Expr,
+) -> Result<Option<String>> {
+    if !ctx.discard_expr_value {
+        return Ok(None);
+    }
+    let Some(acc_slot) = ctx.i64_loop_accumulator_slots.get(&id).cloned() else {
+        return Ok(None);
+    };
+    let Some(addend_expr) = self_add_addend(id, value) else {
+        return Ok(None);
+    };
+    let Some(addend) = lower_nonnegative_i64_addend(ctx, addend_expr)? else {
+        return Ok(None);
+    };
+
+    let current = ctx.block().load(I64, &acc_slot);
+    let next = ctx.block().add(I64, &current, &addend);
+    ctx.block().store(I64, &next, &acc_slot);
+
+    if let Some(slot_idx) = ctx.shadow_slot_map.get(&id).copied() {
+        emit_shadow_slot_clear(ctx, slot_idx);
+    }
+    ctx.int_range_aliases.remove(&id);
+    ctx.int_range_facts.retain(|fact| fact.local_id != id);
+    ctx.nonnegative_integer_locals.insert(id);
+    ctx.exact_safe_integer_locals.remove(&id);
+    super::record_native_arena_owner_assignment(ctx, id, value);
+
+    Ok(Some(double_literal(0.0)))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Integer(i) => Ok(double_literal(*i as f64)),
@@ -485,6 +611,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                 return Ok(v);
             }
+            if let Some(v) = try_lower_i64_loop_accumulator_set(ctx, *id, value)? {
+                return Ok(v);
+            }
             // Detect the `x = x + y` self-append pattern.
             // The fast path requires a plain alloca slot in `ctx.locals` —
             // module globals (use `@global` loads), closure captures (use
@@ -720,6 +849,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Soft fallback: silently increment a throwaway value.
                 return Ok(double_literal(0.0));
             };
+            if ctx.i32_only_counter_updates.contains(id) {
+                if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
+                    let discard_expr_value = ctx.discard_expr_value;
+                    let (old_i32, new_i32) = {
+                        let blk = ctx.block();
+                        let old_i32 = blk.load(I32, &i32_slot);
+                        let delta = match op {
+                            UpdateOp::Increment => "1",
+                            UpdateOp::Decrement => "-1",
+                        };
+                        let new_i32 = blk.add(I32, &old_i32, delta);
+                        blk.store(I32, &new_i32, &i32_slot);
+                        (old_i32, new_i32)
+                    };
+                    super::record_int_facts_for_update(ctx, *id, *op);
+                    if discard_expr_value {
+                        return Ok(double_literal(0.0));
+                    }
+                    let blk = ctx.block();
+                    let old = blk.sitofp(I32, &old_i32, DOUBLE);
+                    let new = blk.sitofp(I32, &new_i32, DOUBLE);
+                    return Ok(if *prefix { new } else { old });
+                }
+            }
             let blk = ctx.block();
             let old = blk.load(DOUBLE, &storage);
             let new = match op {

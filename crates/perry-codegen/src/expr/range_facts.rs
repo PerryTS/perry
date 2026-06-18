@@ -7,6 +7,12 @@ use crate::native_value::{
 
 use super::FnCtx;
 
+pub(crate) const MAX_SAFE_INTEGER_I64: i64 = 9_007_199_254_740_991;
+
+fn expr_is_negative_zero(expr: &Expr) -> bool {
+    matches!(expr, Expr::Number(n) if *n == 0.0 && n.is_sign_negative())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IntRange {
     pub min: i64,
@@ -304,6 +310,7 @@ pub(crate) fn record_int_facts_for_let(
     let Some(init_expr) = init else {
         ctx.int_range_aliases.remove(&id);
         ctx.nonnegative_integer_locals.remove(&id);
+        ctx.exact_safe_integer_locals.remove(&id);
         return;
     };
     let range = int_range_expr(ctx, init_expr);
@@ -317,17 +324,35 @@ pub(crate) fn record_int_facts_for_let(
     } else {
         ctx.nonnegative_integer_locals.remove(&id);
     }
+    if let Some(range) = range {
+        if range.min == range.max
+            && (-MAX_SAFE_INTEGER_I64..=MAX_SAFE_INTEGER_I64).contains(&range.min)
+            && !expr_is_negative_zero(init_expr)
+        {
+            ctx.exact_safe_integer_locals.insert(id, range.min);
+        } else {
+            ctx.exact_safe_integer_locals.remove(&id);
+        }
+    } else {
+        ctx.exact_safe_integer_locals.remove(&id);
+    }
 }
 
 pub(crate) fn record_int_facts_for_local_set(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) {
     ctx.int_range_aliases.remove(&id);
-    let remains_nonnegative = int_range_expr(ctx, value).is_some_and(IntRange::is_nonnegative);
+    let range = int_range_expr(ctx, value);
+    let remains_nonnegative = range.is_some_and(IntRange::is_nonnegative);
     ctx.int_range_facts.retain(|fact| fact.local_id != id);
     if remains_nonnegative {
         ctx.nonnegative_integer_locals.insert(id);
     } else {
         ctx.nonnegative_integer_locals.remove(&id);
     }
+    // Assignment codegen runs once for a control-flow edge, not once per
+    // runtime execution. Keeping an exact value here would be stale after
+    // branches and loop bodies; declaration initializers remain the precise
+    // source for exact safe-integer facts.
+    ctx.exact_safe_integer_locals.remove(&id);
 }
 
 pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
@@ -384,6 +409,7 @@ pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
 
 pub(crate) fn record_int_facts_for_update(ctx: &mut FnCtx<'_>, id: u32, op: UpdateOp) {
     ctx.int_range_aliases.remove(&id);
+    ctx.exact_safe_integer_locals.remove(&id);
     let remains_nonnegative = match op {
         UpdateOp::Increment => ctx.nonnegative_integer_locals.contains(&id),
         UpdateOp::Decrement => int_range_for_local(ctx, id, &mut std::collections::HashSet::new())
