@@ -759,14 +759,20 @@ unsafe fn inherited_proto_accessor_value(
     if acc.get == 0 {
         return Some(JSValue::undefined());
     }
-    let closure = (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
-    if closure.is_null() {
-        return Some(JSValue::undefined());
-    }
-    let previous_this = js_implicit_this_set(receiver);
-    let value = crate::closure::js_closure_call0(closure);
-    js_implicit_this_set(previous_this);
-    Some(JSValue::from_bits(value.to_bits()))
+    // Route through `invoke_accessor_getter` rather than a bare
+    // `js_implicit_this_set` + `js_closure_call0`. A getter installed via
+    // `Object.defineProperty(Class.prototype, name, { get })` is an ORDINARY
+    // method closure whose body reads `this` from its captured receiver slot —
+    // not from IMPLICIT_THIS — so merely setting IMPLICIT_THIS left the getter
+    // observing the prototype it lives on instead of the instance (winston's
+    // `get transports()` saw the prototype, whose `this._readableState` is
+    // undefined → "Cannot convert undefined or null to object").
+    // `invoke_accessor_getter` clones the closure with `this` rebound to the
+    // real receiver (and applies strict/sloppy coercion), matching the
+    // own-accessor read path.
+    Some(super::field_get_set::invoke_accessor_getter(
+        acc.get, receiver,
+    ))
 }
 
 unsafe fn resolve_proto_chain_field_inner(
