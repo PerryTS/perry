@@ -875,12 +875,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 for la in &lowered_args {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
-                ctx.pending_declares.push((
-                    ctor.symbol.clone(),
-                    crate::types::VOID,
-                    ctor_param_types,
-                ));
-                ctx.block().call_void(&ctor.symbol, &ctor_args);
+                // `super(...)` to an imported parent: the parent ctor's return
+                // override does not replace the derived `this`, so discard the
+                // return. Declared DOUBLE to match the symbol's real signature
+                // (the source standalone ctor returns DOUBLE — see codegen/mod.rs).
+                ctx.pending_declares
+                    .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
             }
 
             // After the parent body has run (which may have set `this.config`

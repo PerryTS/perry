@@ -305,6 +305,17 @@ jobs:
           # flakes) and races the GC/threading tests into intermittent SIGSEGV.
           # Run perry-runtime single-threaded so the tests can't interfere.
           RUST_TEST_THREADS=1 cargo test -p perry-runtime
+          # `cargo test` only builds lib/bin/test targets — NOT the `staticlib`
+          # crate-type — so libperry_runtime.a / libperry_stdlib.a are never
+          # produced by the steps above; they only exist if restored from the
+          # cache. A PR that touches perry-runtime/perry-stdlib invalidates the
+          # cached staticlib and cargo never rebuilds it, so integration tests
+          # that compile with PERRY_NO_AUTO_OPTIMIZE=1 (e.g.
+          # functional_batch2_regressions, which link the prebuilt archive
+          # directly) fail with "Could not find libperry_runtime.a". Build the
+          # staticlibs explicitly so those tests are deterministic regardless of
+          # cache state.
+          cargo build -p perry-runtime -p perry-stdlib
           find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
           # The remaining workspace includes large `perry` / `perry-stdlib`
           # test binaries. Keep Cargo build jobs serialized so the runner

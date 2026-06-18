@@ -134,6 +134,50 @@ fn pack_lowered_args_array(ctx: &mut FnCtx<'_>, args: &[String]) -> String {
     nanbox_pointer_inline(ctx.block(), &current)
 }
 
+/// Marshal the lowered `new`-site args into the value list a cross-module
+/// imported constructor symbol expects. The source module compiled the
+/// standalone `<class>_constructor(this, p0, …)` with `ctor.param_count`
+/// explicit slots. When the constructor's last param is `...rest`
+/// (`ctor.has_rest`), that final slot must receive a PACKED ARRAY of every
+/// trailing arg — not the first trailing arg passed raw. Mirrors the
+/// inline-ctor `inline_constructor_param_values` rest packing and the
+/// `method_has_rest` path for imported methods (#672). Returns exactly
+/// `ctor.param_count` value strings; missing leading args are padded with
+/// `undefined`.
+fn marshal_imported_ctor_args(
+    ctx: &mut FnCtx<'_>,
+    ctor: &crate::codegen::ImportedCtor,
+    lowered_args: &[String],
+) -> Vec<String> {
+    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let param_count = ctor.param_count;
+    if ctor.has_rest && param_count > 0 {
+        // The first `param_count - 1` slots are positional; the last slot is
+        // the rest array packing every remaining arg.
+        let n_positional = param_count - 1;
+        let mut out: Vec<String> = Vec::with_capacity(param_count);
+        for i in 0..n_positional {
+            out.push(
+                lowered_args
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| undef.clone()),
+            );
+        }
+        let tail: Vec<String> = lowered_args.iter().skip(n_positional).cloned().collect();
+        out.push(pack_lowered_args_array(ctx, &tail));
+        out
+    } else {
+        // No rest: positional, padded to `param_count` with `undefined`.
+        let mut out: Vec<String> = lowered_args.to_vec();
+        while out.len() < param_count {
+            out.push(undef.clone());
+        }
+        out.truncate(param_count.max(out.len()));
+        out
+    }
+}
+
 /// The effective constructor arity for `new <class>(...)`: the class's own
 /// ctor params, else — for a subclass with no own ctor — the closest
 /// ancestor-with-a-ctor's param count (the synthesized default ctor forwards
@@ -951,7 +995,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     let after_idx = ctx.new_block("ctor.return.after");
     let after_label = ctx.block_label(after_idx);
     ctx.inline_ctor_return.push(crate::expr::InlineCtorReturn {
-        result_slot: ctor_result_slot,
+        result_slot: ctor_result_slot.clone(),
         after_label,
         // A class is "derived" (and thus subject to the stricter
         // return-override rules) if it has ANY heritage — a named parent,
@@ -1377,50 +1421,51 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 .filter(|_| effective_class_name != lookup_class)
             {
                 // Walked to an ancestor — call its ctor with this and forwarded args.
-                let undef_lit =
-                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered_args.len() < ctor.param_count {
-                    lowered_args.push(undef_lit.clone());
-                }
+                // `...rest` ctors get the trailing args packed into one array
+                // for the final slot (mirrors method_has_rest, #672).
+                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
-                    Vec::with_capacity(1 + lowered_args.len());
+                    Vec::with_capacity(1 + marshalled.len());
                 ctor_args.push((DOUBLE, &obj_box));
                 let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
-                    .chain(lowered_args.iter().map(|_| DOUBLE))
+                    .chain(marshalled.iter().map(|_| DOUBLE))
                     .collect();
-                for la in &lowered_args {
+                for la in &marshalled {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
-                ctx.pending_declares.push((
-                    ctor.symbol.clone(),
-                    crate::types::VOID,
-                    ctor_param_types,
-                ));
-                ctx.block().call_void(&ctor.symbol, &ctor_args);
+                // Walked to an ANCESTOR ctor: its return-override does not replace
+                // the leaf instance, so discard the return value. Declared DOUBLE
+                // to match the symbol's real signature (see codegen/mod.rs).
+                ctx.pending_declares
+                    .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
-                // doesn't read garbage from stale registers.
-                let undef_lit =
-                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                while lowered_args.len() < ctor.param_count {
-                    lowered_args.push(undef_lit.clone());
-                }
+                // doesn't read garbage from stale registers, and pack the rest
+                // slot into an array when the ctor's last param is `...rest`.
+                let marshalled = marshal_imported_ctor_args(ctx, &ctor, &lowered_args);
                 // Pass `this` as NaN-boxed double (same as compile_method's this_arg).
                 let mut ctor_args: Vec<(crate::types::LlvmType, &str)> =
-                    Vec::with_capacity(1 + lowered_args.len());
+                    Vec::with_capacity(1 + marshalled.len());
                 ctor_args.push((DOUBLE, &obj_box));
                 let ctor_param_types: Vec<crate::types::LlvmType> = std::iter::once(DOUBLE)
-                    .chain(lowered_args.iter().map(|_| DOUBLE))
+                    .chain(marshalled.iter().map(|_| DOUBLE))
                     .collect();
-                for la in &lowered_args {
+                for la in &marshalled {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
-                ctx.pending_declares.push((
-                    ctor.symbol.clone(),
-                    crate::types::VOID,
-                    ctor_param_types,
-                ));
-                ctx.block().call_void(&ctor.symbol, &ctor_args);
+                // The standalone `<class>_constructor` symbol returns DOUBLE: the
+                // value an explicit `return <obj/fn>` produced (ECMAScript ctor
+                // return-override) or `undefined` for an ordinary ctor. Capture it
+                // into `ctor_result_slot` so the return-override applied at the end
+                // of `lower_new` honors it — chalk's `class Chalk { constructor(o){
+                // return chalkFactory(o); } }` returns a FUNCTION, so `new Chalk(o)`
+                // must yield that function, not the empty allocated instance
+                // ("value is not a function" on `new Chalk(...).red(...)`).
+                ctx.pending_declares
+                    .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
+                ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
             }
         } // end !found_inherited_ctor
     }
