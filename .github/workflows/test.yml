@@ -368,21 +368,28 @@ jobs:
             # auto-optimize *integration* tests (tests/*.rs — each shells out to
             # `perry compile`, ~4–6 min apiece, ~30 of them) are NOT run per-PR;
             # they run in the nightly full job, on release tags, and on demand
-            # via the `run-extended-tests` label. Unit-test binaries are small,
-            # so builds parallelize safely (no serialization / clean churn) and
-            # there is no staticlib dependency to build.
+            # via the `run-extended-tests` label. No staticlib dependency to
+            # build (no integration tests).
             #
+            # Each crate's test binary statically links the whole runtime, so
+            # building many at once OOMs the runner (same reason the FULL path
+            # uses CARGO_BUILD_JOBS=1). Serialize here too, and drop crates with
+            # no `src/` unit tests (their lib test binary has zero tests yet
+            # still pays the heavy link).
+            export CARGO_BUILD_JOBS=1
             # perry-runtime first, single-threaded (process-global state); it is
             # a lib-only crate, so filter to --lib.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
               RUST_TEST_THREADS=1 cargo test --lib -p perry-runtime
             fi
-            rest="$(printf '%s\n' "$scope" | grep -vx 'perry-runtime' || true)"
+            rest="$(printf '%s\n' "$scope" | grep -vx 'perry-runtime' \
+              | python3 scripts/ci_test_scope.py --with-tests || true)"
+            echo "Crates with unit tests in scope:"; printf '%s\n' "$rest"
             if [ -n "$rest" ]; then
-              # One parallel invocation across the rest of the scope. `cargo test
-              # --lib` errors if NO selected package has a library (a perry-only
-              # diff → just the bin-only `perry` crate), so include --lib only
-              # when some selected crate has one; --bins is always safe.
+              # One invocation across the rest of the scope. `cargo test --lib`
+              # errors if NO selected package has a library (a perry-only diff →
+              # just the bin-only `perry` crate), so include --lib only when some
+              # selected crate has one; --bins is always safe.
               pkg_args="$(printf '%s\n' "$rest" | sed 's/^/-p /' | tr '\n' ' ')"
               if printf '%s\n' "$rest" | python3 scripts/ci_test_scope.py --has-lib; then
                 target_filter="--lib --bins"

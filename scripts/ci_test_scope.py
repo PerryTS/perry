@@ -26,6 +26,8 @@ is included when affected; the workflow runs it single-threaded separately.
 Usage:  <changed-files> | python3 scripts/ci_test_scope.py [--full]
 """
 import json
+import os
+import re
 import subprocess
 import sys
 
@@ -137,9 +139,54 @@ def _has_lib_mode() -> int:
     return 0 if has else 1
 
 
+_TEST_ATTR = re.compile(r"#\[\s*(?:tokio::)?test\b")
+
+
+def _with_tests_mode() -> int:
+    """Print the subset of stdin package names whose source contains unit tests.
+
+    The per-PR fast path serializes test-binary links to avoid OOM (each crate's
+    test binary statically links the whole runtime); building a test binary for a
+    crate with *zero* `#[test]`s is pure wasted link time. Filtering them out
+    keeps the wide-fan-out case (a perry-runtime change selects ~50 crates, ~30 of
+    which are zero-test FFI shims) under the time budget. Conservative: a crate is
+    kept if any `.rs` under its dir has a `#[test]` / `#[tokio::test]` attribute.
+    """
+    names = set(sys.stdin.read().split())
+    md = _load_metadata()
+    for p in md["packages"]:
+        if p["name"] not in names:
+            continue
+        # Only scan `src/` — the fast path runs `--lib --bins`, i.e. unit tests
+        # compiled into the lib/bin targets. Integration tests under `tests/`
+        # are NOT run per-PR, so a crate whose only `#[test]`s live there must
+        # not be selected (its lib test binary would have zero tests yet still
+        # pay the heavy runtime link).
+        crate_dir = os.path.join(os.path.dirname(p["manifest_path"]), "src")
+        has_test = False
+        for root, _dirs, files in os.walk(crate_dir):
+            for fname in files:
+                if not fname.endswith(".rs"):
+                    continue
+                try:
+                    with open(os.path.join(root, fname), encoding="utf-8", errors="ignore") as fh:
+                        if _TEST_ATTR.search(fh.read()):
+                            has_test = True
+                            break
+                except OSError:
+                    pass
+            if has_test:
+                break
+        if has_test:
+            print(p["name"])
+    return 0
+
+
 def main() -> int:
     if "--has-lib" in sys.argv:
         return _has_lib_mode()
+    if "--with-tests" in sys.argv:
+        return _with_tests_mode()
 
     full = "--full" in sys.argv
     changed = [line.strip() for line in sys.stdin if line.strip()]

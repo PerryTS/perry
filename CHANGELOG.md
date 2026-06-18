@@ -1,3 +1,21 @@
+## v0.5.1186 — fix(ci): per-PR cargo-test link-OOM — serialize fast-path links + skip zero-unit-test crates
+
+The #5411 fast per-PR path built every affected crate's unit-test binary in one
+unbounded-parallel `cargo test --lib --bins -p ...` invocation. Each test binary
+statically links the whole runtime, so a wide-fan-out diff (a perry-runtime change
+selects ~50 crates) linked ~50 huge binaries at once and the runner OOMed
+(`linking with \`cc\` failed`) — the exact failure the FULL path avoids with
+`CARGO_BUILD_JOBS=1`. Surfaced on #5402 (Tier 2 touches perry-runtime).
+
+- `.github/workflows/test.yml` — the fast path now sets `CARGO_BUILD_JOBS=1`
+  (serialize the heavy links; no OOM) and filters the scope through
+  `ci_test_scope.py --with-tests`, dropping crates with no `src/` unit tests
+  (~13 zero-test FFI shims in the wide case) whose lib test binary would link the
+  runtime for zero tests.
+- `scripts/ci_test_scope.py` — new `--with-tests` mode: prints the subset of stdin
+  package names whose `src/` contains a `#[test]` / `#[tokio::test]` (unit tests
+  the `--lib --bins` filter actually runs; integration-only crates are excluded).
+
 ## v0.5.1185 — perf(ci): make per-PR cargo-test fast (<10 min) — unit tests for affected crates; integration tests move to nightly/tags
 
 The `cargo-test` gate took ~90 min: it built the **entire workspace** in debug,
