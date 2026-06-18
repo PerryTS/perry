@@ -93,7 +93,7 @@ pub(crate) use i32_fast_path::{
     try_flat_const_2d_int, try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
-pub(crate) use index_get::lower_guarded_array_index_get;
+pub(crate) use index_get::lower_guarded_array_index_get_trusted_i32;
 pub(crate) use nanbox_inline::{
     i32_bool_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline, nanbox_pointer_inline_pub,
     nanbox_string_inline,
