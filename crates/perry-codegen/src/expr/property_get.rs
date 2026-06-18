@@ -87,6 +87,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if property == "length"
                 && matches!(
                     object.as_ref(),
+                    Expr::LocalGet(id) if ctx.json_stringify_length_only_locals.contains(id)
+                ) =>
+        {
+            lower_expr(ctx, object)
+        }
+        Expr::PropertyGet { object, property }
+            if property == "length"
+                && matches!(
+                    object.as_ref(),
                     Expr::PropertyGet { property: p, .. } if p == "errors"
                 ) =>
         {

@@ -155,6 +155,7 @@ pub(super) fn compile_function(
         active_region_id: None,
         locals,
         local_types,
+        json_stringify_length_only_locals: native_facts.json_stringify_length_only_locals().clone(),
         current_block: 0,
         discard_expr_value: false,
         func_names,

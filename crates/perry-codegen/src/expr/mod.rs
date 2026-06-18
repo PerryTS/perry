@@ -144,6 +144,9 @@ pub(crate) struct FnCtx<'a> {
     /// tracking" extension). Populated from function params and `Stmt::Let`
     /// declarations as they're lowered.
     pub local_types: std::collections::HashMap<u32, HirType>,
+    /// Immutable locals initialized from `JSON.stringify(...)` whose only
+    /// observed use in this native region is `.length`.
+    pub json_stringify_length_only_locals: std::collections::HashSet<u32>,
     /// Index into `func.blocks()` pointing at the block currently receiving
     /// instructions. Lowering fns update this when control flow splits.
     pub current_block: usize,

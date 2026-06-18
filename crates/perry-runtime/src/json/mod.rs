@@ -36,7 +36,9 @@ pub use parse_api::{
     js_json_parse, js_json_parse_or_null, js_json_parse_result, js_json_parse_typed_array,
 };
 pub use raw_json::{js_json_is_raw_json, js_json_raw_json};
-pub use replacer::{js_json_stringify_full, js_json_stringify_with_replacer};
+pub use replacer::{
+    js_json_stringify_full, js_json_stringify_full_length, js_json_stringify_with_replacer,
+};
 pub use reviver::js_json_parse_with_reviver;
 pub use stringify_api::{
     js_json_get_bool, js_json_get_number, js_json_get_string, js_json_is_valid, js_json_stringify,
@@ -76,6 +78,7 @@ pub(crate) use stringify::{
 #[allow(unused_imports)]
 pub(crate) use stringify_api::{
     redirect_lazy_to_materialized, string_from_header, try_stringify_lazy_array,
+    try_stringify_lazy_array_len, try_stringify_lazy_array_slice,
 };
 
 // ─── Circular reference detection ────────────────────────────────────────────
@@ -623,6 +626,34 @@ mod tests {
             unsafe { js_json_stringify_full(f64::from_bits(TAG_UNDEFINED), null, null) as u64 },
             TAG_UNDEFINED
         );
+    }
+
+    #[test]
+    fn stringify_full_length_matches_full_string_for_lazy_array() {
+        let mut input = String::from("[");
+        for i in 0..128 {
+            if i > 0 {
+                input.push(',');
+            }
+            input.push_str(&format!(
+                "{{\"id\":{},\"name\":\"cafe_{}\",\"emoji\":\"{}\"}}",
+                i, i, "\u{1F600}"
+            ));
+        }
+        input.push(']');
+
+        let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let value = unsafe { js_json_parse(text) };
+        let boxed = f64::from_bits(value.bits());
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+
+        let length = unsafe { js_json_stringify_full_length(boxed, undefined, undefined) };
+        let full_bits = unsafe { js_json_stringify_full(boxed, undefined, undefined) as u64 };
+        let full_ptr = (full_bits & POINTER_MASK) as *const StringHeader;
+        let full_str = unsafe { str_from_header(full_ptr).unwrap() };
+
+        assert_eq!(length, unsafe { (*full_ptr).utf16_len });
+        assert_eq!(length, full_str.encode_utf16().count() as u32);
     }
 
     #[test]

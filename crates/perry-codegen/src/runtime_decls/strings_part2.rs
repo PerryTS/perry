@@ -529,6 +529,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_shared_array_buffer_new_value", I64, &[DOUBLE]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_json_stringify_full_length",
+        I32,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_json_parse_with_reviver", I64, &[I64, I64]);
     module.declare_function("js_array_find", DOUBLE, &[I64, I64]);
     module.declare_function("js_array_findIndex", I32, &[I64, I64]);

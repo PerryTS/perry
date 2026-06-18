@@ -58,7 +58,7 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
 /// `JSON.stringify` never emits whitespace for the 2-arg form, so
 /// this is only correct when the blob came from `JSON.stringify` or
 /// is otherwise whitespace-free in the array span).
-pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringHeader> {
+pub(crate) unsafe fn try_stringify_lazy_array_slice(value: f64) -> Option<&'static [u8]> {
     let bits = value.to_bits();
     let top16 = bits >> 48;
     let maybe_ptr = if top16 == 0x7FFD {
@@ -125,7 +125,21 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
     if end > blob_bytes.len() || start > end {
         return None;
     }
-    let slice = &blob_bytes[start..end];
+    Some(&blob_bytes[start..end])
+}
+
+pub(crate) unsafe fn try_stringify_lazy_array_len(value: f64) -> Option<u32> {
+    let slice = try_stringify_lazy_array_slice(value)?;
+    let len = u32::try_from(slice.len()).ok()?;
+    if slice.is_ascii() {
+        Some(len)
+    } else {
+        Some(crate::string::compute_utf16_len(slice.as_ptr(), len))
+    }
+}
+
+pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringHeader> {
+    let slice = try_stringify_lazy_array_slice(value)?;
     Some(json_string_from_output_bytes(slice))
 }
 

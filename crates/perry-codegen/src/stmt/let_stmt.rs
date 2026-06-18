@@ -20,6 +20,24 @@ fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
         )
 }
 
+fn try_lower_json_stringify_length_only_init(
+    ctx: &mut FnCtx<'_>,
+    init_expr: &perry_hir::Expr,
+) -> Result<Option<String>> {
+    let perry_hir::Expr::JsonStringifyFull(value, replacer, indent) = init_expr else {
+        return Ok(None);
+    };
+    let v = crate::expr::lower_expr(ctx, value)?;
+    let r = crate::expr::lower_expr(ctx, replacer)?;
+    let i = crate::expr::lower_expr(ctx, indent)?;
+    let len_i32 = ctx.block().call(
+        I32,
+        "js_json_stringify_full_length",
+        &[(DOUBLE, &v), (DOUBLE, &r), (DOUBLE, &i)],
+    );
+    Ok(Some(ctx.block().sitofp(I32, &len_i32, DOUBLE)))
+}
+
 pub(crate) fn lower_let(
     ctx: &mut FnCtx<'_>,
     id: u32,
@@ -961,8 +979,18 @@ pub(crate) fn lower_let(
         } else {
             false
         };
+        let mut used_json_stringify_length_init = false;
         let v = if !used_i32_init {
-            let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+            let v = if ctx.json_stringify_length_only_locals.contains(&id) {
+                if let Some(length_v) = try_lower_json_stringify_length_only_init(ctx, init_expr)? {
+                    used_json_stringify_length_init = true;
+                    length_v
+                } else {
+                    lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?
+                }
+            } else {
+                lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?
+            };
             // String aliasing fix: `let y = x` (init is `LocalGet`
             // of a string-typed local) shares the same heap
             // pointer between `y` and `x`. A later
@@ -977,19 +1005,21 @@ pub(crate) fn lower_let(
             // and `test_edge_error_handling`'s `finallyReturn`
             // started returning `start-try-finally` instead of
             // `start-try`.
-            if let perry_hir::Expr::LocalGet(src_id) = init_expr {
-                if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
-                    let blk = ctx.block();
-                    let s_ptr = blk.call(
-                        crate::types::I64,
-                        "js_get_string_pointer_unified",
-                        &[(DOUBLE, &v)],
-                    );
-                    blk.call_void("js_string_addref", &[(crate::types::I64, &s_ptr)]);
+            if !used_json_stringify_length_init {
+                if let perry_hir::Expr::LocalGet(src_id) = init_expr {
+                    if matches!(ctx.local_types.get(src_id), Some(perry_types::Type::String)) {
+                        let blk = ctx.block();
+                        let s_ptr = blk.call(
+                            crate::types::I64,
+                            "js_get_string_pointer_unified",
+                            &[(DOUBLE, &v)],
+                        );
+                        blk.call_void("js_string_addref", &[(crate::types::I64, &s_ptr)]);
+                    }
                 }
             }
             ctx.block().store(DOUBLE, &v, &slot);
-            if !mutable {
+            if !mutable && !used_json_stringify_length_init {
                 if let perry_hir::Expr::NativePodView {
                     count, view_type, ..
                 } = init_expr
@@ -1045,7 +1075,7 @@ pub(crate) fn lower_let(
         // Let — measured noise on bench_json_roundtrip.
         // Only fires when PERRY_SHADOW_STACK=1 is set at
         // compile time, since the map is empty otherwise.
-        if !used_i32_init {
+        if !used_i32_init && !used_json_stringify_length_init {
             if ctx.shadow_slot_map.contains_key(&id)
                 && !crate::expr::expr_is_known_non_pointer_shadow_value(ctx, init_expr)
             {
