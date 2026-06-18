@@ -1395,6 +1395,14 @@ pub unsafe extern "C" fn js_native_call_value(
     // exactly one sensible meaning — construct it — so do that here instead of
     // `throw_not_callable` (which surfaces as "value is not a function").
     if func_ptr.is_null() && crate::object::is_class_object_value(func_value) {
+        // W4 experiment: a 0-arg call of a class object is most likely a
+        // new-expression CALLEE RESOLUTION (`new s.RequestCookies(headers)` whose
+        // member callee eval'd as a 0-arg call). Returning the class object lets
+        // the OUTER `new` construct it with the real args. A call WITH args is a
+        // direct construct.
+        if args_len == 0 {
+            return f64::from_bits(func_value.to_bits());
+        }
         return crate::object::js_new_function_construct(func_value, args_ptr, args_len);
     }
     let dispatch_args_len = if !func_ptr.is_null() && lookup_closure_rest(func_ptr).is_none() {
