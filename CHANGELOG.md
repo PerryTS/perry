@@ -1,3 +1,65 @@
+## v0.5.1184 — fix: unblock main CI — dead-stripped symbol + cargo-test staticlib + oversized link/mod.rs
+
+Three pre-existing CI fragilities on `main` were turning required checks red for
+PRs. Fixed together since all are "make main's CI green again."
+
+### 0. cargo-test never builds the runtime staticlib (latent; surfaced by fix #1)
+
+The `cargo-test` job runs `cargo test -p perry-runtime`, which only builds
+lib/bin/test targets — **not** the `staticlib` crate-type — so
+`libperry_runtime.a` / `libperry_stdlib.a` are never produced by the job and only
+exist when restored from the rust-cache. Integration tests that compile with
+`PERRY_NO_AUTO_OPTIMIZE=1` (e.g. `functional_batch2_regressions`) link the
+prebuilt archive directly, so the moment a PR touches perry-runtime/perry-stdlib
+the cached staticlib is invalidated, cargo never rebuilds it, and those tests fail
+with `Could not find libperry_runtime.a`. Fix #1 below touches perry-runtime and
+hit exactly this. Fix: add an explicit `cargo build -p perry-runtime -p
+perry-stdlib` to the cargo-test job before the integration-test loop so the
+staticlibs exist regardless of cache state.
+
+### 1. dead-stripped runtime symbol breaks cold runtime-only compiles (cargo-test)
+
+`js_array_numeric_value_to_raw_f64` (added by #5291 for representation-aware
+numeric array lowering, `crates/perry-runtime/src/array/header.rs`) is
+`#[no_mangle]` but is only ever called from generated machine code — nothing in
+the runtime crate references it. Without a `#[used]` anchor the linker dead-strips
+it from `libperry_runtime.a`, so any cold `PERRY_NO_AUTO_OPTIMIZE=1` compile of a
+program that triggers that lowering fails at link with `Undefined symbols:
+_js_array_numeric_value_to_raw_f64`. This surfaced as 5 failing
+`functional_batch2_regressions` tests. Fix: add the `#[used]` keepalive anchor
+(same pattern as the auto-optimize keepalives in `error.rs`; see
+project_autoopt_ffi_symbol_link_break). This regression class is normally
+CI-invisible because warm staticlib caches mask it.
+
+### 2. link/mod.rs over the file-size gate (lint)
+
+`crates/perry/src/commands/compile/link/mod.rs` crossed the 2000-line file-size
+gate (2132 lines) after #5400 grew the Windows response-file path, turning the
+`lint` job red for every PR branched off main. Split the single ~1770-line
+`build_and_run_link` orchestrator (the only oversized item) into a sibling
+`link/build_and_run.rs`, leaving mod.rs at 357 lines and the new file at 1785.
+Pure mechanical move (`use super::*`; `build_and_run_link` is now `pub(crate)`,
+re-exported from mod.rs; five compile-module paths became `super::super::…`).
+
+Pure mechanical move, no behavior change:
+
+- The function moved verbatim; `use super::*` pulls in every helper that stays in
+  the parent `link` module (the `NativeBackendLinkMetadata` selection, the
+  `resolve_optional_framework_dir` / `find_project_root_for` /
+  `rewrite_link_with_response_file` / `quote_response_arg` / `response_file_contents`
+  helpers, and the sibling-module re-exports).
+- `build_and_run_link` is now `pub(crate)` (was `pub(super)`) so mod.rs can
+  re-export it to the parent `compile` module via
+  `pub(super) use build_and_run::build_and_run_link;`.
+- The five fully-qualified paths that reached into the `compile` module
+  (`library_search::`, `sandbox_buildrs::`, `optimized_libs::`,
+  `run_lock_verify_for_compile`, `find_perry_workspace_root`) became
+  `super::super::…` from the new two-level-deep module.
+
+All 599 perry bin unit tests pass (including the link `response_file_tests` /
+`native_package_selection_tests` / `optional_framework_dir_tests`); a hello-world
+compile+link round-trips through the moved driver.
+
 ## v0.5.1183 — feat(hir): ambient `require` in compiled compilePackages modules — Tier 1 of #5389 (fixes #5373)
 
 A bare or **computed** `require(expr)` inside a `compilePackages`-compiled module
