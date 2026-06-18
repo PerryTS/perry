@@ -1209,7 +1209,16 @@ pub(super) fn try_native_module_methods(
                             let mut it = args.into_iter();
                             let func = it.next().unwrap_or(Expr::Undefined);
                             let this_arg = it.next().unwrap_or(Expr::Undefined);
-                            let args_arr = it.next().unwrap_or(Expr::Array(vec![]));
+                            // Spec sec-reflect.apply runs CreateListFromArrayLike
+                            // on argumentsList, which throws a TypeError when
+                            // Type(argumentsList) is not Object. An OMITTED
+                            // argumentsList is `undefined` (not Object), so it
+                            // must reach the runtime as `undefined` and throw —
+                            // NOT default to an empty array, which would silently
+                            // succeed with no args (test262
+                            // Reflect/apply/arguments-list-is-not-array-like
+                            // `Reflect.apply(fn, null /* empty */)`).
+                            let args_arr = it.next().unwrap_or(Expr::Undefined);
                             return Ok(Ok(Expr::ReflectApply {
                                 func: Box::new(func),
                                 this_arg: Box::new(this_arg),
