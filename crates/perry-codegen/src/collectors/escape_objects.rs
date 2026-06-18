@@ -1,5 +1,5 @@
 use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 
@@ -21,6 +21,187 @@ pub fn collect_non_escaping_object_literals(
 
     candidates.retain(|id, _| !escaped.contains(id));
     candidates
+}
+
+pub fn collect_non_escaping_object_literal_used_fields(
+    stmts: &[perry_hir::Stmt],
+    non_escaping_object_literals: &HashMap<u32, Vec<String>>,
+) -> HashMap<u32, HashSet<String>> {
+    let mut used = HashMap::new();
+    if non_escaping_object_literals.is_empty() {
+        return used;
+    }
+    collect_used_object_fields_in_stmts(stmts, non_escaping_object_literals, &mut used);
+    used
+}
+
+fn collect_used_object_fields_in_stmts(
+    stmts: &[perry_hir::Stmt],
+    non_escaping_object_literals: &HashMap<u32, Vec<String>>,
+    used: &mut HashMap<u32, HashSet<String>>,
+) {
+    use perry_hir::Stmt;
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(expr) = init {
+                    collect_used_object_fields_in_expr(expr, non_escaping_object_literals, used);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => {
+                collect_used_object_fields_in_expr(expr, non_escaping_object_literals, used);
+            }
+            Stmt::Return(expr) => {
+                if let Some(expr) = expr {
+                    collect_used_object_fields_in_expr(expr, non_escaping_object_literals, used);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_used_object_fields_in_expr(condition, non_escaping_object_literals, used);
+                collect_used_object_fields_in_stmts(
+                    then_branch,
+                    non_escaping_object_literals,
+                    used,
+                );
+                if let Some(else_branch) = else_branch {
+                    collect_used_object_fields_in_stmts(
+                        else_branch,
+                        non_escaping_object_literals,
+                        used,
+                    );
+                }
+            }
+            Stmt::While { condition, body } => {
+                collect_used_object_fields_in_expr(condition, non_escaping_object_literals, used);
+                collect_used_object_fields_in_stmts(body, non_escaping_object_literals, used);
+            }
+            Stmt::DoWhile { body, condition } => {
+                collect_used_object_fields_in_stmts(body, non_escaping_object_literals, used);
+                collect_used_object_fields_in_expr(condition, non_escaping_object_literals, used);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init_stmt) = init {
+                    collect_used_object_fields_in_stmts(
+                        std::slice::from_ref(init_stmt.as_ref()),
+                        non_escaping_object_literals,
+                        used,
+                    );
+                }
+                if let Some(condition) = condition {
+                    collect_used_object_fields_in_expr(
+                        condition,
+                        non_escaping_object_literals,
+                        used,
+                    );
+                }
+                if let Some(update) = update {
+                    collect_used_object_fields_in_expr(update, non_escaping_object_literals, used);
+                }
+                collect_used_object_fields_in_stmts(body, non_escaping_object_literals, used);
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_used_object_fields_in_stmts(
+                    std::slice::from_ref(body.as_ref()),
+                    non_escaping_object_literals,
+                    used,
+                );
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_used_object_fields_in_stmts(body, non_escaping_object_literals, used);
+                if let Some(catch) = catch {
+                    collect_used_object_fields_in_stmts(
+                        &catch.body,
+                        non_escaping_object_literals,
+                        used,
+                    );
+                }
+                if let Some(finally) = finally {
+                    collect_used_object_fields_in_stmts(
+                        finally,
+                        non_escaping_object_literals,
+                        used,
+                    );
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                collect_used_object_fields_in_expr(
+                    discriminant,
+                    non_escaping_object_literals,
+                    used,
+                );
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        collect_used_object_fields_in_expr(
+                            test,
+                            non_escaping_object_literals,
+                            used,
+                        );
+                    }
+                    collect_used_object_fields_in_stmts(
+                        &case.body,
+                        non_escaping_object_literals,
+                        used,
+                    );
+                }
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_) => {}
+        }
+    }
+}
+
+fn collect_used_object_fields_in_expr(
+    expr: &perry_hir::Expr,
+    non_escaping_object_literals: &HashMap<u32, Vec<String>>,
+    used: &mut HashMap<u32, HashSet<String>>,
+) {
+    use perry_hir::Expr;
+    if let Expr::PropertyGet { object, property } = expr {
+        if let Expr::LocalGet(id) = object.as_ref() {
+            if let Some(fields) = non_escaping_object_literals.get(id) {
+                if fields.iter().any(|field| field == property) {
+                    used.entry(*id).or_default().insert(property.clone());
+                }
+            }
+        }
+    }
+    if let Expr::PropertyUpdate {
+        object, property, ..
+    } = expr
+    {
+        if let Expr::LocalGet(id) = object.as_ref() {
+            if let Some(fields) = non_escaping_object_literals.get(id) {
+                if fields.iter().any(|field| field == property) {
+                    used.entry(*id).or_default().insert(property.clone());
+                }
+            }
+        }
+    }
+    if let Expr::Closure { body, .. } = expr {
+        collect_used_object_fields_in_stmts(body, non_escaping_object_literals, used);
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        collect_used_object_fields_in_expr(child, non_escaping_object_literals, used);
+    });
 }
 
 pub fn find_object_literal_candidates(

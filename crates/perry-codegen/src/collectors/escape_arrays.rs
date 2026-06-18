@@ -1,5 +1,5 @@
 use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::*;
 
@@ -20,6 +20,145 @@ pub fn collect_non_escaping_arrays(
 
     candidates.retain(|id, _| !escaped.contains(id));
     candidates
+}
+
+pub fn collect_non_escaping_array_used_indices(
+    stmts: &[perry_hir::Stmt],
+    non_escaping_arrays: &HashMap<u32, u32>,
+) -> HashMap<u32, HashSet<u32>> {
+    let mut used = HashMap::new();
+    if non_escaping_arrays.is_empty() {
+        return used;
+    }
+    collect_used_array_indices_in_stmts(stmts, non_escaping_arrays, &mut used);
+    used
+}
+
+fn collect_used_array_indices_in_stmts(
+    stmts: &[perry_hir::Stmt],
+    non_escaping_arrays: &HashMap<u32, u32>,
+    used: &mut HashMap<u32, HashSet<u32>>,
+) {
+    use perry_hir::Stmt;
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(expr) = init {
+                    collect_used_array_indices_in_expr(expr, non_escaping_arrays, used);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => {
+                collect_used_array_indices_in_expr(expr, non_escaping_arrays, used);
+            }
+            Stmt::Return(expr) => {
+                if let Some(expr) = expr {
+                    collect_used_array_indices_in_expr(expr, non_escaping_arrays, used);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                collect_used_array_indices_in_expr(condition, non_escaping_arrays, used);
+                collect_used_array_indices_in_stmts(then_branch, non_escaping_arrays, used);
+                if let Some(else_branch) = else_branch {
+                    collect_used_array_indices_in_stmts(else_branch, non_escaping_arrays, used);
+                }
+            }
+            Stmt::While { condition, body } => {
+                collect_used_array_indices_in_expr(condition, non_escaping_arrays, used);
+                collect_used_array_indices_in_stmts(body, non_escaping_arrays, used);
+            }
+            Stmt::DoWhile { body, condition } => {
+                collect_used_array_indices_in_stmts(body, non_escaping_arrays, used);
+                collect_used_array_indices_in_expr(condition, non_escaping_arrays, used);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init_stmt) = init {
+                    collect_used_array_indices_in_stmts(
+                        std::slice::from_ref(init_stmt.as_ref()),
+                        non_escaping_arrays,
+                        used,
+                    );
+                }
+                if let Some(condition) = condition {
+                    collect_used_array_indices_in_expr(condition, non_escaping_arrays, used);
+                }
+                if let Some(update) = update {
+                    collect_used_array_indices_in_expr(update, non_escaping_arrays, used);
+                }
+                collect_used_array_indices_in_stmts(body, non_escaping_arrays, used);
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_used_array_indices_in_stmts(
+                    std::slice::from_ref(body.as_ref()),
+                    non_escaping_arrays,
+                    used,
+                );
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_used_array_indices_in_stmts(body, non_escaping_arrays, used);
+                if let Some(catch) = catch {
+                    collect_used_array_indices_in_stmts(&catch.body, non_escaping_arrays, used);
+                }
+                if let Some(finally) = finally {
+                    collect_used_array_indices_in_stmts(finally, non_escaping_arrays, used);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                collect_used_array_indices_in_expr(discriminant, non_escaping_arrays, used);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        collect_used_array_indices_in_expr(test, non_escaping_arrays, used);
+                    }
+                    collect_used_array_indices_in_stmts(&case.body, non_escaping_arrays, used);
+                }
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_) => {}
+        }
+    }
+}
+
+fn collect_used_array_indices_in_expr(
+    expr: &perry_hir::Expr,
+    non_escaping_arrays: &HashMap<u32, u32>,
+    used: &mut HashMap<u32, HashSet<u32>>,
+) {
+    use perry_hir::Expr;
+    if let Expr::IndexGet { object, index } = expr {
+        if let Expr::LocalGet(id) = object.as_ref() {
+            if let Some(&len) = non_escaping_arrays.get(id) {
+                if let Some(k) = const_index(index) {
+                    if k < len {
+                        used.entry(*id).or_default().insert(k);
+                    }
+                }
+            }
+        }
+    }
+    if let Expr::Closure { body, .. } = expr {
+        collect_used_array_indices_in_stmts(body, non_escaping_arrays, used);
+    }
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        collect_used_array_indices_in_expr(child, non_escaping_arrays, used);
+    });
 }
 
 pub fn find_array_candidates(
