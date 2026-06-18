@@ -667,20 +667,37 @@ pub fn lower_module_full(
         names.dedup();
         for name in names {
             // Reuse an existing global `var`, else mint a fresh hoisted slot;
-            // either way emit an undefined-init entry slot so the block's B.3.3
-            // write (which runs before any source-position `var f = …`) has
-            // storage to target.
+            // either way emit an entry slot so the block's B.3.3 write (which
+            // runs before any source-position `var f = …`) has storage to target.
             let id = if let Some(existing) = ctx.lookup_local(&name) {
                 existing
             } else {
                 ctx.define_local(name.clone(), Type::Any)
+            };
+            // B.3.3 entry value. Normally the legacy `var` is `undefined` until
+            // the block declaration runs. But when a same-named *top-level*
+            // function declaration also exists, F is already in
+            // declaredFunctionNames, so B.3.3 does NOT create a fresh
+            // `undefined` binding — the function declaration owns the entry
+            // value. A non-reassigned top-level `function f` is otherwise called
+            // straight through `lookup_func` and never bound to this var slot,
+            // so without this the legacy var shadows it as `undefined` and
+            // `f()` throws at entry (the `existing-fn-no-init` cluster, #5346).
+            // Seed the slot with the function and mark it function-valued; the
+            // block-level declaration still overwrites it (`existing-fn-update`).
+            let init = match ctx.lookup_func(&name) {
+                Some(func_id) if functions_with_bodies.contains(&name) => {
+                    ctx.function_valued_locals.insert(id);
+                    Expr::FuncRef(func_id)
+                }
+                _ => Expr::Undefined,
             };
             module.init.push(Stmt::Let {
                 id,
                 name: name.clone(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Undefined),
+                init: Some(init),
             });
             ctx.var_hoisted_ids.insert(id);
             ctx.annexb_block_fn_var_ids.insert(name, id);
