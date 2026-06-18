@@ -562,6 +562,22 @@ pub(crate) fn collect_lexical_decl_names(
     }
 }
 
+/// Add the lexically-bound names of a `let`/`const` for-head to the Annex B
+/// forbidden set. A `var` for-head is not lexical and does not gate B.3.3.
+fn annexb_forhead_lexical_names(
+    var_decl: &ast::VarDecl,
+    out: &mut std::collections::HashSet<String>,
+) {
+    if var_decl.kind == ast::VarDeclKind::Var {
+        return;
+    }
+    for decl in &var_decl.decls {
+        let mut names = Vec::new();
+        collect_var_binding_names_from_pat(&decl.name, &mut names);
+        out.extend(names);
+    }
+}
+
 /// Annex B B.3.3 (#5297): collect the names of function declarations that
 /// appear *inside a nested block* of a function/program body. In sloppy mode
 /// such a legacy block-level function declaration ALSO creates a `var`-style
@@ -632,9 +648,30 @@ fn annexb_nested_stmt(
         ast::Stmt::DoWhile(do_while) => {
             annexb_nested_stmt(&do_while.body, forbidden, all_out, var_out)
         }
-        ast::Stmt::For(for_stmt) => annexb_nested_stmt(&for_stmt.body, forbidden, all_out, var_out),
-        ast::Stmt::ForIn(for_in) => annexb_nested_stmt(&for_in.body, forbidden, all_out, var_out),
-        ast::Stmt::ForOf(for_of) => annexb_nested_stmt(&for_of.body, forbidden, all_out, var_out),
+        ast::Stmt::For(for_stmt) => {
+            // A `let`/`const` for-head (`for (let f; ;)`) lexically scopes the
+            // body, so the equivalent enclosing `var f` would be an early error
+            // — B.3.3 skips it. Seed those names into the body's forbidden set.
+            let mut inner = forbidden.clone();
+            if let Some(ast::VarDeclOrExpr::VarDecl(vd)) = &for_stmt.init {
+                annexb_forhead_lexical_names(vd, &mut inner);
+            }
+            annexb_nested_stmt(&for_stmt.body, &inner, all_out, var_out)
+        }
+        ast::Stmt::ForIn(for_in) => {
+            let mut inner = forbidden.clone();
+            if let ast::ForHead::VarDecl(vd) = &for_in.left {
+                annexb_forhead_lexical_names(vd, &mut inner);
+            }
+            annexb_nested_stmt(&for_in.body, &inner, all_out, var_out)
+        }
+        ast::Stmt::ForOf(for_of) => {
+            let mut inner = forbidden.clone();
+            if let ast::ForHead::VarDecl(vd) = &for_of.left {
+                annexb_forhead_lexical_names(vd, &mut inner);
+            }
+            annexb_nested_stmt(&for_of.body, &inner, all_out, var_out)
+        }
         ast::Stmt::Labeled(labeled) => {
             annexb_nested_stmt(&labeled.body, forbidden, all_out, var_out)
         }
@@ -654,7 +691,18 @@ fn annexb_nested_stmt(
         ast::Stmt::Try(try_stmt) => {
             annexb_nested_block(&try_stmt.block.stmts, forbidden, all_out, var_out);
             if let Some(handler) = &try_stmt.handler {
-                annexb_nested_block(&handler.body.stmts, forbidden, all_out, var_out);
+                // A *destructuring* catch parameter (`catch ({ f })`) lexically
+                // binds its names, so a same-named enclosing `var` would be an
+                // early error and B.3.3 is skipped. A *simple* catch binding
+                // (`catch (f)`) is exempt — Annex B.3.4 lets a `var f` alias it,
+                // so it does not gate B.3.3.
+                let mut inner = forbidden.clone();
+                if let Some(param @ (ast::Pat::Array(_) | ast::Pat::Object(_))) = &handler.param {
+                    let mut names = Vec::new();
+                    collect_var_binding_names_from_pat(param, &mut names);
+                    inner.extend(names);
+                }
+                annexb_nested_block(&handler.body.stmts, &inner, all_out, var_out);
             }
             if let Some(finalizer) = &try_stmt.finalizer {
                 annexb_nested_block(&finalizer.stmts, forbidden, all_out, var_out);
