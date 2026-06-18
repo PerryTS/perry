@@ -82,9 +82,9 @@ pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
                 // (same approach as button/textfield/toggle/slider/etc).
                 // layout::relayout() moves the widget to its real parent
                 // once the App() container hierarchy is resolved.
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -151,8 +151,8 @@ pub fn add_item(handle: i64, title_ptr: *const u8) {
                 SendMessageW(
                     hwnd,
                     CB_ADDSTRING,
-                    WPARAM(0),
-                    LPARAM(wide.as_ptr() as isize),
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
                 );
             }
         }
@@ -170,7 +170,12 @@ pub fn set_selected(handle: i64, index: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                SendMessageW(hwnd, CB_SETCURSEL, WPARAM(index as usize), LPARAM(0));
+                SendMessageW(
+                    hwnd,
+                    CB_SETCURSEL,
+                    Some(WPARAM(index as usize)),
+                    Some(LPARAM(0)),
+                );
             }
         }
     }
@@ -186,7 +191,8 @@ pub fn get_selected(handle: i64) -> i64 {
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
-            let result = unsafe { SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)) };
+            let result =
+                unsafe { SendMessageW(hwnd, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))) };
             return result.0 as i64;
         }
         -1

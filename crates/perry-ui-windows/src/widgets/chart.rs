@@ -197,16 +197,16 @@ unsafe fn draw_line(hdc: HDC, plot: &RECT, data: &[(String, f64)]) {
 
     // Baseline along the bottom of the plot rect.
     let axis_pen = CreatePen(PS_SOLID, 1, rgb(178, 178, 178));
-    let old = SelectObject(hdc, axis_pen);
+    let old = SelectObject(hdc, axis_pen.into());
     MoveToEx(hdc, plot.left, plot.bottom, None);
     let _ = LineTo(hdc, plot.right, plot.bottom);
     SelectObject(hdc, old);
-    let _ = DeleteObject(axis_pen);
+    let _ = DeleteObject(axis_pen.into());
 
     // Series.
     let (r, g, b) = PALETTE_RGB[0];
     let pen = CreatePen(PS_SOLID, 2, rgb(r, g, b));
-    let old = SelectObject(hdc, pen);
+    let old = SelectObject(hdc, pen.into());
     for (i, (_, v)) in data.iter().enumerate() {
         let px = plot.left + (i as f64 * dx) as i32;
         // Win32 GDI origin is top-left like Cairo; flip y so big values
@@ -219,7 +219,7 @@ unsafe fn draw_line(hdc: HDC, plot: &RECT, data: &[(String, f64)]) {
         }
     }
     SelectObject(hdc, old);
-    let _ = DeleteObject(pen);
+    let _ = DeleteObject(pen.into());
 }
 
 #[cfg(target_os = "windows")]
@@ -247,7 +247,7 @@ unsafe fn draw_bars(hdc: HDC, plot: &RECT, data: &[(String, f64)]) {
             bottom: plot.bottom,
         };
         let _ = FillRect(hdc, &bar_rect, brush);
-        let _ = DeleteObject(brush);
+        let _ = DeleteObject(brush.into());
     }
 }
 
@@ -284,8 +284,8 @@ unsafe fn draw_pie(hdc: HDC, plot: &RECT, data: &[(String, f64)]) {
         let (cr, cg, cb) = PALETTE_RGB[i % PALETTE_RGB.len()];
         let brush = CreateSolidBrush(rgb(cr, cg, cb));
         let pen = CreatePen(PS_SOLID, 1, rgb(255, 255, 255));
-        let old_brush = SelectObject(hdc, brush);
-        let old_pen = SelectObject(hdc, pen);
+        let old_brush = SelectObject(hdc, brush.into());
+        let old_pen = SelectObject(hdc, pen.into());
         // GDI Pie() with same start and end isn't valid; skip empty
         // wedges produced by a 0-frac entry.
         if (end_angle - start_angle).abs() > 1e-6 {
@@ -293,8 +293,8 @@ unsafe fn draw_pie(hdc: HDC, plot: &RECT, data: &[(String, f64)]) {
         }
         SelectObject(hdc, old_brush);
         SelectObject(hdc, old_pen);
-        let _ = DeleteObject(brush);
-        let _ = DeleteObject(pen);
+        let _ = DeleteObject(brush.into());
+        let _ = DeleteObject(pen.into());
         start_angle = end_angle;
     }
 }
@@ -323,9 +323,9 @@ pub fn create(kind: i64, width: f64, height: f64) -> i64 {
                 0,
                 width.max(40.0) as i32,
                 height.max(40.0) as i32,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             );
             let Ok(hwnd) = hwnd else {
@@ -404,7 +404,7 @@ fn request_redraw(handle: i64) {
             return;
         };
         unsafe {
-            let _ = InvalidateRect(hwnd, None, true);
+            let _ = InvalidateRect(Some(hwnd), None, true);
         }
     }
     #[cfg(not(target_os = "windows"))]

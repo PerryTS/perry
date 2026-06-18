@@ -401,7 +401,7 @@ pub fn handle_callback_message(wparam: usize, lparam: isize) {
                             TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_BOTTOMALIGN,
                             pt.x,
                             pt.y,
-                            0,
+                            Some(0),
                             hwnd,
                             None,
                         );

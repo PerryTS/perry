@@ -143,7 +143,7 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
                 height as i32,
                 None,
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -183,7 +183,7 @@ pub fn set_body(window_handle: i64, widget_handle: i64) {
             if let Some(parent_hwnd) = w.borrow().get(&window_handle) {
                 if let Some(child_hwnd) = crate::widgets::get_hwnd(widget_handle) {
                     unsafe {
-                        let _ = SetParent(child_hwnd, *parent_hwnd);
+                        let _ = SetParent(child_hwnd, Some(*parent_hwnd));
                         let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
                         SetWindowLongW(child_hwnd, GWL_STYLE, (style | WS_CHILD.0) as i32);
                         // Trigger initial layout (mirrors app_set_body)

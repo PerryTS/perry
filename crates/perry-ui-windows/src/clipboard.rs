@@ -101,7 +101,7 @@ pub fn write(text_ptr: *const u8) {
                 let _ = GlobalUnlock(hmem);
             }
 
-            let _ = SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(hmem.0));
+            let _ = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hmem.0)));
             let _ = CloseClipboard();
         }
     }

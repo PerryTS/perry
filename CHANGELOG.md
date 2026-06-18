@@ -1,3 +1,88 @@
+## v0.5.1182 — fix(hir): native-builtin require destructuring stranded on a pre-registered module-var slot (#5364 × #5216 merge skew)
+
+`const { createInterface } = require("readline")` (and every destructured
+native/Node-builtin `require`) regressed to `undefined` for the bound leaf on
+`main` after v0.5.1180 — a merge-skew interaction between two independently-green
+PRs:
+
+- **#5216** lowers `const { x } = require("<native>")` by registering each
+  destructured leaf as a *native-module alias* (`register_native_module`) and
+  skipping the runtime local, so `x` / `typeof x` resolves through the static
+  native table — exact `import { x } from "<native>"` parity.
+- **#5364** taught the module-level forward-declaration pass to *pre-register*
+  destructuring leaves as module-var locals (fixing semver's bottom-of-file
+  cyclic `const { safeRe, t } = require('../internal/re')`).
+
+Together, the native-alias leaf now also had a pre-registered module-var local
+that was never written (its runtime destructuring is skipped). A bare `x` read
+resolved to that stale `undefined` local and shadowed the native alias →
+`typeof createInterface === "undefined"`. The `require_native_builtin_lowers_like_namespace_import`
+gap test (correct as written) caught it; each PR was green on its own base, so
+it slipped in only at the merged HEAD and failed the `cargo-test` gate, blocking
+the v0.5.1181 publish.
+
+Fix (`destructuring/var_decl_sources.rs`): in the native-alias branches
+(generic resolvable-native modules + `net`'s skipped factory leaves), drop the
+pre-registered module-var local via `ctx.remove_local_binding(&binding)` — the
+same thing the simple-ident `register_require_namespace_binding` path already
+does — so the leaf resolves to the native table, not a stranded local. The
+relative/file-require path that #5364 targets (`require('../internal/re')`) is
+not a resolvable native specifier, so it never enters these branches and keeps
+#5364's behavior unchanged. Verified: all 6 `module_import_forms` tests pass and
+#5364's `test_cjs_module_destructure_after_class.sh` still passes.
+
+## v0.5.1181 — fix(perry-ui-windows): migrate to windows / windows-core 0.62 (unblock Windows release publish)
+
+The v0.5.1180 release packaged macOS, Linux and Android, but **published
+nothing**: every publish job in `release-packages.yml` (`npm-publish`,
+`homebrew`, `apt`, `apt-repo`, `winget`, `update-workers`) is `needs: build`,
+and the `build` matrix's Windows leg failed to compile, collapsing the whole
+`build` job to `failure` and skipping all publishers. Only the GitHub Release
+page (notes + source tarball) shipped.
+
+Root cause: Dependabot PR #5300-era bump `c0f46f07e` raised `webview2-com` to
+`=0.39`, which resolves `windows` / `windows-core` to **0.62.2** — but
+`crates/perry-ui-windows/Cargo.toml` still pinned `windows` / `windows-core` at
+`0.58`. The webview2 COM interfaces (`ICoreWebView2`, etc.) were then a
+different crate version than perry's own `HWND` / `RECT` / `PCWSTR` / `PWSTR` /
+`Interface` types, so the WebView2 boundary in `widgets/webview.rs` failed to
+type-check (the in-file comment had warned this exact skew would break the
+build).
+
+Fix: align `perry-ui-windows` to `windows` / `windows-core` `0.62` and migrate
+the crate's source to the 0.62 API surface. This is a mechanical,
+behavior-preserving migration across ~47 files:
+
+- **`Option<HANDLE>` parameters**: many Win32 calls now take `Option<…>`
+  (`SendMessageW`/`PostMessageW` WPARAM/LPARAM, `InvalidateRect` / `SetParent`
+  / `ReleaseDC` / `SetFocus` / `SetWindowPos` / `CreateWindowExW` /
+  `SetTimer` / … HWND/HMENU/HINSTANCE) — present handles wrapped in `Some(…)`.
+- **GDI objects**: `DeleteObject` / `SelectObject` / `GetObjectW` now take
+  `HGDIOBJ`; `HBRUSH`/`HPEN`/`HFONT`/`HBITMAP` converted via `.into()`.
+- **`CreateFontW`**: charset / precision / quality integer args wrapped in
+  their 0.62 newtypes (`FONT_CHARSET` / `FONT_OUTPUT_PRECISION` /
+  `FONT_CLIP_PRECISION` / `FONT_QUALITY`).
+- **`BOOL`** moved from `windows::Win32::Foundation` to `windows::core`.
+- **`#[implement]` COM authoring** (`drag_drop.rs`) and a winrt
+  `TypedEventHandler` (`media_playback.rs`): 0.62 passes interface args as
+  `windows::core::Ref<'_, T>` instead of `Option<&T>`; signatures + bodies
+  (`pdataobj.as_ref()`) updated accordingly.
+- **`widgets/webview.rs`**: `#[implement]` macros now come from
+  `windows-core`'s re-export (the `windows` `implement` feature was removed in
+  0.62); `Error::from_win32()` replaced with
+  `Error::from(HRESULT::from_win32(GetLastError().0))`; event-registration
+  tokens are now `i64` (`add_NavigationStarting` / `add_NavigationCompleted`
+  take `*mut i64`).
+
+Verified by cross-compiling the crate to `x86_64-pc-windows-msvc` from macOS
+via `cargo-xwin` (`cargo xwin check -p perry-ui-windows --target
+x86_64-pc-windows-msvc` → clean) — the Windows build is not exercised by the
+PR `Tests` matrix (only by `release-packages.yml` on a tag), so local
+cross-check is the pre-merge gate. `perry-ui-windows` was the sole failing
+crate in the v0.5.1180 Windows build, so this restores both the
+`build (windows)` and `build-cross (perry-ui-windows)` legs and lets the
+publish jobs run.
+
 ## v0.5.1180 — ci: warm the main-scoped CI cache so PRs stop building cold
 
 Follow-up to v0.5.1179. Moving sccache to a persisted disk cache was necessary

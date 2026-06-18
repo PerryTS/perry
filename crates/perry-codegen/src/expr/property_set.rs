@@ -38,9 +38,10 @@ use super::{
     emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
     emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
-    expr_is_known_non_pointer_shadow_value, extract_array_of_object_shape, i32_bool_to_nanbox,
-    import_origin_suffix, is_global_this_builtin_function_name, is_global_this_builtin_name,
-    is_known_finite, lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    expr_is_known_non_pointer_shadow_value, expr_produces_non_pointer_bits_by_construction,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
     lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
@@ -404,6 +405,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 
                         ctx.current_block = fast_idx;
+                        // #5334 lever D: a value that is a non-pointer by
+                        // construction (number / bool / undefined / null /
+                        // comparison / arithmetic) creates no parent→child heap
+                        // reference, so the generational write barrier is a
+                        // semantic no-op and can be skipped. Computed before the
+                        // block builder is borrowed below. The LAYOUT NOTE is
+                        // kept regardless: it records the slot's pointer-ness for
+                        // minor-scan skipping, and a non-pointer write into a
+                        // slot that previously held a pointer is a real
+                        // transition the GC must observe. Same soundness standard
+                        // as the array-store barrier elision.
+                        let field_set_barrier_needed =
+                            !expr_produces_non_pointer_bits_by_construction(ctx, value);
                         let blk = ctx.block();
                         let obj_ptr = blk.inttoptr(I64, &obj_handle);
                         let header_skip = "24".to_string();
@@ -427,7 +441,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 true,
                                 &obj_bits,
                                 &field_addr,
-                                true,
+                                field_set_barrier_needed,
                             );
                         }
                         blk.br(&merge_label);

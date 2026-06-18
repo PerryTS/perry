@@ -100,7 +100,7 @@ const NO_STMT_PRED: &dyn Fn(&perry_hir::Stmt) -> bool = &|_| false;
 /// uninitialized — ECMAScript then throws ReferenceError at the implicit
 /// `return this`. We detect the static no-super case at compile time so
 /// `new Sub()` throws instead of returning a half-built object.
-pub(super) fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
+pub(crate) fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
     ctor_body_any(body, &expr_calls_super, NO_STMT_PRED)
 }
 
@@ -123,7 +123,7 @@ fn expr_calls_super(expr: &Expr) -> bool {
 /// for-of is still iterating), so the static no-super throw must not fire —
 /// unless the body also dereferences `this` directly (see the call site).
 /// Refs class/subclass/derived-class-return-override-{for-of,finally-super}-arrow.
-pub(super) fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
+pub(crate) fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
     ctor_body_any(body, &expr_calls_super_incl_closures, NO_STMT_PRED)
 }
 
@@ -148,7 +148,7 @@ fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
 /// a no-direct-super derived ctor throws ReferenceError per spec before any
 /// closure could run `super()`, so the static entry throw stays correct
 /// (test262 class/elements/privatefieldset-evaluation-order-1).
-pub(super) fn ctor_body_uses_this(body: &[perry_hir::Stmt]) -> bool {
+pub(crate) fn ctor_body_uses_this(body: &[perry_hir::Stmt]) -> bool {
     ctor_body_any(body, &expr_uses_this_direct, NO_STMT_PRED)
 }
 
@@ -177,7 +177,7 @@ fn expr_uses_this_direct(expr: &Expr) -> bool {
 /// returned value at runtime. Refs
 /// class/subclass/class-definition-null-proto-contains-return-override and
 /// class/subclass/builtin-objects/Object/constructor-return-undefined-throws.
-pub(super) fn ctor_body_has_value_return(body: &[perry_hir::Stmt]) -> bool {
+pub(crate) fn ctor_body_has_value_return(body: &[perry_hir::Stmt]) -> bool {
     ctor_body_any(
         body,
         &|_| false,

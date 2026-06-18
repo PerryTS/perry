@@ -77,7 +77,7 @@ pub fn create(_body_handle: i64, width: f64, height: f64) -> i64 {
                 height as i32,
                 None,
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();

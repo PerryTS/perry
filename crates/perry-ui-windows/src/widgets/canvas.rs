@@ -207,7 +207,7 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                     DrawCmd::Stroke(r, g, b, _a, width) => {
                         let color = COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16));
                         let pen = CreatePen(PS_SOLID, width as i32, color);
-                        let old_pen = SelectObject(hdc, pen);
+                        let old_pen = SelectObject(hdc, pen.into());
 
                         let mut first = true;
                         for &(px, py) in &path_points {
@@ -221,7 +221,7 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
 
                         SelectObject(hdc, old_pen);
                         if !current_pen.is_invalid() {
-                            let _ = DeleteObject(current_pen);
+                            let _ = DeleteObject(current_pen.into());
                         }
                         current_pen = pen;
                     }
@@ -259,7 +259,7 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                                 }
                             };
                             let _ = FillRect(hdc, &band, brush);
-                            let _ = DeleteObject(brush);
+                            let _ = DeleteObject(brush.into());
                         }
                     }
                     DrawCmd::DrawImage(image, sx, sy, sw, sh, dx, dy, dw, dh) => {
@@ -326,7 +326,7 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
             }
 
             if !current_pen.is_invalid() {
-                let _ = DeleteObject(current_pen);
+                let _ = DeleteObject(current_pen.into());
             }
         }
 
@@ -352,9 +352,9 @@ pub fn create(width: f64, height: f64) -> i64 {
                 0,
                 width as i32,
                 height as i32,
-                super::get_parking_hwnd(),
+                Some(super::get_parking_hwnd()),
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -399,7 +399,7 @@ fn invalidate(handle: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let _ = InvalidateRect(hwnd, None, false);
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
         }
     }

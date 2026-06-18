@@ -42,15 +42,15 @@ pub fn create() -> i64 {
                 0,
                 200,
                 20,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
 
             // Start marquee animation (30ms interval)
-            SendMessageW(hwnd, PBM_SETMARQUEE, WPARAM(1), LPARAM(30));
+            SendMessageW(hwnd, PBM_SETMARQUEE, Some(WPARAM(1)), Some(LPARAM(30)));
 
             register_widget(hwnd, WidgetKind::ProgressView, control_id)
         }
@@ -74,14 +74,19 @@ pub fn set_value(handle: i64, value: f64) {
                     // Switch to marquee (indeterminate) mode
                     let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
                     SetWindowLongW(hwnd, GWL_STYLE, (style | PBS_MARQUEE) as i32);
-                    SendMessageW(hwnd, PBM_SETMARQUEE, WPARAM(1), LPARAM(30));
+                    SendMessageW(hwnd, PBM_SETMARQUEE, Some(WPARAM(1)), Some(LPARAM(30)));
                 } else {
                     // Switch to determinate mode
                     let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
                     SetWindowLongW(hwnd, GWL_STYLE, (style & !PBS_MARQUEE) as i32);
-                    SendMessageW(hwnd, PBM_SETMARQUEE, WPARAM(0), LPARAM(0));
+                    SendMessageW(hwnd, PBM_SETMARQUEE, Some(WPARAM(0)), Some(LPARAM(0)));
                     let pos = (value * 100.0) as isize;
-                    SendMessageW(hwnd, PBM_SETPOS, WPARAM(pos as usize), LPARAM(0));
+                    SendMessageW(
+                        hwnd,
+                        PBM_SETPOS,
+                        Some(WPARAM(pos as usize)),
+                        Some(LPARAM(0)),
+                    );
                 }
             }
         }

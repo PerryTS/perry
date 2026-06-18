@@ -156,7 +156,7 @@ pub fn is_dark_mode() -> i64 {
             if RegOpenKeyExW(
                 HKEY_CURRENT_USER,
                 PCWSTR(key_wide.as_ptr()),
-                0,
+                Some(0),
                 KEY_READ,
                 &mut hkey,
             )

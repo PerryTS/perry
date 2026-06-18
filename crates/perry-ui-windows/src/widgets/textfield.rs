@@ -78,9 +78,9 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
                 0,
                 200,
                 30,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -91,8 +91,8 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
                 SendMessageW(
                     hwnd,
                     EM_SETCUEBANNER,
-                    WPARAM(0),
-                    LPARAM(wide.as_ptr() as isize),
+                    Some(WPARAM(0)),
+                    Some(LPARAM(wide.as_ptr() as isize)),
                 );
             }
 
@@ -177,7 +177,7 @@ pub fn focus(handle: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let _ = SetFocus(hwnd);
+                let _ = SetFocus(Some(hwnd));
             }
         }
     }
@@ -227,7 +227,7 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
         });
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }
@@ -267,7 +267,12 @@ pub fn set_font_size(handle: i64, size: f64) {
         if let Some(hwnd) = super::get_hwnd(handle) {
             let font = super::text::create_font_with_family_pub(size as i32, 400, "Segoe UI");
             unsafe {
-                SendMessageW(hwnd, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+                SendMessageW(
+                    hwnd,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0 as usize)),
+                    Some(LPARAM(1)),
+                );
             }
         }
     }

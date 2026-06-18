@@ -25,24 +25,29 @@ qrcodegen = "1.8"
 # parented to a host HWND with sync-pumped init via WebView2's async
 # completion-handler callbacks. WebView2 Runtime ships with Windows 11
 # by default and as a redistributable on Windows 10 1803+.
-# webview2-com 0.34.x is the last release that uses windows 0.58 (matches
-# the rest of perry-ui-windows). 0.35+ moved to windows 0.59+ which would
-# clash with our HWND/PCWSTR types.
+# webview2-com 0.39.x resolves to windows / windows-core 0.62.2. The rest of
+# perry-ui-windows is aligned to the same 0.62 line below, so HWND / RECT /
+# PCWSTR / PWSTR / Interface types are identical across the webview2 boundary
+# (a version skew here is what broke the Windows build at v0.5.1180).
 webview2-com = "=0.39"
 
 [features]
 geisterhand = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# The `#[implement]` macro from `windows` 0.58 expands to absolute
+# The `#[implement]` macro from `windows` expands to absolute
 # `::windows_core::` paths, so the consuming crate must depend on
 # `windows-core` directly or the COM authoring in drag_drop.rs fails to
-# resolve `windows_core` (E0433). Pinned to 0.58 to match `windows`.
-windows-core = "0.58"
-windows = { version = "0.58", features = [
-    # `#[implement]` — needed to author the IDropTarget / IDropSource /
-    # IDataObject COM objects for native drag-and-drop (#4773).
-    "implement",
+# resolve `windows_core` (E0433). Pinned to 0.62 to match `windows` and the
+# webview2-com 0.39 dependency tree.
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    # NOTE: `#[implement]` / `#[interface]` (used to author the IDropTarget /
+    # IDropSource / IDataObject COM objects for native drag-and-drop, #4773)
+    # are no longer a `windows` feature in 0.62 — they are re-exported from
+    # `windows::core` (via the unconditional `windows-implement` dep of
+    # `windows-core`), so `use windows::core::implement;` resolves without a
+    # feature flag.
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
