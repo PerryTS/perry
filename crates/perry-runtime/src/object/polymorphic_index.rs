@@ -36,7 +36,20 @@ unsafe fn property_key_string_ptr(value: f64) -> *mut crate::StringHeader {
 #[no_mangle]
 pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> f64 {
     let raw = if (obj_handle as u64) >> 48 >= 0x7FF8 {
-        (obj_handle as u64) & 0x0000_FFFF_FFFF_FFFF
+        // NaN-boxed: only POINTER_TAG (0x7FFD) and STRING_TAG (0x7FFF) carry a
+        // heap pointer in the low 48 bits. INT32 (0x7FFE), BIGINT (0x7FFA) and
+        // the undefined/null/bool tags (0x7FFC) are PRIMITIVES — indexing them
+        // yields `undefined` per JS (`(983055)[0] === undefined`). Treating an
+        // INT32's integer payload as a pointer derefs a wild address → SIGSEGV.
+        // This is the Next.js app-page-turbo render crash: a NaN-boxed-int
+        // receiver (0xf000f = 983055) indexed inside a class `get` method
+        // (js_object_get_index_polymorphic read its GcHeader at raw-8). Reject
+        // non-pointer/non-string NaN-boxed receivers up front (cross-platform —
+        // not dependent on a heap-address floor).
+        match (obj_handle as u64) >> 48 {
+            0x7FFD | 0x7FFF => (obj_handle as u64) & 0x0000_FFFF_FFFF_FFFF,
+            _ => return f64::from_bits(crate::value::TAG_UNDEFINED),
+        }
     } else {
         obj_handle as u64
     };
@@ -62,6 +75,18 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         );
     }
 
+    // #wall5-render: `obj[idx]` where `obj` is a mis-boxed / non-heap value
+    // (e.g. a small bogus pointer like 0xf000f produced upstream) must NOT
+    // dereference the GcHeader at `raw-8` — that's a wild read → SIGSEGV. The
+    // `raw < 0x1000` guards above are too weak (0xf000f passes). Typed-array /
+    // buffer / string receivers were already handled before this point, so a
+    // value reaching here that isn't a valid arena/old-gen object pointer is
+    // not indexable → `undefined` (matches JS `(5)[0]` etc.). Mirrors the
+    // is_closure_ptr heap-range guard (wall #2). Next.js app-page-turbo's
+    // `u_i_24_6.get` indexed such a value during the app render → crash.
+    if !crate::value::addr_class::is_valid_obj_ptr(raw as *const u8) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     let gc_type = unsafe {
         let gc_header_addr = raw.wrapping_sub(crate::gc::GC_HEADER_SIZE as u64) as usize;
         if gc_header_addr < 0x1000 {
