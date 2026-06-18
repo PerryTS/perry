@@ -516,11 +516,15 @@ impl<'a> DirectParser<'a> {
             } else {
                 self.parse_value_generic()
             };
-            js_arr = parse_root_array_ptr(arr_slot);
             // GC is suppressed for the whole typed parse, so array growth
-            // cannot collect before `value` is stored.
-            js_arr = self.array_push_parse_fast(js_arr, value);
-            parse_root_set(arr_slot, JSValue::object_ptr(js_arr as *mut u8));
+            // cannot collect before `value` is stored. The array pointer
+            // remains stable across nested value parsing; refresh the parse
+            // root only if the push actually grows to a new header.
+            let pushed = self.array_push_parse_fast(js_arr, value);
+            if pushed != js_arr {
+                parse_root_set(arr_slot, JSValue::object_ptr(pushed as *mut u8));
+            }
+            js_arr = pushed;
 
             self.skip_whitespace();
             if self.peek() == Some(b',') {
@@ -530,7 +534,6 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b']');
-        js_arr = parse_root_array_ptr(arr_slot);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_arr as *mut u8)
     }
@@ -700,13 +703,15 @@ impl<'a> DirectParser<'a> {
 
         loop {
             let value = self.parse_value();
-            js_arr = parse_root_array_ptr(arr_slot);
             // GC is suppressed for the whole direct parse, so array growth
-            // cannot collect before `value` is stored.
-            js_arr = self.array_push_parse_fast(js_arr, value);
-            // js_array_push may have returned a new ArrayHeader* after grow;
-            // update the root slot so GC sees the new pointer, not the stale one.
-            parse_root_set(arr_slot, JSValue::object_ptr(js_arr as *mut u8));
+            // cannot collect before `value` is stored. The array pointer
+            // remains stable across nested value parsing; refresh the parse
+            // root only if the push actually grows to a new header.
+            let pushed = self.array_push_parse_fast(js_arr, value);
+            if pushed != js_arr {
+                parse_root_set(arr_slot, JSValue::object_ptr(pushed as *mut u8));
+            }
+            js_arr = pushed;
 
             self.skip_whitespace();
             if self.peek() == Some(b',') {
@@ -716,7 +721,6 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b']');
-        js_arr = parse_root_array_ptr(arr_slot);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_arr as *mut u8)
     }

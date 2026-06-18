@@ -224,21 +224,6 @@ pub(crate) fn parse_root_set(idx: usize, v: JSValue) {
 }
 
 #[inline]
-pub(crate) fn parse_root_get(idx: usize) -> JSValue {
-    PARSE_ROOTS.with(|r| {
-        r.borrow()
-            .get(idx)
-            .map(|slot| JSValue::from_bits(slot.to_bits()))
-            .unwrap_or_else(JSValue::undefined)
-    })
-}
-
-#[inline]
-pub(crate) fn parse_root_array_ptr(idx: usize) -> *mut crate::ArrayHeader {
-    (parse_root_get(idx).bits() & POINTER_MASK) as *mut crate::ArrayHeader
-}
-
-#[inline]
 pub(crate) fn parse_root_save_len() -> usize {
     PARSE_ROOTS.with(|r| r.borrow().len())
 }
@@ -660,6 +645,27 @@ mod tests {
             unsafe { str_from_header(output).unwrap() },
             std::str::from_utf8(input).unwrap()
         );
+    }
+
+    #[test]
+    fn direct_parse_array_growth_keeps_root_current() {
+        let mut input = String::from("[");
+        for i in 0..40 {
+            if i > 0 {
+                input.push(',');
+            }
+            input.push_str(&format!(r#"{{"i":{},"v":[{},{}]}}"#, i, i, i + 1));
+        }
+        input.push(']');
+
+        let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let value = unsafe { js_json_parse(text) };
+        let arr = (value.bits() & POINTER_MASK) as *const crate::ArrayHeader;
+
+        assert_eq!(crate::array::js_array_length(arr), 40);
+
+        let output = unsafe { js_json_stringify(f64::from_bits(value.bits()), TYPE_UNKNOWN) };
+        assert_eq!(unsafe { str_from_header(output).unwrap() }, input);
     }
 
     #[test]
