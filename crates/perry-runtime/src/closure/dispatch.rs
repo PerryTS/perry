@@ -1387,6 +1387,16 @@ pub unsafe extern "C" fn js_native_call_value(
     if func_ptr.is_null() && crate::object::is_function_prototype_object_value(func_value) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // W2 (Next.js app-page-turbo): a class-object (OBJECT_TYPE_CLASS) can reach
+    // the value-call path — e.g. `new s.RequestCookies(headers)` where the
+    // dynamic callee `s.RequestCookies` resolves (through a webpack lazy-export
+    // getter) to a class object, but the construct site lowered to a call rather
+    // than routing to `js_new_function_construct`. Calling a class object has
+    // exactly one sensible meaning — construct it — so do that here instead of
+    // `throw_not_callable` (which surfaces as "value is not a function").
+    if func_ptr.is_null() && crate::object::is_class_object_value(func_value) {
+        return crate::object::js_new_function_construct(func_value, args_ptr, args_len);
+    }
     let dispatch_args_len = if !func_ptr.is_null() && lookup_closure_rest(func_ptr).is_none() {
         match lookup_closure_arity(func_ptr) {
             Some(declared) if (declared as usize) > args_len => declared as usize,
