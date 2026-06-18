@@ -995,7 +995,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     let after_idx = ctx.new_block("ctor.return.after");
     let after_label = ctx.block_label(after_idx);
     ctx.inline_ctor_return.push(crate::expr::InlineCtorReturn {
-        result_slot: ctor_result_slot,
+        result_slot: ctor_result_slot.clone(),
         after_label,
         // A class is "derived" (and thus subject to the stricter
         // return-override rules) if it has ANY heritage — a named parent,
@@ -1433,12 +1433,12 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 for la in &marshalled {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
-                ctx.pending_declares.push((
-                    ctor.symbol.clone(),
-                    crate::types::VOID,
-                    ctor_param_types,
-                ));
-                ctx.block().call_void(&ctor.symbol, &ctor_args);
+                // Walked to an ANCESTOR ctor: its return-override does not replace
+                // the leaf instance, so discard the return value. Declared DOUBLE
+                // to match the symbol's real signature (see codegen/mod.rs).
+                ctx.pending_declares
+                    .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
             } else if let Some(ctor) = ctx.imported_class_ctors.get(class_name).cloned() {
                 // Pad missing optional args with TAG_UNDEFINED so the constructor
                 // doesn't read garbage from stale registers, and pack the rest
@@ -1454,12 +1454,18 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
                 for la in &marshalled {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
-                ctx.pending_declares.push((
-                    ctor.symbol.clone(),
-                    crate::types::VOID,
-                    ctor_param_types,
-                ));
-                ctx.block().call_void(&ctor.symbol, &ctor_args);
+                // The standalone `<class>_constructor` symbol returns DOUBLE: the
+                // value an explicit `return <obj/fn>` produced (ECMAScript ctor
+                // return-override) or `undefined` for an ordinary ctor. Capture it
+                // into `ctor_result_slot` so the return-override applied at the end
+                // of `lower_new` honors it — chalk's `class Chalk { constructor(o){
+                // return chalkFactory(o); } }` returns a FUNCTION, so `new Chalk(o)`
+                // must yield that function, not the empty allocated instance
+                // ("value is not a function" on `new Chalk(...).red(...)`).
+                ctx.pending_declares
+                    .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
+                ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
             }
         } // end !found_inherited_ctor
     }
