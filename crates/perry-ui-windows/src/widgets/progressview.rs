@@ -81,7 +81,12 @@ pub fn set_value(handle: i64, value: f64) {
                     SetWindowLongW(hwnd, GWL_STYLE, (style & !PBS_MARQUEE) as i32);
                     SendMessageW(hwnd, PBM_SETMARQUEE, Some(WPARAM(0)), Some(LPARAM(0)));
                     let pos = (value * 100.0) as isize;
-                    SendMessageW(hwnd, PBM_SETPOS, Some(WPARAM(pos as usize)), Some(LPARAM(0)));
+                    SendMessageW(
+                        hwnd,
+                        PBM_SETPOS,
+                        Some(WPARAM(pos as usize)),
+                        Some(LPARAM(0)),
+                    );
                 }
             }
         }

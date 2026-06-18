@@ -602,7 +602,8 @@ pub fn clear_children(handle: i64) {
         // preventing a black flash while new children are being added.
         if let Some(parent_hwnd) = get_hwnd(handle) {
             unsafe {
-                let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(parent_hwnd), None, true);
+                let _ =
+                    windows::Win32::Graphics::Gdi::InvalidateRect(Some(parent_hwnd), None, true);
             }
         }
     }
@@ -944,7 +945,12 @@ pub fn set_control_size(handle: i64, size: i64) {
                         "Segoe UI\0".encode_utf16().collect::<Vec<u16>>().as_ptr(),
                     ),
                 );
-                SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+                SendMessageW(
+                    hwnd,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0 as usize)),
+                    Some(LPARAM(1)),
+                );
             }
         }
     }

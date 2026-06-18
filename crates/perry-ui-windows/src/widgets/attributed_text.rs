@@ -197,7 +197,8 @@ pub fn append(
 
         unsafe {
             // Move caret to end-of-text and insert the new substring.
-            let end_total: isize = SendMessageW(hwnd, EM_GETTEXTLENGTH, Some(WPARAM(0)), Some(LPARAM(0))).0;
+            let end_total: isize =
+                SendMessageW(hwnd, EM_GETTEXTLENGTH, Some(WPARAM(0)), Some(LPARAM(0))).0;
             SendMessageW(
                 hwnd,
                 EM_SETSEL,

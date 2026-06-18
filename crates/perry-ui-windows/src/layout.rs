@@ -589,7 +589,8 @@ fn measure_text_height(hwnd: HWND, width: i32, vertical: bool) -> i32 {
         GetWindowTextW(hwnd, &mut buf);
 
         // Send WM_GETFONT to get the current font
-        let hfont = HFONT(SendMessageW(hwnd, WM_GETFONT, Some(WPARAM(0)), Some(LPARAM(0))).0 as *mut _);
+        let hfont =
+            HFONT(SendMessageW(hwnd, WM_GETFONT, Some(WPARAM(0)), Some(LPARAM(0))).0 as *mut _);
         let old_font = if !hfont.is_invalid() {
             SelectObject(hdc, hfont.into())
         } else {

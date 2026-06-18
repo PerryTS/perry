@@ -111,7 +111,8 @@ pub fn handle_click(handle: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             let checked = unsafe {
-                SendMessageW(hwnd, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 == BST_CHECKED.0 as isize
+                SendMessageW(hwnd, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0
+                    == BST_CHECKED.0 as isize
             };
             let value = if checked { 1.0 } else { 0.0 };
 
@@ -138,7 +139,12 @@ pub fn set_state(handle: i64, on: i32) {
         if let Some(hwnd) = super::get_hwnd(handle) {
             let check = if on != 0 { BST_CHECKED } else { BST_UNCHECKED };
             unsafe {
-                SendMessageW(hwnd, BM_SETCHECK, Some(WPARAM(check.0 as usize)), Some(LPARAM(0)));
+                SendMessageW(
+                    hwnd,
+                    BM_SETCHECK,
+                    Some(WPARAM(check.0 as usize)),
+                    Some(LPARAM(0)),
+                );
             }
         }
     }

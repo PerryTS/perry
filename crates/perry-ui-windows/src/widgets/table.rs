@@ -200,7 +200,9 @@ pub fn create(row_count: f64, col_count: f64, render_closure: f64) -> i64 {
                 hwnd,
                 LVM_SETEXTENDEDLISTVIEWSTYLE,
                 Some(WPARAM(0)),
-                Some(LPARAM((LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_HEADERDRAGDROP) as isize)),
+                Some(LPARAM(
+                    (LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_HEADERDRAGDROP) as isize,
+                )),
             );
 
             // Insert the columns. Default header is "Col N".
@@ -351,7 +353,12 @@ pub fn update_row_count(handle: i64, count: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                SendMessageW(hwnd, LVM_SETITEMCOUNT, Some(WPARAM(count as usize)), Some(LPARAM(0)));
+                SendMessageW(
+                    hwnd,
+                    LVM_SETITEMCOUNT,
+                    Some(WPARAM(count as usize)),
+                    Some(LPARAM(0)),
+                );
                 let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
@@ -431,7 +438,8 @@ pub fn get_selected_rows_count(handle: i64) -> i64 {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let res = SendMessageW(hwnd, LVM_GETSELECTEDCOUNT, Some(WPARAM(0)), Some(LPARAM(0)));
+                let res =
+                    SendMessageW(hwnd, LVM_GETSELECTEDCOUNT, Some(WPARAM(0)), Some(LPARAM(0)));
                 return res.0 as i64;
             }
         }

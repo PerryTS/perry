@@ -267,7 +267,12 @@ pub fn set_font_size(handle: i64, size: f64) {
         if let Some(hwnd) = super::get_hwnd(handle) {
             let font = super::text::create_font_with_family_pub(size as i32, 400, "Segoe UI");
             unsafe {
-                SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+                SendMessageW(
+                    hwnd,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0 as usize)),
+                    Some(LPARAM(1)),
+                );
             }
         }
     }

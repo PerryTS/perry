@@ -170,7 +170,12 @@ pub fn set_selected(handle: i64, index: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                SendMessageW(hwnd, CB_SETCURSEL, Some(WPARAM(index as usize)), Some(LPARAM(0)));
+                SendMessageW(
+                    hwnd,
+                    CB_SETCURSEL,
+                    Some(WPARAM(index as usize)),
+                    Some(LPARAM(0)),
+                );
             }
         }
     }
@@ -186,7 +191,8 @@ pub fn get_selected(handle: i64) -> i64 {
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
-            let result = unsafe { SendMessageW(hwnd, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))) };
+            let result =
+                unsafe { SendMessageW(hwnd, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))) };
             return result.0 as i64;
         }
         -1

@@ -754,7 +754,15 @@ pub fn app_set_level(app_handle: i64, value_ptr: *const u8) {
                         "modal" => HWND_TOPMOST,
                         _ => HWND_NOTOPMOST,
                     };
-                    let _ = SetWindowPos(hwnd, Some(insert_after), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(insert_after),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE,
+                    );
                 }
             }
         });

@@ -239,7 +239,12 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
             let font =
                 crate::widgets::text::create_font_with_family_pub(20, 400, "Segoe UI Symbol");
             unsafe {
-                SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+                SendMessageW(
+                    hwnd,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0 as usize)),
+                    Some(LPARAM(1)),
+                );
             }
         }
     }

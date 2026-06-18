@@ -488,10 +488,10 @@ fn create_font_with_family(size: i32, weight: i32, family: &str) -> HFONT {
             0,            // fdwItalic
             0,            // fdwUnderline
             0,            // fdwStrikeOut
-            windows::Win32::Graphics::Gdi::FONT_CHARSET(0),            // fdwCharSet (DEFAULT_CHARSET)
-            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(0),            // fdwOutputPrecision
-            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0),            // fdwClipPrecision
-            windows::Win32::Graphics::Gdi::FONT_QUALITY(0),            // fdwQuality
+            windows::Win32::Graphics::Gdi::FONT_CHARSET(0), // fdwCharSet (DEFAULT_CHARSET)
+            windows::Win32::Graphics::Gdi::FONT_OUTPUT_PRECISION(0), // fdwOutputPrecision
+            windows::Win32::Graphics::Gdi::FONT_CLIP_PRECISION(0), // fdwClipPrecision
+            windows::Win32::Graphics::Gdi::FONT_QUALITY(0), // fdwQuality
             0,            // fdwPitchAndFamily
             windows::core::PCWSTR(family_wide.as_ptr()),
         )
@@ -518,7 +518,12 @@ fn apply_font(handle: i64, font: HFONT) {
 
     if let Some(hwnd) = super::get_hwnd(handle) {
         unsafe {
-            SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+            SendMessageW(
+                hwnd,
+                WM_SETFONT,
+                Some(WPARAM(font.0 as usize)),
+                Some(LPARAM(1)),
+            );
         }
     }
 }

@@ -242,7 +242,12 @@ unsafe fn walk_and_apply_expand(hwnd: HWND, h_item: isize, code: u32) {
     if h_item == 0 {
         return;
     }
-    SendMessageW(hwnd, TVM_EXPAND, Some(WPARAM(code as usize)), Some(LPARAM(h_item)));
+    SendMessageW(
+        hwnd,
+        TVM_EXPAND,
+        Some(WPARAM(code as usize)),
+        Some(LPARAM(h_item)),
+    );
     // Walk children — TVGN_CHILD = 4.
     let child = SendMessageW(hwnd, TVM_GETNEXTITEM, Some(WPARAM(4)), Some(LPARAM(h_item))).0;
     walk_and_apply_expand(hwnd, child, code);

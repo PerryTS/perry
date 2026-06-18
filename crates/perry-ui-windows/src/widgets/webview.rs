@@ -339,9 +339,11 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
             } else if let Some(env) = environment {
                 env_done_clone.set(Some(Ok(env)));
             } else {
-                env_done_clone.set(Some(Err(windows::core::Error::from(windows::core::HRESULT::from_win32(unsafe {
-                    windows::Win32::Foundation::GetLastError().0
-                })))));
+                env_done_clone.set(Some(Err(windows::core::Error::from(
+                    windows::core::HRESULT::from_win32(unsafe {
+                        windows::Win32::Foundation::GetLastError().0
+                    }),
+                ))));
             }
             env_ready_clone.set(true);
             Ok(())
@@ -381,9 +383,11 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
             } else if let Some(c) = controller {
                 ctrl_done_clone.set(Some(Ok(c)));
             } else {
-                ctrl_done_clone.set(Some(Err(windows::core::Error::from(windows::core::HRESULT::from_win32(unsafe {
-                    windows::Win32::Foundation::GetLastError().0
-                })))));
+                ctrl_done_clone.set(Some(Err(windows::core::Error::from(
+                    windows::core::HRESULT::from_win32(unsafe {
+                        windows::Win32::Foundation::GetLastError().0
+                    }),
+                ))));
             }
             ctrl_ready_clone.set(true);
             Ok(())

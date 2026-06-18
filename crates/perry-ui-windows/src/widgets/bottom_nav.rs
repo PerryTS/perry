@@ -315,8 +315,11 @@ pub fn set_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
             #[cfg(target_os = "windows")]
             for item in &entry.items {
                 unsafe {
-                    let _ =
-                        windows::Win32::Graphics::Gdi::InvalidateRect(Some(item.btn_hwnd), None, true);
+                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(
+                        Some(item.btn_hwnd),
+                        None,
+                        true,
+                    );
                 }
             }
         }
@@ -332,8 +335,11 @@ pub fn set_unselected_tint_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
             #[cfg(target_os = "windows")]
             for item in &entry.items {
                 unsafe {
-                    let _ =
-                        windows::Win32::Graphics::Gdi::InvalidateRect(Some(item.btn_hwnd), None, true);
+                    let _ = windows::Win32::Graphics::Gdi::InvalidateRect(
+                        Some(item.btn_hwnd),
+                        None,
+                        true,
+                    );
                 }
             }
         }
