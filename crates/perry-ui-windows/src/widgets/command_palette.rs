@@ -131,7 +131,7 @@ fn refresh_filter() {
         POPUP.with(|p| {
             if let Some((_, _, list_hwnd)) = *p.borrow() {
                 unsafe {
-                    SendMessageW(list_hwnd, LB_RESETCONTENT, WPARAM(0), LPARAM(0));
+                    SendMessageW(list_hwnd, LB_RESETCONTENT, Some(WPARAM(0)), Some(LPARAM(0)));
                     COMMANDS.with(|c| {
                         let cmds = c.borrow();
                         for &i in &filtered {
@@ -145,14 +145,14 @@ fn refresh_filter() {
                                 SendMessageW(
                                     list_hwnd,
                                     LB_ADDSTRING,
-                                    WPARAM(0),
-                                    LPARAM(wide.as_ptr() as isize),
+                                    Some(WPARAM(0)),
+                                    Some(LPARAM(wide.as_ptr() as isize)),
                                 );
                             }
                         }
                     });
                     if !filtered.is_empty() {
-                        SendMessageW(list_hwnd, LB_SETCURSEL, WPARAM(0), LPARAM(0));
+                        SendMessageW(list_hwnd, LB_SETCURSEL, Some(WPARAM(0)), Some(LPARAM(0)));
                     }
                 }
             }
@@ -172,7 +172,7 @@ pub fn show() {
                 if let Some((popup, edit, _)) = *p.borrow() {
                     unsafe {
                         let _ = ShowWindow(popup, SW_SHOW);
-                        let _ = SetFocus(edit);
+                        let _ = SetFocus(Some(edit));
                     }
                 }
             });
@@ -214,7 +214,7 @@ pub fn show() {
                 h,
                 None,
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -230,9 +230,9 @@ pub fn show() {
                 10,
                 w - 20,
                 28,
-                popup,
-                HMENU(1 as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(popup),
+                Some(HMENU(1 as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -248,9 +248,9 @@ pub fn show() {
                 48,
                 w - 20,
                 h - 60,
-                popup,
-                HMENU(2 as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(popup),
+                Some(HMENU(2 as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -260,7 +260,7 @@ pub fn show() {
             refresh_filter();
 
             let _ = ShowWindow(popup, SW_SHOW);
-            let _ = SetFocus(edit);
+            let _ = SetFocus(Some(edit));
         }
     }
 }
@@ -282,7 +282,7 @@ pub fn hide() {
 fn run_selected() {
     let idx_in_listbox = POPUP.with(|p| {
         p.borrow().map(|(_, _, list)| unsafe {
-            SendMessageW(list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i64
+            SendMessageW(list, LB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i64
         })
     });
     let Some(idx) = idx_in_listbox else { return };

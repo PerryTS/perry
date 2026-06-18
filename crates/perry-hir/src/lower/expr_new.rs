@@ -17,6 +17,7 @@ use crate::ir::Expr;
 use crate::lower_decl::lower_class_from_ast;
 use crate::lower_types::extract_ts_type_with_ctx;
 
+use super::expr_new_builtins::{global_member_constructor_name, module_constructor_name};
 use super::{lower_expr, LoweringContext};
 
 /// Lower `new TextDecoder(label?, { fatal?, ignoreBOM? })` into
@@ -214,61 +215,6 @@ fn is_url_encoding_constructor_name(name: &str) -> bool {
     )
 }
 
-fn module_constructor_name(module_name: &str, method_name: Option<&str>) -> Option<&'static str> {
-    match (module_name, method_name) {
-        ("events", Some("EventEmitterAsyncResource")) => Some("EventEmitterAsyncResource"),
-        ("url", Some("URL")) => Some("URL"),
-        ("url", Some("URLSearchParams")) => Some("URLSearchParams"),
-        ("url", Some("URLPattern")) => Some("URLPattern"),
-        ("util", Some("TextEncoder")) => Some("TextEncoder"),
-        ("util", Some("TextDecoder")) => Some("TextDecoder"),
-        ("stream/web", Some("TextEncoderStream"))
-        | ("node:stream/web", Some("TextEncoderStream")) => Some("TextEncoderStream"),
-        ("stream/web", Some("TextDecoderStream"))
-        | ("node:stream/web", Some("TextDecoderStream")) => Some("TextDecoderStream"),
-        ("stream/web", Some("CompressionStream"))
-        | ("node:stream/web", Some("CompressionStream")) => Some("CompressionStream"),
-        ("stream/web", Some("DecompressionStream"))
-        | ("node:stream/web", Some("DecompressionStream")) => Some("DecompressionStream"),
-        _ => None,
-    }
-}
-
-fn global_member_constructor_name(
-    ctx: &LoweringContext,
-    obj_name: &str,
-    prop_name: &str,
-) -> Option<&'static str> {
-    if obj_name == "globalThis" && ctx.lookup_local("globalThis").is_none() {
-        return match prop_name {
-            "URL" => Some("URL"),
-            "URLSearchParams" => Some("URLSearchParams"),
-            "URLPattern" => Some("URLPattern"),
-            "TextEncoder" => Some("TextEncoder"),
-            "TextDecoder" => Some("TextDecoder"),
-            "MessageChannel" => Some("MessageChannel"),
-            "BroadcastChannel" => Some("BroadcastChannel"),
-            "TextEncoderStream" => Some("TextEncoderStream"),
-            "TextDecoderStream" => Some("TextDecoderStream"),
-            "CompressionStream" => Some("CompressionStream"),
-            "DecompressionStream" => Some("DecompressionStream"),
-            _ => None,
-        };
-    }
-
-    if let Some(module_name) = ctx.lookup_builtin_module_alias(obj_name) {
-        if let Some(name) = module_constructor_name(module_name, Some(prop_name)) {
-            return Some(name);
-        }
-    }
-    if let Some((module_name, None)) = ctx.lookup_native_module(obj_name) {
-        if let Some(name) = module_constructor_name(module_name, Some(prop_name)) {
-            return Some(name);
-        }
-    }
-    None
-}
-
 fn is_worker_messaging_constructor_name(name: &str) -> bool {
     matches!(name, "MessageChannel" | "BroadcastChannel")
 }
@@ -332,6 +278,12 @@ fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
+    // #5253: source byte offset of this `new` expression, captured once and
+    // threaded into every `New`/`NewDynamic`/`NewDynamicSpread` we build below.
+    // Under `--debug-symbols`, codegen resolves it to a `file:line` for the
+    // runtime "X is not a constructor" TypeError. Mirrors `Call.byte_offset`
+    // (#5247). `_byte_offset` because not every arm below builds a New variant.
+    let new_byte_offset = new_expr.span.lo.0;
 
     // `new <callee>(...args)` — spread arguments. Every per-constructor branch
     // below collapses spreads into a plain array argument (they map over
@@ -352,6 +304,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             return Ok(Expr::NewDynamicSpread {
                 callee: Box::new(callee),
                 args,
+                byte_offset: new_byte_offset,
             });
         }
     }
@@ -407,6 +360,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: "EventEmitter".to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
                 });
             }
         }
@@ -445,6 +399,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         class_name: class_name.to_string(),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         type_args: Vec::new(),
+                        byte_offset: new_byte_offset,
                     });
                 }
                 if let Some(expr) =
@@ -462,6 +417,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -553,6 +509,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         property: prop_ident.sym.to_string(),
                     }),
                     args,
+                    byte_offset: new_byte_offset,
                 });
             }
             let is_url_module =
@@ -789,6 +746,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
                 });
             }
             if let Some((module_name, _)) = ctx.lookup_native_module(module_alias) {
@@ -814,6 +772,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         class_name: class_name.to_string(),
                         args,
                         type_args: Vec::new(),
+                        byte_offset: new_byte_offset,
                     });
                 }
             }
@@ -993,6 +952,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: class_name.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -1031,6 +991,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         property: method_name,
                     }),
                     args,
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -1058,6 +1019,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         property: export,
                     }),
                     args,
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -1095,6 +1057,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         property: "GCProfiler".to_string(),
                     }),
                     args,
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -1803,6 +1766,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                             class_name: resolved,
                             args,
                             type_args,
+                            byte_offset: new_byte_offset,
                         });
                     }
                 }
@@ -1828,6 +1792,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::LocalGet(local_id)),
                         args,
+                        byte_offset: new_byte_offset,
                     });
                 }
                 // ES5 function constructors: `function Foo(){ this.x = … }`
@@ -1847,6 +1812,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::FuncRef(func_id)),
                         args,
+                        byte_offset: new_byte_offset,
                     });
                 }
                 // #4698: `new <imported-binding>()` where the binding is a
@@ -1894,6 +1860,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 class_name,
                 args,
                 type_args,
+                byte_offset: new_byte_offset,
             })
         }
         // Non-identifier callee (e.g., new (condition ? A : B)() or new someVar())
@@ -1935,6 +1902,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: synthetic_name,
                     args,
                     type_args,
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -1974,6 +1942,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         class_name: property.clone(),
                         args,
                         type_args: Vec::new(),
+                        byte_offset: new_byte_offset,
                     });
                 }
                 if matches!(object.as_ref(), Expr::NativeModuleRef(module)
@@ -1985,10 +1954,15 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         class_name: property.clone(),
                         args,
                         type_args: Vec::new(),
+                        byte_offset: new_byte_offset,
                     });
                 }
             }
-            Ok(Expr::NewDynamic { callee, args })
+            Ok(Expr::NewDynamic {
+                callee,
+                args,
+                byte_offset: new_byte_offset,
+            })
         }
     }
 }

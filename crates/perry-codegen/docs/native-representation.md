@@ -14,8 +14,8 @@ generic JavaScript `double`/NaN-box value.
    the selected `NativeRep`, the LLVM type, and the SSA value.
 3. A `NativeRep` describes the compiler contract, not an optimization by
    itself. Examples are `I32`, `U32`, `U64`, `USize`, `F32`, `F64`, `U8`,
-   `BufferLen`, `NativeHandle`, `PromiseBoundary`, `JsValue`, and
-   `BufferView`.
+   `BufferLen`, `NativeHandle`, `PromiseBoundary`, `JsValueBits`, `JsValue`,
+   and `BufferView`.
 4. `materialize_js_value` is the boundary where a native value is converted back
    to the generic JS ABI representation. Each conversion records a
    `MaterializationReason` and, for native ABI crossings, a
@@ -61,7 +61,8 @@ added.
 
 ## Native ABI Contract
 
-Schema version 5 records explicit native ABI transitions. Native values may stay
+Schema version 12 records explicit native ABI transitions and internal boxed
+bits counts. Native values may stay
 region-local with their LLVM ABI type:
 
 - `I32`, `U32`, and `BufferLen`: LLVM `i32`; `U32` and `BufferLen` materialize
@@ -72,13 +73,18 @@ region-local with their LLVM ABI type:
 - `F32`: LLVM `float`; JS-number materialization is explicit `fpext` to
   `double`. Raw `f32` records are not JS-visible.
 - `F64` and `JsValue`: LLVM `double`.
+- `JsValueBits`: LLVM `i64`, used only as an internal NaN-box bit-pattern
+  representation. Public ABI records still use `JsValue`/`double`.
 - `BufferView`: LLVM `ptr`, scoped to the native buffer proof region.
 
 `native_abi_transition` records use `{ from_native_rep, to_native_rep, op,
 reason, lossy }`. Valid ops are `none`, `signed_int_to_float`,
-`unsigned_int_to_float`, `float_extend`, `pointer_box`, and `promise_box`.
-The legacy `scalar_conversion` field is still written for compatibility, but
-new checks should read `native_abi_transition`.
+`unsigned_int_to_float`, `float_extend`, `js_value_to_bits`,
+`bits_to_js_value`, `pointer_box`, `native_handle_box`, and `promise_box`.
+The `js_value_to_bits` and `bits_to_js_value` ops are plain bitcasts that mark
+the boundary between the current `double` ABI and the optimizer-local boxed
+bits representation. The legacy `scalar_conversion` field is still written for
+compatibility, but new checks should read `native_abi_transition`.
 
 ## Verification Mode
 
@@ -97,6 +103,8 @@ The verifier rejects records that claim:
 - `explicit_assume` as a bounds proof.
 - LLVM type mismatches for the claimed native rep.
 - JS-visible or materialized raw `F32` records.
+- `JsValueBits` used as an external ABI descriptor or dynamic fallback record.
+- Materialized `JsValueBits` records without a `js_value_to_bits` transition.
 - Escaping raw `NativeHandle` or `PromiseBoundary` records.
 - Native ABI transitions without a matching materialization reason.
 - Invalid transition ops or signedness, including implicit unsigned/signed

@@ -400,12 +400,53 @@ fn collect_module_one(
     // left untouched.
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
+    // #5247: when `--debug-symbols` is on, capture where the original module
+    // body lands inside the wrapped output so source-location resolution can
+    // map a wrapped-coordinate byte offset back to an original-source line.
+    // `None` unless we both wrapped this module AND debug symbols are on, so
+    // the default build does no extra work.
+    let mut cjs_wrap_body_prefix_lines: Option<u32> = None;
     let source = if was_cjs_wrapped {
-        super::cjs_wrap::wrap_commonjs_for_target(&raw_source, &canonical, target)
+        if ctx.debug_symbols {
+            let (wrapped, body_off) =
+                super::cjs_wrap::wrap_commonjs_with_body_offset(&raw_source, &canonical, target);
+            // Newlines before the original body in the wrapped output = the
+            // wrapper prefix line count. Recorded only when the body was
+            // located; otherwise we skip the skew correction (graceful
+            // degrade to the uncorrected line rather than a wrong one).
+            cjs_wrap_body_prefix_lines = body_off.map(|off| {
+                wrapped.as_bytes()[..off]
+                    .iter()
+                    .filter(|&&b| b == b'\n')
+                    .count() as u32
+            });
+            wrapped
+        } else {
+            super::cjs_wrap::wrap_commonjs_for_target(&raw_source, &canonical, target)
+        }
     } else {
         raw_source
     };
+    // #5247: the create-require transform may prepend `import * as` lines,
+    // shifting BOTH the prefix and the body down by the same number of lines.
+    // Capture the wrapped line count, run the transform, then add the line
+    // delta to the prefix so the wrapped-line → original-line subtraction is
+    // computed against the FINAL parsed source.
+    let lines_before_transform = source.bytes().filter(|&b| b == b'\n').count();
     let source = transform_create_require_literal_requires(&source, &ctx.compile_packages);
+    if was_cjs_wrapped && ctx.debug_symbols {
+        if let Some(prefix_lines) = cjs_wrap_body_prefix_lines {
+            let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
+            let added_lines = lines_after_transform.saturating_sub(lines_before_transform) as u32;
+            ctx.cjs_wrap_debug_sources.insert(
+                canonical.clone(),
+                super::types::CjsWrapDebugSource {
+                    wrapped_source: source.clone(),
+                    prefix_line_count: prefix_lines + added_lines,
+                },
+            );
+        }
+    }
 
     // Note (#686): we no longer hash source bytes here. The object cache key
     // is now keyed on a post-transform HIR fingerprint computed inside the
@@ -505,6 +546,11 @@ fn collect_module_one(
     } else {
         Some(&ctx.cross_module_class_field_types)
     };
+    let imported_class_accessors = if ctx.cross_module_class_accessors.is_empty() {
+        None
+    } else {
+        Some(&ctx.cross_module_class_accessors)
+    };
     // Issue #444: this module is the user-supplied entry iff its canonical
     // path matches the one stashed by `compile.rs::run_with_parse_cache`
     // before the first `collect_modules` invocation. Bundle-extension
@@ -594,6 +640,7 @@ fn collect_module_one(
         *next_class_id,
         resolved_types,
         imported_class_fields,
+        imported_class_accessors,
         is_entry_module,
         is_external_module,
     );
@@ -685,9 +732,11 @@ fn collect_module_one(
             paths,
             arg,
             byte_offset,
+            synchronous,
             ..
         } = expr
         {
+            let synchronous = *synchronous;
             if !paths.is_empty() {
                 // Already resolved (e.g. a second pass on the same module).
                 return;
@@ -756,6 +805,18 @@ fn collect_module_one(
                             dynamic_path_sets.push(DynImportOutcome::Resolved(matches));
                             return;
                         }
+                    }
+                    // #5389 Tier 2: a synchronous `require(expr)` whose specifier
+                    // doesn't const-fold (and didn't glob-match above) falls back
+                    // to the Tier-1 ambient createRequire-backed `require` at
+                    // codegen — builtins resolve by string, unknown packages throw
+                    // the descriptive ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE. Leave
+                    // `paths` empty (no `deferred_error`); the empty-paths +
+                    // synchronous codegen arm emits the ambient require. This
+                    // never participates in the strict-dynamic-import hard error.
+                    if synchronous {
+                        dynamic_path_sets.push(DynImportOutcome::Resolved(Vec::new()));
+                        return;
                     }
                     // #5230: a genuinely runtime-computed specifier. This is the
                     // analog of #5206's runtime-unknown eval bucket. Strict mode

@@ -79,8 +79,8 @@ pub(crate) fn lower_switch(
     // `switch (type.$$typeof) { case CTX: t = 10; break a; }`, where the
     // case body's `break a` was landing in the invalid-element tail and
     // every Context.Provider became fiber tag 29 → children dropped).
-    let consumed_label = ctx.pending_label.take();
-    if let Some(ref lbl) = consumed_label {
+    let consumed_labels = std::mem::take(&mut ctx.pending_labels);
+    for lbl in &consumed_labels {
         ctx.label_targets.insert(
             lbl.clone(),
             (exit_label.clone(), exit_label.clone(), ctx.try_depth),

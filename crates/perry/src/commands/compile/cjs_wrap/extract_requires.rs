@@ -180,6 +180,72 @@ pub fn identifier_is_reassigned(source: &str, name: &str) -> bool {
     false
 }
 
+/// Does the CJS source declare a binding named `name` via `var`/`let`/`const`/
+/// `function`/`class` anywhere in the body? Used by the named-export emission to
+/// decide whether `name` is a real module binding (so `export const name =
+/// _cjs.name;` is safe) or merely an object-literal export KEY whose value is a
+/// global/expression — in which case emitting a module-scope `const name` would
+/// SHADOW a global builtin that the body references freely.
+///
+/// Concretely: bluebird's `errors.js` ends with `module.exports = { Error:
+/// Error, TypeError: _TypeError, ... }`. The keys `Error`/`TypeError`/
+/// `RangeError` are JS global builtins; the body has no `function Error` /
+/// `var Error` etc. Emitting `export const Error = _cjs.Error;` introduced a
+/// module-scope `Error` that shadowed the global for the body's
+/// `inherits(SubError, Error)` (an IIFE-local free reference) — `Error` read
+/// `undefined` and `Parent.prototype` threw `Cannot read properties of
+/// undefined (reading 'prototype')`. This helper lets the caller skip the
+/// shadowing `const` for such names.
+///
+/// Heuristic, regex-crate-friendly (no lookaround): whole-word scan for `name`
+/// preceded (modulo whitespace) by a `var`/`let`/`const`/`function`/`class`
+/// keyword. Member-access positions (`x.name`) and `name`-as-a-substring are
+/// excluded. A false positive (treating a non-declared name as declared) only
+/// reverts to the prior `export const` behavior; a false negative (treating a
+/// declared name as undeclared) only forfeits a named export's module-scope
+/// binding while still surfacing the value via `_cjs.name`.
+pub fn identifier_is_declared_binding(source: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let bytes = source.as_bytes();
+    let nlen = name.len();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$';
+    let mut from = 0usize;
+    while let Some(rel) = source[from..].find(name) {
+        let start = from + rel;
+        let end = start + nlen;
+        from = start + 1;
+        // Whole-word boundaries.
+        if start > 0 && is_ident(bytes[start - 1]) {
+            continue;
+        }
+        if end < bytes.len() && is_ident(bytes[end]) {
+            continue;
+        }
+        // Preceding non-space char: skip member access (`.name`).
+        let mut p = start;
+        while p > 0 && (bytes[p - 1] as char).is_whitespace() {
+            p -= 1;
+        }
+        if p > 0 && bytes[p - 1] == b'.' {
+            continue;
+        }
+        // Preceding identifier token must be a binding keyword.
+        let mut w = p;
+        while w > 0 && is_ident(bytes[w - 1]) {
+            w -= 1;
+        }
+        if matches!(
+            &source[w..p],
+            "var" | "let" | "const" | "function" | "class"
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Next.js lazy-require classification (single forward pass). Returns the set
 /// of specifiers whose EVERY `require('<spec>')` call site is lexically inside
 /// a FUNCTION body — never at module top level, and never inside a top-level

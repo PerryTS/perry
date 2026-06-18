@@ -6445,6 +6445,28 @@ pub(crate) unsafe fn get_native_module_constant(
         return cjs_default_export_value("process");
     }
 
+    // Node's `require('stream')` IS the legacy `Stream` constructor (a function
+    // that also carries `.Readable`/`.Writable`/… statics), so its `.prototype`
+    // is the EventEmitter-derived `Stream.prototype`. Perry models the module as
+    // a namespace OBJECT, so `require('stream').prototype` was `undefined`.
+    // readable-stream's `Readable.prototype.on = function (ev, fn) { var res =
+    // Stream.prototype.on.call(this, ev, fn); … }` (where `Stream =
+    // require('stream')`) then threw "Function.prototype.call was called on a
+    // value that is not a function". Resolve `require('stream').prototype` to the
+    // same legacy `Stream.prototype` the `.Stream` export carries (minted +
+    // cached by `bound_native_callable_export_value("stream", "Stream")`), which
+    // now exposes the EventEmitter prototype methods.
+    if module_name == "stream" && property == "prototype" {
+        let stream_ctor = bound_native_callable_export_value("stream", "Stream");
+        let ctor_ptr = (stream_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
+        if ctor_ptr != 0 {
+            let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+            if !JSValue::from_bits(proto.to_bits()).is_undefined() {
+                return Some(proto);
+            }
+        }
+    }
+
     if property == "default" && !is_cjs_default_object && module_name != "process" {
         if let Some(value) = cjs_default_export_value(module_name) {
             return Some(value);

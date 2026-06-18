@@ -611,6 +611,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let prop_idx = ctx.strings.intern(property);
                 let prop_bytes_global = format!("@{}", ctx.strings.entry(prop_idx).bytes_global);
                 let prop_len_str = property.len().to_string();
+                // The value read of a native-module callable export (`const f =
+                // util.inherits`) mints a BOUND_METHOD closure that, when invoked
+                // indirectly, dispatches through the per-module `NM_DISPATCH_REGISTRY`
+                // populated by `js_nm_install_<module>()`. The *direct* call form
+                // (`util.inherits(a, b)`) is statically lowered to the runtime extern
+                // and never touches the registry, so a module reached ONLY via this
+                // value-read path would leave the registry empty and the indirect call
+                // would resolve to `undefined` (winston/readable-stream's
+                // `require('inherits')` → `util.inherits` value → `inherits(Sub, Base)`
+                // silently skipped, breaking the ES5 super-chain). Emit the install
+                // here so the value-read path's later dispatch finds the module fn.
+                if let Some(install_sym) = crate::nm_install::nm_install_symbol(module_name) {
+                    ctx.block().call_void(install_sym, &[]);
+                }
                 return Ok(ctx.block().call(
                     DOUBLE,
                     "js_native_module_property_by_name",
@@ -674,7 +688,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .cloned()
                 {
                     let value = ctx.block().load(DOUBLE, &slot);
-                    let lowered = LoweredValue {
+                    let declared_raw_f64 = crate::type_analysis::scalar_replaced_field_is_raw_f64(
+                        ctx,
+                        object.as_ref(),
+                        property,
+                    );
+                    let raw_f64_field =
+                        crate::type_analysis::scalar_replaced_field_raw_f64_store_state(
+                            ctx,
+                            Some(*id),
+                            property,
+                            declared_raw_f64,
+                        );
+                    let lowered_js = LoweredValue {
                         semantic: SemanticKind::JsValue,
                         rep: NativeRep::JsValue,
                         llvm_ty: DOUBLE,
@@ -684,15 +710,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "ScalarObjectFieldGet",
                         Some(*id),
                         "scalar_object_field_load",
-                        &lowered,
+                        &lowered_js,
                         None,
                         None,
                         None,
                         None,
                         false,
                         false,
-                        vec![format!("field={}", property)],
+                        vec![
+                            format!("field={}", property),
+                            format!("raw_f64_field={}", raw_f64_field as u8),
+                        ],
                     );
+                    if raw_f64_field {
+                        let lowered_f64 = LoweredValue::f64(value.clone());
+                        ctx.record_lowered_value_with_access_mode(
+                            "ScalarObjectFieldGet",
+                            Some(*id),
+                            "scalar_object_field_load.raw_f64",
+                            &lowered_f64,
+                            None,
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            vec![format!("field={}", property), "raw_f64_field=1".to_string()],
+                        );
+                    }
                     return Ok(value);
                 }
                 // Issue #613: when the local is scalar-replaced but the
@@ -725,14 +770,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Also handle `this` during scalar-replaced ctor inlining
             if let Expr::This = object.as_ref() {
-                if let Some(slot) = ctx.scalar_ctor_target.last().and_then(|tid| {
-                    ctx.scalar_replaced
-                        .get(tid)
-                        .map(|fs| fs.get(property.as_str()).cloned())
-                }) {
+                if let Some(target_id) = ctx.scalar_ctor_target.last().copied() {
+                    let slot = ctx
+                        .scalar_replaced
+                        .get(&target_id)
+                        .and_then(|fs| fs.get(property.as_str()).cloned());
                     if let Some(slot) = slot {
                         let value = ctx.block().load(DOUBLE, &slot);
-                        let lowered = LoweredValue {
+                        let declared_raw_f64 =
+                            crate::type_analysis::scalar_replaced_field_is_raw_f64(
+                                ctx,
+                                object.as_ref(),
+                                property,
+                            );
+                        let raw_f64_field =
+                            crate::type_analysis::scalar_replaced_field_raw_f64_store_state(
+                                ctx,
+                                Some(target_id),
+                                property,
+                                declared_raw_f64,
+                            );
+                        let lowered_js = LoweredValue {
                             semantic: SemanticKind::JsValue,
                             rep: NativeRep::JsValue,
                             llvm_ty: DOUBLE,
@@ -740,17 +798,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         };
                         ctx.record_lowered_value_with_access_mode(
                             "ScalarThisFieldGet",
-                            None,
+                            Some(target_id),
                             "scalar_object_field_load",
-                            &lowered,
+                            &lowered_js,
                             None,
                             None,
                             None,
                             None,
                             false,
                             false,
-                            vec![format!("field={}", property)],
+                            vec![
+                                format!("field={}", property),
+                                format!("raw_f64_field={}", raw_f64_field as u8),
+                            ],
                         );
+                        if raw_f64_field {
+                            let lowered_f64 = LoweredValue::f64(value.clone());
+                            ctx.record_lowered_value_with_access_mode(
+                                "ScalarThisFieldGet",
+                                Some(target_id),
+                                "scalar_object_field_load.raw_f64",
+                                &lowered_f64,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                false,
+                                vec![format!("field={}", property), "raw_f64_field=1".to_string()],
+                            );
+                        }
                         return Ok(value);
                     }
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
@@ -777,8 +854,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // for the only realistic alternative caller. The full fix
             // would side-channel the original global name through
             // lowering; deferred until a second-callable-builtin
-            // arrives. Other property shapes still fall through to
-            // `0.0`.
+            // arrives. Other unrecognized property shapes fall through
+            // to the `undefined` sentinel (a spec-correct property miss).
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
                 // `process.env` read as a VALUE (not `process.env.X`) must
                 // materialize the live env object, not the `undefined` sentinel.
@@ -1159,7 +1236,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(PTR, &key_bytes_global), (I64, &key_len)],
                     ));
                 }
-                return Ok(double_literal(0.0));
+                // Unknown member on a builtin global namespace object
+                // (`Reflect.enumerate`, `Math.bogus`, `JSON.bogus`, …): JS
+                // semantics is a plain `undefined` property miss, not `0`. The
+                // HIR collapsed the receiver to the `GlobalGet(0)` sentinel so we
+                // can't tell which namespace it was, but an unrecognized member
+                // read is `undefined` for every one of them. (The legacy `0.0`
+                // here made `typeof Math.bogus === "number"` and broke
+                // feature-detection like `Reflect.enumerate === undefined`.)
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             // Namespace-import member access: `import * as O from './oids';
             // O.OID_INT2`. The HIR lowers `O` itself to `ExternFuncRef { name:
@@ -1579,6 +1664,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
+                        // #5391 path 2: oversized modules full-outline the entire
+                        // class-field-GET diamond (guard + fast load + fallback +
+                        // phi) to a single `js_class_field_get_ic(...)` call that
+                        // returns the field value. This shrinks large minified
+                        // user functions enough for clang -O0 to compile them
+                        // (the per-function compile time is superlinear in size).
+                        // Mirrors the field-SET full-outline (#5334 lever B).
+                        if crate::codegen::full_outline_ic_enabled() {
+                            let (key_raw, expected_keys) = {
+                                let blk = ctx.block();
+                                let key_box = blk.load(DOUBLE, &key_handle_global);
+                                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                let expected_keys =
+                                    blk.load(I64, &format!("@{}", keys_global_name));
+                                (key_raw, expected_keys)
+                            };
+                            let val = ctx.block().call(
+                                DOUBLE,
+                                "js_class_field_get_ic",
+                                &[
+                                    (I64, &site_id),
+                                    (DOUBLE, &recv_box),
+                                    (I32, &expected_class_id_str),
+                                    (I64, &expected_keys),
+                                    (I64, &key_raw),
+                                    (I32, &field_idx_str),
+                                    (I32, requires_raw_f64_str),
+                                ],
+                            );
+                            return Ok(val);
+                        }
                         // #5093: build the guard operands once, up front, so both
                         // the inline shape pre-check and the guard-call fallback
                         // can reference them.
@@ -1682,11 +1799,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.current_block = fallback_idx;
                         let blk = ctx.block();
                         blk.call_void("js_typed_feedback_record_fallback_call", &[(I64, &site_id)]);
-                        let val_fallback = blk.call(
+                        let val_fallback_js = blk.call(
                             DOUBLE,
                             "js_object_get_field_by_name_f64",
                             &[(I64, &obj_bits), (I64, &key_raw)],
                         );
+                        let val_fallback = val_fallback_js.clone();
                         let fallback_end_label = blk.label.clone();
                         blk.br(&merge_label);
                         if requires_raw_f64 {
@@ -1694,7 +1812,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 semantic: SemanticKind::JsValue,
                                 rep: NativeRep::JsValue,
                                 llvm_ty: DOUBLE,
-                                value: val_fallback.clone(),
+                                value: val_fallback_js.clone(),
                             };
                             ctx.record_lowered_value_with_access_mode_and_facts(
                                 "ClassFieldGet",

@@ -61,9 +61,9 @@ pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
                 0,
                 100,
                 24,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -111,7 +111,8 @@ pub fn handle_click(handle: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             let checked = unsafe {
-                SendMessageW(hwnd, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == BST_CHECKED.0 as isize
+                SendMessageW(hwnd, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0
+                    == BST_CHECKED.0 as isize
             };
             let value = if checked { 1.0 } else { 0.0 };
 
@@ -138,7 +139,12 @@ pub fn set_state(handle: i64, on: i32) {
         if let Some(hwnd) = super::get_hwnd(handle) {
             let check = if on != 0 { BST_CHECKED } else { BST_UNCHECKED };
             unsafe {
-                SendMessageW(hwnd, BM_SETCHECK, WPARAM(check.0 as usize), LPARAM(0));
+                SendMessageW(
+                    hwnd,
+                    BM_SETCHECK,
+                    Some(WPARAM(check.0 as usize)),
+                    Some(LPARAM(0)),
+                );
             }
         }
     }

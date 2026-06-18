@@ -80,6 +80,31 @@ api.on(event: string, handler: (data: unknown) => void): void  // Listen for eve
 api.emit(event: string, data: unknown): void                    // Emit to other plugins
 ```
 
+### Unregistering (Selective Cleanup)
+
+The host purges all of a plugin's registrations when the plugin is unloaded,
+so explicit unregister calls are only needed for **long-lived plugins that
+re-configure themselves at runtime**, or for stopping services / event
+listeners cleanly before re-registering.
+
+```typescript,no-test
+api.unregisterHook(name: string, handler: (ctx: unknown) => unknown): void
+api.unregisterTool(name: string): void
+api.unregisterService(name: string): void   // invokes the service's stopFn first
+api.unregisterRoute(path: string): void
+api.off(event: string, handler: (data: unknown) => void): void
+```
+
+`unregisterHook` / `off` do a **closure-identity compare**: pass the exact
+same closure reference that was registered. `unregisterService` invokes the
+service's `stopFn` before removing the entry, matching the lifecycle
+contract of `registerService`. All five calls are no-ops if the caller did
+not register the resource or no entry matches.
+
+```typescript
+{{#include ../../examples/plugins/plugin_snippets.ts:deactivate-cleanup}}
+```
+
 ## Next Steps
 
 - [Hooks & Events](hooks-and-events.md) — Hook modes, event bus

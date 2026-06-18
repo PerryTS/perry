@@ -905,7 +905,7 @@ pub fn fix_native_instance_expr(
                 fix_native_instance_expr(arg, native_instances, local_id_instances);
             }
         }
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             fix_native_instance_expr(callee, native_instances, local_id_instances);
             for arg in args {
                 fix_native_instance_expr(arg, native_instances, local_id_instances);

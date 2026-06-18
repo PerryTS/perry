@@ -109,6 +109,59 @@ function registerWorker(api: PluginApi) {
 }
 // ANCHOR_END: register-service
 
+// ANCHOR: unregister-hooks
+// Selective cleanup for long-lived plugins that re-register at runtime.
+// Pass the exact same closure reference that was registered — the runtime
+// does a closure-identity compare.
+function unregisterHook(api: PluginApi, handler: (data: any) => any) {
+    api.unregisterHook("onRequest", handler)
+}
+// ANCHOR_END: unregister-hooks
+
+// ANCHOR: unregister-tools-services-routes
+function unregisterEverything(api: PluginApi) {
+    api.unregisterTool("formatCode")
+    api.unregisterService("worker")   // stopFn is invoked before removal
+    api.unregisterRoute("/api/foo")
+}
+// ANCHOR_END: unregister-tools-services-routes
+
+// ANCHOR: off-event
+function unsubscribe(api: PluginApi, handler: (data: any) => void) {
+    api.off("dataUpdated", handler)
+}
+// ANCHOR_END: off-event
+
+// ANCHOR: deactivate-cleanup
+// Recommended pattern: keep a module-scoped reference to handlers so
+// `deactivate()` can selectively unregister them. The host also purges
+// all of a plugin's registrations on unload, but explicit unregister
+// calls are the right way to stop services / event handlers cleanly
+// when a plugin re-configures itself at runtime. Shown here as a
+// regular function (not exported) so it doesn't collide with the
+// `activate` / `deactivate` exports from `counter-plugin` above.
+const _onDataUpdated = (data: any) => {
+    console.log(`${data.source} updated ${data.records} records`)
+}
+
+function _stopWorker() {
+    console.log("worker stopped")
+}
+
+function _startWorker() {
+    console.log("worker started")
+}
+
+function cleanupExample(api: PluginApi) {
+    api.on("dataUpdated", _onDataUpdated)
+    api.registerService("worker", _startWorker, _stopWorker)
+
+    // Later, in your deactivate() export:
+    api.off("dataUpdated", _onDataUpdated)
+    api.unregisterService("worker")   // invokes _stopWorker before removal
+}
+// ANCHOR_END: deactivate-cleanup
+
 // Reference every helper so the linker doesn't dead-strip the function bodies.
 console.log(typeof activate)
 console.log(typeof deactivate)
@@ -121,3 +174,7 @@ console.log(typeof listenForEvent)
 console.log(typeof registerFormatter)
 console.log(typeof readConfig)
 console.log(typeof registerWorker)
+console.log(typeof unregisterHook)
+console.log(typeof unregisterEverything)
+console.log(typeof unsubscribe)
+console.log(typeof cleanupExample)

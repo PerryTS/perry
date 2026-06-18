@@ -359,7 +359,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             .iter()
             .any(|(_, e)| expr_uses_this_as_value(e, fields)),
         Expr::New { args, .. } => args.iter().any(|a| expr_uses_this_as_value(a, fields)),
-        Expr::NewDynamic { callee, args } => {
+        Expr::NewDynamic { callee, args, .. } => {
             expr_uses_this_as_value(callee, fields)
                 || args.iter().any(|a| expr_uses_this_as_value(a, fields))
         }

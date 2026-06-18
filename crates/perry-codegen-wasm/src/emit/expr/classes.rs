@@ -265,7 +265,7 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 // If no compiled constructor, just leave the instance handle on stack
             }
-            Expr::NewDynamic { callee, args } => {
+            Expr::NewDynamic { callee, args, .. } => {
                 // Dynamic new — approximate with regular call via mem_call
                 self.emit_frame_begin(func, (args.len() + 1) as u32);
                 self.emit_store_arg(func, 0, callee);

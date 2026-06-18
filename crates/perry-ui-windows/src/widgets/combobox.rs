@@ -86,9 +86,9 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
                 0,
                 220,
                 200,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             );
             let Ok(hwnd) = hwnd else {
@@ -126,8 +126,8 @@ pub fn add_item(handle: i64, value_ptr: *const u8) {
             SendMessageW(
                 hwnd,
                 CB_ADDSTRING,
-                WPARAM(0),
-                LPARAM(wide.as_ptr() as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(wide.as_ptr() as isize)),
             );
         }
     }
@@ -213,7 +213,7 @@ pub fn handle_dropdown_pick(handle: i64) {
         return;
     };
     unsafe {
-        let idx = SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
+        let idx = SendMessageW(hwnd, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32;
         if idx < 0 {
             return;
         }
@@ -221,8 +221,8 @@ pub fn handle_dropdown_pick(handle: i64) {
         SendMessageW(
             hwnd,
             CB_GETLBTEXT,
-            WPARAM(idx as usize),
-            LPARAM(buf.as_mut_ptr() as isize),
+            Some(WPARAM(idx as usize)),
+            Some(LPARAM(buf.as_mut_ptr() as isize)),
         );
         // Find null terminator + write back into edit field.
         let nul = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());

@@ -88,7 +88,36 @@ fi
 
 # Check for node
 HAS_NODE=0
-command -v node &>/dev/null && HAS_NODE=1
+NODE_CMD=(node)
+
+detect_node_ts_runner() {
+  command -v node &>/dev/null || return 1
+
+  local probe
+  probe=$(mktemp "${TMPDIR:-/tmp}/perry-node-ts-probe.XXXXXX.ts")
+  printf 'const x: number = 1;\nconsole.log("node_ts_probe:" + x);\n' >"$probe"
+
+  if node "$probe" >/dev/null 2>&1; then
+    NODE_CMD=(node)
+    rm -f "$probe"
+    return 0
+  fi
+
+  if node --experimental-strip-types "$probe" >/dev/null 2>&1; then
+    NODE_CMD=(node --experimental-strip-types)
+    rm -f "$probe"
+    return 0
+  fi
+
+  rm -f "$probe"
+  return 1
+}
+
+if detect_node_ts_runner; then
+  HAS_NODE=1
+else
+  echo "Node.js is unavailable for .ts benchmark inputs; Node columns and correctness checks will be skipped." >&2
+fi
 
 echo -e "${BOLD}${CYAN}Perry Performance Comparison (speed + RAM)${NC}"
 echo ""
@@ -100,32 +129,39 @@ RESULTS_FILE=$(mktemp)
 RUN_OUTPUT_DIR=$(mktemp -d)
 
 extract_time() {
-  echo "$1" | grep -E "^[a-z_]+:[0-9]+" | head -1 | cut -d: -f2
+  awk -F: '/^[a-z_]+:[0-9]+/ {print $2; exit}' <<<"$1"
 }
 
 measure_rss() {
-  # macOS: /usr/bin/time -l reports "peak memory footprint" in bytes on stderr
-  # Linux: /usr/bin/time -v reports "Maximum resident set size" in KB on stderr
+  # macOS: /usr/bin/time -l reports peak RSS in bytes.
+  # Linux: /usr/bin/time -v reports peak RSS in KB.
   local stdout_file="$1"
   local binary="$2"
   shift 2
   local tmp_err=$(mktemp)
 
-  /usr/bin/time -l "$binary" "$@" >"$stdout_file" 2>"$tmp_err"
-
-  local rss_bytes=0
-  # macOS newer: "peak memory footprint" in bytes
-  local pmf
-  pmf=$(grep 'peak memory footprint' "$tmp_err" 2>/dev/null | awk '{print $1}' || true)
-  if [[ -n "$pmf" && "$pmf" != "0" ]]; then
-    rss_bytes=$pmf
+  if [[ -x /usr/bin/time ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+      /usr/bin/time -l "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+    else
+      /usr/bin/time -v "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
+    fi
   else
-    # macOS older / some versions: "maximum resident set size" in bytes
-    local mrs
-    mrs=$(grep 'maximum resident set size' "$tmp_err" 2>/dev/null | awk '{print $1}' || true)
-    [[ -n "$mrs" ]] && rss_bytes=$mrs
+    "$binary" "$@" >"$stdout_file" 2>"$tmp_err" || true
   fi
-  local rss_kb=$((rss_bytes / 1024))
+
+  local rss_kb=0
+  if [[ "$(uname)" == "Darwin" ]]; then
+    local rss_bytes
+    rss_bytes=$(awk '/peak memory footprint/ {print $1; exit} /maximum resident set size/ {print $1; exit}' "$tmp_err" 2>/dev/null || true)
+    rss_bytes=${rss_bytes:-0}
+    rss_kb=$((rss_bytes / 1024))
+  else
+    local linux_kb
+    linux_kb=$(awk -F': ' '/Maximum resident set size/ {print $2; exit}' "$tmp_err" 2>/dev/null || true)
+    linux_kb=${linux_kb:-0}
+    rss_kb=$linux_kb
+  fi
 
   rm -f "$tmp_err"
 
@@ -216,7 +252,7 @@ for bench in $BENCHMARKS; do
     for (( run=0; run<RUNS; run++ )); do
       n_out="$RUN_OUTPUT_DIR/$name.node.$run.out"
       n_out_samples+=("$n_out")
-      r_rss=$(measure_rss "$n_out" node "$SUITE_DIR/$bench")
+      r_rss=$(measure_rss "$n_out" "${NODE_CMD[@]}" "$SUITE_DIR/$bench")
       r_out=$(cat "$n_out")
       r_ms=$(extract_time "$r_out")
       [[ -n "$r_ms" ]] && n_ms_samples+=("$r_ms")

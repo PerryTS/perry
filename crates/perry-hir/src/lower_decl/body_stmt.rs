@@ -7,8 +7,8 @@ use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
     collect_for_of_pattern_leaves, emit_for_of_pattern_binding, insert_iterator_close_on_abrupt,
-    lazy_iter_for_stmt, lazy_or_index_elem, lower_expr, wrap_lazy_for_of_body_close_on_throw,
-    LoweringContext,
+    labeled_body_targets_loop, lazy_iter_for_stmt, lazy_or_index_elem, lower_expr,
+    wrap_lazy_for_of_body_close_on_throw, LoweringContext,
 };
 use crate::lower_patterns::*;
 use crate::lower_types::*;
@@ -344,6 +344,34 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     }
                 }
                 ctx.pending_classes.push(class);
+                // #5251 follow-up — a function-nested `class X { … }` whose
+                // name collides with an OUTER same-named local must SHADOW
+                // that local within this scope, exactly as a nested
+                // `function X(){}` does (see `lower_nested_fn_decl`, which
+                // `define_local`s the function name + emits a `Stmt::Let`).
+                // Without a scope-local binding, a later in-scope reference to
+                // `X` (e.g. the cjs_wrap `exports.X = X` that records the
+                // module's named export) falls through `lookup_local` to the
+                // enclosing module-scope `const X = _cjs.X` re-export binding —
+                // a circular self-read that resolves to `undefined`. That is
+                // the class-vs-function export asymmetry that left
+                // `require('./code').Name` undefined for ajv's `codegen/code.js`
+                // (`class Name`) while an identically-shaped `function Name`
+                // exported fine. Bind the name to a `ClassRef` value (the same
+                // shape `var C = class {…}` lowers to, recorded by codegen in
+                // `local_class_aliases`) so the in-scope read resolves to the
+                // class. Gated on a pre-existing outer binding so working
+                // packages (no collision) are byte-for-byte unaffected.
+                if ctx.lookup_local(&class_name).is_some() {
+                    let class_local = ctx.define_local(class_name.clone(), Type::Any);
+                    result.push(Stmt::Let {
+                        id: class_local,
+                        name: class_name.clone(),
+                        ty: Type::Any,
+                        init: Some(Expr::ClassRef(class_name.clone())),
+                        mutable: false,
+                    });
+                }
             } else {
                 // Duplicate same-named class: still evaluate its computed
                 // member keys for their spec-mandated side effects. See
@@ -448,17 +476,31 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         }
         ast::Stmt::Labeled(labeled_stmt) => {
             let label = labeled_stmt.label.sym.to_string();
-            // #2383: a labeled *block* — `a: { ... break a; ... }` — exits the
-            // block via `break a` (valid JS/TS; heavily used by minified React).
-            // It is NOT a loop, so the loop-based labeled-break codegen has
-            // nothing to bind the label to. Desugar to a labeled run-once
-            // do-while: `a: do { ... } while (false)`. The do-while's exit block
-            // becomes the labeled-break target, the body runs exactly once, and
-            // the `while (false)` falls straight through to the exit. `continue
-            // a` against a block label is a JS early SyntaxError, so it never
-            // reaches here.
-            if let ast::Stmt::Block(block) = &*labeled_stmt.body {
-                let body = lower_block_stmt_scoped(ctx, block)?;
+            // #2383 + #5247: a labeled *non-loop* statement — a block
+            // (`a: { ... break a; ... }`, heavily used by minified React), or an
+            // `if` (`a: if (...) { ... break a; ... }`, emitted by minified
+            // bignumber.js / ajv), or a `switch`/expression statement — exits via
+            // `break a`. It is NOT a loop, so the loop-based labeled-break codegen
+            // has nothing to bind the label to. Desugar any labeled non-loop to a
+            // labeled run-once do-while: `a: do { ... } while (false)`. The
+            // do-while's exit block becomes the labeled-break target, the body runs
+            // exactly once, and `while (false)` falls straight through, including
+            // when the `break a` fires from inside a *nested* loop in the body.
+            // `continue a` against a non-loop label is a JS early SyntaxError, so it
+            // never reaches here. Labeled LOOPS skip this and keep the label bound
+            // to the loop itself, so `continue a` targets the loop.
+            //
+            // #5247: a label chain ending in a loop (`outer: inner: for (...)`) is
+            // a loop label too — unwrap nested `Labeled` bodies so the outer label
+            // binds to the real loop and `continue outer` targets it, rather than
+            // desugaring `outer` to a run-once do-while.
+            let body_is_loop = labeled_body_targets_loop(&labeled_stmt.body);
+            if !body_is_loop {
+                let body = if let ast::Stmt::Block(block) = &*labeled_stmt.body {
+                    lower_block_stmt_scoped(ctx, block)?
+                } else {
+                    lower_body_stmt(ctx, &labeled_stmt.body)?
+                };
                 result.push(Stmt::Labeled {
                     label,
                     body: Box::new(Stmt::DoWhile {
@@ -1848,7 +1890,7 @@ pub fn find_native_return_in_stmts(
                         let var = ident.sym.as_ref();
                         for i in ni_start..ctx.native_instances.len() {
                             if ctx.native_instances[i].0 == var {
-                                ctx.func_return_native_instances.push((
+                                ctx.push_func_return_native_instance((
                                     func_name.to_string(),
                                     ctx.native_instances[i].1.clone(),
                                     ctx.native_instances[i].2.clone(),

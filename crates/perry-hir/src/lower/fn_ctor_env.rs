@@ -214,10 +214,10 @@ pub(crate) fn build_fn_ctor_env(module: &ast::Module) -> FnCtorEnv {
     let mut decls: HashMap<String, (usize, Option<ast::Expr>)> = HashMap::new();
     let mut writes: HashMap<String, usize> = HashMap::new();
 
-    let empty_shadow = Shadow::new();
+    let mut empty_shadow = Shadow::new();
     for item in &module.body {
         if let ast::ModuleItem::Stmt(stmt) = item {
-            scan_stmt(stmt, &mut decls, &mut writes, &empty_shadow);
+            scan_stmt(stmt, &mut decls, &mut writes, &mut empty_shadow);
         }
     }
 
@@ -783,7 +783,7 @@ fn collect_fn_scope_names(stmts: &[ast::Stmt], out: &mut Shadow) {
 
 /// Treat every binding identifier in a pattern as a write (catch clauses,
 /// destructuring) — it shadows or mutates the name.
-fn record_pat_bindings(pat: &ast::Pat, writes: &mut HashMap<String, usize>, shadow: &Shadow) {
+fn record_pat_bindings(pat: &ast::Pat, writes: &mut HashMap<String, usize>, shadow: &mut Shadow) {
     match pat {
         ast::Pat::Ident(b) => record_write(&b.id.sym, writes, shadow),
         ast::Pat::Array(arr) => {
@@ -820,7 +820,7 @@ fn scan_stmt(
     stmt: &ast::Stmt,
     decls: &mut HashMap<String, (usize, Option<ast::Expr>)>,
     writes: &mut HashMap<String, usize>,
-    shadow: &Shadow,
+    shadow: &mut Shadow,
 ) {
     match stmt {
         ast::Stmt::Decl(ast::Decl::Var(var)) => {
@@ -939,7 +939,11 @@ fn scan_stmt(
     }
 }
 
-fn scan_for_head_writes(head: &ast::ForHead, writes: &mut HashMap<String, usize>, shadow: &Shadow) {
+fn scan_for_head_writes(
+    head: &ast::ForHead,
+    writes: &mut HashMap<String, usize>,
+    shadow: &mut Shadow,
+) {
     match head {
         ast::ForHead::VarDecl(v) => {
             for d in &v.decls {
@@ -961,7 +965,7 @@ fn scan_for_head_writes(head: &ast::ForHead, writes: &mut HashMap<String, usize>
 fn scan_assign_target_writes(
     target: &ast::AssignTarget,
     writes: &mut HashMap<String, usize>,
-    shadow: &Shadow,
+    shadow: &mut Shadow,
 ) {
     match target {
         ast::AssignTarget::Simple(simple) => match simple {
@@ -999,27 +1003,52 @@ fn scan_assign_target_writes(
 
 /// Walk a nested function for writes to NON-shadowed (module-level) names.
 /// The function's params and its own hoisted declarations extend the shadow.
+///
+/// The shadow is threaded as a single shared `&mut Shadow` that we push the
+/// function's own names onto and pop afterwards, instead of `clone()`ing the
+/// whole enclosing shadow per nested function. The old clone made scanning a
+/// scope of N sibling nested functions O(N²) (each clone copies the ~N
+/// enclosing names) — pathological for modules/wrapper-IIFEs that declare many
+/// sibling closures (the same class of perf bug as the capture-set rebuild).
+/// To restore the shadow exactly, we only remove the names this frame newly
+/// inserted (a name already shadowed by an outer scope must stay shadowed).
 fn scan_fn_body_writes(
     params: &[&ast::Pat],
     stmts: &[ast::Stmt],
     writes: &mut HashMap<String, usize>,
-    outer_shadow: &Shadow,
+    shadow: &mut Shadow,
 ) {
-    let mut shadow = outer_shadow.clone();
+    // Gather the names this function frame introduces (params + hoisted
+    // declarations) without disturbing the shared shadow.
+    let mut frame_names = Shadow::new();
     for p in params {
-        collect_pat_names(p, &mut shadow);
+        collect_pat_names(p, &mut frame_names);
     }
-    collect_fn_scope_names(stmts, &mut shadow);
+    collect_fn_scope_names(stmts, &mut frame_names);
+
+    // Insert only the names not already shadowed, remembering them so we can
+    // pop exactly this frame's additions and leave outer shadows intact.
+    let mut added: Vec<String> = Vec::new();
+    for name in frame_names {
+        if shadow.insert(name.clone()) {
+            added.push(name);
+        }
+    }
+
     let mut nested_decls: HashMap<String, (usize, Option<ast::Expr>)> = HashMap::new();
     for s in stmts {
-        scan_stmt(s, &mut nested_decls, writes, &shadow);
+        scan_stmt(s, &mut nested_decls, writes, shadow);
+    }
+
+    for name in added {
+        shadow.remove(&name);
     }
 }
 
 fn scan_function_writes(
     function: &ast::Function,
     writes: &mut HashMap<String, usize>,
-    shadow: &Shadow,
+    shadow: &mut Shadow,
 ) {
     let params: Vec<&ast::Pat> = function.params.iter().map(|p| &p.pat).collect();
     let stmts: &[ast::Stmt] = function
@@ -1030,7 +1059,7 @@ fn scan_function_writes(
     scan_fn_body_writes(&params, stmts, writes, shadow);
 }
 
-fn scan_class_writes(class: &ast::Class, writes: &mut HashMap<String, usize>, shadow: &Shadow) {
+fn scan_class_writes(class: &ast::Class, writes: &mut HashMap<String, usize>, shadow: &mut Shadow) {
     if let Some(sup) = &class.super_class {
         scan_expr_writes(sup, writes, shadow);
     }
@@ -1069,7 +1098,7 @@ fn scan_class_writes(class: &ast::Class, writes: &mut HashMap<String, usize>, sh
     }
 }
 
-fn scan_expr_writes(expr: &ast::Expr, writes: &mut HashMap<String, usize>, shadow: &Shadow) {
+fn scan_expr_writes(expr: &ast::Expr, writes: &mut HashMap<String, usize>, shadow: &mut Shadow) {
     match expr {
         ast::Expr::Assign(a) => {
             scan_assign_target_writes(&a.left, writes, shadow);
@@ -1174,11 +1203,23 @@ fn scan_expr_writes(expr: &ast::Expr, writes: &mut HashMap<String, usize>, shado
                     scan_fn_body_writes(&params, &b.stmts, writes, shadow);
                 }
                 ast::BlockStmtOrExpr::Expr(e) => {
-                    let mut inner = shadow.clone();
+                    // Arrow expression body: push the params, scan, then pop —
+                    // mirrors `scan_fn_body_writes` so we don't clone the whole
+                    // enclosing shadow per arrow.
+                    let mut frame_names = Shadow::new();
                     for p in &params {
-                        collect_pat_names(p, &mut inner);
+                        collect_pat_names(p, &mut frame_names);
                     }
-                    scan_expr_writes(e, writes, &inner);
+                    let mut added: Vec<String> = Vec::new();
+                    for name in frame_names {
+                        if shadow.insert(name.clone()) {
+                            added.push(name);
+                        }
+                    }
+                    scan_expr_writes(e, writes, shadow);
+                    for name in added {
+                        shadow.remove(&name);
+                    }
                 }
             }
         }

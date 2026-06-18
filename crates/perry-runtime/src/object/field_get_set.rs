@@ -3552,6 +3552,22 @@ pub extern "C" fn js_object_get_field_by_name(
                                 return JSValue::from_bits(v.to_bits());
                             }
                         }
+                        // `promise.constructor` is the global `Promise`
+                        // (inherited from `Promise.prototype.constructor`). Any
+                        // own expando (`p.constructor = X`) already returned via
+                        // `exotic_get_own_property` above. execa
+                        // (`(async () => {})().constructor.prototype`) reads it
+                        // to capture the native promise prototype — without this
+                        // arm it fell through to `undefined` and
+                        // `.prototype` threw `Cannot read properties of
+                        // undefined`.
+                        if name_bytes == b"constructor" {
+                            let v = crate::object::js_get_global_this_builtin_value(
+                                b"Promise".as_ptr(),
+                                7,
+                            );
+                            return JSValue::from_bits(v.to_bits());
+                        }
                         // A Promise is a `GC_TYPE_PROMISE` cell, not an
                         // `ObjectHeader`; never fall through to the field/vtable
                         // path below (it would reinterpret the promise's bytes).

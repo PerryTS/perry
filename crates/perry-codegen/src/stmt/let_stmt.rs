@@ -10,6 +10,29 @@ use crate::native_value::{
 };
 use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
+/// #5271: does `init` provably evaluate to a plain object literal? Two
+/// shapes reach codegen: a data-only literal stays `Expr::Object`, while a
+/// literal carrying methods/getters lowers to an immediately-invoked
+/// object-building closure whose sole param is named `__perry_obj_iife`
+/// and whose single argument is the seed `Object(..)`. Recognizing both
+/// lets `o.trim()` / `internals.trim(v, s)` resolve to the receiver's own
+/// member rather than `String.prototype.trim`.
+fn is_object_literal_init(init: &perry_hir::Expr) -> bool {
+    use perry_hir::Expr;
+    match init {
+        Expr::Object(_) => true,
+        Expr::Call { callee, args, .. } => {
+            matches!(args.first(), Some(Expr::Object(_)))
+                && matches!(
+                    callee.as_ref(),
+                    Expr::Closure { params, .. }
+                        if params.first().map_or(false, |p| p.name == "__perry_obj_iife")
+                )
+        }
+        _ => false,
+    }
+}
+
 fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
     matches!(expr, perry_hir::Expr::GlobalGet(_))
         || matches!(
@@ -44,6 +67,14 @@ pub(crate) fn lower_let(
         if let Some(init_expr) = init {
             if let Some(props) = crate::lower_call::extract_options_fields(ctx, init_expr) {
                 ctx.option_object_locals.insert(id, props);
+            }
+            // #5271: remember object-literal locals so a builtin-named member
+            // call (`o.trim()`, joi's `internals.trim(v, s)`) resolves to the
+            // object's OWN method instead of being claimed by the static
+            // String-method fast path. Covers both plain literals and the
+            // method-bearing literals that lower to an object-building IIFE.
+            if is_object_literal_init(init_expr) {
+                ctx.object_literal_locals.insert(id);
             }
         }
     }
@@ -358,7 +389,16 @@ pub(crate) fn lower_let(
             // result into its slot. Order matches source, so any
             // side effects stay observable in the same sequence the
             // heap-allocating path would have produced.
+            let used_indices = ctx
+                .non_escaping_array_used_indices
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
             for (i, elem) in elements.iter().enumerate() {
+                let index_is_observed = used_indices.contains(&(i as u32));
+                if !index_is_observed && lower_unused_expr(ctx, elem)? {
+                    continue;
+                }
                 let v = lower_expr(ctx, elem)?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
                 let lowered = LoweredValue {
@@ -415,7 +455,15 @@ pub(crate) fn lower_let(
             // order — duplicate keys naturally do last-write-wins
             // because they share a slot. Side effects of each value
             // expression stay observable in declaration order.
+            let used_fields = ctx
+                .non_escaping_object_literal_used_fields
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
             for (key, value_expr) in props {
+                if !used_fields.contains(key) && lower_unused_expr(ctx, value_expr)? {
+                    continue;
+                }
                 let v = lower_expr(ctx, value_expr)?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
@@ -1446,6 +1494,9 @@ pub(crate) fn collect_scalar_class_data(
 }
 
 fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool> {
+    if unused_expr_is_pure_nonthrowing(ctx, expr) {
+        return Ok(true);
+    }
     match expr {
         perry_hir::Expr::New {
             class_name, args, ..
@@ -1489,6 +1540,96 @@ fn lower_unused_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<bool
         }
         _ => Ok(false),
     }
+}
+
+fn unused_expr_is_pure_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> bool {
+    match expr {
+        perry_hir::Expr::Undefined
+        | perry_hir::Expr::Null
+        | perry_hir::Expr::Bool(_)
+        | perry_hir::Expr::Number(_)
+        | perry_hir::Expr::Integer(_)
+        | perry_hir::Expr::String(_)
+        | perry_hir::Expr::WtfString(_)
+        | perry_hir::Expr::LocalGet(_) => true,
+        perry_hir::Expr::Unary { operand, .. } => {
+            crate::type_analysis::is_numeric_expr(ctx, operand)
+                && unused_expr_is_pure_nonthrowing(ctx, operand)
+        }
+        perry_hir::Expr::Binary { op, left, right } => {
+            unused_binary_is_pure_nonthrowing(ctx, op, left, right)
+                && unused_expr_is_pure_nonthrowing(ctx, left)
+                && unused_expr_is_pure_nonthrowing(ctx, right)
+        }
+        perry_hir::Expr::Compare { left, right, .. } => {
+            unused_primitive_expr_is_nonthrowing(ctx, left)
+                && unused_primitive_expr_is_nonthrowing(ctx, right)
+                && unused_expr_is_pure_nonthrowing(ctx, left)
+                && unused_expr_is_pure_nonthrowing(ctx, right)
+        }
+        perry_hir::Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            unused_expr_is_pure_nonthrowing(ctx, condition)
+                && unused_expr_is_pure_nonthrowing(ctx, then_expr)
+                && unused_expr_is_pure_nonthrowing(ctx, else_expr)
+        }
+        _ => false,
+    }
+}
+
+fn unused_binary_is_pure_nonthrowing(
+    ctx: &FnCtx<'_>,
+    op: &perry_hir::BinaryOp,
+    left: &perry_hir::Expr,
+    right: &perry_hir::Expr,
+) -> bool {
+    match op {
+        perry_hir::BinaryOp::Add => {
+            let l_num = crate::type_analysis::is_numeric_expr(ctx, left);
+            let r_num = crate::type_analysis::is_numeric_expr(ctx, right);
+            if l_num && r_num {
+                return true;
+            }
+            let l_str = crate::type_analysis::is_definitely_string_expr(ctx, left);
+            let r_str = crate::type_analysis::is_definitely_string_expr(ctx, right);
+            (l_str || r_str)
+                && unused_primitive_expr_is_nonthrowing(ctx, left)
+                && unused_primitive_expr_is_nonthrowing(ctx, right)
+        }
+        perry_hir::BinaryOp::Sub
+        | perry_hir::BinaryOp::Mul
+        | perry_hir::BinaryOp::Div
+        | perry_hir::BinaryOp::Mod
+        | perry_hir::BinaryOp::BitAnd
+        | perry_hir::BinaryOp::BitOr
+        | perry_hir::BinaryOp::BitXor
+        | perry_hir::BinaryOp::Shl
+        | perry_hir::BinaryOp::Shr
+        | perry_hir::BinaryOp::UShr => {
+            crate::type_analysis::is_numeric_expr(ctx, left)
+                && crate::type_analysis::is_numeric_expr(ctx, right)
+        }
+        _ => false,
+    }
+}
+
+fn unused_primitive_expr_is_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> bool {
+    crate::type_analysis::is_numeric_expr(ctx, expr)
+        || crate::type_analysis::is_definitely_string_expr(ctx, expr)
+        || crate::type_analysis::is_bool_expr(ctx, expr)
+        || matches!(
+            expr,
+            perry_hir::Expr::Undefined
+                | perry_hir::Expr::Null
+                | perry_hir::Expr::String(_)
+                | perry_hir::Expr::WtfString(_)
+                | perry_hir::Expr::Number(_)
+                | perry_hir::Expr::Integer(_)
+                | perry_hir::Expr::Bool(_)
+        )
 }
 
 fn record_pod_rejection(ctx: &mut FnCtx<'_>, id: u32, reason: String) {

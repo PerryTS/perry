@@ -44,6 +44,21 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
     }
     if stripped.contains("module.exports")
         || stripped.contains("exports.")
+        // Issue #5275: bracket / computed-string-literal CJS export forms —
+        // `module['exports'] = …` / `module["exports"] = …` (default) and
+        // `exports['name'] = …` / `exports["name"] = …` (named). These are
+        // semantically identical to the dot forms (@colors/colors's
+        // `lib/custom/trap.js` does `module['exports'] = function runTheTrap`).
+        // Without recognizing them the file falls through to the ESM pipeline
+        // and the bare `module`/`exports` identifiers throw at module init.
+        //
+        // NOTE: `strip_comments_and_strings` blanks the `'exports'` STRING
+        // CONTENT (and its quotes) to spaces, leaving `module[          ]`, so
+        // we can't match the quoted token against `stripped`. Scan for the
+        // bracket-export shape on the original source via a regex that allows
+        // whitespace where the stripper would have written spaces. A genuinely
+        // dynamic `module[k]` (non-string-literal key) does NOT match.
+        || has_bracket_cjs_export(source)
         // Issue #4872: tsc-compiled type-only modules (nestjs dist
         // `*.interface.js`) contain ONLY the interop marker
         // `Object.defineProperty(exports, "__esModule", { value: true });`
@@ -55,6 +70,23 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
         return true;
     }
     stripped.contains("require(") && !stripped.contains("import ")
+}
+
+/// Issue #5275: detect a bracket / computed-string-literal CJS export
+/// assignment — `module['exports'] = …`, `module["exports"] = …`,
+/// `exports['name'] = …`, `exports["name"] = …`, and the
+/// `module.exports['name'] = …` variant. Requires the `=` (an assignment) so
+/// a bare `module['exports']` read or a comment mention doesn't trip it, and
+/// requires a string-literal key so a genuinely dynamic `module[k] = …` is
+/// not matched. Matched on the ORIGINAL source because
+/// `strip_comments_and_strings` blanks the quoted key.
+fn has_bracket_cjs_export(source: &str) -> bool {
+    // `module['exports'] = …` / `module["exports"] = …` (default export).
+    let module_default = regex::Regex::new(r#"\bmodule\[\s*['"]exports['"]\s*\]\s*="#).unwrap();
+    // `exports['name'] = …` / `module.exports['name'] = …` (named export).
+    let named =
+        regex::Regex::new(r#"\bexports\[\s*['"][A-Za-z_$][A-Za-z0-9_$]*['"]\s*\]\s*="#).unwrap();
+    module_default.is_match(source) || named.is_match(source)
 }
 
 /// Replace comment bodies and string/template-literal contents with spaces

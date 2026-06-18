@@ -399,11 +399,15 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // lowered (for/while/do-while) can register itself in
         // `label_targets` under this name.
         Stmt::Labeled { label, body } => {
-            ctx.pending_label = Some(label.clone());
+            // Stack this label onto any pending ones from an enclosing
+            // `Stmt::Labeled` so a chain (`outer: inner: for (...)`) hands the
+            // loop *both* labels to register. The loop/switch consumes the
+            // whole stack via `mem::take`.
+            ctx.pending_labels.push(label.clone());
             lower_stmt(ctx, body)?;
-            // If the body wasn't a loop that consumed the pending label,
-            // clear it to avoid leaking into subsequent statements.
-            ctx.pending_label = None;
+            // If the body wasn't a loop/switch that consumed the pending
+            // labels, clear them to avoid leaking into subsequent statements.
+            ctx.pending_labels.clear();
             // Clean up the label target now that we've exited the labeled
             // statement's scope.
             ctx.label_targets.remove(label);

@@ -304,6 +304,14 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Explicit type arguments (e.g., new Box<number>(42))
         type_args: Vec<Type>,
+        /// #5253: byte offset (`new_expr.span.lo.0`) of this `new` expression
+        /// in its module's source, captured at AST→HIR lowering. Used by
+        /// codegen (under `--debug-symbols`) to attach a `file:line` to the
+        /// runtime "X is not a constructor" TypeError. `0` when unknown
+        /// (synthesized `new` from transforms/intrinsics) — resolves to no
+        /// location, falling back to `<anonymous>`. Mirrors `Call.byte_offset`
+        /// (#5247) and is excluded from stable-hashing.
+        byte_offset: u32,
     },
 
     /// Dynamic new expression (new with non-identifier callee)
@@ -314,6 +322,11 @@ pub enum Expr {
         callee: Box<Expr>,
         /// Arguments to pass to the constructor
         args: Vec<Expr>,
+        /// #5253: source byte offset of the `new` expression — see
+        /// `New::byte_offset`. The `const X: any = undefined; new X()`
+        /// not-a-constructor case lowers here (callee is `LocalGet`), so this
+        /// is the field that localizes ajv's `undefined is not a constructor`.
+        byte_offset: u32,
     },
 
     /// Dynamic `new` with spread arguments — `new <callee>(...args)`.
@@ -325,6 +338,9 @@ pub enum Expr {
     NewDynamicSpread {
         callee: Box<Expr>,
         args: Vec<CallArg>,
+        /// #5253: source byte offset of the `new` expression — see
+        /// `New::byte_offset`.
+        byte_offset: u32,
     },
 
     /// Runtime `new.target` value for ordinary functions.
@@ -2539,6 +2555,15 @@ pub enum Expr {
         /// (`paths` resolved to a finite set). In strict mode such a site is a
         /// compile error instead and never produces a node with this set.
         deferred_error: Option<String>,
+        /// #5389 Tier 2: `true` when this node came from a **synchronous**
+        /// CommonJS `require(expr)` in a compiled external/compilePackages
+        /// module rather than an ESM `import(expr)`. Codegen returns the target
+        /// namespace value directly (no `Promise` wrap) and uses the ambient
+        /// createRequire-backed `require` as the no-match / unresolved
+        /// fallthrough (builtin-or-throw) instead of a rejected promise. The
+        /// compile-time path resolution (`collect_modules`) is identical for
+        /// both — only the dispatch shape differs. `false` for ESM `import()`.
+        synchronous: bool,
     },
     /// Compile-time-resolved `new Worker(filename, options?)` from
     /// `node:worker_threads`. The filename expression follows the same

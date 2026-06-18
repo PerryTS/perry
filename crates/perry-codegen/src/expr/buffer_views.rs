@@ -1,4 +1,4 @@
-use perry_hir::Expr;
+use perry_hir::{walker::walk_expr_children, Expr};
 
 use crate::native_value::{
     AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
@@ -299,19 +299,12 @@ pub(crate) fn downgrade_buffer_aliases_in_expr(
     expr: &Expr,
     reason: MaterializationReason,
 ) {
-    match expr {
-        Expr::LocalGet(id) => downgrade_buffer_alias(ctx, *id, reason),
-        Expr::Binary { left, right, .. } => {
-            downgrade_buffer_aliases_in_expr(ctx, left, reason.clone());
-            downgrade_buffer_aliases_in_expr(ctx, right, reason);
-        }
-        Expr::PropertyGet { object, .. } => downgrade_buffer_aliases_in_expr(ctx, object, reason),
-        Expr::IndexGet { object, index } => {
-            downgrade_buffer_aliases_in_expr(ctx, object, reason.clone());
-            downgrade_buffer_aliases_in_expr(ctx, index, reason);
-        }
-        _ => {}
+    if let Expr::LocalGet(id) = expr {
+        downgrade_buffer_alias(ctx, *id, reason.clone());
     }
+    walk_expr_children(expr, &mut |child| {
+        downgrade_buffer_aliases_in_expr(ctx, child, reason.clone());
+    });
 }
 
 pub(crate) fn buffer_access_materialization_reason(

@@ -960,6 +960,7 @@ fn state_method_call(state_id: u32, method: &str, args: Vec<Expr>) -> Expr {
         }),
         args,
         type_args: vec![],
+        byte_offset: 0,
     }
 }
 
@@ -2531,6 +2532,7 @@ fn issue_410_serialize_condition_fallback_has_no_block_comment_close() {
         callee: Box::new(Expr::LocalGet(99)),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     let s = serialize_condition(&unrecognized, &bindings, &consts);
     assert!(
@@ -2762,6 +2764,7 @@ fn issue_410_conditional_modifier_chain_has_no_nested_block_comments() {
             callee: Box::new(Expr::LocalGet(999)),
             args: vec![],
             type_args: vec![],
+            byte_offset: 0,
         },
     ));
     m.init.push(let_widget(

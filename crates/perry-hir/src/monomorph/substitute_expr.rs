@@ -259,6 +259,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             class_name,
             args,
             type_args,
+            byte_offset,
         } => Expr::New {
             class_name: class_name.clone(),
             args: args
@@ -269,6 +270,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
                 .iter()
                 .map(|t| substitute_type(t, substitutions))
                 .collect(),
+            byte_offset: *byte_offset,
         },
 
         // Class/Enum references

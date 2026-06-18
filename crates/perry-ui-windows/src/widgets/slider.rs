@@ -78,25 +78,30 @@ pub fn create(min: f64, max: f64, initial: f64, on_change: f64) -> i64 {
                 0,
                 200,
                 24,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
 
             // Set range [0, 1000]
-            SendMessageW(hwnd, TBM_SETRANGEMIN, WPARAM(0), LPARAM(0));
+            SendMessageW(hwnd, TBM_SETRANGEMIN, Some(WPARAM(0)), Some(LPARAM(0)));
             SendMessageW(
                 hwnd,
                 TBM_SETRANGEMAX,
-                WPARAM(1),
-                LPARAM(TRACKBAR_RANGE as isize),
+                Some(WPARAM(1)),
+                Some(LPARAM(TRACKBAR_RANGE as isize)),
             );
 
             // Set initial position
             let pos = value_to_pos(initial, min, max);
-            SendMessageW(hwnd, TBM_SETPOS, WPARAM(1), LPARAM(pos as isize));
+            SendMessageW(
+                hwnd,
+                TBM_SETPOS,
+                Some(WPARAM(1)),
+                Some(LPARAM(pos as isize)),
+            );
 
             let handle = register_widget(hwnd, WidgetKind::Slider, control_id);
             SLIDER_INFO.with(|info| {
@@ -167,7 +172,9 @@ pub fn handle_scroll(handle: i64) {
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
-            let pos = unsafe { SendMessageW(hwnd, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32 };
+            let pos = unsafe {
+                SendMessageW(hwnd, TBM_GETPOS, Some(WPARAM(0)), Some(LPARAM(0))).0 as i32
+            };
 
             SLIDER_INFO.with(|info| {
                 let info = info.borrow();
@@ -195,7 +202,12 @@ pub fn set_value(handle: i64, value: f64) {
                 if let Some(si) = info.get(&handle) {
                     let pos = value_to_pos(value, si.min, si.max);
                     unsafe {
-                        SendMessageW(hwnd, TBM_SETPOS, WPARAM(1), LPARAM(pos as isize));
+                        SendMessageW(
+                            hwnd,
+                            TBM_SETPOS,
+                            Some(WPARAM(1)),
+                            Some(LPARAM(pos as isize)),
+                        );
                     }
                 }
             });

@@ -380,6 +380,14 @@ pub struct CompileOptions {
     /// `debug_locations` is on (avoids cloning source for every module in the
     /// common build). `None` falls back to the `<anonymous>` frame.
     pub module_source: Option<String>,
+    /// #5247 (CJS-wrap coordinate skew): for a CommonJS module rewritten by
+    /// `cjs_wrap`, `module_source` is the WRAPPED text and `byte_offset`s are in
+    /// wrapped coordinates. This is the number of newlines the injected wrapper
+    /// prefix added before the original body; codegen subtracts it from the
+    /// wrapped line so the rendered location is in original-source coordinates.
+    /// `0` for non-wrapped modules and the entire default build (offsets inside
+    /// the preamble — wrapped line `<=` this — resolve to no location).
+    pub debug_source_line_offset: u32,
 }
 
 /// Issue #100: one entry in a module's namespace-population list.
@@ -445,6 +453,14 @@ pub struct ImportedClass {
     pub constructor_param_count: usize,
     /// Whether the source class declared its own constructor body.
     pub has_own_constructor: bool,
+    /// Whether the source class's constructor's last declared parameter is
+    /// `...rest`. Symmetric to `method_has_rest` but for the constructor: the
+    /// source module compiled `<class>_constructor(this, arg0, …)` expecting
+    /// the rest slot to receive a PACKED ARRAY of the trailing args. Without
+    /// this flag the cross-module `new C(a, b, c)` dispatch passed the args
+    /// positionally, so `arg0 = a` (raw) and `b`/`c` were dropped — a
+    /// `constructor(...args)` saw `args = a`, length 1.
+    pub constructor_has_rest: bool,
     /// Whether the source class has instance fields that require initializer replay.
     pub has_instance_fields: bool,
     /// Method names defined on this class.
@@ -512,6 +528,10 @@ pub(crate) struct ImportedCtor {
     pub param_count: usize,
     pub has_own_constructor: bool,
     pub has_instance_fields: bool,
+    /// True when the constructor's last declared param is `...rest`. Tells
+    /// the cross-module `new` dispatch to pack the trailing args into an
+    /// array for the rest slot rather than passing them positionally.
+    pub has_rest: bool,
 }
 
 impl ImportedCtor {

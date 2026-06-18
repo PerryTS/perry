@@ -97,6 +97,22 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
             return arr;
         }
     }
+    // A raw ArrayBuffer / SharedArrayBuffer is NOT array-like: it has no
+    // `length` property and no [[Symbol.iterator]], so `Array.from(arrayBuffer)`
+    // takes the array-like branch with length 0 and yields an empty array,
+    // rather than materializing its bytes (test262
+    // Array/from/items-is-arraybuffer). Node Buffers and typed arrays ARE
+    // array-like / iterable and still materialize their elements via
+    // js_array_clone below — only the backing ArrayBuffer is registered here,
+    // and Array.from receives the typed-array/Buffer pointer, not the backing
+    // buffer. (Spread `[...arrayBuffer]` goes through js_array_clone_for_spread,
+    // not this path, so its separate semantics are unaffected.)
+    if ptr_bits != 0
+        && (crate::buffer::is_array_buffer(ptr_bits)
+            || crate::buffer::is_shared_array_buffer(ptr_bits))
+    {
+        return js_array_alloc(0);
+    }
     js_array_clone(ptr_bits as *const ArrayHeader)
 }
 

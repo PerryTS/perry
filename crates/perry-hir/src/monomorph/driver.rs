@@ -252,6 +252,7 @@ fn collect_instantiations_in_expr(
             class_name,
             args,
             type_args,
+            ..
         } => {
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);

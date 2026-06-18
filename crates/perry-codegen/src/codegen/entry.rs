@@ -355,6 +355,7 @@ pub(super) fn compile_module_entry(
             source_function: "module_init".to_string(),
             source_function_slug: crate::expr::native_region_slug("module_init"),
             active_region_id: None,
+            native_facts: &main_native_facts,
             locals: HashMap::new(),
             local_types: init_local_types,
             current_block: 0,
@@ -363,7 +364,7 @@ pub(super) fn compile_module_entry(
             strings,
             loop_targets: Vec::new(),
             label_targets: HashMap::new(),
-            pending_label: None,
+            pending_labels: Vec::new(),
             classes,
             this_stack: Vec::new(),
             inline_ctor_return: Vec::new(),
@@ -398,6 +399,7 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
             option_object_locals: HashMap::new(),
+            object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
@@ -445,7 +447,13 @@ pub(super) fn compile_module_entry(
             non_escaping_news: main_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
             non_escaping_arrays: main_native_facts.non_escaping_arrays().clone(),
+            non_escaping_array_used_indices: main_native_facts
+                .non_escaping_array_used_indices()
+                .clone(),
             non_escaping_object_literals: main_native_facts.non_escaping_object_literals().clone(),
+            non_escaping_object_literal_used_fields: main_native_facts
+                .non_escaping_object_literal_used_fields()
+                .clone(),
             flat_const_arrays: &cross_module.flat_const_arrays,
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,
@@ -793,6 +801,7 @@ pub(super) fn compile_module_entry(
             source_function: "module_init".to_string(),
             source_function_slug: crate::expr::native_region_slug("module_init"),
             active_region_id: None,
+            native_facts: &init_native_facts,
             locals: HashMap::new(),
             local_types: HashMap::new(),
             current_block: 0,
@@ -801,7 +810,7 @@ pub(super) fn compile_module_entry(
             strings,
             loop_targets: Vec::new(),
             label_targets: HashMap::new(),
-            pending_label: None,
+            pending_labels: Vec::new(),
             classes,
             this_stack: Vec::new(),
             inline_ctor_return: Vec::new(),
@@ -836,6 +845,7 @@ pub(super) fn compile_module_entry(
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
             option_object_locals: HashMap::new(),
+            object_literal_locals: HashSet::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_reexport_named_imports: &cross_module.namespace_reexport_named_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
@@ -883,7 +893,13 @@ pub(super) fn compile_module_entry(
             non_escaping_news: init_native_facts.non_escaping_news().clone(),
             non_escaping_new_used_fields: init_native_facts.non_escaping_new_used_fields().clone(),
             non_escaping_arrays: init_native_facts.non_escaping_arrays().clone(),
+            non_escaping_array_used_indices: init_native_facts
+                .non_escaping_array_used_indices()
+                .clone(),
             non_escaping_object_literals: init_native_facts.non_escaping_object_literals().clone(),
+            non_escaping_object_literal_used_fields: init_native_facts
+                .non_escaping_object_literal_used_fields()
+                .clone(),
             flat_const_arrays: &cross_module.flat_const_arrays,
             array_row_aliases: HashMap::new(),
             clamp3_functions: &cross_module.clamp3_functions,

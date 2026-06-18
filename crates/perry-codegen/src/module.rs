@@ -10,12 +10,82 @@
 //! `to_ir()` assembles the pieces into a complete `.ll` file with the target
 //! triple header.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::block::FpFlags;
 use crate::function::LlFunction;
 use crate::native_value::NativeRepRecord;
 use crate::types::LlvmType;
+
+/// Strip a leading LLVM linkage keyword from a global's post-`=` text, if
+/// present. Linkage comes before `unnamed_addr`/`constant`/`global` in the
+/// grammar, so this leaves the rest of the definition intact.
+fn strip_leading_linkage(s: &str) -> &str {
+    for kw in [
+        "private ",
+        "internal ",
+        "linkonce_odr ",
+        "linkonce ",
+        "weak_odr ",
+        "weak ",
+        "common ",
+        "available_externally ",
+    ] {
+        if let Some(rest) = s.strip_prefix(kw) {
+            return rest;
+        }
+    }
+    s
+}
+
+/// Rewrite a module-global definition so it is safe to duplicate across
+/// codegen units (#5391). Local-linkage (`private`/`internal`) and bare
+/// external definitions are promoted to `linkonce_odr`, so the linker keeps a
+/// single copy when the same global is emitted into multiple units. `external`
+/// declarations (no initializer) are returned unchanged — duplicating a
+/// declaration is harmless.
+fn promote_global_for_units(line: &str) -> String {
+    if line.contains(" = external ") {
+        return line.to_string();
+    }
+    match line.split_once(" = ") {
+        Some((lhs, rhs)) => format!(
+            "{} = linkonce_odr {}",
+            lhs,
+            strip_leading_linkage(rhs.trim_start())
+        ),
+        None => line.to_string(),
+    }
+}
+
+/// Synthesize an external `declare` line matching a locally-defined function's
+/// signature, so a codegen unit that calls it (but does not define it) resolves
+/// the call at link time.
+fn declare_line_for(f: &LlFunction) -> String {
+    let params = f
+        .params
+        .iter()
+        .map(|(t, _)| t.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let attrs = if f.name == "setjmp" || f.name == "_setjmp" {
+        " #0"
+    } else {
+        ""
+    };
+    format!("declare {} @{}({}){}", f.return_type, f.name, params, attrs)
+}
+
+/// Render a function with external linkage forced, promoting an `internal` /
+/// `private` definition so cross-unit calls can bind to it. Names are
+/// module-prefixed and unique, so promotion never collides.
+fn render_fn_external(f: &LlFunction) -> String {
+    let ir = f.to_ir();
+    if f.linkage == "internal" || f.linkage == "private" {
+        return ir.replacen(&format!("define {} ", f.linkage), "define ", 1);
+    }
+    ir
+}
 
 pub struct LlModule {
     pub target_triple: String,
@@ -125,6 +195,14 @@ impl LlModule {
         self.functions.get_mut(idx)
     }
 
+    /// Number of functions defined so far. Used to recover the index of a
+    /// just-`define_function`ed function (whose `&mut` borrow must be released
+    /// before the index can be read) when emitting a sequence of functions —
+    /// e.g. the chunked string-pool init (#5391 function splitting).
+    pub fn function_count(&self) -> usize {
+        self.functions.len()
+    }
+
     /// True if a function with the given name has already been *defined*
     /// in this module. Used by the #461 export-stub pass to avoid
     /// redefining a symbol that an earlier emission path (function body,
@@ -214,6 +292,24 @@ impl LlModule {
         (name, len)
     }
 
+    /// Functions to emit, each symbol AT MOST ONCE (first occurrence wins).
+    ///
+    /// Minified bundles can contain two distinct classes that sanitize to the
+    /// same name (e.g. two classes `j`), producing colliding mangled method
+    /// symbols (`perry_method_..._j__getElementsByTagName` defined twice). LLVM
+    /// rejects the redefinition. Emitting each symbol once lets the module
+    /// compile; calls to the duplicate resolve to the first definition (a
+    /// dispatch ambiguity limited to genuinely name-colliding members — proper
+    /// disambiguation by class id is a separate concern). Shared by [`to_ir`]
+    /// and [`render_codegen_units`] so both paths agree on the symbol set.
+    fn deduped_function_refs(&self) -> Vec<&LlFunction> {
+        let mut seen: HashSet<&str> = HashSet::with_capacity(self.functions.len());
+        self.functions
+            .iter()
+            .filter(|f| seen.insert(f.name.as_str()))
+            .collect()
+    }
+
     /// Serialize the module to a complete `.ll` file.
     pub fn to_ir(&self) -> String {
         let mut ir = String::new();
@@ -232,9 +328,11 @@ impl LlModule {
         }
         ir.push('\n');
 
+        let funcs = self.deduped_function_refs();
+
         // Skip any `declare` whose name is also `define`d in this module —
         // LLVM rejects declare+define for the same symbol.
-        let defined: HashSet<&str> = self.functions.iter().map(|f| f.name.as_str()).collect();
+        let defined: HashSet<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
         for (name, decl) in &self.declarations {
             if defined.contains(name.as_str()) {
                 continue;
@@ -244,42 +342,157 @@ impl LlModule {
         }
         ir.push('\n');
 
-        for func in &self.functions {
+        for func in &funcs {
             ir.push_str(&func.to_ir());
             ir.push('\n');
         }
 
-        // Attribute group for setjmp's `returns_twice` marker.
-        // Only emit if setjmp (any variant) was actually declared in
-        // this module. Apple targets declare `_setjmp` (fast variant
-        // without signal-mask save), Windows declares `_setjmp`
-        // (2-arg ABI), Linux declares `setjmp` — all three need
-        // `returns_twice` on the call site.
+        self.push_attrs_and_metadata(&mut ir);
+
+        ir
+    }
+
+    /// Emit the shared setjmp attribute groups + the `!0`/buffer-alias metadata
+    /// tail. Factored out of [`to_ir`] so each codegen unit can replicate the
+    /// same attributes and metadata (so `#0`/`#1` and `!N` references resolve in
+    /// every unit). Over-emitting an unused attribute group is harmless.
+    fn push_attrs_and_metadata(&self, ir: &mut String) {
+        // Attribute group for setjmp's `returns_twice` marker. Only emit if
+        // setjmp (any variant) was declared. Apple declares `_setjmp`, Windows
+        // `_setjmp` (2-arg ABI), Linux `setjmp` — all need `returns_twice`.
         if self.declared_names.contains("setjmp") || self.declared_names.contains("_setjmp") {
             ir.push_str("\nattributes #0 = { returns_twice }\n");
-            // Functions that contain a `try` statement are marked with `#1`.
-            // `optnone` forces LLVM to skip mem2reg/SROA inside the function,
-            // so allocas aren't promoted to SSA registers across the setjmp
-            // call — otherwise mutations in the try body are invisible to
-            // the catch block after longjmp. Pairs with `noinline` so the
-            // constraint isn't lost via inlining into a caller.
+            // Functions containing a `try` are marked `#1`. `optnone` skips
+            // mem2reg/SROA so allocas aren't promoted across the setjmp call
+            // (else try-body mutations are invisible to catch after longjmp);
+            // `noinline` keeps the constraint from being lost via inlining.
             ir.push_str("attributes #1 = { noinline optnone }\n");
         }
-
-        // Issue #52: `!0 = !{}` metadata node referenced by
-        // `load_invariant` (via `!invariant.load !0`). LLVM's GVN + LICM
-        // hoist loads tagged with `!invariant.load` out of their
-        // enclosing loops when the loop body can't write to the same
-        // address; without this, the per-access Buffer / Array length
-        // reload stays pinned inside every bounds check even when the
-        // buffer is loop-invariant.
+        // Issue #52: `!0 = !{}` referenced by `!invariant.load !0`, plus the
+        // buffer alias-scope metadata. LICM/GVN hoist invariant loads out of
+        // loops only with these present.
         ir.push_str("\n!0 = !{}\n");
         for ml in &self.metadata_lines {
             ir.push_str(ml);
             ir.push('\n');
         }
+    }
 
-        ir
+    /// Render this module as `n` independent codegen-unit `.ll` texts (#5391).
+    ///
+    /// Each unit is independently compilable by `clang -c`, so peak compiler
+    /// memory is bounded to ~1/n of the whole module — the structural fix for
+    /// the single giant translation unit that makes clang OOM on large bundles.
+    ///
+    /// The functions are split into `n` contiguous buckets. Every unit carries:
+    ///   * the full string-constant + global set, with local-linkage and bare
+    ///     external DEFINITIONS promoted to `linkonce_odr` (the linker keeps one
+    ///     copy). Globals are a tiny fraction of a large module's IR, so the
+    ///     duplication is cheap; `external` *declarations* are replicated as-is;
+    ///   * the module's external `declare`s plus a synthesized `declare` for
+    ///     every locally-defined function the unit does NOT itself define, so
+    ///     cross-unit calls resolve at link time (deduped by name, existing
+    ///     declarations win);
+    ///   * each function rendered with external linkage forced (the lone
+    ///     `internal` init/wrapper is promoted so cross-unit calls bind);
+    ///   * the shared attribute groups + metadata (so `#N`/`!N` refs resolve).
+    ///
+    /// `n <= 1` (or a single-function module) returns one text identical to
+    /// [`to_ir`]. The caller compiles each text to an object and combines them
+    /// (`ld -r`) into one object, keeping `compile_module`'s single-object API.
+    pub fn render_codegen_units(&self, n: usize) -> Vec<String> {
+        let funcs = self.deduped_function_refs();
+        if n <= 1 || funcs.len() <= 1 {
+            return vec![self.to_ir()];
+        }
+        let n = n.min(funcs.len());
+
+        // Balance units by estimated byte size, not function count: minified
+        // bundles have a few enormous functions (a 68MB IIFE in the cli.js
+        // case), so contiguous count-chunking can clump them into one outsized
+        // unit whose clang -O0 time dominates. Greedy largest-first bin-packing
+        // assigns each function to the currently-smallest unit, isolating big
+        // functions and keeping the rest even. (A single function larger than
+        // total/n is irreducible here — that is the intra-function #4880
+        // problem, not something inter-function splitting can divide.)
+        let sizes: Vec<usize> = funcs.iter().map(|f| f.estimated_ir_bytes()).collect();
+        let mut order: Vec<usize> = (0..funcs.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(sizes[i]));
+        let mut buckets: Vec<Vec<&LlFunction>> = vec![Vec::new(); n];
+        let mut bucket_bytes = vec![0usize; n];
+        for &i in &order {
+            let target = bucket_bytes
+                .iter()
+                .enumerate()
+                .min_by_key(|&(_, &b)| b)
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            buckets[target].push(funcs[i]);
+            bucket_bytes[target] += sizes[i];
+        }
+
+        let shared_strings: Vec<String> = self
+            .string_constants
+            .iter()
+            .map(|s| promote_global_for_units(s))
+            .collect();
+        let shared_globals: Vec<String> = self
+            .globals
+            .iter()
+            .map(|g| promote_global_for_units(g))
+            .collect();
+
+        // name -> declare line. Existing module declarations (runtime, FFI,
+        // cross-module) take precedence; every locally-defined function without
+        // one gets a synthesized declare. Deduped by name so no unit emits a
+        // duplicate declaration. BTreeMap for deterministic unit output.
+        let mut decl_by_name: BTreeMap<&str, String> = BTreeMap::new();
+        for (name, decl) in &self.declarations {
+            decl_by_name.insert(name.as_str(), decl.clone());
+        }
+        for f in &funcs {
+            decl_by_name
+                .entry(f.name.as_str())
+                .or_insert_with(|| declare_line_for(f));
+        }
+
+        let mut units = Vec::with_capacity(n);
+        for bucket in &buckets {
+            let defined: HashSet<&str> = bucket.iter().map(|f| f.name.as_str()).collect();
+            let mut ir = String::new();
+            ir.push_str("; Generated by perry-codegen (codegen unit)\n");
+            ir.push_str(&format!("target triple = \"{}\"\n\n", self.target_triple));
+
+            for sc in &shared_strings {
+                ir.push_str(sc);
+                ir.push('\n');
+            }
+            ir.push('\n');
+            for g in &shared_globals {
+                ir.push_str(g);
+                ir.push('\n');
+            }
+            ir.push('\n');
+
+            // Declares for everything this unit references but does not define.
+            for (name, decl) in &decl_by_name {
+                if defined.contains(name) {
+                    continue;
+                }
+                ir.push_str(decl);
+                ir.push('\n');
+            }
+            ir.push('\n');
+
+            for func in bucket {
+                ir.push_str(&render_fn_external(func));
+                ir.push('\n');
+            }
+
+            self.push_attrs_and_metadata(&mut ir);
+            units.push(ir);
+        }
+        units
     }
 }
 
@@ -287,6 +500,126 @@ impl LlModule {
 mod tests {
     use super::*;
     use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+
+    #[test]
+    fn render_codegen_units_partitions_and_links() {
+        // #5391: a 2-unit split of a 2-function module must (a) define each
+        // function in exactly one unit, (b) declare the other so cross-unit
+        // calls resolve, and (c) carry the shared globals in BOTH units with
+        // local linkage promoted to linkonce_odr (linker dedups).
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        m.declare_function("js_console_log_number", VOID, &[DOUBLE]);
+        m.add_internal_global("perry_global_x", DOUBLE, "0.0");
+        let (_s, _l) = m.add_string_constant("hi");
+
+        // f() calls g()
+        let f = m.define_function("perry_fn_m__f", DOUBLE, vec![]);
+        let e = f.create_block("entry");
+        let r = e.call(DOUBLE, "perry_fn_m__g", &[]);
+        e.ret(DOUBLE, &r);
+        let g = m.define_function("perry_fn_m__g", DOUBLE, vec![]);
+        let e2 = g.create_block("entry");
+        e2.ret(DOUBLE, "0.0");
+
+        let units = m.render_codegen_units(2);
+        assert_eq!(units.len(), 2, "two functions → two units");
+
+        // Each function defined exactly once across all units.
+        let def_f = units
+            .iter()
+            .filter(|u| u.contains("define double @perry_fn_m__f("))
+            .count();
+        let def_g = units
+            .iter()
+            .filter(|u| u.contains("define double @perry_fn_m__g("))
+            .count();
+        assert_eq!(def_f, 1);
+        assert_eq!(def_g, 1);
+
+        // The unit that DEFINES f (and calls g) must DECLARE g.
+        let u_with_f = units
+            .iter()
+            .find(|u| u.contains("define double @perry_fn_m__f("))
+            .unwrap();
+        assert!(u_with_f.contains("declare double @perry_fn_m__g()"));
+
+        // Shared globals appear in BOTH units, promoted to linkonce_odr.
+        for u in &units {
+            assert!(u.contains("@perry_global_x = linkonce_odr global double 0.0"));
+            assert!(u.contains("@.str.0 = linkonce_odr unnamed_addr constant"));
+            assert!(u.contains("declare void @js_console_log_number(double)"));
+            assert!(u.contains("target triple = \"arm64-apple-macosx15.0.0\""));
+        }
+    }
+
+    #[test]
+    fn duplicate_function_symbol_emitted_once() {
+        // Two classes that sanitize to the same name produce a colliding
+        // method symbol; it must be emitted once (LLVM rejects redefinition),
+        // in both the single-TU and the codegen-unit render paths.
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        for _ in 0..2 {
+            let f = m.define_function("perry_method_j__foo", DOUBLE, vec![]);
+            f.create_block("entry").ret(DOUBLE, "0.0");
+        }
+        assert_eq!(
+            m.to_ir()
+                .matches("define double @perry_method_j__foo(")
+                .count(),
+            1,
+            "duplicate symbol must be defined once in to_ir"
+        );
+        let units = m.render_codegen_units(4);
+        let defs: usize = units
+            .iter()
+            .map(|u| u.matches("define double @perry_method_j__foo(").count())
+            .sum();
+        assert_eq!(
+            defs, 1,
+            "duplicate symbol must be defined once across units"
+        );
+    }
+
+    #[test]
+    fn render_codegen_units_balances_by_size_isolating_a_giant_fn() {
+        // One huge function + several tiny ones, split into 2 units: greedy
+        // size bin-packing must isolate the giant function so it does NOT share
+        // a unit with the tiny ones (which would make that unit outsized).
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        let big = m.define_function("perry_fn_m__big", DOUBLE, vec![]);
+        let be = big.create_block("entry");
+        for _ in 0..2000 {
+            be.call_void("js_noop", &[]);
+        }
+        be.ret(DOUBLE, "0.0");
+        for k in 0..6 {
+            let f = m.define_function(format!("perry_fn_m__small{k}"), DOUBLE, vec![]);
+            f.create_block("entry").ret(DOUBLE, "0.0");
+        }
+        let units = m.render_codegen_units(2);
+        assert_eq!(units.len(), 2);
+        let big_unit = units
+            .iter()
+            .find(|u| u.contains("define double @perry_fn_m__big("))
+            .unwrap();
+        // The giant function's unit holds (essentially) only it — the six small
+        // functions land in the other unit to balance bytes.
+        let smalls_with_big = (0..6)
+            .filter(|k| big_unit.contains(&format!("define double @perry_fn_m__small{k}(")))
+            .count();
+        assert!(
+            smalls_with_big <= 1,
+            "giant function should be isolated, not clumped with the small ones (got {smalls_with_big})"
+        );
+    }
+
+    #[test]
+    fn render_codegen_units_single_unit_matches_to_ir() {
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        let f = m.define_function("main", I32, vec![]);
+        f.create_block("entry").ret(I32, "0");
+        assert_eq!(m.render_codegen_units(1), vec![m.to_ir()]);
+    }
 
     #[test]
     fn hello_world_ir_is_well_formed() {

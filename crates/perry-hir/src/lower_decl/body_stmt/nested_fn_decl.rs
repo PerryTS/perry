@@ -27,23 +27,41 @@ pub(super) fn lower_nested_fn_decl(
     // inside the body resolve to FuncRef(func_id).
     ctx.register_func(func_name.clone(), func_id);
 
+    // Annex B B.3.3 (#5297): a *block-nested* `function f(){}` in sloppy mode is
+    // block-scoped (its own binding) and ALSO writes the enclosing-scope `var f`
+    // at its declaration point — while the block keeps its independent binding
+    // (`f = 123` inside the body must not change the outer `var f`, per
+    // `block-decl-*-block-scoping`). `annexb_block_fn_names_all` holds every
+    // block-nested function name of the enclosing sloppy body; membership means
+    // "give this a fresh block-local rather than reuse an enclosing same-named
+    // binding" (so a `function f(){}` block-shadowing a parameter `f` doesn't
+    // clobber it). The `annexb_block_fn_var_ids` subset additionally gets the
+    // enclosing `var` write; names suppressed by a parameter/lexical conflict
+    // are in `_all` but not the map (fresh local, no outer write).
+    let is_block_nested = ctx.inside_block_scope > 0
+        && !ctx.current_strict
+        && ctx.annexb_block_fn_names_all.contains(&func_name);
+    let annexb_outer_var = if is_block_nested {
+        ctx.annexb_block_fn_var_ids.get(&func_name).copied()
+    } else {
+        None
+    };
+
     // Define the local for the function name BEFORE lowering the body,
     // so self-recursive references inside the body resolve to
     // LocalGet(local_id) rather than FuncRef(func_id). This ensures
     // the LLVM backend's boxed-var analysis sees the same LocalId at
     // both the declaration and self-reference sites.
-    let local_id = ctx
-        .lookup_local(&func_name)
-        .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any));
+    let local_id = if is_block_nested {
+        // Fresh block-local binding, independent of any enclosing same-named
+        // parameter / `var` (the latter is written separately below).
+        ctx.define_local(func_name.clone(), Type::Any)
+    } else {
+        ctx.lookup_local(&func_name)
+            .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any))
+    };
 
     let scope_mark = ctx.enter_scope();
-
-    // Track outer locals for capture detection
-    let outer_locals: Vec<(String, LocalId)> = ctx
-        .locals
-        .iter()
-        .map(|(name, id, _)| (name.clone(), *id))
-        .collect();
 
     // Lower parameters. Skip the TypeScript `this:` annotation —
     // it has no runtime existence (see the sibling site above for
@@ -170,8 +188,13 @@ pub(super) fn lower_nested_fn_decl(
         collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
     }
 
-    let outer_local_ids: std::collections::HashSet<LocalId> =
-        outer_locals.iter().map(|(_, id)| *id).collect();
+    // The function's own scope has been popped (`exit_scope` above), so the
+    // live `ctx.locals.id_set()` is exactly the enclosing scope's locals — the
+    // membership view capture detection needs. Previously this was rebuilt into
+    // a fresh `HashSet` from a per-closure cloned snapshot of `ctx.locals`,
+    // which made capture analysis O(scope) per nested function = O(n²) over a
+    // scope of n sibling functions (the perf bug behind this change).
+    let outer_local_ids = ctx.locals.id_set();
     let param_ids: std::collections::HashSet<LocalId> = params.iter().map(|p| p.id).collect();
 
     // dayjs (issue: format() returned `292278994-08`): local
@@ -245,6 +268,16 @@ pub(super) fn lower_nested_fn_decl(
         init: Some(closure),
         mutable: false,
     });
+
+    // Annex B B.3.3 (#5297): copy the just-bound block-local function into the
+    // enclosing-scope `var` so the name is visible (as the function) outside the
+    // block, while later mutation of the block-local stays local.
+    if let Some(outer_id) = annexb_outer_var {
+        result.push(Stmt::Expr(Expr::LocalSet(
+            outer_id,
+            Box::new(Expr::LocalGet(local_id)),
+        )));
+    }
 
     Ok(())
 }

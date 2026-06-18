@@ -955,6 +955,7 @@ mod object_cache_tests {
             is_dynamic_import_target: false,
             debug_locations: false,
             module_source: None,
+            debug_source_line_offset: 0,
         }
     }
 
@@ -1243,6 +1244,7 @@ mod object_cache_tests {
             source_prefix: "feature_ts".into(),
             constructor_param_count: 0,
             has_own_constructor: false,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec![],
             method_param_counts: vec![],
@@ -1277,6 +1279,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
@@ -1296,6 +1299,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 2, // different arity
             has_own_constructor: true,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![0],
@@ -1323,6 +1327,7 @@ mod object_cache_tests {
             source_prefix: "src".into(),
             constructor_param_count: 1,
             has_own_constructor: true,
+            constructor_has_rest: false,
             has_instance_fields: true,
             method_names: vec!["bar".into()],
             method_param_counts: vec![1],
