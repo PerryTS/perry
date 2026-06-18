@@ -1418,6 +1418,34 @@ pub(crate) unsafe fn try_dispatch_instance_method_value(
     ))
 }
 
+/// #wall4: null-safe variant used ONLY by the unknown-native-method fallback in
+/// codegen (`lower_call/native/mod.rs`). The HIR can mis-classify a receiver's
+/// class so an `obj.method()` reaches that fallback; dispatching via
+/// `js_native_call_method` is correct for a REAL receiver (fixes the Next.js
+/// `e.indexOf` mis-typed-as-FormData case where `e` is a real array). But a
+/// genuinely undefined/null receiver must NOT hard-throw "Cannot read
+/// properties of undefined" — the prior `0.0` sentinel let such call sites limp,
+/// and Next's `app-page-turbo.runtime.prod.js` TOP-LEVEL has a nullish-receiver
+/// `.indexOf` that, if it throws, aborts the entire module load (then the
+/// `_not-found` page can't be required → HTTP 500). Returns the SAME `0.0`
+/// sentinel as the old fallback for a nullish receiver (preserving the exact
+/// pre-fix non-crashing behavior — `undefined` instead broke downstream code
+/// that expected a number); otherwise dispatches identically.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_nullsafe(
+    object: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let v = crate::value::JSValue::from_bits(object.to_bits());
+    if v.is_undefined() || v.is_null() {
+        return 0.0;
+    }
+    js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_native_call_method(
     object: f64,

@@ -2329,6 +2329,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if !obj_is_named_import
             && perry_api_manifest::module_has_any_entries(module)
             && perry_api_manifest::module_has_symbol(module, prop).is_none()
+            // #wall4: a method that is unmistakably a `String.prototype` member
+            // (`endsWith`, `startsWith`, `slice`, …) called on an identifier that
+            // *happens* to share a node-core module name (`url`, `path`) means the
+            // receiver is a runtime string value, NOT the module — don't gate it
+            // as an unimplemented module API; fall through to a normal PropertyGet
+            // so it dispatches dynamically on the real receiver. Next.js's
+            // app-page-turbo bundle calls `url.endsWith(...)` on a URL *string*
+            // bound to a local named `url`, which otherwise threw
+            // "url.endsWith is not implemented in Perry (ahead-of-time)".
+            && !super::array_fold::is_known_string_prototype_method(prop)
         {
             // #3896: a bare *value read* of an absent member on a Node
             // builtin module namespace/default object is an ordinary
