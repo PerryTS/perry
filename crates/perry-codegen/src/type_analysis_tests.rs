@@ -69,6 +69,7 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
                 class_name: "Array".to_string(),
                 args: vec![Expr::Integer(4)],
                 type_args: vec![],
+                byte_offset: 0,
             },
         ),
         Some(HirType::Array(Box::new(HirType::Any)))
@@ -135,6 +136,7 @@ fn hir_inferred_types_reuse_imported_function_return_facts() {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     assert_eq!(
@@ -321,6 +323,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
                 }),
                 args: Vec::new(),
                 type_args: Vec::new(),
+                byte_offset: 0,
             },
             &facts,
         ),
@@ -380,4 +383,38 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         ),
         HirType::Named("Widget".to_string())
     );
+}
+
+#[test]
+fn function_return_type_is_conservative() {
+    // Documents the deliberate `None`: codegen doesn't thread a local
+    // function-return-type map, so direct `FuncRef` calls infer `Any` rather
+    // than a declared type. If this is ever wired in, this test should be
+    // updated alongside it.
+    use perry_hir::HirTypeFacts as _;
+    let local_types = HashMap::new();
+    let imported_func_return_types = HashMap::new();
+    let classes = HashMap::new();
+    let interfaces = HashMap::new();
+    let class_stack = Vec::new();
+    let enums = HashMap::new();
+    let facts = CodegenTypeFacts {
+        local_types: &local_types,
+        imported_func_return_types: &imported_func_return_types,
+        classes: &classes,
+        interfaces: &interfaces,
+        class_stack: &class_stack,
+        enums: &enums,
+    };
+    assert_eq!(facts.function_return_type(0), None);
+}
+
+#[test]
+fn tuple_index_literal_only_accepts_nonneg_integers() {
+    assert_eq!(tuple_index_literal(&Expr::Integer(2)), Some(2));
+    assert_eq!(tuple_index_literal(&Expr::Number(1.0)), Some(1));
+    // Negative, fractional, or non-literal indices aren't statically known.
+    assert_eq!(tuple_index_literal(&Expr::Integer(-1)), None);
+    assert_eq!(tuple_index_literal(&Expr::Number(1.5)), None);
+    assert_eq!(tuple_index_literal(&Expr::LocalGet(0)), None);
 }

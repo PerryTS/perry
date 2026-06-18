@@ -102,6 +102,7 @@ fn uses_environment_for_local_and_function_return_types() {
         callee: Box::new(Expr::FuncRef(3)),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     assert_eq!(infer_expr_type(&call, &env), Type::Boolean);
 }
@@ -175,6 +176,7 @@ fn can_use_external_function_return_facts() {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
 
     assert_eq!(infer_expr_type(&call, &facts), Type::String);
@@ -187,6 +189,7 @@ fn can_use_external_function_return_facts() {
         }),
         args: vec![],
         type_args: vec![],
+        byte_offset: 0,
     };
     let facts = ExternFacts {
         returns: HashMap::from([("maybeCount".to_string(), Type::Any)]),
@@ -761,6 +764,7 @@ fn infers_named_class_and_interface_property_facts() {
                 }),
                 args: Vec::new(),
                 type_args: Vec::new(),
+                byte_offset: 0,
             },
             &env,
         ),
@@ -806,6 +810,7 @@ fn infers_named_class_and_interface_property_facts() {
                 }),
                 args: Vec::new(),
                 type_args: Vec::new(),
+                byte_offset: 0,
             },
             &env,
         ),
@@ -823,6 +828,7 @@ fn infers_common_constructed_runtime_values() {
                 class_name: "Widget".to_string(),
                 args: vec![],
                 type_args: vec![],
+                byte_offset: 0,
             },
             &env,
         ),
@@ -834,6 +840,7 @@ fn infers_common_constructed_runtime_values() {
                 class_name: "Array".to_string(),
                 args: vec![Expr::Integer(4)],
                 type_args: vec![],
+                byte_offset: 0,
             },
             &env,
         ),
@@ -895,6 +902,7 @@ fn infers_common_constructed_runtime_values() {
             &Expr::NewDynamic {
                 callee: Box::new(Expr::LocalGet(404)),
                 args: Vec::new(),
+                byte_offset: 0,
             },
             &env,
         ),
@@ -905,6 +913,7 @@ fn infers_common_constructed_runtime_values() {
             &Expr::NewDynamicSpread {
                 callee: Box::new(Expr::LocalGet(404)),
                 args: vec![CallArg::Spread(Expr::Array(vec![]))],
+                byte_offset: 0,
             },
             &env,
         ),
@@ -1567,5 +1576,129 @@ fn path_to_namespaced_path_requires_string_input() {
             &env
         ),
         Type::Any
+    );
+}
+
+#[test]
+fn mixed_bigint_number_arithmetic_is_not_bigint() {
+    let env = empty_env();
+    let mixed = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::BigInt("1".to_string())),
+        right: Box::new(Expr::Number(2.0)),
+    };
+    // `1n + 2` throws a TypeError at runtime, so it is not a BigInt.
+    assert_eq!(infer_expr_type(&mixed, &env), Type::Any);
+
+    let both = Expr::Binary {
+        op: BinaryOp::Mul,
+        left: Box::new(Expr::BigInt("2".to_string())),
+        right: Box::new(Expr::BigInt("3".to_string())),
+    };
+    assert_eq!(infer_expr_type(&both, &env), Type::BigInt);
+}
+
+#[test]
+fn logical_and_or_unions_both_operands() {
+    let env = empty_env();
+    // `0 && "x"` evaluates to `0` (a number), so the result is number | string,
+    // not just the right operand's type.
+    let expr = Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(Expr::Number(0.0)),
+        right: Box::new(Expr::String("x".to_string())),
+    };
+    assert_eq!(
+        infer_expr_type(&expr, &env),
+        Type::Union(vec![Type::Number, Type::String])
+    );
+
+    // Equal operand types collapse rather than forming a redundant union.
+    let same = Expr::Logical {
+        op: LogicalOp::Or,
+        left: Box::new(Expr::String("a".to_string())),
+        right: Box::new(Expr::String("b".to_string())),
+    };
+    assert_eq!(infer_expr_type(&same, &env), Type::String);
+}
+
+#[test]
+fn resolves_this_and_super_in_class_context() {
+    let mut module = Module::new("test");
+    module.classes.push(Class {
+        id: 1,
+        name: "Base".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        fields: vec![class_field("label", Type::String)],
+        constructor: None,
+        methods: vec![function_decl(10, "score", Type::Number)],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+    });
+    module.classes.push(Class {
+        id: 2,
+        name: "Child".to_string(),
+        type_params: Vec::new(),
+        extends: Some(1),
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        fields: Vec::new(),
+        constructor: None,
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+    });
+
+    let mut env = HirTypeEnv::from_module(&module);
+    let this_label = Expr::PropertyGet {
+        object: Box::new(Expr::This),
+        property: "label".to_string(),
+    };
+
+    // No class context → `this.label` stays conservative.
+    assert_eq!(infer_expr_type(&this_label, &env), Type::Any);
+
+    // Inside Child's body, `this`/`super` resolve through the chain to Base.
+    env.set_current_class(Some("Child".to_string()));
+    assert_eq!(infer_expr_type(&this_label, &env), Type::String);
+    assert_eq!(
+        infer_expr_type(
+            &Expr::SuperPropertyGet {
+                property: "label".to_string()
+            },
+            &env,
+        ),
+        Type::String
+    );
+    assert_eq!(
+        infer_expr_type(
+            &Expr::SuperMethodCall {
+                method: "score".to_string(),
+                args: Vec::new(),
+            },
+            &env,
+        ),
+        Type::Number
     );
 }

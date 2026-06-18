@@ -68,10 +68,6 @@ crates/perry-runtime/src/regex.rs
 crates/perry-codegen-arkts/src/tests.rs
 crates/perry-api-manifest/src/entries.rs
 crates/perry/src/commands/compile.rs
-# Compile-module discovery stayed at 2002 LOC on current main after the
-# compile.rs split; extracting the graph-walk/cache invalidation helpers is a
-# follow-up compile modularization task tracked alongside #1435.
-crates/perry/src/commands/compile/collect_modules.rs
 # node:dns + node:dgram. Crossed 2000 LOC when the loopback fakes became real
 # getaddrinfo/DNS/UDP I/O (#4911) — the in-process/deterministic paths are kept
 # behind PERRY_DETERMINISTIC_NET=1, so each module now carries both the real and

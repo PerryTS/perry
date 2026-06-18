@@ -263,6 +263,18 @@ impl TypeWidening {
         }
     }
 
+    /// Like [`collect`], but with `this`/`super` bound to `class_name` so member
+    /// reads (`this.name`, `super.x`) inside class method bodies infer real
+    /// types instead of `Any` — otherwise a numeric local assigned from a
+    /// known-string member would silently keep its `Number` type.
+    pub(crate) fn collect_in_class(&mut self, class_name: &str, stmts: &[Stmt]) {
+        let prev = self.env.set_current_class(Some(class_name.to_string()));
+        for s in stmts {
+            visit_stmt(s, &mut self.sets, &self.env);
+        }
+        self.env.set_current_class(prev);
+    }
+
     pub(crate) fn apply(&self, stmts: &mut [Stmt]) {
         if self.sets.object_like.is_empty() && self.sets.non_number_primitive.is_empty() {
             return;

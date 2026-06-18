@@ -930,19 +930,21 @@ pub fn lower_module_full(
         }
         for class in &module.classes {
             for method in &class.methods {
-                widening.collect(&method.body);
+                widening.collect_in_class(&class.name, &method.body);
             }
             for (_, getter) in &class.getters {
-                widening.collect(&getter.body);
+                widening.collect_in_class(&class.name, &getter.body);
             }
             for (_, setter) in &class.setters {
-                widening.collect(&setter.body);
+                widening.collect_in_class(&class.name, &setter.body);
             }
+            // Static methods bind `this` to the constructor, not an instance,
+            // so instance-member resolution would be wrong — keep it bare.
             for static_method in &class.static_methods {
                 widening.collect(&static_method.body);
             }
             if let Some(ref ctor) = class.constructor {
-                widening.collect(&ctor.body);
+                widening.collect_in_class(&class.name, &ctor.body);
             }
         }
         widening.apply(&mut module.init);

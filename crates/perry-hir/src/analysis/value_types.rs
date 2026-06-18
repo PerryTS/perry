@@ -31,6 +31,10 @@ pub struct HirTypeEnv {
     named_properties: HashMap<(String, String), Type>,
     static_fields: HashMap<(String, String), Type>,
     static_method_returns: HashMap<(String, String), Type>,
+    /// Name of the class whose body is currently being inferred, if any. Drives
+    /// `this`/`super` lookups so member reads inside class methods resolve to
+    /// real types instead of `Any`.
+    current_class: Option<String>,
 }
 
 /// Read-only type facts needed by [`infer_expr_type`].
@@ -151,6 +155,27 @@ impl HirTypeFacts for HirTypeEnv {
             &mut HashSet::new(),
         )
         .cloned()
+    }
+
+    fn this_type(&self) -> Option<Type> {
+        self.current_class.clone().map(Type::Named)
+    }
+
+    fn super_property_type(&self, property: &str) -> Option<Type> {
+        // `super.x` reads from the parent chain, so resolve from the current
+        // class's first parent (named_property_type itself walks further up).
+        let parent = self
+            .type_extends
+            .get(self.current_class.as_deref()?)?
+            .first()?;
+        self.named_property_type(parent, property)
+    }
+
+    fn super_method_return_type(&self, method: &str) -> Option<Type> {
+        match self.super_property_type(method)? {
+            Type::Function(ft) => Some(*ft.return_type),
+            _ => None,
+        }
     }
 }
 
@@ -327,6 +352,13 @@ impl HirTypeEnv {
     pub fn with_local(mut self, id: LocalId, ty: Type) -> Self {
         self.insert_local(id, ty);
         self
+    }
+
+    /// Set (or clear) the class context used for `this`/`super` lookups.
+    /// Returns the previous value so callers can restore it after walking a
+    /// class body.
+    pub fn set_current_class(&mut self, name: Option<String>) -> Option<String> {
+        std::mem::replace(&mut self.current_class, name)
     }
 
     /// Register or override a global type.
@@ -1620,7 +1652,9 @@ fn infer_binary_type<F: HirTypeFacts + ?Sized>(
             let right_ty = infer_expr_type(right, env);
             if left_ty.is_string_like() || right_ty.is_string_like() {
                 Type::String
-            } else if matches!(left_ty, Type::BigInt) || matches!(right_ty, Type::BigInt) {
+            } else if matches!(left_ty, Type::BigInt) && matches!(right_ty, Type::BigInt) {
+                // Mixed BigInt/Number arithmetic throws a TypeError at runtime,
+                // so only both-BigInt operands yield a BigInt result.
                 Type::BigInt
             } else if left_ty.is_number_like() && right_ty.is_number_like() {
                 Type::Number
@@ -1631,7 +1665,7 @@ fn infer_binary_type<F: HirTypeFacts + ?Sized>(
         BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow => {
             let left_ty = infer_expr_type(left, env);
             let right_ty = infer_expr_type(right, env);
-            if matches!(left_ty, Type::BigInt) || matches!(right_ty, Type::BigInt) {
+            if matches!(left_ty, Type::BigInt) && matches!(right_ty, Type::BigInt) {
                 Type::BigInt
             } else if left_ty.is_number_like() && right_ty.is_number_like() {
                 Type::Number
@@ -1648,6 +1682,19 @@ fn infer_binary_type<F: HirTypeFacts + ?Sized>(
     }
 }
 
+/// Union of two inferred types, collapsing to `Any` if either side is unknown
+/// and deduping the trivially-equal case. Used where a value can take one of
+/// two operand types (e.g. `&&`/`||`).
+fn union_of(left: Type, right: Type) -> Type {
+    if matches!(left, Type::Any) || matches!(right, Type::Any) {
+        Type::Any
+    } else if left == right {
+        left
+    } else {
+        Type::Union(vec![left, right])
+    }
+}
+
 fn infer_logical_type<F: HirTypeFacts + ?Sized>(
     op: LogicalOp,
     left: &Expr,
@@ -1656,12 +1703,11 @@ fn infer_logical_type<F: HirTypeFacts + ?Sized>(
 ) -> Type {
     match op {
         LogicalOp::And | LogicalOp::Or => {
+            // `a && b` / `a || b` evaluate to EITHER operand depending on `a`'s
+            // truthiness (e.g. `0 && "x"` is `0`), so the result is their union.
+            let left_ty = infer_expr_type(left, env);
             let right_ty = infer_expr_type(right, env);
-            if matches!(right_ty, Type::Any) {
-                Type::Any
-            } else {
-                right_ty
-            }
+            union_of(left_ty, right_ty)
         }
         LogicalOp::Coalesce => {
             let left_ty = infer_expr_type(left, env);

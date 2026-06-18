@@ -37,6 +37,11 @@ impl HirTypeFacts for CodegenTypeFacts<'_> {
     }
 
     fn function_return_type(&self, _id: u32) -> Option<&HirType> {
+        // Intentionally conservative: codegen doesn't thread a local
+        // function-return-type map through `FnCtx`, so direct `FuncRef` calls
+        // infer `Any` rather than a possibly-stale declared type. Wiring the
+        // module's `Function.return_type` map in is a precision follow-up, not a
+        // correctness fix. Locked in by `function_return_type_is_conservative`.
         None
     }
 

@@ -2138,6 +2138,17 @@ pub(crate) fn is_native_module_dynamic_index(e: &Expr) -> bool {
 /// type when it's cheap to determine (literals, locals, field accesses
 /// on known classes). Returns `None` when computing the type would
 /// require a fuller type-checker pass.
+/// Extract a non-negative integer literal index from an index expression, if it
+/// is one. Used to type tuple element accesses only for in-bounds literal
+/// indices (dynamic indices into a heterogeneous tuple aren't statically known).
+fn tuple_index_literal(index: &Expr) -> Option<usize> {
+    match index {
+        Expr::Integer(n) if *n >= 0 => Some(*n as usize),
+        Expr::Number(f) if *f >= 0.0 && f.fract() == 0.0 => Some(*f as usize),
+        _ => None,
+    }
+}
+
 pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
     match e {
         Expr::Array(_) => Some(HirType::Array(Box::new(HirType::Any))),
@@ -2319,9 +2330,19 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // statically known to be `Array<Array<T>>` / `Array<Tuple<...>>`.
         // Also handles `Record<K, V>[key]` → V so `groups["a"].length`
         // on `Record<string, number[]>` finds the array fast path.
-        Expr::IndexGet { object, .. } => match static_type_of(ctx, object) {
+        Expr::IndexGet { object, index } => match static_type_of(ctx, object) {
             Some(HirType::Array(inner)) => Some(*inner),
-            Some(HirType::Tuple(elems)) if !elems.is_empty() => Some(elems[0].clone()),
+            // A literal, in-bounds index has the exact element type. A dynamic
+            // index could hit any element, so it's only sound when the tuple is
+            // homogeneous — otherwise stay conservative (e.g. `[string, number]`
+            // must not type `t[i]` as `string`).
+            Some(HirType::Tuple(elems)) if !elems.is_empty() => match tuple_index_literal(index) {
+                Some(i) => elems.get(i).cloned(),
+                None => {
+                    let first = &elems[0];
+                    elems.iter().all(|t| t == first).then(|| first.clone())
+                }
+            },
             Some(HirType::Generic { base, type_args })
                 if base == "Record" && type_args.len() == 2 =>
             {
