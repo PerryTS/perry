@@ -1773,6 +1773,95 @@ pub unsafe extern "C" fn js_request_new(
     handle_to_f64(id)
 }
 
+/// `new Request(url, init)` where `init` is a *runtime* object value rather
+/// than a statically-analyzable object literal (#5458). Codegen's
+/// `extract_options_fields` fast path only recognizes inline `{...}` literals,
+/// recorded option-object locals, and `__AnonShape_` synthesis; for any other
+/// init shape — a call-expression result (`new Request(url, f())`), a spread
+/// literal (`{ ...e }`), or a dynamic object — it previously evaluated and
+/// **discarded** the init, silently dropping `method`/`body`/`headers`. That
+/// made every non-GET method default back to `"GET"`, mis-dispatching POST
+/// requests to GET handlers (or 404) in Hono and any other framework that
+/// builds a `RequestInit` indirectly. This helper reads each field off the
+/// init object at runtime and delegates to `js_request_new` so all construction
+/// and validation logic stays in one place.
+#[no_mangle]
+pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, init: f64) -> f64 {
+    let raw = perry_runtime::value::js_nanbox_get_pointer(init);
+    // Non-object init (undefined / number / small handle): behave like
+    // `new Request(url)` with no init — every field keeps its default.
+    if raw < 0x10000 {
+        return js_request_new(
+            url_ptr,
+            std::ptr::null(),
+            std::ptr::null(),
+            0.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            f64::from_bits(TAG_FALSE),
+            std::ptr::null(),
+            f64::from_bits(TAG_UNDEFINED),
+        );
+    }
+    let obj = raw as *const perry_runtime::object::ObjectHeader;
+
+    // Read `init[name]` as a NaN-boxed JSValue (TAG_UNDEFINED when absent).
+    let field = |name: &[u8]| -> f64 {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        perry_runtime::object::js_object_get_field_by_name_f64(obj, key)
+    };
+    // Read `init[name]` as a raw `*const StringHeader`, null for absent /
+    // undefined / null so `js_request_new`'s `string_from_header` applies the
+    // correct per-field default.
+    let str_field = |name: &[u8]| -> *const StringHeader {
+        let v = field(name);
+        if matches!(v.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+            return std::ptr::null();
+        }
+        perry_runtime::value::js_get_string_pointer_unified(v) as *const StringHeader
+    };
+
+    // `headers`: build a fresh Headers store from whatever the init carries
+    // (a Headers handle, a plain object, or an iterable of `[name, value]`).
+    let headers_val = field(b"headers");
+    let headers_handle = if matches!(headers_val.to_bits(), TAG_UNDEFINED | TAG_NULL) {
+        0.0
+    } else {
+        let h = js_headers_new();
+        js_headers_init_from_value(h, headers_val);
+        h
+    };
+
+    let keepalive = field(b"keepalive");
+    let keepalive = if keepalive.to_bits() == TAG_UNDEFINED {
+        f64::from_bits(TAG_FALSE)
+    } else {
+        keepalive
+    };
+
+    js_request_new(
+        url_ptr,
+        str_field(b"method"),
+        str_field(b"body"),
+        headers_handle,
+        str_field(b"referrer"),
+        str_field(b"referrerPolicy"),
+        str_field(b"mode"),
+        str_field(b"credentials"),
+        str_field(b"cache"),
+        str_field(b"redirect"),
+        str_field(b"integrity"),
+        keepalive,
+        str_field(b"duplex"),
+        field(b"signal"),
+    )
+}
+
 /// Shared `request.headers` resolver used by both the typed codegen path
 /// (`js_request_get_headers`) and the untyped property dispatcher. Lazily
 /// allocates a Headers registry entry from the request's stored header map

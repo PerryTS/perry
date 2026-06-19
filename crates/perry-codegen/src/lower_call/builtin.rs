@@ -1089,6 +1089,21 @@ pub(super) fn lower_builtin_new(
             let mut duplex_ptr = "0".to_string();
             let mut signal = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
 
+            // #5458: when the init isn't a statically-extractable object
+            // literal (e.g. a call-expression result `f()`, a spread `{...e}`,
+            // or a dynamic object), read its fields at runtime instead of
+            // discarding it. Dropping the init silently defaulted `method` back
+            // to "GET", mis-dispatching POST requests to GET handlers in Hono.
+            if args.len() >= 2 && extract_options_fields(ctx, &args[1]).is_none() {
+                let init_val = lower_expr(ctx, &args[1])?;
+                let handle = ctx.block().call(
+                    DOUBLE,
+                    "js_request_new_from_init",
+                    &[(I64, &url_ptr), (DOUBLE, &init_val)],
+                );
+                return Ok(Some(handle));
+            }
+
             if args.len() >= 2 {
                 if let Some(props) = extract_options_fields(ctx, &args[1]) {
                     for (k, vexpr) in &props {

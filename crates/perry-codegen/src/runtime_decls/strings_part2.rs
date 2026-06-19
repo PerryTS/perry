@@ -930,6 +930,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
             I64, I64, I64, DOUBLE, I64, I64, I64, I64, I64, I64, I64, DOUBLE, I64, DOUBLE,
         ],
     );
+    // #5458: new Request(url_ptr, init_value_f64) -> f64 — runtime-field
+    // fallback for init shapes codegen can't statically extract (call results,
+    // spreads, dynamic objects). Reads method/body/headers/... off the init
+    // object at runtime instead of silently dropping them.
+    module.declare_function("js_request_new_from_init", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_request_get_url", I64, &[DOUBLE]);
     module.declare_function("js_request_get_method", I64, &[DOUBLE]);
     module.declare_function("js_request_get_body", DOUBLE, &[DOUBLE]);
