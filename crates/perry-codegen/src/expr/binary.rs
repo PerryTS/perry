@@ -21,6 +21,10 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::native_value::{
+    materialize_small_bigint_pointer_to_js_value, BufferAccessMode, LoweredValue,
+    MaterializationReason,
+};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     add_operands_have_pod_materialization_hazard, compute_auto_captures,
@@ -29,7 +33,7 @@ use crate::type_analysis::{
     receiver_class_name,
 };
 #[allow(unused_imports)]
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I128, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
@@ -62,6 +66,156 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         }
     }
     Ok((lower_expr(ctx, expr)?, false))
+}
+
+fn small_bigint_literal_value(expr: &Expr) -> Option<i64> {
+    let Expr::BigInt(raw) = expr else {
+        return None;
+    };
+    let normalized = raw.replace('_', "");
+    let s = normalized.strip_suffix('n').unwrap_or(&normalized);
+    let (negative, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let (radix, digits) = if let Some(rest) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        (16, rest)
+    } else if let Some(rest) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
+        (8, rest)
+    } else if let Some(rest) = digits
+        .strip_prefix("0b")
+        .or_else(|| digits.strip_prefix("0B"))
+    {
+        (2, rest)
+    } else {
+        (10, digits)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let magnitude = i128::from_str_radix(digits, radix).ok()?;
+    let value = if negative { -magnitude } else { magnitude };
+    i64::try_from(value).ok()
+}
+
+fn small_bigint_native_op(op: BinaryOp) -> Option<(&'static str, &'static str)> {
+    match op {
+        BinaryOp::Add => Some(("add", "js_dynamic_add")),
+        BinaryOp::Sub => Some(("sub", "js_dynamic_sub")),
+        BinaryOp::Mul => Some(("mul", "js_dynamic_mul")),
+        _ => None,
+    }
+}
+
+fn bigint_dynamic_helper(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::Add => "js_dynamic_add",
+        BinaryOp::Sub => "js_dynamic_sub",
+        BinaryOp::Mul => "js_dynamic_mul",
+        BinaryOp::Div => "js_dynamic_div",
+        BinaryOp::Mod => "js_dynamic_mod",
+        BinaryOp::BitAnd => "js_dynamic_bitand",
+        BinaryOp::BitOr => "js_dynamic_bitor",
+        BinaryOp::BitXor => "js_dynamic_bitxor",
+        BinaryOp::Shl => "js_dynamic_shl",
+        BinaryOp::Shr => "js_dynamic_shr",
+        BinaryOp::Pow => "js_dynamic_pow",
+        BinaryOp::UShr => "js_dynamic_ushr",
+    }
+}
+
+fn record_small_bigint_rejection(
+    ctx: &mut FnCtx<'_>,
+    reason: &'static str,
+    fallback_helper: &'static str,
+) {
+    let lowered = LoweredValue::js_value("0.0");
+    ctx.record_lowered_value_with_access_mode(
+        "BigIntSmallBinaryRejected",
+        None,
+        "small_bigint.literal_binary_rejected",
+        &lowered,
+        None,
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(MaterializationReason::RuntimeApi),
+        false,
+        false,
+        vec![
+            format!("small_bigint_rejected={reason}"),
+            format!("fallback={fallback_helper}"),
+            "boxed_at=generic_bigint_dynamic_helper".to_string(),
+        ],
+    );
+}
+
+fn try_lower_small_bigint_literal_binary(
+    ctx: &mut FnCtx<'_>,
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+) -> Option<String> {
+    let (native_op, fallback_helper) = small_bigint_native_op(op)?;
+    let Some(left_i64) = small_bigint_literal_value(left) else {
+        record_small_bigint_rejection(ctx, "requires_left_i64_literal", fallback_helper);
+        return None;
+    };
+    let Some(right_i64) = small_bigint_literal_value(right) else {
+        record_small_bigint_rejection(ctx, "requires_right_i64_literal", fallback_helper);
+        return None;
+    };
+
+    let left_const = left_i64.to_string();
+    let right_const = right_i64.to_string();
+    let result_i128 = {
+        let blk = ctx.block();
+        let left_wide = blk.sext(I64, &left_const, I128);
+        let right_wide = blk.sext(I64, &right_const, I128);
+        match op {
+            BinaryOp::Add => blk.add(I128, &left_wide, &right_wide),
+            BinaryOp::Sub => blk.sub(I128, &left_wide, &right_wide),
+            BinaryOp::Mul => blk.mul(I128, &left_wide, &right_wide),
+            _ => return None,
+        }
+    };
+    let lowered = LoweredValue::small_bigint(result_i128.clone());
+    ctx.record_lowered_value(
+        "BigIntSmallBinary",
+        None,
+        "small_bigint.literal_binary_i128",
+        &lowered,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![
+            "proof=both_operands_bigint_literals_fit_i64".to_string(),
+            format!("native_op=i128_{native_op}"),
+            "public_semantics=materialize_bigint_object_before_js_boundary".to_string(),
+        ],
+    );
+    let ptr = {
+        let blk = ctx.block();
+        let lo = blk.trunc(I128, &result_i128, I64);
+        let hi_wide = blk.ashr(I128, &result_i128, "64");
+        let hi = blk.trunc(I128, &hi_wide, I64);
+        blk.call(I64, "js_bigint_from_i128_parts", &[(I64, &lo), (I64, &hi)])
+    };
+    Some(materialize_small_bigint_pointer_to_js_value(
+        ctx,
+        &ptr,
+        MaterializationReason::RuntimeApi,
+    ))
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -118,6 +272,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(DOUBLE, &l), (DOUBLE, &r)],
                     ));
                 }
+                if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) {
+                    if let Some(value) =
+                        try_lower_small_bigint_literal_binary(ctx, *op, left.as_ref(), right.as_ref())
+                    {
+                        return Ok(value);
+                    }
+                    let l = lower_expr(ctx, left)?;
+                    let r = lower_expr(ctx, right)?;
+                    return Ok(ctx
+                        .block()
+                        .call(DOUBLE, "js_dynamic_add", &[(DOUBLE, &l), (DOUBLE, &r)]));
+                }
                 // Refs #486: neither operand is statically known. Per JS
                 // spec for `+`, if EITHER side is a string at runtime, the
                 // result is string concatenation; otherwise numeric add
@@ -159,41 +325,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // concat (the `is_definitely_string_expr` check above
             // already ruled out the string case). Closes GH #33.
             if is_bigint_expr(ctx, left) || is_bigint_expr(ctx, right) {
-                let helper = match op {
-                    BinaryOp::Add => Some("js_dynamic_add"),
-                    BinaryOp::Sub => Some("js_dynamic_sub"),
-                    BinaryOp::Mul => Some("js_dynamic_mul"),
-                    BinaryOp::Div => Some("js_dynamic_div"),
-                    BinaryOp::Mod => Some("js_dynamic_mod"),
-                    // Bitwise ops on bigints dispatch to the same
-                    // unbox→bigint-op→rebox helpers used for arithmetic.
-                    // Without this, `5n ^ 1n` fell through to the i32
-                    // ToInt32 path that interprets the NaN-boxed bigint
-                    // bits as a double — `fptosi` on a NaN-payload f64
-                    // yielded a small signed integer (e.g. -6 for XOR of
-                    // two 64-bit bigints) and masking with
-                    // 0xFFFFFFFFFFFFFFFFn collapsed to 0 (closes #39).
-                    BinaryOp::BitAnd => Some("js_dynamic_bitand"),
-                    BinaryOp::BitOr => Some("js_dynamic_bitor"),
-                    BinaryOp::BitXor => Some("js_dynamic_bitxor"),
-                    BinaryOp::Shl => Some("js_dynamic_shl"),
-                    BinaryOp::Shr => Some("js_dynamic_shr"),
-                    // `bigint ** bigint` is a BigInt operation (RangeError on
-                    // negative exponent); `>>>` on any BigInt is a TypeError.
-                    // Both are routed through the dynamic helpers so the
-                    // numeric fallback only fires when neither side is a
-                    // BigInt at runtime (#2908).
-                    BinaryOp::Pow => Some("js_dynamic_pow"),
-                    BinaryOp::UShr => Some("js_dynamic_ushr"),
-                    _ => None,
-                };
-                if let Some(fname) = helper {
-                    let l = lower_expr(ctx, left)?;
-                    let r = lower_expr(ctx, right)?;
-                    return Ok(ctx
-                        .block()
-                        .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
+                let fname = bigint_dynamic_helper(*op);
+                if let Some(value) =
+                    try_lower_small_bigint_literal_binary(ctx, *op, left.as_ref(), right.as_ref())
+                {
+                    return Ok(value);
                 }
+                let l = lower_expr(ctx, left)?;
+                let r = lower_expr(ctx, right)?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]));
             }
             // Fast path: `<integer-valued> % <integer literal>` (the
             // factorial / `i % 1000` loop shape). `frem double` lowers

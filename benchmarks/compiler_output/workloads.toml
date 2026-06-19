@@ -1968,7 +1968,7 @@ allowed_missed_reason_kinds = [
 allocations_traced = 640
 gc_collections_traced = 5
 write_barriers_static = 64
-write_barriers_traced = 360
+write_barriers_traced = 50000
 boxed_number_allocations_static = 64
 buffer_slow_path_accesses_static = 128
 

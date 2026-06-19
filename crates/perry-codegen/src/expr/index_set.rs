@@ -269,6 +269,25 @@ fn lower_array_index_set_via_runtime_key(
     Ok(val_double)
 }
 
+fn lower_packed_f64_loop_store_value(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    value: &Expr,
+) -> Result<(String, Vec<String>)> {
+    if let Expr::MathAbs(operand) = value {
+        if matches!(
+            operand.as_ref(),
+            Expr::IndexGet { object, .. }
+                if matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id)
+        ) {
+            let raw = lower_expr(ctx, operand)?;
+            let abs = ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &raw)]);
+            return Ok((abs, vec!["rhs_unary_math=llvm.fabs.f64".to_string()]));
+        }
+    }
+    Ok((lower_expr(ctx, value)?, Vec::new()))
+}
+
 fn lower_packed_f64_loop_index_set(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
@@ -277,7 +296,7 @@ fn lower_packed_f64_loop_index_set(
     guard_id: &str,
     side_exit_label: &str,
 ) -> Result<String> {
-    let val_double = lower_expr(ctx, value)?;
+    let (val_double, rhs_notes) = lower_packed_f64_loop_store_value(ctx, arr_id, value)?;
     let arr_expr = Expr::LocalGet(arr_id);
     let arr_box = lower_expr(ctx, &arr_expr)?;
     let feedback_site_id = emit_typed_feedback_register_site(
@@ -399,16 +418,20 @@ fn lower_packed_f64_loop_index_set(
         Vec::new(),
         false,
         false,
-        vec![
-            "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard".to_string(),
-            "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64".to_string(),
-            "array_reloaded_after_rhs=1".to_string(),
-            "array_reloaded_after_store_guard=1".to_string(),
-            "array_reloaded_after_canonicalization=1".to_string(),
-            "store_guard_failure=side_exit_slow_restart".to_string(),
-            "index_range=nonnegative_i32".to_string(),
-            "length_range=guarded_i32".to_string(),
-        ],
+        {
+            let mut notes = vec![
+                "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard".to_string(),
+                "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64".to_string(),
+                "array_reloaded_after_rhs=1".to_string(),
+                "array_reloaded_after_store_guard=1".to_string(),
+                "array_reloaded_after_canonicalization=1".to_string(),
+                "store_guard_failure=side_exit_slow_restart".to_string(),
+                "index_range=nonnegative_i32".to_string(),
+                "length_range=guarded_i32".to_string(),
+            ];
+            notes.extend(rhs_notes);
+            notes
+        },
     );
     ctx.current_block = merge_idx;
     Ok(val_double)

@@ -1033,6 +1033,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
     let set = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/set.rs"));
     let boxes = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/box.rs"));
     let closure_alloc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/closure/alloc.rs"));
+    let promise = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/promise/mod.rs"));
 
     for (src, static_name, signature, target) in [
         (
@@ -1181,15 +1182,81 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             map,
+            "KEEP_JS_MAP_SET_STRING_KEY",
+            "static KEEP_JS_MAP_SET_STRING_KEY: extern \"C\" fn(",
+            "js_map_set_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_I32",
+            "static KEEP_JS_MAP_SET_STRING_I32: extern \"C\" fn(",
+            "js_map_set_string_i32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_U32",
+            "static KEEP_JS_MAP_SET_STRING_U32: extern \"C\" fn(",
+            "js_map_set_string_u32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_F32",
+            "static KEEP_JS_MAP_SET_STRING_F32: extern \"C\" fn(",
+            "js_map_set_string_f32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_BOOL",
+            "static KEEP_JS_MAP_SET_STRING_BOOL: extern \"C\" fn(",
+            "js_map_set_string_bool",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_STRING",
+            "static KEEP_JS_MAP_SET_STRING_STRING: extern \"C\" fn(",
+            "js_map_set_string_string",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_NUMBER_KEY",
+            "static KEEP_JS_MAP_SET_NUMBER_KEY: extern \"C\" fn(*mut MapHeader, f64, f64) -> *mut MapHeader",
+            "js_map_set_number_key",
+        ),
+        (
+            map,
             "KEEP_JS_MAP_HAS_STRING_KEY",
             "static KEEP_JS_MAP_HAS_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> i32",
             "js_map_has_string_key",
         ),
         (
             map,
+            "KEEP_JS_MAP_HAS_NUMBER_KEY",
+            "static KEEP_JS_MAP_HAS_NUMBER_KEY: extern \"C\" fn(*const MapHeader, f64) -> i32",
+            "js_map_has_number_key",
+        ),
+        (
+            map,
             "KEEP_JS_MAP_GET_STRING_KEY",
             "static KEEP_JS_MAP_GET_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> f64",
             "js_map_get_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_GET_NUMBER_KEY",
+            "static KEEP_JS_MAP_GET_NUMBER_KEY: extern \"C\" fn(*const MapHeader, f64) -> f64",
+            "js_map_get_number_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_DELETE_STRING_KEY",
+            "static KEEP_JS_MAP_DELETE_STRING_KEY: extern \"C\" fn(*mut MapHeader, *const StringHeader) -> i32",
+            "js_map_delete_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_DELETE_NUMBER_KEY",
+            "static KEEP_JS_MAP_DELETE_NUMBER_KEY: extern \"C\" fn(*mut MapHeader, f64) -> i32",
+            "js_map_delete_number_key",
         ),
         (
             set,
@@ -1199,15 +1266,105 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             set,
+            "KEEP_JS_SET_ADD_NUMBER",
+            "static KEEP_JS_SET_ADD_NUMBER: extern \"C\" fn(*mut SetHeader, f64) -> *mut SetHeader",
+            "js_set_add_number",
+        ),
+        (
+            set,
             "KEEP_JS_SET_HAS_STRING",
             "static KEEP_JS_SET_HAS_STRING: extern \"C\" fn(*const SetHeader, *const StringHeader) -> i32",
             "js_set_has_string",
         ),
         (
             set,
+            "KEEP_JS_SET_HAS_NUMBER",
+            "static KEEP_JS_SET_HAS_NUMBER: extern \"C\" fn(*const SetHeader, f64) -> i32",
+            "js_set_has_number",
+        ),
+        (
+            set,
             "KEEP_JS_SET_DELETE_STRING",
             "static KEEP_JS_SET_DELETE_STRING: extern \"C\" fn(*mut SetHeader, *const StringHeader) -> i32",
             "js_set_delete_string",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_NUMBER",
+            "static KEEP_JS_SET_DELETE_NUMBER: extern \"C\" fn(*mut SetHeader, f64) -> i32",
+            "js_set_delete_number",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_I32",
+            "static KEEP_JS_SET_ADD_I32: extern \"C\" fn(*mut SetHeader, i32) -> *mut SetHeader",
+            "js_set_add_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_I32",
+            "static KEEP_JS_SET_HAS_I32: extern \"C\" fn(*const SetHeader, i32) -> i32",
+            "js_set_has_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_I32",
+            "static KEEP_JS_SET_DELETE_I32: extern \"C\" fn(*mut SetHeader, i32) -> i32",
+            "js_set_delete_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_U32",
+            "static KEEP_JS_SET_ADD_U32: extern \"C\" fn(*mut SetHeader, u32) -> *mut SetHeader",
+            "js_set_add_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_U32",
+            "static KEEP_JS_SET_HAS_U32: extern \"C\" fn(*const SetHeader, u32) -> i32",
+            "js_set_has_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_U32",
+            "static KEEP_JS_SET_DELETE_U32: extern \"C\" fn(*mut SetHeader, u32) -> i32",
+            "js_set_delete_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_F32",
+            "static KEEP_JS_SET_ADD_F32: extern \"C\" fn(*mut SetHeader, f32) -> *mut SetHeader",
+            "js_set_add_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_F32",
+            "static KEEP_JS_SET_HAS_F32: extern \"C\" fn(*const SetHeader, f32) -> i32",
+            "js_set_has_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_F32",
+            "static KEEP_JS_SET_DELETE_F32: extern \"C\" fn(*mut SetHeader, f32) -> i32",
+            "js_set_delete_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_BOOL",
+            "static KEEP_JS_SET_ADD_BOOL: extern \"C\" fn(*mut SetHeader, i32) -> *mut SetHeader",
+            "js_set_add_bool",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_BOOL",
+            "static KEEP_JS_SET_HAS_BOOL: extern \"C\" fn(*const SetHeader, i32) -> i32",
+            "js_set_has_bool",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_BOOL",
+            "static KEEP_JS_SET_DELETE_BOOL: extern \"C\" fn(*mut SetHeader, i32) -> i32",
+            "js_set_delete_bool",
         ),
         (
             boxes,
@@ -1244,6 +1401,18 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
             "KEEP_JS_BOOL_BOX_SET",
             "static KEEP_JS_BOOL_BOX_SET: extern \"C\" fn(*mut BoolBox, i32)",
             "js_bool_box_set",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_SET_I1",
+            "static KEEP_JS_ITER_RESULT_SET_I1: extern \"C\" fn(i32, i32) -> f64",
+            "js_iter_result_set_i1",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_GET_VALUE_I1",
+            "static KEEP_JS_ITER_RESULT_GET_VALUE_I1: extern \"C\" fn() -> i32",
+            "js_iter_result_get_value_i1",
         ),
         (
             trace,

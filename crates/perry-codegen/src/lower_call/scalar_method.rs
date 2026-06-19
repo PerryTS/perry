@@ -1,56 +1,268 @@
 //! Scalar-replaced receiver method summaries.
 
 use anyhow::{bail, Result};
-use perry_hir::Expr;
+use std::collections::HashMap;
+
+use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
-use crate::native_value::{LoweredValue, NativeRep, SemanticKind};
+use crate::expr::{i32_to_nanbox, lower_expr, lower_expr_as_i32, nanbox_pointer_inline, FnCtx};
+use crate::native_value::{
+    BufferAccessMode, LoweredValue, MaterializationReason, NativeFactUse, NativeRep, SemanticKind,
+};
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarMethodArgKind {
     ProvenNumeric,
-    GuardedF64Local,
+    GuardedF64Expr,
+    GuardedI32Local,
     Generic,
 }
 
-fn scalar_method_arg_is_proven_numeric(arg: &Expr) -> bool {
-    match arg {
-        Expr::Integer(_) | Expr::Number(_) => true,
-        Expr::Unary { op, operand } => {
-            matches!(op, perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::Neg)
-                && scalar_method_arg_is_proven_numeric(operand)
-        }
-        Expr::Binary { op, left, right } => {
-            matches!(
-                op,
-                perry_hir::BinaryOp::Add
-                    | perry_hir::BinaryOp::Sub
-                    | perry_hir::BinaryOp::Mul
-                    | perry_hir::BinaryOp::Div
-                    | perry_hir::BinaryOp::Mod
-            ) && scalar_method_arg_is_proven_numeric(left)
-                && scalar_method_arg_is_proven_numeric(right)
-        }
-        _ => false,
+#[derive(Clone, Debug)]
+struct ScalarMethodArgPlan {
+    kind: ScalarMethodArgKind,
+    guard_locals: Vec<u32>,
+    expression_guard: bool,
+}
+
+fn push_guard_local_once(locals: &mut Vec<u32>, id: u32) {
+    if !locals.contains(&id) {
+        locals.push(id);
     }
 }
 
-fn scalar_method_arg_kind(ctx: &FnCtx<'_>, arg: &Expr) -> ScalarMethodArgKind {
-    if scalar_method_arg_is_proven_numeric(arg) {
-        return ScalarMethodArgKind::ProvenNumeric;
-    }
-    if let Expr::LocalGet(id) = arg {
-        if ctx
-            .local_types
-            .get(id)
-            .is_some_and(|ty| matches!(ty, Type::Number | Type::Int32))
-        {
-            return ScalarMethodArgKind::GuardedF64Local;
+fn collect_guarded_numeric_arg_locals(ctx: &FnCtx<'_>, arg: &Expr) -> Option<Vec<u32>> {
+    fn walk(ctx: &FnCtx<'_>, arg: &Expr, locals: &mut Vec<u32>) -> bool {
+        match arg {
+            Expr::Integer(_) | Expr::Number(_) => true,
+            Expr::LocalGet(id) => {
+                if ctx.closure_captures.contains_key(id)
+                    || ctx.boxed_vars.contains(id)
+                    || ctx.module_globals.contains_key(id)
+                    || !ctx.locals.contains_key(id)
+                    || !ctx
+                        .local_types
+                        .get(id)
+                        .is_some_and(|ty| matches!(ty, Type::Number | Type::Int32))
+                {
+                    return false;
+                }
+                push_guard_local_once(locals, *id);
+                true
+            }
+            Expr::Unary { op, operand } => {
+                matches!(op, UnaryOp::Pos | UnaryOp::Neg) && walk(ctx, operand, locals)
+            }
+            Expr::Binary { op, left, right } => {
+                matches!(
+                    op,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
+                ) && walk(ctx, left, locals)
+                    && walk(ctx, right, locals)
+            }
+            _ => false,
         }
     }
-    ScalarMethodArgKind::Generic
+
+    let mut locals = Vec::new();
+    if walk(ctx, arg, &mut locals) {
+        Some(locals)
+    } else {
+        None
+    }
+}
+
+fn local_can_use_public_arg_guard(ctx: &FnCtx<'_>, id: u32, expected: Type) -> bool {
+    !ctx.closure_captures.contains_key(&id)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.module_globals.contains_key(&id)
+        && ctx.locals.contains_key(&id)
+        && ctx.local_types.get(&id).is_some_and(|ty| *ty == expected)
+}
+
+fn scalar_method_arg_plan(ctx: &FnCtx<'_>, arg: &Expr, param_ty: &Type) -> ScalarMethodArgPlan {
+    if matches!(param_ty, Type::Int32) {
+        return match arg {
+            Expr::Integer(value) if i32::try_from(*value).is_ok() => ScalarMethodArgPlan {
+                kind: ScalarMethodArgKind::ProvenNumeric,
+                guard_locals: Vec::new(),
+                expression_guard: false,
+            },
+            Expr::LocalGet(id) if local_can_use_public_arg_guard(ctx, *id, Type::Int32) => {
+                ScalarMethodArgPlan {
+                    kind: ScalarMethodArgKind::GuardedI32Local,
+                    guard_locals: vec![*id],
+                    expression_guard: false,
+                }
+            }
+            _ => ScalarMethodArgPlan {
+                kind: ScalarMethodArgKind::Generic,
+                guard_locals: Vec::new(),
+                expression_guard: false,
+            },
+        };
+    }
+
+    match collect_guarded_numeric_arg_locals(ctx, arg) {
+        Some(guard_locals) if guard_locals.is_empty() => ScalarMethodArgPlan {
+            kind: ScalarMethodArgKind::ProvenNumeric,
+            guard_locals,
+            expression_guard: false,
+        },
+        Some(guard_locals) => ScalarMethodArgPlan {
+            kind: ScalarMethodArgKind::GuardedF64Expr,
+            guard_locals,
+            expression_guard: !matches!(arg, Expr::LocalGet(_)),
+        },
+        None => ScalarMethodArgPlan {
+            kind: ScalarMethodArgKind::Generic,
+            guard_locals: Vec::new(),
+            expression_guard: false,
+        },
+    }
+}
+
+fn lower_int32_scalar_arg_fast(
+    ctx: &mut FnCtx<'_>,
+    arg: &Expr,
+    raw_i32_locals: &HashMap<u32, String>,
+) -> Result<String> {
+    match arg {
+        Expr::Integer(value) => i32::try_from(*value)
+            .map(|value| value.to_string())
+            .map_err(|_| anyhow::anyhow!("scalar Int32 method literal out of range: {value}")),
+        Expr::LocalGet(id) => raw_i32_locals
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing guarded scalar Int32 method arg local {id}")),
+        _ => lower_expr_as_i32(ctx, arg),
+    }
+}
+
+fn lower_guarded_numeric_arg_fast(
+    ctx: &mut FnCtx<'_>,
+    arg: &Expr,
+    raw_locals: &HashMap<u32, String>,
+) -> Result<String> {
+    match arg {
+        Expr::Integer(_) | Expr::Number(_) => lower_expr(ctx, arg),
+        Expr::LocalGet(id) => raw_locals
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing guarded scalar method arg local {id}")),
+        Expr::Unary { op, operand } => {
+            let value = lower_guarded_numeric_arg_fast(ctx, operand, raw_locals)?;
+            Ok(match op {
+                UnaryOp::Pos => value,
+                UnaryOp::Neg => ctx.block().fneg(&value),
+                _ => bail!("unsupported guarded scalar method unary arg"),
+            })
+        }
+        Expr::Binary { op, left, right } => {
+            let left = lower_guarded_numeric_arg_fast(ctx, left, raw_locals)?;
+            let right = lower_guarded_numeric_arg_fast(ctx, right, raw_locals)?;
+            Ok(match op {
+                BinaryOp::Add => ctx.block().fadd(&left, &right),
+                BinaryOp::Sub => ctx.block().fsub(&left, &right),
+                BinaryOp::Mul => ctx.block().fmul(&left, &right),
+                BinaryOp::Div => ctx.block().fdiv(&left, &right),
+                BinaryOp::Mod => ctx.block().frem(&left, &right),
+                _ => bail!("unsupported guarded scalar method binary arg"),
+            })
+        }
+        _ => bail!(
+            "unsupported guarded scalar method arg expression kind {}",
+            crate::expr::variant_name(arg)
+        ),
+    }
+}
+
+fn load_scalar_method_arg_guard_value(ctx: &mut FnCtx<'_>, id: u32) -> Result<String> {
+    let slot = ctx
+        .locals
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing scalar method arg guard local {id}"))?;
+    Ok(ctx.block().load(DOUBLE, &slot))
+}
+
+fn collect_guard_local_values(
+    ctx: &mut FnCtx<'_>,
+    arg_plans: &[ScalarMethodArgPlan],
+) -> Result<Vec<(u32, String)>> {
+    let mut values = Vec::new();
+    let mut seen = Vec::new();
+    for plan in arg_plans {
+        if !matches!(plan.kind, ScalarMethodArgKind::GuardedF64Expr) {
+            continue;
+        }
+        for id in &plan.guard_locals {
+            if seen.contains(id) {
+                continue;
+            }
+            seen.push(*id);
+            values.push((*id, load_scalar_method_arg_guard_value(ctx, *id)?));
+        }
+    }
+    Ok(values)
+}
+
+fn collect_i32_guard_local_values(
+    ctx: &mut FnCtx<'_>,
+    arg_plans: &[ScalarMethodArgPlan],
+) -> Result<Vec<(u32, String)>> {
+    let mut values = Vec::new();
+    let mut seen = Vec::new();
+    for plan in arg_plans {
+        if !matches!(plan.kind, ScalarMethodArgKind::GuardedI32Local) {
+            continue;
+        }
+        for id in &plan.guard_locals {
+            if seen.contains(id) {
+                continue;
+            }
+            seen.push(*id);
+            values.push((*id, load_scalar_method_arg_guard_value(ctx, *id)?));
+        }
+    }
+    Ok(values)
+}
+
+fn scalar_method_summary_fact(
+    receiver_id: u32,
+    class_name: &str,
+    property: &str,
+    state: &'static str,
+    detail: &'static str,
+) -> NativeFactUse {
+    NativeFactUse {
+        fact_id: format!(
+            "native_region.scalar_method_summary.{receiver_id}.{class_name}.{property}"
+        ),
+        kind: "scalar_method_summary".to_string(),
+        local_id: Some(receiver_id),
+        state: state.to_string(),
+        detail: detail.to_string(),
+        reason: None,
+    }
+}
+
+fn scalar_method_notes(class_name: &str, property: &str) -> Vec<String> {
+    vec![
+        format!("class={class_name}"),
+        format!("method={property}"),
+        "receiver=scalar_replaced".to_string(),
+    ]
+}
+
+fn scalar_method_return_note(method: &perry_hir::Function) -> &'static str {
+    match method.return_type {
+        Type::Int32 => "summary_return=int32",
+        Type::Boolean => "summary_return=boolean",
+        _ => "summary_return=number",
+    }
 }
 
 fn lower_scalar_method_inline_body(
@@ -60,6 +272,8 @@ fn lower_scalar_method_inline_body(
     property: &str,
     method: &perry_hir::Function,
     arg_values: &[String],
+    fact_detail: &'static str,
+    extra_notes: Vec<String>,
 ) -> Result<String> {
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
@@ -96,7 +310,10 @@ fn lower_scalar_method_inline_body(
         llvm_ty: DOUBLE,
         value: result.clone(),
     };
-    ctx.record_lowered_value(
+    let mut notes = scalar_method_notes(class_name, property);
+    notes.push(scalar_method_return_note(method).to_string());
+    notes.extend(extra_notes);
+    ctx.record_lowered_value_with_access_mode_and_facts(
         "ScalarMethodCall",
         Some(receiver_id),
         "scalar_method_summary_inline",
@@ -104,16 +321,150 @@ fn lower_scalar_method_inline_body(
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        vec![scalar_method_summary_fact(
+            receiver_id,
+            class_name,
+            property,
+            "consumed",
+            fact_detail,
+        )],
+        Vec::new(),
         false,
         false,
-        vec![
-            format!("class={class_name}"),
-            format!("method={property}"),
-            "receiver=scalar_replaced".to_string(),
-        ],
+        notes,
     );
 
     Ok(result)
+}
+
+fn lower_scalar_method_int32_inline_body(
+    ctx: &mut FnCtx<'_>,
+    receiver_id: u32,
+    class_name: &str,
+    property: &str,
+    method: &perry_hir::Function,
+    arg_values: &[String],
+    fact_detail: &'static str,
+    extra_notes: Vec<String>,
+) -> Result<String> {
+    let saved_locals = ctx.locals.clone();
+    let saved_local_types = ctx.local_types.clone();
+    let saved_i32_slots = ctx.i32_counter_slots.clone();
+    let saved_this_len = ctx.this_stack.len();
+    let saved_class_len = ctx.class_stack.len();
+    let saved_scalar_ctor_len = ctx.scalar_ctor_target.len();
+
+    for (param, value) in method.params.iter().zip(arg_values.iter()) {
+        let slot = ctx.func.alloca_entry(I32);
+        ctx.block().store(I32, value, &slot);
+        ctx.i32_counter_slots.insert(param.id, slot);
+        ctx.local_types.insert(param.id, param.ty.clone());
+    }
+
+    ctx.scalar_ctor_target.push(receiver_id);
+    ctx.class_stack.push(class_name.to_string());
+    let dummy_this = ctx.func.alloca_entry(DOUBLE);
+    ctx.this_stack.push(dummy_this);
+
+    let raw_i32 = match method.body.as_slice() {
+        [perry_hir::Stmt::Return(Some(expr))] => lower_expr_as_i32(ctx, expr)?,
+        _ => unreachable!("simple scalar method summary only accepts one return"),
+    };
+    let result = i32_to_nanbox(ctx.block(), &raw_i32);
+
+    ctx.this_stack.truncate(saved_this_len);
+    ctx.class_stack.truncate(saved_class_len);
+    ctx.scalar_ctor_target.truncate(saved_scalar_ctor_len);
+    ctx.locals = saved_locals;
+    ctx.local_types = saved_local_types;
+    ctx.i32_counter_slots = saved_i32_slots;
+
+    let lowered = LoweredValue {
+        semantic: SemanticKind::JsValue,
+        rep: NativeRep::JsValue,
+        llvm_ty: DOUBLE,
+        value: result.clone(),
+    };
+    let mut notes = scalar_method_notes(class_name, property);
+    notes.push(scalar_method_return_note(method).to_string());
+    notes.extend(extra_notes);
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "ScalarMethodCall",
+        Some(receiver_id),
+        "scalar_method_summary_inline",
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![scalar_method_summary_fact(
+            receiver_id,
+            class_name,
+            property,
+            "consumed",
+            fact_detail,
+        )],
+        Vec::new(),
+        false,
+        false,
+        notes,
+    );
+
+    Ok(result)
+}
+
+fn record_scalar_method_materialized_fallback(
+    ctx: &mut FnCtx<'_>,
+    receiver_id: u32,
+    class_name: &str,
+    property: &str,
+    value: &str,
+    fallback_state: &'static str,
+    guard_note: Option<&'static str>,
+) {
+    let lowered = LoweredValue {
+        semantic: SemanticKind::JsValue,
+        rep: NativeRep::JsValue,
+        llvm_ty: DOUBLE,
+        value: value.to_string(),
+    };
+    let mut notes = scalar_method_notes(class_name, property);
+    notes.push(format!("scalar_method_fallback={fallback_state}"));
+    if let Some(guard) = guard_note {
+        notes.push(format!("arg_guard={guard}"));
+    }
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "ScalarMethodCall",
+        Some(receiver_id),
+        "scalar_method_summary_materialized_fallback",
+        &lowered,
+        None,
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(MaterializationReason::RuntimeApi),
+        None,
+        None,
+        Vec::new(),
+        vec![scalar_method_summary_fact(
+            receiver_id,
+            class_name,
+            property,
+            fallback_state,
+            match fallback_state {
+                "generic_arg" => "generic_argument",
+                "arg_guard_failed" => "guarded_numeric_args_fallback",
+                _ => fallback_state,
+            },
+        )],
+        false,
+        false,
+        notes,
+    );
 }
 
 fn materialize_scalar_receiver(
@@ -213,6 +564,164 @@ fn lower_materialized_receiver_dispatch(
     ))
 }
 
+fn lower_scalar_replaced_int32_method_call(
+    ctx: &mut FnCtx<'_>,
+    receiver_id: u32,
+    class_name: &str,
+    property: &str,
+    method: &perry_hir::Function,
+    args: &[Expr],
+) -> Result<String> {
+    let arg_plans: Vec<_> = args
+        .iter()
+        .zip(method.params.iter())
+        .map(|(arg, param)| scalar_method_arg_plan(ctx, arg, &param.ty))
+        .collect();
+
+    if arg_plans
+        .iter()
+        .any(|plan| matches!(plan.kind, ScalarMethodArgKind::Generic))
+    {
+        let mut lowered_args = Vec::with_capacity(args.len());
+        for arg in args {
+            lowered_args.push(lower_expr(ctx, arg)?);
+        }
+        let fallback = lower_materialized_receiver_dispatch(
+            ctx,
+            receiver_id,
+            class_name,
+            property,
+            &lowered_args,
+        )?;
+        record_scalar_method_materialized_fallback(
+            ctx,
+            receiver_id,
+            class_name,
+            property,
+            &fallback,
+            "generic_arg",
+            None,
+        );
+        return Ok(fallback);
+    }
+
+    if !arg_plans
+        .iter()
+        .any(|plan| matches!(plan.kind, ScalarMethodArgKind::GuardedI32Local))
+    {
+        let mut raw_args = Vec::with_capacity(args.len());
+        let raw_i32_locals = HashMap::new();
+        for arg in args {
+            raw_args.push(lower_int32_scalar_arg_fast(ctx, arg, &raw_i32_locals)?);
+        }
+        return lower_scalar_method_int32_inline_body(
+            ctx,
+            receiver_id,
+            class_name,
+            property,
+            method,
+            &raw_args,
+            "exact_receiver_summary",
+            vec!["arg_proof=proven_int32".to_string()],
+        );
+    }
+
+    let guard_values = collect_i32_guard_local_values(ctx, &arg_plans)?;
+    let mut guard: Option<String> = None;
+    for (_, value) in &guard_values {
+        let raw = ctx
+            .block()
+            .call(I32, "js_typed_i32_arg_guard", &[(DOUBLE, value.as_str())]);
+        let ok = ctx.block().icmp_ne(I32, &raw, "0");
+        guard = Some(match guard {
+            Some(prev) => ctx.block().and(I1, &prev, &ok),
+            None => ok,
+        });
+    }
+
+    let fast_idx = ctx.new_block("scalar_method_arg_guard.fast");
+    let fallback_idx = ctx.new_block("scalar_method_arg_guard.fallback");
+    let merge_idx = ctx.new_block("scalar_method_arg_guard.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    if let Some(guard) = guard {
+        ctx.block().cond_br(&guard, &fast_label, &fallback_label);
+    } else {
+        ctx.block().br(&fast_label);
+    }
+
+    ctx.current_block = fast_idx;
+    let mut raw_i32_locals = HashMap::new();
+    for (id, value) in &guard_values {
+        raw_i32_locals.insert(
+            *id,
+            ctx.block()
+                .call(I32, "js_typed_i32_arg_to_raw", &[(DOUBLE, value.as_str())]),
+        );
+    }
+    let mut fast_args = Vec::with_capacity(args.len());
+    for arg in args {
+        fast_args.push(lower_int32_scalar_arg_fast(ctx, arg, &raw_i32_locals)?);
+    }
+    let guarded_arg_count = arg_plans
+        .iter()
+        .filter(|plan| matches!(plan.kind, ScalarMethodArgKind::GuardedI32Local))
+        .count();
+    let fast_value = lower_scalar_method_int32_inline_body(
+        ctx,
+        receiver_id,
+        class_name,
+        property,
+        method,
+        &fast_args,
+        "guarded_numeric_args_fast_path",
+        vec![
+            "arg_guard=js_typed_i32_arg_guard".to_string(),
+            format!("guarded_arg_count={guarded_arg_count}"),
+        ],
+    )?;
+    let after_fast = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = fallback_idx;
+    let mut lowered_args = Vec::with_capacity(args.len());
+    for arg in args {
+        lowered_args.push(lower_expr(ctx, arg)?);
+    }
+    let fallback_value = lower_materialized_receiver_dispatch(
+        ctx,
+        receiver_id,
+        class_name,
+        property,
+        &lowered_args,
+    )?;
+    record_scalar_method_materialized_fallback(
+        ctx,
+        receiver_id,
+        class_name,
+        property,
+        &fallback_value,
+        "arg_guard_failed",
+        Some("js_typed_i32_arg_guard"),
+    );
+    let after_fallback = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[
+            (fast_value.as_str(), after_fast.as_str()),
+            (fallback_value.as_str(), after_fallback.as_str()),
+        ],
+    ))
+}
+
 pub(super) fn try_lower_scalar_replaced_method_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -239,33 +748,57 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     .cloned() else {
         return Ok(None);
     };
-    let arg_kinds: Vec<_> = args
+    if matches!(method.return_type, Type::Int32) {
+        return Ok(Some(lower_scalar_replaced_int32_method_call(
+            ctx,
+            *receiver_id,
+            &class_name,
+            property,
+            &method,
+            args,
+        )?));
+    }
+    let arg_plans: Vec<_> = args
         .iter()
-        .map(|arg| scalar_method_arg_kind(ctx, arg))
+        .zip(method.params.iter())
+        .map(|(arg, param)| scalar_method_arg_plan(ctx, arg, &param.ty))
         .collect();
 
-    let mut lowered_args = Vec::with_capacity(args.len());
-    for arg in args {
-        lowered_args.push(lower_expr(ctx, arg)?);
-    }
-
-    if arg_kinds
+    if arg_plans
         .iter()
-        .any(|kind| matches!(kind, ScalarMethodArgKind::Generic))
+        .any(|plan| matches!(plan.kind, ScalarMethodArgKind::Generic))
     {
-        return Ok(Some(lower_materialized_receiver_dispatch(
+        let mut lowered_args = Vec::with_capacity(args.len());
+        for arg in args {
+            lowered_args.push(lower_expr(ctx, arg)?);
+        }
+        let fallback = lower_materialized_receiver_dispatch(
             ctx,
             *receiver_id,
             &class_name,
             property,
             &lowered_args,
-        )?));
+        )?;
+        record_scalar_method_materialized_fallback(
+            ctx,
+            *receiver_id,
+            &class_name,
+            property,
+            &fallback,
+            "generic_arg",
+            None,
+        );
+        return Ok(Some(fallback));
     }
 
-    if !arg_kinds
+    if !arg_plans
         .iter()
-        .any(|kind| matches!(kind, ScalarMethodArgKind::GuardedF64Local))
+        .any(|plan| matches!(plan.kind, ScalarMethodArgKind::GuardedF64Expr))
     {
+        let mut lowered_args = Vec::with_capacity(args.len());
+        for arg in args {
+            lowered_args.push(lower_expr(ctx, arg)?);
+        }
         return Ok(Some(lower_scalar_method_inline_body(
             ctx,
             *receiver_id,
@@ -273,14 +806,14 @@ pub(super) fn try_lower_scalar_replaced_method_call(
             property,
             &method,
             &lowered_args,
+            "exact_receiver_summary",
+            vec!["arg_proof=proven_numeric".to_string()],
         )?));
     }
 
+    let guard_values = collect_guard_local_values(ctx, &arg_plans)?;
     let mut guard: Option<String> = None;
-    for (kind, value) in arg_kinds.iter().zip(lowered_args.iter()) {
-        if !matches!(kind, ScalarMethodArgKind::GuardedF64Local) {
-            continue;
-        }
+    for (_, value) in &guard_values {
         let raw = ctx
             .block()
             .call(I32, "js_typed_f64_arg_guard", &[(DOUBLE, value.as_str())]);
@@ -304,18 +837,30 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     }
 
     ctx.current_block = fast_idx;
-    let mut fast_args = Vec::with_capacity(lowered_args.len());
-    for (kind, value) in arg_kinds.iter().zip(lowered_args.iter()) {
-        if matches!(kind, ScalarMethodArgKind::GuardedF64Local) {
-            fast_args.push(ctx.block().call(
+    let mut raw_locals = HashMap::new();
+    for (id, value) in &guard_values {
+        raw_locals.insert(
+            *id,
+            ctx.block().call(
                 DOUBLE,
                 "js_typed_f64_arg_to_raw",
                 &[(DOUBLE, value.as_str())],
-            ));
-        } else {
-            fast_args.push(value.clone());
-        }
+            ),
+        );
     }
+    let mut fast_args = Vec::with_capacity(args.len());
+    for arg in args {
+        fast_args.push(lower_guarded_numeric_arg_fast(ctx, arg, &raw_locals)?);
+    }
+    let guarded_arg_count = arg_plans
+        .iter()
+        .filter(|plan| matches!(plan.kind, ScalarMethodArgKind::GuardedF64Expr))
+        .count();
+    let guard_note = if arg_plans.iter().any(|plan| plan.expression_guard) {
+        "public_numeric_expr"
+    } else {
+        "js_typed_f64_arg_guard"
+    };
     let fast_value = lower_scalar_method_inline_body(
         ctx,
         *receiver_id,
@@ -323,6 +868,11 @@ pub(super) fn try_lower_scalar_replaced_method_call(
         property,
         &method,
         &fast_args,
+        "guarded_numeric_args_fast_path",
+        vec![
+            format!("arg_guard={guard_note}"),
+            format!("guarded_arg_count={guarded_arg_count}"),
+        ],
     )?;
     let after_fast = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
@@ -330,6 +880,10 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     }
 
     ctx.current_block = fallback_idx;
+    let mut lowered_args = Vec::with_capacity(args.len());
+    for arg in args {
+        lowered_args.push(lower_expr(ctx, arg)?);
+    }
     let fallback_value = lower_materialized_receiver_dispatch(
         ctx,
         *receiver_id,
@@ -337,6 +891,15 @@ pub(super) fn try_lower_scalar_replaced_method_call(
         property,
         &lowered_args,
     )?;
+    record_scalar_method_materialized_fallback(
+        ctx,
+        *receiver_id,
+        &class_name,
+        property,
+        &fallback_value,
+        "arg_guard_failed",
+        Some(guard_note),
+    );
     let after_fallback = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);

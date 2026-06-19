@@ -39,6 +39,14 @@ fn typed_string_closure_signature_note(arg_count: usize) -> String {
     }
 }
 
+fn typed_i32_closure_signature_note(arg_count: usize) -> String {
+    if arg_count <= 1 {
+        "typed_signature=i32(i64 closure, i32)->i32".to_string()
+    } else {
+        "typed_signature=i32(i64 closure, i32, ...)->i32".to_string()
+    }
+}
+
 fn is_async_dispose_symbol_index(index: &Expr) -> bool {
     let Expr::SymbolFor(symbol_name) = index else {
         return false;
@@ -341,6 +349,17 @@ pub fn try_lower_closure_typed_local_call(
                         && args
                             .iter()
                             .all(|arg| crate::type_analysis::is_numeric_expr(ctx, arg));
+                    let uses_typed_i32_clone = ctx.typed_i32_closures.contains(&func_id)
+                        && args.iter().all(|arg| {
+                            matches!(
+                                crate::type_analysis::static_type_of(ctx, arg),
+                                Some(HirType::Int32)
+                            ) || matches!(
+                                arg,
+                                Expr::Integer(n)
+                                    if (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n)
+                            )
+                        });
                     let uses_typed_string_clone = ctx.typed_string_closures.contains(&func_id)
                         && args
                             .iter()
@@ -464,6 +483,98 @@ pub fn try_lower_closure_typed_local_call(
                                 format!("typed_clone={typed_fn}"),
                                 format!("generic_closure={generic_closure_fn}"),
                                 format!("closure_func_id={func_id}"),
+                            ],
+                        );
+                        result
+                    } else if uses_typed_i32_clone {
+                        let typed_fn = crate::codegen::typed_i32_closure_name(&closure_fn);
+                        let generic_closure_fn =
+                            crate::codegen::generic_closure_body_name(&closure_fn);
+                        let mut typed_guard: Option<String> = None;
+                        for value in &lowered_args {
+                            let raw = ctx.block().call(
+                                I32,
+                                "js_typed_i32_arg_guard",
+                                &[(DOUBLE, value.as_str())],
+                            );
+                            let ok = ctx.block().icmp_ne(I32, &raw, "0");
+                            typed_guard = Some(match typed_guard {
+                                Some(prev) => ctx.block().and(I1, &prev, &ok),
+                                None => ok,
+                            });
+                        }
+
+                        let typed_idx = ctx.new_block("closure_direct.typed_i32");
+                        let generic_idx = ctx.new_block("closure_direct.generic");
+                        let typed_merge_idx = ctx.new_block("closure_direct.typed_merge");
+                        let typed_label = ctx.block_label(typed_idx);
+                        let generic_label = ctx.block_label(generic_idx);
+                        let typed_merge_label = ctx.block_label(typed_merge_idx);
+                        if let Some(typed_guard) = typed_guard {
+                            ctx.block()
+                                .cond_br(&typed_guard, &typed_label, &generic_label);
+                        } else {
+                            ctx.block().br(&typed_label);
+                        }
+
+                        ctx.current_block = typed_idx;
+                        let mut typed_args_storage: Vec<String> =
+                            Vec::with_capacity(lowered_args.len());
+                        for value in &lowered_args {
+                            typed_args_storage.push(ctx.block().call(
+                                I32,
+                                "js_typed_i32_arg_to_raw",
+                                &[(DOUBLE, value.as_str())],
+                            ));
+                        }
+                        let mut typed_args: Vec<(crate::types::LlvmType, &str)> =
+                            Vec::with_capacity(typed_args_storage.len() + 1);
+                        typed_args.push((I64, &closure_handle));
+                        typed_args.extend(typed_args_storage.iter().map(|s| (I32, s.as_str())));
+                        let raw_i32 = ctx.block().call(I32, &typed_fn, &typed_args);
+                        let typed_value = crate::expr::i32_to_nanbox(ctx.block(), &raw_i32);
+                        let after_typed = ctx.block().label.clone();
+                        if !ctx.block().is_terminated() {
+                            ctx.block().br(&typed_merge_label);
+                        }
+
+                        ctx.current_block = generic_idx;
+                        let mut generic_args: Vec<(crate::types::LlvmType, &str)> =
+                            vec![(I64, &closure_handle)];
+                        for v in &lowered_args {
+                            generic_args.push((DOUBLE, v.as_str()));
+                        }
+                        let generic_value =
+                            ctx.block().call(DOUBLE, &generic_closure_fn, &generic_args);
+                        let after_generic = ctx.block().label.clone();
+                        if !ctx.block().is_terminated() {
+                            ctx.block().br(&typed_merge_label);
+                        }
+
+                        ctx.current_block = typed_merge_idx;
+                        let result = ctx.block().phi(
+                            DOUBLE,
+                            &[
+                                (typed_value.as_str(), after_typed.as_str()),
+                                (generic_value.as_str(), after_generic.as_str()),
+                            ],
+                        );
+                        ctx.record_lowered_value(
+                            "ClosureCall",
+                            None,
+                            "typed_i32_closure_direct_call",
+                            &LoweredValue::js_value(result.clone()),
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            vec![
+                                format!("typed_clone={typed_fn}"),
+                                format!("generic_closure={generic_closure_fn}"),
+                                format!("closure_func_id={func_id}"),
+                                typed_i32_closure_signature_note(lowered_args.len()),
+                                "boxed_result_at=direct_call_boundary".to_string(),
                             ],
                         );
                         result

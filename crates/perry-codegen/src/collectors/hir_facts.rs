@@ -39,6 +39,7 @@ pub(crate) struct RepresentationFacts {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArrayKindFact {
+    PackedI32,
     PackedF64,
     PackedValue,
     HoleyValue,
@@ -129,6 +130,13 @@ impl TypeFacts {
 
     pub(crate) fn proves_packed_f64_array(&self, local_id: u32) -> bool {
         self.array_kind(local_id) == ArrayKindFact::PackedF64
+            && self.proves_noalias_array(local_id)
+            && self.proves_array_length_stable(local_id)
+            && !self.has_materialization_hazard(local_id)
+    }
+
+    pub(crate) fn proves_packed_i32_array(&self, local_id: u32) -> bool {
+        self.array_kind(local_id) == ArrayKindFact::PackedI32
             && self.proves_noalias_array(local_id)
             && self.proves_array_length_stable(local_id)
             && !self.has_materialization_hazard(local_id)
@@ -592,7 +600,9 @@ impl ArrayFactCollector {
     fn collect_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::ArrayPush { array_id, value } => {
-                let value_kind = if expr_is_numeric_shaped(value) {
+                let value_kind = if expr_is_i32_shaped(value) {
+                    ArrayKindFact::PackedI32
+                } else if expr_is_numeric_shaped(value) {
                     ArrayKindFact::PackedF64
                 } else {
                     ArrayKindFact::PackedValue
@@ -680,7 +690,9 @@ impl ArrayFactCollector {
                 value,
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
-                    let value_kind = if expr_is_numeric_shaped(value) {
+                    let value_kind = if expr_is_i32_shaped(value) {
+                        ArrayKindFact::PackedI32
+                    } else if expr_is_numeric_shaped(value) {
                         ArrayKindFact::PackedF64
                     } else {
                         ArrayKindFact::PackedValue
@@ -1044,12 +1056,10 @@ impl ArrayFactCollector {
 
 fn array_kind_from_declared_type(ty: &perry_types::Type) -> ArrayKindFact {
     match ty {
-        perry_types::Type::Array(elem)
-            if matches!(
-                elem.as_ref(),
-                perry_types::Type::Number | perry_types::Type::Int32
-            ) =>
-        {
+        perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Int32) => {
+            ArrayKindFact::PackedI32
+        }
+        perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Number) => {
             ArrayKindFact::PackedF64
         }
         perry_types::Type::Array(_) => ArrayKindFact::PackedValue,
@@ -1059,6 +1069,9 @@ fn array_kind_from_declared_type(ty: &perry_types::Type) -> ArrayKindFact {
 
 fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
     match expr {
+        Expr::Array(elements) if elements.iter().all(expr_is_literal_i32) => {
+            ArrayKindFact::PackedI32
+        }
         Expr::Array(elements) if elements.iter().all(expr_is_literal_number) => {
             ArrayKindFact::PackedF64
         }
@@ -1077,6 +1090,13 @@ fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
             }
             if saw_hole {
                 ArrayKindFact::HoleyValue
+            } else if elements.iter().all(|element| {
+                matches!(
+                    element,
+                    perry_hir::ArrayElement::Expr(expr) if expr_is_literal_i32(expr)
+                )
+            }) {
+                ArrayKindFact::PackedI32
             } else if all_numeric {
                 ArrayKindFact::PackedF64
             } else {
@@ -1089,6 +1109,40 @@ fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
 
 fn expr_is_literal_number(expr: &Expr) -> bool {
     matches!(expr, Expr::Integer(_) | Expr::Number(_))
+}
+
+fn expr_is_literal_i32(expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(n) => i32::try_from(*n).is_ok(),
+        Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+            let value = *n as i64;
+            i32::try_from(value).is_ok() && *n == value as f64
+        }
+        _ => false,
+    }
+}
+
+fn expr_is_i32_shaped(expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(n) => i32::try_from(*n).is_ok(),
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                perry_hir::BinaryOp::BitAnd
+                    | perry_hir::BinaryOp::BitOr
+                    | perry_hir::BinaryOp::BitXor
+                    | perry_hir::BinaryOp::Shl
+                    | perry_hir::BinaryOp::Shr
+                    | perry_hir::BinaryOp::UShr
+            ) =>
+        {
+            expr_is_numeric_shaped(left) && expr_is_numeric_shaped(right)
+        }
+        Expr::MathImul(left, right) => {
+            expr_is_numeric_shaped(left) && expr_is_numeric_shaped(right)
+        }
+        _ => false,
+    }
 }
 
 fn expr_is_numeric_shaped(expr: &Expr) -> bool {
@@ -1133,6 +1187,8 @@ fn meet_array_kind(left: ArrayKindFact, right: ArrayKindFact) -> ArrayKindFact {
         (Unknown, _) | (_, Unknown) => Unknown,
         (HoleyValue, _) | (_, HoleyValue) => HoleyValue,
         (PackedValue, _) | (_, PackedValue) => PackedValue,
+        (PackedI32, PackedI32) => PackedI32,
+        (PackedI32, PackedF64) | (PackedF64, PackedI32) => PackedF64,
         (PackedF64, PackedF64) => PackedF64,
     }
 }
@@ -1172,6 +1228,18 @@ mod tests {
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Number)),
+            mutable: true,
+            init: Some(Expr::Array(
+                values.iter().copied().map(Expr::Integer).collect(),
+            )),
+        }
+    }
+
+    fn int32_array_let(id: u32, values: &[i64]) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("a{}", id),
+            ty: Type::Array(Box::new(Type::Int32)),
             mutable: true,
             init: Some(Expr::Array(
                 values.iter().copied().map(Expr::Integer).collect(),
@@ -1307,6 +1375,32 @@ mod tests {
         assert_eq!(graph.platform_constant(90), Some(1.0));
         assert!(graph.purity.pure_helper_function_ids.contains(&7));
         assert!(graph.proves_pure_helper(7));
+    }
+
+    #[test]
+    fn packed_i32_array_fact_requires_int32_array_with_i32_literal_initializer() {
+        let facts = collect_hir_facts(
+            &[
+                int32_array_let(1, &[1, 2, 3]),
+                number_array_let(2, &[1, 2, 3]),
+                Stmt::Let {
+                    id: 3,
+                    name: "fractional".to_string(),
+                    ty: Type::Array(Box::new(Type::Int32)),
+                    mutable: true,
+                    init: Some(Expr::Array(vec![Expr::Number(1.5)])),
+                },
+            ],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(facts.array_kind(1), ArrayKindFact::PackedI32);
+        assert!(facts.proves_packed_i32_array(1));
+        assert_eq!(facts.array_kind(2), ArrayKindFact::PackedF64);
+        assert!(!facts.proves_packed_i32_array(2));
+        assert_eq!(facts.array_kind(3), ArrayKindFact::PackedF64);
+        assert!(!facts.proves_packed_i32_array(3));
     }
 
     #[test]

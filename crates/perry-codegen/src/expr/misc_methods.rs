@@ -21,7 +21,7 @@ use crate::lower_string_method::{
 };
 #[allow(unused_imports)]
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::native_value::{LoweredValue, MaterializationReason, NativeRep};
+use crate::native_value::{ExpectedNativeRep, LoweredValue, MaterializationReason, NativeRep};
 #[allow(unused_imports)]
 use crate::type_analysis::{
     compute_auto_captures, is_array_expr, is_bigint_expr, is_bool_expr, is_map_expr,
@@ -38,13 +38,13 @@ use super::{
     emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
     extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
     is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32, lower_expr_value,
-    lower_index_set_fast, lower_js_args_array, lower_math_operand, lower_object_literal,
-    lower_stream_super_init, lower_url_string_getter, materialize_js_value, nanbox_bigint_inline,
-    nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
-    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
-    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
-    FlatConstInfo, FnCtx, I18nLowerCtx,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32, lower_expr_native,
+    lower_expr_value, lower_index_set_fast, lower_js_args_array, lower_math_operand,
+    lower_object_literal, lower_stream_super_init, lower_url_string_getter, materialize_js_value,
+    nanbox_bigint_inline, nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline,
+    proxy_build_args_array, try_flat_const_2d_int, try_lower_flat_const_index_get,
+    try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx,
 };
 
 fn lowered_value_to_iter_result_f64(
@@ -103,6 +103,44 @@ fn lower_iter_result_f64_payload(
             Ok((LoweredValue::f64(value), "slot_kind=raw_f64_coerced"))
         }
     }
+}
+
+fn is_definite_bool_iter_result_payload(value: &Expr) -> bool {
+    matches!(
+        value,
+        Expr::Bool(_)
+            | Expr::Compare { .. }
+            | Expr::Unary {
+                op: UnaryOp::Not,
+                ..
+            }
+            | Expr::BooleanCoerce(_)
+            | Expr::IsFinite(_)
+            | Expr::IsNaN(_)
+            | Expr::NumberIsNaN(_)
+            | Expr::NumberIsFinite(_)
+            | Expr::NumberIsInteger(_)
+            | Expr::IsUndefinedOrBareNan(_)
+            | Expr::SetHas { .. }
+            | Expr::SetDelete { .. }
+            | Expr::MapHas { .. }
+            | Expr::MapDelete { .. }
+            | Expr::ArrayIncludes { .. }
+    )
+}
+
+fn lower_iter_result_i1_payload(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<Option<LoweredValue>> {
+    if matches!(value, Expr::LocalGet(_)) {
+        let Some(lowered) = lower_expr_value(ctx, value)? else {
+            return Ok(None);
+        };
+        return Ok(matches!(lowered.rep, NativeRep::I1).then_some(lowered));
+    }
+    if !is_definite_bool_iter_result_payload(value) {
+        return Ok(None);
+    }
+    let lowered = lower_expr_native(ctx, value, ExpectedNativeRep::I1)?;
+    Ok(matches!(lowered.rep, NativeRep::I1).then_some(lowered))
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -780,7 +818,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // per-await `{value, done}` heap alloc on the hot path.
         Expr::IterResultSet(value, done) => {
             let done_str = if *done { "1" } else { "0" };
-            if is_numeric_expr(ctx, value) {
+            if let Some(raw) = lower_iter_result_i1_payload(ctx, value)? {
+                let value_i32 = ctx.block().zext(I1, &raw.value, I32);
+                let result = ctx.block().call(
+                    DOUBLE,
+                    "js_iter_result_set_i1",
+                    &[(I32, &value_i32), (I32, done_str)],
+                );
+                ctx.record_lowered_value(
+                    "IterResultSet",
+                    None,
+                    "compiler_private_async_iter_result_set_i1",
+                    &raw,
+                    None,
+                    None,
+                    None,
+                    false,
+                    false,
+                    vec!["slot_kind=raw_i1_proven".to_string()],
+                );
+                Ok(result)
+            } else if is_numeric_expr(ctx, value) {
                 let (raw, slot_note) = lower_iter_result_f64_payload(ctx, value)?;
                 let result = ctx.block().call(
                     DOUBLE,

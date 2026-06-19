@@ -5,6 +5,8 @@
 //! body is either:
 //! - `return <numeric expression>` over numeric parameters, numeric literals,
 //!   and direct `this.field` reads of public numeric fields; or
+//! - `return <Int32 expression>` over public Int32 fields/params/in-range
+//!   integer literals and signed bitwise binary operators; or
 //! - `return <numeric expression> <cmp> <numeric expression>` for boolean
 //!   predicates over the same safe numeric expression subset.
 
@@ -16,6 +18,7 @@ use perry_types::Type;
 #[derive(Clone, Copy)]
 enum ScalarMethodReturnKind {
     Numeric,
+    Int32,
     Boolean,
 }
 
@@ -57,11 +60,17 @@ pub(crate) fn is_simple_scalar_method(
 
     let mut numeric_params = HashSet::new();
     for param in &method.params {
+        let param_type_is_safe = match return_kind {
+            ScalarMethodReturnKind::Int32 => is_int32_type(&param.ty),
+            ScalarMethodReturnKind::Numeric | ScalarMethodReturnKind::Boolean => {
+                is_numeric_type(&param.ty)
+            }
+        };
         if param.default.is_some()
             || param.is_rest
             || param.arguments_object.is_some()
             || !param.decorators.is_empty()
-            || !is_numeric_type(&param.ty)
+            || !param_type_is_safe
         {
             return false;
         }
@@ -75,7 +84,9 @@ pub(crate) fn is_simple_scalar_method(
 }
 
 fn scalar_method_return_kind(ty: &Type) -> Option<ScalarMethodReturnKind> {
-    if is_numeric_type(ty) {
+    if matches!(ty, Type::Int32) {
+        Some(ScalarMethodReturnKind::Int32)
+    } else if matches!(ty, Type::Number) {
         Some(ScalarMethodReturnKind::Numeric)
     } else if matches!(ty, Type::Boolean) {
         Some(ScalarMethodReturnKind::Boolean)
@@ -94,6 +105,9 @@ fn scalar_method_return_expr_is_safe(
     match return_kind {
         ScalarMethodReturnKind::Numeric => {
             numeric_scalar_method_expr_is_safe(classes, class_name, expr, numeric_params)
+        }
+        ScalarMethodReturnKind::Int32 => {
+            int32_scalar_method_expr_is_safe(classes, class_name, expr, numeric_params)
         }
         ScalarMethodReturnKind::Boolean => {
             boolean_scalar_method_expr_is_safe(classes, class_name, expr, numeric_params)
@@ -151,8 +165,39 @@ fn numeric_scalar_method_expr_is_safe(
     }
 }
 
+fn int32_scalar_method_expr_is_safe(
+    classes: &HashMap<String, &Class>,
+    class_name: &str,
+    expr: &Expr,
+    numeric_params: &HashSet<u32>,
+) -> bool {
+    match expr {
+        Expr::Integer(value) => i32::try_from(*value).is_ok(),
+        Expr::LocalGet(id) => numeric_params.contains(id),
+        Expr::Binary { op, left, right } => {
+            matches!(
+                op,
+                BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            ) && int32_scalar_method_expr_is_safe(classes, class_name, left, numeric_params)
+                && int32_scalar_method_expr_is_safe(classes, class_name, right, numeric_params)
+        }
+        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+            public_int32_field(classes, class_name, property)
+        }
+        _ => false,
+    }
+}
+
 fn is_numeric_type(ty: &Type) -> bool {
     matches!(ty, Type::Number | Type::Int32)
+}
+
+fn is_int32_type(ty: &Type) -> bool {
+    matches!(ty, Type::Int32)
 }
 
 fn public_numeric_field(
@@ -181,6 +226,40 @@ fn public_numeric_field(
                 && !field.is_private
                 && field.name == field_name
                 && is_numeric_type(&field.ty)
+        }) {
+            return true;
+        }
+        current = class.extends_name.clone();
+    }
+    false
+}
+
+fn public_int32_field(
+    classes: &HashMap<String, &Class>,
+    class_name: &str,
+    field_name: &str,
+) -> bool {
+    let mut current = Some(class_name.to_string());
+    let mut seen = HashSet::new();
+    let mut depth = 0usize;
+    while let Some(name) = current {
+        depth += 1;
+        if depth > 64 || !seen.insert(name.clone()) {
+            return false;
+        }
+        let Some(class) = classes.get(&name).copied() else {
+            return false;
+        };
+        if class.getters.iter().any(|(name, _)| name == field_name)
+            || class.setters.iter().any(|(name, _)| name == field_name)
+        {
+            return false;
+        }
+        if class.fields.iter().any(|field| {
+            field.key_expr.is_none()
+                && !field.is_private
+                && field.name == field_name
+                && is_int32_type(&field.ty)
         }) {
             return true;
         }

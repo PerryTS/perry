@@ -1803,8 +1803,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // immediately.
     module.declare_function("js_iter_result_set", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_iter_result_set_f64", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_iter_result_set_i1", DOUBLE, &[I32, I32]);
     module.declare_function("js_iter_result_get_value", DOUBLE, &[]);
     module.declare_function("js_iter_result_get_value_f64", DOUBLE, &[]);
+    module.declare_function("js_iter_result_get_value_i1", I32, &[]);
     module.declare_function("js_iter_result_get_done", DOUBLE, &[]);
     // Optimized async-step chain: replaces
     // `Promise.resolve(value).then(then_v_arrow, then_e_arrow)` in

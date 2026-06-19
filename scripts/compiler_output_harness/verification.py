@@ -118,6 +118,19 @@ def runtime_budget_results(
                 ),
             }
         )
+    if trace_budget_fields and runtime_summary.get("gc_trace_unavailable") is True:
+        results.append(
+            {
+                "field": "gc_trace_unavailable",
+                "actual": 1,
+                "maximum": 0,
+                "passed": False,
+                "detail": (
+                    "PERRY_GC_TRACE was requested, but the linked runtime "
+                    "reported diagnostics feature disabled"
+                ),
+            }
+        )
     for field, maximum in sorted(budgets.items()):
         actual = int(runtime_summary.get(field, 0) or 0)
         results.append(

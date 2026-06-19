@@ -727,6 +727,11 @@ pub(crate) struct CrossModuleCtx {
     /// own-method direct calls may select these clones after receiver/method
     /// and per-representation typed argument guards pass.
     pub typed_i1_methods: std::collections::HashSet<(String, String)>,
+    /// Own instance methods that have a generated internal typed-string clone.
+    /// Public method symbols remain JSValue trampolines; exact own-method
+    /// direct calls may select these clones after receiver/method and string
+    /// argument guards pass.
+    pub typed_string_methods: std::collections::HashSet<(String, String)>,
     /// Per-method typed-i1 clone parameter reps. This lets exact same-module
     /// method calls target mixed native predicate clones such as
     /// `i1(double, double)` without routing through the public JSValue wrapper.
@@ -742,6 +747,10 @@ pub(crate) struct CrossModuleCtx {
     /// Only statically-known local closure calls may select these clones after
     /// closure identity/arity and numeric argument guards pass.
     pub typed_f64_closures: std::collections::HashSet<u32>,
+    /// Inline closure bodies that have a generated internal typed-i32 clone.
+    /// Only statically-known local closure calls may select these clones after
+    /// closure identity/arity and Int32 argument guards pass.
+    pub typed_i32_closures: std::collections::HashSet<u32>,
     /// Inline closure bodies that have a generated internal typed-i1 clone.
     /// Only statically-known local closure calls may select these clones after
     /// closure identity/arity and per-representation argument guards pass.

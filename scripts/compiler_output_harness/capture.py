@@ -33,7 +33,7 @@ from .common import (
     write_text,
 )
 from .spec import WORKLOADS
-from .verification import verify_artifacts
+from .verification import TRACE_RUNTIME_BUDGET_FIELDS, verify_artifacts
 
 
 SUITES: dict[str, list[str]] = {
@@ -114,9 +114,11 @@ def resolve_benchmark_runs(args: argparse.Namespace) -> int:
     return runs
 
 
-def _compile_env(clang: str) -> dict[str, str]:
+def _compile_env(clang: str, *, enable_gc_trace: bool = False) -> dict[str, str]:
     env = {**os.environ, "PERRY_LLVM_KEEP_IR": "1", "PERRY_NO_CACHE": "1"}
     env["PERRY_LLVM_CLANG"] = clang
+    if enable_gc_trace:
+        env["PERRY_GC_TRACE"] = "1"
     return env
 
 
@@ -198,6 +200,10 @@ def capture(args: argparse.Namespace) -> int:
     clang = resolve_clang(args.clang)
     analysis_extra_clang_args = list(args.clang_arg or [])
     runs = resolve_benchmark_runs(args)
+    trace_budget_fields = set(
+        workload_info.get("runtime_budgets", {})
+    ).intersection(TRACE_RUNTIME_BUDGET_FIELDS)
+    compile_gc_trace = bool(trace_budget_fields and not args.no_gc_trace)
     binary = (out_dir / args.workload).resolve()
 
     commands: dict[str, Any] = {}
@@ -217,7 +223,7 @@ def capture(args: argparse.Namespace) -> int:
     commands["hir"] = run_command(
         hir_cmd,
         cwd=out_dir,
-        env=_compile_env(clang),
+        env=_compile_env(clang, enable_gc_trace=compile_gc_trace),
         timeout=args.compile_timeout,
         stdout_path=hir_stdout,
         stderr_path=hir_stderr,
@@ -236,7 +242,7 @@ def capture(args: argparse.Namespace) -> int:
     commands["compile"] = run_command(
         compile_cmd,
         cwd=out_dir,
-        env=_compile_env(clang),
+        env=_compile_env(clang, enable_gc_trace=compile_gc_trace),
         timeout=args.compile_timeout,
         stdout_path=compile_stdout,
         stderr_path=compile_stderr,
@@ -479,7 +485,7 @@ def capture_suite(args: argparse.Namespace) -> int:
         per_workload = copy.copy(args)
         per_workload.workload = workload
         per_workload.out_dir = str(workload_out)
-        per_workload.gate = False
+        per_workload.gate = bool(args.gate)
         per_workload.print_summary = False
         per_workload.verify_native_regions = True
         try:

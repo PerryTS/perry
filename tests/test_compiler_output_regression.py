@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 if sys.version_info < (3, 11):
@@ -21,6 +22,7 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = HARNESS
 SPEC.loader.exec_module(HARNESS)
 
+from compiler_output_harness import capture as CAPTURE_MODULE
 from compiler_output_harness.capture import SUITES
 
 
@@ -1132,10 +1134,67 @@ idxset.bounded_numeric_merge.5:
         workflow = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text(
             encoding="utf-8"
         )
+        native_region_block = workflow.split("Gate native-region proof compiler output", 1)[
+            1
+        ].split("Gate native-ABI proof compiler output", 1)[0]
+        native_abi_block = workflow.split("Gate native-ABI proof compiler output", 1)[
+            1
+        ].split("Gate typed feedback runtime evidence", 1)[0]
+        self.assertIn("--gate", native_region_block)
+        self.assertIn("--gate", native_abi_block)
         self.assertIn("Gate native-ABI proof compiler output", workflow)
         self.assertIn("--suite native-abi-proof", workflow)
+        self.assertIn("Run native ABI evidence report unit tests", workflow)
+        self.assertIn("tests.test_native_abi_evidence_report", workflow)
+        self.assertIn("native-abi-evidence-packet:", workflow)
+        self.assertIn("Gate native ABI evidence packet", workflow)
+        self.assertIn("tests/test_native_abi_evidence_packet_smoke.sh", workflow)
+        self.assertIn("target/native-abi-evidence-packet", workflow)
         self.assertIn("Gate typed feedback runtime evidence", workflow)
         self.assertIn("tests.test_typed_feedback_runtime_evidence", workflow)
+
+    def test_capture_suite_propagates_gate_to_workload_capture(self):
+        observed_gate_values = []
+        original_capture = CAPTURE_MODULE.capture
+        CAPTURE_MODULE.SUITES["__gate_propagation_test__"] = ["dummy_workload"]
+
+        def fake_capture(args):
+            observed_gate_values.append(args.gate)
+            out_dir = Path(args.out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "structural-report.json").write_text(
+                json.dumps({"status": "pass", "errors": []}),
+                encoding="utf-8",
+            )
+            return 0
+
+        CAPTURE_MODULE.capture = fake_capture
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                args = SimpleNamespace(
+                    suite="__gate_propagation_test__",
+                    out_dir=temp,
+                    gate=True,
+                    print_summary=False,
+                )
+                self.assertEqual(CAPTURE_MODULE.capture_suite(args), 0)
+        finally:
+            CAPTURE_MODULE.capture = original_capture
+            CAPTURE_MODULE.SUITES.pop("__gate_propagation_test__", None)
+
+        self.assertEqual(observed_gate_values, [True])
+
+    def test_trace_budget_compile_env_requests_gc_trace(self):
+        env = CAPTURE_MODULE._compile_env("clang", enable_gc_trace=True)
+        self.assertEqual(env["PERRY_GC_TRACE"], "1")
+        self.assertNotIn("PERRY_GC_TRACE", CAPTURE_MODULE._compile_env("clang"))
+
+    def test_auto_optimize_enables_diagnostics_for_gc_trace_evidence(self):
+        optimized_libs = (
+            REPO_ROOT / "crates" / "perry" / "src" / "commands" / "compile" / "optimized_libs.rs"
+        ).read_text(encoding="utf-8")
+        self.assertIn('std::env::var("PERRY_GC_TRACE")', optimized_libs)
+        self.assertIn("perry-runtime/diagnostics", optimized_libs)
 
     def test_release_sweep_wires_native_abi_evidence_packet_smoke(self):
         release_sweep = (REPO_ROOT / "scripts" / "release_sweep.sh").read_text(
@@ -1150,13 +1209,23 @@ idxset.bounded_numeric_merge.5:
         smoke = (
             REPO_ROOT / "tests" / "test_native_abi_evidence_packet_smoke.sh"
         ).read_text(encoding="utf-8")
+        packet = (
+            REPO_ROOT / "scripts" / "native_abi_evidence_packet.sh"
+        ).read_text(encoding="utf-8")
         self.assertIn(
             "13|native_abi_evidence|all|native ABI evidence packet smoke gate",
             release_sweep,
         )
         self.assertIn("tests/test_native_abi_evidence_packet_smoke.sh", tier)
         self.assertIn("PERRY_BIN", tier)
+        self.assertIn("--runs 5", smoke)
         self.assertIn("--gate", smoke)
+        self.assertIn("scripts/check_runtime_symbols.sh", packet)
+        self.assertIn("release_symbol_guard", smoke)
+        self.assertIn("--gate requires --runs >= 5", packet)
+        self.assertIn("build_runtime_archive", packet)
+        self.assertIn("snapshot_tool_artifacts", packet)
+        self.assertIn("rustc_wrapper_scrubbed", packet)
 
     def test_runtime_symbol_guard_roots_numeric_array_helpers(self):
         guard = (REPO_ROOT / "scripts" / "check_runtime_symbols.sh").read_text(
@@ -1232,11 +1301,37 @@ idxset.bounded_numeric_merge.5:
         )
         for symbol in (
             "js_map_set_string_number",
+            "js_map_set_string_key",
+            "js_map_set_string_i32",
+            "js_map_set_string_u32",
+            "js_map_set_string_f32",
+            "js_map_set_string_bool",
+            "js_map_set_string_string",
+            "js_map_set_number_key",
             "js_map_get_string_key",
+            "js_map_get_number_key",
             "js_map_has_string_key",
+            "js_map_has_number_key",
+            "js_map_delete_string_key",
+            "js_map_delete_number_key",
             "js_set_add_string",
+            "js_set_add_number",
             "js_set_has_string",
+            "js_set_has_number",
             "js_set_delete_string",
+            "js_set_delete_number",
+            "js_set_add_i32",
+            "js_set_has_i32",
+            "js_set_delete_i32",
+            "js_set_add_u32",
+            "js_set_has_u32",
+            "js_set_delete_u32",
+            "js_set_add_f32",
+            "js_set_has_f32",
+            "js_set_delete_f32",
+            "js_set_add_bool",
+            "js_set_has_bool",
+            "js_set_delete_bool",
         ):
             self.assertIn(symbol, guard)
 
@@ -1253,8 +1348,10 @@ idxset.bounded_numeric_merge.5:
             "js_bool_box_set",
             "js_iter_result_set",
             "js_iter_result_set_f64",
+            "js_iter_result_set_i1",
             "js_iter_result_get_value",
             "js_iter_result_get_value_f64",
+            "js_iter_result_get_value_i1",
             "js_iter_result_get_done",
         ):
             self.assertIn(symbol, guard)

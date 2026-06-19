@@ -119,6 +119,24 @@ pub(crate) fn typed_i1_closure_capture_reps(
     Some(reps)
 }
 
+pub(crate) fn typed_i32_closure_capture_reps(
+    expr: &Expr,
+    module_local_types: &HashMap<u32, Type>,
+) -> Option<Vec<(u32, TypedParamRep)>> {
+    let Expr::Closure { captures, .. } = expr else {
+        return None;
+    };
+    let mut reps = Vec::with_capacity(captures.len());
+    for id in captures {
+        let ty = module_local_types.get(id)?;
+        if !matches!(ty, Type::Int32) {
+            return None;
+        }
+        reps.push((*id, TypedParamRep::I32));
+    }
+    Some(reps)
+}
+
 pub(crate) fn typed_string_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
@@ -319,12 +337,20 @@ pub(crate) fn typed_i32_method_name(generic_name: &str) -> String {
     format!("{generic_name}__typed_i32")
 }
 
+pub(crate) fn typed_string_method_name(generic_name: &str) -> String {
+    format!("{generic_name}__typed_string")
+}
+
 pub(crate) fn typed_f64_closure_name(generic_name: &str) -> String {
     format!("{generic_name}__typed_f64")
 }
 
 pub(crate) fn typed_i1_closure_name(generic_name: &str) -> String {
     format!("{generic_name}__typed_i1")
+}
+
+pub(crate) fn typed_i32_closure_name(generic_name: &str) -> String {
+    format!("{generic_name}__typed_i32")
 }
 
 pub(crate) fn typed_string_closure_name(generic_name: &str) -> String {
@@ -359,6 +385,11 @@ pub(crate) fn is_typed_f64_method_candidate(method: &Function) -> bool {
 #[allow(dead_code)]
 pub(crate) fn is_typed_i1_method_candidate(method: &Function) -> bool {
     typed_i1_function_rejection_reason_impl(method).is_none()
+}
+
+#[allow(dead_code)]
+pub(crate) fn is_typed_string_method_candidate(method: &Function) -> bool {
+    typed_string_method_rejection_reason(method).is_none()
 }
 
 pub(crate) fn typed_f64_function_rejection_reason(
@@ -442,6 +473,12 @@ pub(crate) fn typed_i32_method_rejection_reason(
     method: &Function,
 ) -> Option<TypedCloneRejectionReason> {
     typed_i32_function_rejection_reason_impl(method)
+}
+
+pub(crate) fn typed_string_method_rejection_reason(
+    method: &Function,
+) -> Option<TypedCloneRejectionReason> {
+    typed_string_function_rejection_reason(method)
 }
 
 #[allow(dead_code)]
@@ -574,6 +611,71 @@ pub(crate) fn typed_i1_closure_rejection_reason_with_types(
     }
 
     typed_i1_body_rejection_reason(body, locals)
+}
+
+pub(crate) fn typed_i32_closure_rejection_reason(expr: &Expr) -> Option<TypedCloneRejectionReason> {
+    typed_i32_closure_rejection_reason_with_types(expr, &HashMap::new())
+}
+
+pub(crate) fn typed_i32_closure_rejection_reason_with_types(
+    expr: &Expr,
+    module_local_types: &HashMap<u32, Type>,
+) -> Option<TypedCloneRejectionReason> {
+    let Expr::Closure {
+        params,
+        return_type,
+        body,
+        captures,
+        mutable_captures,
+        captures_this,
+        captures_new_target,
+        is_async,
+        is_generator,
+        ..
+    } = expr
+    else {
+        return Some(TypedCloneRejectionReason::NotClosure);
+    };
+    if *is_async || *is_generator {
+        return Some(TypedCloneRejectionReason::AsyncOrGenerator);
+    }
+    if *captures_this {
+        return Some(TypedCloneRejectionReason::CapturesThis);
+    }
+    if *captures_new_target {
+        return Some(TypedCloneRejectionReason::CapturesNewTarget);
+    }
+    if !mutable_captures.is_empty() || captures.iter().any(|id| mutable_captures.contains(id)) {
+        return Some(TypedCloneRejectionReason::Captures);
+    }
+    if !matches!(return_type, Type::Int32) {
+        return Some(TypedCloneRejectionReason::ReturnTypeNotI32);
+    }
+
+    let mut locals = HashMap::new();
+    for param in params {
+        if param.default.is_some() {
+            return Some(TypedCloneRejectionReason::ParamDefault);
+        }
+        if param.is_rest {
+            return Some(TypedCloneRejectionReason::RestParam);
+        }
+        if param.arguments_object.is_some() {
+            return Some(TypedCloneRejectionReason::ArgumentsObject);
+        }
+        if !matches!(param.ty, Type::Int32) {
+            return Some(TypedCloneRejectionReason::ParamNotI32);
+        }
+        locals.insert(param.id, TypedParamRep::I32);
+    }
+    let Some(capture_reps) = typed_i32_closure_capture_reps(expr, module_local_types) else {
+        return Some(TypedCloneRejectionReason::Captures);
+    };
+    for (capture_id, rep) in capture_reps {
+        locals.insert(capture_id, rep);
+    }
+
+    typed_i32_body_rejection_reason(body, locals)
 }
 
 #[allow(dead_code)]
@@ -1389,7 +1491,15 @@ pub(crate) fn lower_typed_i32_body(
     params: &[perry_hir::Param],
     body: &[Stmt],
 ) -> anyhow::Result<String> {
-    let mut locals = HashMap::new();
+    lower_typed_i32_body_with_seed_locals(blk, params, body, HashMap::new())
+}
+
+pub(crate) fn lower_typed_i32_body_with_seed_locals(
+    blk: &mut crate::block::LlBlock,
+    params: &[perry_hir::Param],
+    body: &[Stmt],
+    mut locals: HashMap<u32, String>,
+) -> anyhow::Result<String> {
     for param in params {
         locals.insert(param.id, format!("%arg{}", param.id));
     }

@@ -294,6 +294,34 @@ fn assert_no_packed_f64_loop_artifacts(artifact: &serde_json::Value) {
     );
 }
 
+fn assert_no_packed_i32_loop(ir: &str) {
+    assert!(
+        !ir.contains("for.packed_i32_fast"),
+        "invalidated array proof must not emit a packed-i32 fast clone:\n{ir}"
+    );
+}
+
+fn assert_no_packed_i32_loop_artifacts(artifact: &serde_json::Value) {
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            matches!(
+                record["consumer"].as_str(),
+                Some(
+                    "packed_i32_loop_guard"
+                        | "packed_i32_loop_fallback"
+                        | "packed_i32_loop_load"
+                        | "packed_i32_loop_load_f64"
+                )
+            ) || record["expr_kind"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("PackedI32Loop"))
+                || record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_i32")
+        }),
+        "invalidated alias mutation must not emit packed-i32 loop artifact records:\n{artifact:#}"
+    );
+}
+
 fn record_has_effect_fact(
     record: &serde_json::Value,
     list: &str,
@@ -761,6 +789,37 @@ fn loop_local_array_alias_push_blocks_packed_f64_loop_and_artifacts() {
 
     let artifact = compile_artifact_json("artifact_packed_f64_loop_local_alias_push.ts", body);
     assert_no_packed_f64_loop_artifacts(&artifact);
+}
+
+#[test]
+fn loop_local_array_alias_push_blocks_packed_i32_loop_and_artifacts() {
+    let body = vec![
+        int32_array_let(1, "arr", vec![1, 2, 3]),
+        number_let(3, "sum", true, int(0)),
+        for_loop(
+            4,
+            length(1),
+            vec![
+                array_alias_let(2, "alias", 1),
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: 2,
+                    value: Box::new(int(4)),
+                }),
+                Stmt::Expr(Expr::LocalSet(
+                    3,
+                    Box::new(bit_or_zero(add(local(3), index_get(1, local(4))))),
+                )),
+            ],
+        ),
+        Stmt::Return(Some(local(3))),
+    ];
+
+    let ir = compile_ir("packed_i32_loop_local_alias_push.ts", body.clone());
+    assert_no_packed_f64_loop(&ir);
+    assert_no_packed_i32_loop(&ir);
+
+    let artifact = compile_artifact_json("artifact_packed_i32_loop_local_alias_push.ts", body);
+    assert_no_packed_i32_loop_artifacts(&artifact);
 }
 
 #[test]

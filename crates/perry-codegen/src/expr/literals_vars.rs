@@ -32,13 +32,13 @@ use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[allow(unused_imports)]
 use super::{
-    buffer_alias_metadata_suffix, can_lower_expr_as_i32, emit_layout_note_slot_on_block,
-    emit_root_nanbox_store_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    emit_string_literal_global, emit_v8_export_call, emit_v8_member_method_call,
-    emit_write_barrier, emit_write_barrier_slot_on_block, expr_is_known_non_pointer_shadow_value,
-    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
-    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
-    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
+    buffer_alias_metadata_suffix, can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
+    emit_layout_note_slot_on_block, emit_root_nanbox_store_on_block, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, emit_string_literal_global, emit_v8_export_call,
+    emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
+    expr_is_known_non_pointer_shadow_value, extract_array_of_object_shape, i32_bool_to_nanbox,
+    import_origin_suffix, is_global_this_builtin_function_name, is_global_this_builtin_name,
+    is_known_finite, lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
     lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_pod_local_reassignment,
     lower_stream_super_init, lower_url_string_getter, materialize_pod_local, nanbox_bigint_inline,
     nanbox_pointer_inline, nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array,
@@ -540,17 +540,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
-                    && can_lower_expr_as_i32(
-                        value,
-                        &ctx.i32_counter_slots,
-                        ctx.flat_const_arrays,
-                        &ctx.array_row_aliases,
-                        ctx.integer_locals,
-                        ctx.clamp3_functions,
-                        ctx.clamp_u8_functions,
-                        ctx.integer_returning_functions,
-                        ctx.i32_identity_functions,
-                    )
+                    && can_lower_expr_as_i32_in_current_region(ctx, value)
                 {
                     let v_i32 = lower_expr_as_i32(ctx, value)?;
                     let unsigned_i32 = ctx.unsigned_i32_locals.contains(id);

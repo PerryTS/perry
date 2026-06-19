@@ -21,6 +21,7 @@ pub(crate) struct NativeFactUse {
     pub kind: String,
     pub local_id: Option<u32>,
     pub state: String,
+    pub detail: String,
     pub reason: Option<MaterializationReason>,
 }
 
@@ -45,6 +46,8 @@ pub(crate) enum NativeAbiTransitionOp {
     NativeHandleBox,
     PromiseBox,
     BoolToJsValue,
+    #[serde(rename = "bigint_box")]
+    BigIntBox,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -430,6 +433,7 @@ impl NativeRepSummary {
                     NativeAbiTransitionOp::NativeHandleBox => "native_handle_box",
                     NativeAbiTransitionOp::PromiseBox => "promise_box",
                     NativeAbiTransitionOp::BoolToJsValue => "bool_to_js_value",
+                    NativeAbiTransitionOp::BigIntBox => "bigint_box",
                 };
                 *native_abi_transition_op_counts
                     .entry(op_name.to_string())
@@ -550,7 +554,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 14,
+        schema_version: 15,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

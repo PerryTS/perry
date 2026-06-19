@@ -61,8 +61,9 @@ pub(crate) use typed_abi::{
     generic_closure_body_name, generic_function_body_name, generic_method_body_name,
     typed_f64_closure_name, typed_f64_function_name, typed_f64_method_name,
     typed_f64_receiver_method_info, typed_f64_receiver_method_name, typed_i1_closure_name,
-    typed_i1_function_name, typed_i1_method_name, typed_i32_function_name, typed_i32_method_name,
-    typed_string_closure_name, typed_string_function_name, TypedParamRep, TypedReceiverMethodInfo,
+    typed_i1_function_name, typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name,
+    typed_i32_method_name, typed_string_closure_name, typed_string_function_name,
+    typed_string_method_name, TypedParamRep, TypedReceiverMethodInfo,
 };
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
@@ -1247,6 +1248,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_f64_methods = std::collections::HashSet::new();
     let mut typed_i32_methods = std::collections::HashSet::new();
     let mut typed_i1_methods = std::collections::HashSet::new();
+    let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
     for class in &hir.classes {
@@ -1325,6 +1327,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     reason,
                     vec![
                         "typed_clone_kind=typed_i32_method".to_string(),
+                        format!("class={}", class.name),
+                        format!("method={}", method.name),
+                        format!("function_id={}", method.id),
+                    ],
+                ),
+            }
+            match typed_abi::typed_string_method_rejection_reason(method) {
+                None => {
+                    typed_string_methods.insert((class.name.clone(), method.name.clone()));
+                }
+                Some(reason) => record_typed_clone_rejection(
+                    &mut typed_clone_rejection_records,
+                    source_function.clone(),
+                    "typed_string_method_clone_decision",
+                    reason,
+                    vec![
+                        "typed_clone_kind=typed_string_method".to_string(),
                         format!("class={}", class.name),
                         format!("method={}", method.name),
                         format!("function_id={}", method.id),
@@ -1491,9 +1510,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_f64_methods,
         typed_i32_methods,
         typed_i1_methods,
+        typed_string_methods,
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
         typed_f64_closures: std::collections::HashSet::new(),
+        typed_i32_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),
         typed_string_closures: std::collections::HashSet::new(),
         typed_string_closure_capture_counts: std::collections::HashMap::new(),
@@ -2449,6 +2470,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         collect_closures_in_stmts(&hir.init, &mut seen, &mut closures);
     }
     cross_module.typed_f64_closures.clear();
+    cross_module.typed_i32_closures.clear();
     cross_module.typed_i1_closures.clear();
     cross_module.typed_string_closures.clear();
     cross_module.typed_string_closure_capture_counts.clear();
@@ -2498,6 +2520,28 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                     format!(
                         "symbol={}",
                         typed_i1_closure_name(&format!(
+                            "perry_closure_{}__{}",
+                            module_prefix, func_id
+                        ))
+                    ),
+                ],
+            ),
+        }
+        match typed_abi::typed_i32_closure_rejection_reason_with_types(expr, &module_local_types) {
+            None => {
+                cross_module.typed_i32_closures.insert(*func_id);
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                format!("closure#{func_id}"),
+                "typed_i32_closure_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_i32_closure".to_string(),
+                    format!("closure_func_id={func_id}"),
+                    format!(
+                        "symbol={}",
+                        typed_i32_closure_name(&format!(
                             "perry_closure_{}__{}",
                             module_prefix, func_id
                         ))

@@ -360,6 +360,18 @@ fn normalize_zero(value: f64) -> f64 {
     }
 }
 
+#[inline(always)]
+fn normalize_number_value_from_boxed(value: f64) -> Option<f64> {
+    let js_value = crate::value::JSValue::from_bits(value.to_bits());
+    if js_value.is_int32() {
+        Some(normalize_zero(js_value.as_int32() as f64))
+    } else if js_value.is_number() {
+        Some(normalize_zero(value))
+    } else {
+        None
+    }
+}
+
 /// Compare two strings by content
 #[cfg(test)]
 unsafe fn strings_equal(a: *const StringHeader, b: *const StringHeader) -> bool {
@@ -666,6 +678,14 @@ pub extern "C" fn js_set_add(set: *mut SetHeader, value: f64) -> *mut SetHeader 
 }
 
 #[no_mangle]
+pub extern "C" fn js_set_add_number(set: *mut SetHeader, value: f64) -> *mut SetHeader {
+    let Some(value) = normalize_number_value_from_boxed(value) else {
+        return js_set_add(set, value);
+    };
+    js_set_add(set, value)
+}
+
+#[no_mangle]
 pub extern "C" fn js_set_add_string(
     set: *mut SetHeader,
     value: *const StringHeader,
@@ -712,6 +732,52 @@ pub extern "C" fn js_set_add_string(
     }
 }
 
+#[inline(always)]
+fn boxed_i32_value(value: i32) -> f64 {
+    f64::from_bits(crate::value::JSValue::int32(value).bits())
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_add_i32(set: *mut SetHeader, value: i32) -> *mut SetHeader {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return set;
+    }
+    js_set_add(set, boxed_i32_value(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_add_u32(set: *mut SetHeader, value: u32) -> *mut SetHeader {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return set;
+    }
+    js_set_add(set, f64::from(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_add_f32(set: *mut SetHeader, value: f32) -> *mut SetHeader {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return set;
+    }
+    js_set_add(set, f64::from(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_add_bool(set: *mut SetHeader, value: i32) -> *mut SetHeader {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return set;
+    }
+    let boxed = if value != 0 {
+        f64::from_bits(crate::value::TAG_TRUE)
+    } else {
+        f64::from_bits(crate::value::TAG_FALSE)
+    };
+    js_set_add(set, boxed)
+}
+
 /// Check if the set has a value
 /// Returns 1 if found, 0 if not found
 #[no_mangle]
@@ -724,6 +790,14 @@ pub extern "C" fn js_set_has(set: *const SetHeader, value: f64) -> i32 {
             0
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_has_number(set: *const SetHeader, value: f64) -> i32 {
+    let Some(value) = normalize_number_value_from_boxed(value) else {
+        return js_set_has(set, value);
+    };
+    js_set_has(set, value)
 }
 
 #[no_mangle]
@@ -740,6 +814,47 @@ pub extern "C" fn js_set_has_string(set: *const SetHeader, value: *const StringH
             0
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_has_i32(set: *const SetHeader, value: i32) -> i32 {
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 0;
+    }
+    js_set_has(set, boxed_i32_value(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_has_u32(set: *const SetHeader, value: u32) -> i32 {
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 0;
+    }
+    js_set_has(set, f64::from(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_has_f32(set: *const SetHeader, value: f32) -> i32 {
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 0;
+    }
+    js_set_has(set, f64::from(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_has_bool(set: *const SetHeader, value: i32) -> i32 {
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return 0;
+    }
+    let boxed = if value != 0 {
+        f64::from_bits(crate::value::TAG_TRUE)
+    } else {
+        f64::from_bits(crate::value::TAG_FALSE)
+    };
+    js_set_has(set, boxed)
 }
 
 /// Delete a value from the set
@@ -782,6 +897,14 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_set_delete_number(set: *mut SetHeader, value: f64) -> i32 {
+    let Some(value) = normalize_number_value_from_boxed(value) else {
+        return js_set_delete(set, value);
+    };
+    js_set_delete(set, value)
+}
+
+#[no_mangle]
 pub extern "C" fn js_set_delete_string(set: *mut SetHeader, value: *const StringHeader) -> i32 {
     let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
     if set.is_null() {
@@ -789,6 +912,47 @@ pub extern "C" fn js_set_delete_string(set: *mut SetHeader, value: *const String
     }
     let value = boxed_heap_string_value(value);
     js_set_delete(set, value)
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_delete_i32(set: *mut SetHeader, value: i32) -> i32 {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return 0;
+    }
+    js_set_delete(set, boxed_i32_value(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_delete_u32(set: *mut SetHeader, value: u32) -> i32 {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return 0;
+    }
+    js_set_delete(set, f64::from(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_delete_f32(set: *mut SetHeader, value: f32) -> i32 {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return 0;
+    }
+    js_set_delete(set, f64::from(value))
+}
+
+#[no_mangle]
+pub extern "C" fn js_set_delete_bool(set: *mut SetHeader, value: i32) -> i32 {
+    let set = clean_set_ptr(set as *const SetHeader) as *mut SetHeader;
+    if set.is_null() {
+        return 0;
+    }
+    let boxed = if value != 0 {
+        f64::from_bits(crate::value::TAG_TRUE)
+    } else {
+        f64::from_bits(crate::value::TAG_FALSE)
+    };
+    js_set_delete(set, boxed)
 }
 
 // Codegen emits these string-key typed lowering helpers directly from
@@ -800,11 +964,42 @@ static KEEP_JS_SET_ADD_STRING: extern "C" fn(
     *const StringHeader,
 ) -> *mut SetHeader = js_set_add_string;
 #[used]
+static KEEP_JS_SET_ADD_NUMBER: extern "C" fn(*mut SetHeader, f64) -> *mut SetHeader =
+    js_set_add_number;
+#[used]
 static KEEP_JS_SET_HAS_STRING: extern "C" fn(*const SetHeader, *const StringHeader) -> i32 =
     js_set_has_string;
 #[used]
+static KEEP_JS_SET_HAS_NUMBER: extern "C" fn(*const SetHeader, f64) -> i32 = js_set_has_number;
+#[used]
 static KEEP_JS_SET_DELETE_STRING: extern "C" fn(*mut SetHeader, *const StringHeader) -> i32 =
     js_set_delete_string;
+#[used]
+static KEEP_JS_SET_DELETE_NUMBER: extern "C" fn(*mut SetHeader, f64) -> i32 = js_set_delete_number;
+#[used]
+static KEEP_JS_SET_ADD_I32: extern "C" fn(*mut SetHeader, i32) -> *mut SetHeader = js_set_add_i32;
+#[used]
+static KEEP_JS_SET_HAS_I32: extern "C" fn(*const SetHeader, i32) -> i32 = js_set_has_i32;
+#[used]
+static KEEP_JS_SET_DELETE_I32: extern "C" fn(*mut SetHeader, i32) -> i32 = js_set_delete_i32;
+#[used]
+static KEEP_JS_SET_ADD_U32: extern "C" fn(*mut SetHeader, u32) -> *mut SetHeader = js_set_add_u32;
+#[used]
+static KEEP_JS_SET_HAS_U32: extern "C" fn(*const SetHeader, u32) -> i32 = js_set_has_u32;
+#[used]
+static KEEP_JS_SET_DELETE_U32: extern "C" fn(*mut SetHeader, u32) -> i32 = js_set_delete_u32;
+#[used]
+static KEEP_JS_SET_ADD_F32: extern "C" fn(*mut SetHeader, f32) -> *mut SetHeader = js_set_add_f32;
+#[used]
+static KEEP_JS_SET_HAS_F32: extern "C" fn(*const SetHeader, f32) -> i32 = js_set_has_f32;
+#[used]
+static KEEP_JS_SET_DELETE_F32: extern "C" fn(*mut SetHeader, f32) -> i32 = js_set_delete_f32;
+#[used]
+static KEEP_JS_SET_ADD_BOOL: extern "C" fn(*mut SetHeader, i32) -> *mut SetHeader = js_set_add_bool;
+#[used]
+static KEEP_JS_SET_HAS_BOOL: extern "C" fn(*const SetHeader, i32) -> i32 = js_set_has_bool;
+#[used]
+static KEEP_JS_SET_DELETE_BOOL: extern "C" fn(*mut SetHeader, i32) -> i32 = js_set_delete_bool;
 
 /// Clear all elements from the set
 #[no_mangle]
@@ -1587,6 +1782,104 @@ mod tests {
 
         assert_eq!(js_set_delete_string(set, s2), 1);
         assert_eq!(js_set_has_string(set, s1), 0);
+    }
+
+    #[test]
+    fn test_set_number_specialized_helpers_preserve_numeric_values_and_fallback() {
+        let set = js_set_alloc(4);
+
+        js_set_add_number(set, -0.0);
+        assert_eq!(js_set_size(set), 1);
+        assert_eq!(js_set_has_number(set, 0.0), 1);
+        assert!(
+            test_set_index_contains(set, 0.0),
+            "numeric helper should populate the Set side-table"
+        );
+
+        js_set_add_number(set, 0.0);
+        assert_eq!(
+            js_set_size(set),
+            1,
+            "-0 and +0 should deduplicate through the numeric helper"
+        );
+        assert_eq!(js_set_delete_number(set, -0.0), 1);
+        assert_eq!(js_set_has_number(set, 0.0), 0);
+
+        let string = js_string_from_bytes(b"fallback".as_ptr(), 8);
+        let boxed_string =
+            f64::from_bits(crate::value::STRING_TAG | (string as u64 & crate::value::POINTER_MASK));
+        js_set_add_number(set, boxed_string);
+        assert_eq!(
+            js_set_has_number(set, boxed_string),
+            1,
+            "nonnumeric calls to the numeric helper should preserve generic fallback semantics"
+        );
+        assert_eq!(js_set_delete_number(set, boxed_string), 1);
+        assert_eq!(js_set_has(set, boxed_string), 0);
+    }
+
+    #[test]
+    fn test_set_i32_specialized_helpers_use_int32_keys() {
+        let set = js_set_alloc(4);
+        js_set_add_i32(set, 42);
+        js_set_add_i32(set, 42);
+        assert_eq!(js_set_size(set), 1);
+        assert_eq!(js_set_has_i32(set, 42), 1);
+        assert_eq!(js_set_has_i32(set, -7), 0);
+
+        let boxed = f64::from_bits(crate::value::JSValue::int32(42).bits());
+        assert_eq!(js_set_has(set, boxed), 1);
+        assert_eq!(js_set_delete_i32(set, 42), 1);
+        assert_eq!(js_set_has(set, boxed), 0);
+        assert_eq!(js_set_delete_i32(set, 42), 0);
+    }
+
+    #[test]
+    fn test_set_u32_specialized_helpers_use_number_keys() {
+        let set = js_set_alloc(4);
+        js_set_add_u32(set, u32::MAX);
+        js_set_add_u32(set, u32::MAX);
+        assert_eq!(js_set_size(set), 1);
+        assert_eq!(js_set_has_u32(set, u32::MAX), 1);
+        assert_eq!(js_set_has_u32(set, 7), 0);
+
+        let boxed = u32::MAX as f64;
+        assert_eq!(js_set_has(set, boxed), 1);
+        assert_eq!(js_set_delete_u32(set, u32::MAX), 1);
+        assert_eq!(js_set_has(set, boxed), 0);
+        assert_eq!(js_set_delete_u32(set, u32::MAX), 0);
+    }
+
+    #[test]
+    fn test_set_f32_specialized_helpers_use_number_keys() {
+        let set = js_set_alloc(4);
+        js_set_add_f32(set, 1.5);
+        js_set_add_f32(set, 1.5);
+        assert_eq!(js_set_size(set), 1);
+        assert_eq!(js_set_has_f32(set, 1.5), 1);
+        assert_eq!(js_set_has_f32(set, -2.25), 0);
+
+        let boxed = 1.5_f64;
+        assert_eq!(js_set_has(set, boxed), 1);
+        assert_eq!(js_set_delete_f32(set, 1.5), 1);
+        assert_eq!(js_set_has(set, boxed), 0);
+        assert_eq!(js_set_delete_f32(set, 1.5), 0);
+    }
+
+    #[test]
+    fn test_set_bool_specialized_helpers_use_boolean_keys() {
+        let set = js_set_alloc(4);
+        js_set_add_bool(set, 1);
+        js_set_add_bool(set, 1);
+        assert_eq!(js_set_size(set), 1);
+        assert_eq!(js_set_has_bool(set, 1), 1);
+        assert_eq!(js_set_has_bool(set, 0), 0);
+
+        let boxed = f64::from_bits(crate::value::TAG_TRUE);
+        assert_eq!(js_set_has(set, boxed), 1);
+        assert_eq!(js_set_delete_bool(set, 1), 1);
+        assert_eq!(js_set_has(set, boxed), 0);
+        assert_eq!(js_set_delete_bool(set, 1), 0);
     }
 
     #[test]

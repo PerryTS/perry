@@ -2139,6 +2139,21 @@ pub fn try_lower_property_get_method_call(
                 } else {
                     None
                 };
+                let typed_string_direct_name =
+                    if ctx.typed_string_methods.contains(&typed_method_key)
+                        && ctx
+                            .methods
+                            .get(&typed_method_key)
+                            .is_some_and(|name| name == &fallback_fn)
+                        && args.len() == typed_formal_count
+                        && args
+                            .iter()
+                            .all(|arg| crate::type_analysis::is_definitely_string_expr(ctx, arg))
+                    {
+                        Some(crate::codegen::typed_string_method_name(&fallback_fn))
+                    } else {
+                        None
+                    };
                 let typed_direct = typed_direct_name
                     .as_ref()
                     .map(|name| (name.as_str(), typed_formal_count));
@@ -2158,6 +2173,9 @@ pub fn try_lower_property_get_method_call(
                         .cloned()
                         .map(|reps| (name.as_str(), reps))
                 });
+                let typed_string_direct = typed_string_direct_name
+                    .as_ref()
+                    .map(|name| (name.as_str(), typed_formal_count));
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
@@ -2170,6 +2188,7 @@ pub fn try_lower_property_get_method_call(
                     typed_receiver_direct,
                     typed_i32_direct,
                     typed_i1_direct,
+                    typed_string_direct,
                     shape_only_guard,
                 ) {
                     return Ok(Some(guarded));

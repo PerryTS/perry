@@ -78,11 +78,37 @@ SENTINELS=(
   js_typed_feedback_object_set_index_polymorphic
   js_typed_feedback_object_set_unboxed_f64_field
   js_map_set_string_number
+  js_map_set_string_key
+  js_map_set_string_i32
+  js_map_set_string_u32
+  js_map_set_string_f32
+  js_map_set_string_bool
+  js_map_set_string_string
+  js_map_set_number_key
   js_map_get_string_key
+  js_map_get_number_key
   js_map_has_string_key
+  js_map_has_number_key
+  js_map_delete_string_key
+  js_map_delete_number_key
   js_set_add_string
+  js_set_add_number
   js_set_has_string
+  js_set_has_number
   js_set_delete_string
+  js_set_delete_number
+  js_set_add_i32
+  js_set_has_i32
+  js_set_delete_i32
+  js_set_add_u32
+  js_set_has_u32
+  js_set_delete_u32
+  js_set_add_f32
+  js_set_has_f32
+  js_set_delete_f32
+  js_set_add_bool
+  js_set_has_bool
+  js_set_delete_bool
   js_i32_box_alloc
   js_i32_box_get
   js_i32_box_set
@@ -91,8 +117,10 @@ SENTINELS=(
   js_bool_box_set
   js_iter_result_set
   js_iter_result_set_f64
+  js_iter_result_set_i1
   js_iter_result_get_value
   js_iter_result_get_value_f64
+  js_iter_result_get_value_i1
   js_iter_result_get_done
   js_typed_feedback_native_call_method_by_id
   js_typed_feedback_native_call_method_apply_by_id

@@ -17,9 +17,9 @@ use super::opts::CrossModuleCtx;
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_method_body_name, lower_typed_f64_body,
     lower_typed_f64_receiver_body, lower_typed_i1_body, lower_typed_i32_body,
-    typed_f64_method_name, typed_f64_receiver_method_name, typed_i1_method_name,
-    typed_i32_method_name, typed_param_reps_for_params, TypedFunctionTrampolineKind, TypedParamRep,
-    TypedReceiverMethodInfo,
+    lower_typed_string_body, typed_f64_method_name, typed_f64_receiver_method_name,
+    typed_i1_method_name, typed_i32_method_name, typed_param_reps_for_params,
+    typed_string_method_name, TypedFunctionTrampolineKind, TypedParamRep, TypedReceiverMethodInfo,
 };
 
 fn emit_typed_method_trampoline_fast_value(
@@ -69,7 +69,15 @@ fn emit_typed_method_trampoline_fast_value(
             crate::expr::i32_bool_to_nanbox(blk, &typed_i32)
         }
         TypedFunctionTrampolineKind::StringRef => {
-            unreachable!("typed-string method trampolines are not emitted")
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .collect();
+            let typed_args: Vec<(LlvmType, &str)> =
+                raw_args.iter().map(|arg| (I64, arg.as_str())).collect();
+            let raw_string = blk.call(I64, typed_name, &typed_args);
+            blk.call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)])
         }
     }
 }
@@ -85,9 +93,7 @@ fn emit_public_typed_method_trampoline(
         TypedFunctionTrampolineKind::F64 => typed_f64_method_name(public_name),
         TypedFunctionTrampolineKind::I32 => typed_i32_method_name(public_name),
         TypedFunctionTrampolineKind::I1 => typed_i1_method_name(public_name),
-        TypedFunctionTrampolineKind::StringRef => {
-            unreachable!("typed-string method trampolines are not emitted")
-        }
+        TypedFunctionTrampolineKind::StringRef => typed_string_method_name(public_name),
     };
     let arg_reps = match kind {
         TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; method.params.len()],
@@ -95,7 +101,7 @@ fn emit_public_typed_method_trampoline(
         TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(&method.params)
             .unwrap_or_else(|| vec![TypedParamRep::I1; method.params.len()]),
         TypedFunctionTrampolineKind::StringRef => {
-            unreachable!("typed-string method trampolines are not emitted")
+            vec![TypedParamRep::StringRef; method.params.len()]
         }
     };
     let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
@@ -446,8 +452,10 @@ pub(super) fn compile_method(
         typed_f64_methods: &cross_module.typed_f64_methods,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
+        typed_string_methods: &cross_module.typed_string_methods,
         typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
         typed_f64_closures: &cross_module.typed_f64_closures,
+        typed_i32_closures: &cross_module.typed_i32_closures,
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
@@ -920,6 +928,44 @@ pub(super) fn compile_typed_i32_method(
     Ok(())
 }
 
+/// Compile the internal typed-string clone for a conservatively eligible
+/// instance method. The clone passes raw `StringHeader*` handles as i64; the
+/// public method symbol remains a JSValue trampoline registered in vtables.
+pub(super) fn compile_typed_string_method(
+    llmod: &mut LlModule,
+    class: &perry_hir::Class,
+    method: &Function,
+    methods: &HashMap<(String, String), String>,
+) -> Result<()> {
+    let generic_name = methods
+        .get(&(class.name.clone(), method.name.clone()))
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "method '{}::{}' missing from registry",
+                class.name,
+                method.name
+            )
+        })?;
+    let llvm_name = typed_string_method_name(&generic_name);
+    let params: Vec<(LlvmType, String)> = method
+        .params
+        .iter()
+        .map(|p| (I64, format!("%arg{}", p.id)))
+        .collect();
+    let lf = llmod.define_function(&llvm_name, I64, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_string_body(blk, &method.params, &method.body)?
+    };
+    lf.block_mut(0).unwrap().ret(I64, &value);
+    Ok(())
+}
+
 /// Compile a static class method as a top-level LLVM function with
 /// no `this` parameter. Mostly identical to `compile_function` but
 /// the LLVM symbol name is scoped by module, class id, class name, and
@@ -1145,8 +1191,10 @@ pub(super) fn compile_static_method(
         typed_f64_methods: &cross_module.typed_f64_methods,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
+        typed_string_methods: &cross_module.typed_string_methods,
         typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
         typed_f64_closures: &cross_module.typed_f64_closures,
+        typed_i32_closures: &cross_module.typed_i32_closures,
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,

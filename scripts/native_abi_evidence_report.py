@@ -62,6 +62,11 @@ REQUIRED_RUNTIME_TESTS = (
     "test_native_async_completion_token_roots_survive_copied_minor_gc",
 )
 
+REQUIRED_RELEASE_SYMBOL_TOKENS = (
+    "defines all",
+    "sentinel symbols",
+)
+
 REQUIRED_COMPILER_ARTIFACTS = (
     "hir",
     "llvm_before_opt",
@@ -77,11 +82,17 @@ SAFETY_CHECK_NAMES = (
     "native_reps_no_unexpected_materialization_reasons",
 )
 
+REQUIRED_PACKET_STDOUT_CHECKS = {
+    "native_abi_packet_typed": "native_abi_packet_typed_checksum",
+    "native_abi_packet_control": "native_abi_packet_control_checksum",
+}
+
 DELTA_FIELDS = (
     "boxed_number_allocations_static",
     "buffer_slow_path_accesses_static",
     "allocations_traced",
     "write_barriers_static",
+    "write_barriers_traced",
     "runtime_calls_static",
 )
 
@@ -90,6 +101,58 @@ REQUIRED_IMPROVEMENT_FIELDS = (
     "buffer_slow_path_accesses_static",
     "allocations_traced",
 )
+
+MATERIAL_REDUCTION_THRESHOLDS = {
+    "allocations_traced": 95.0,
+    "write_barriers_traced": 95.0,
+}
+
+MATERIAL_ELIMINATION_FIELDS = (
+    "boxed_number_allocations_static",
+    "buffer_slow_path_accesses_static",
+)
+
+MATERIAL_SPEEDUP_THRESHOLDS = {
+    "median_wall_ms": 2.0,
+    "p95_wall_ms": 1.5,
+}
+
+MATERIAL_REQUIRED_STAT_QUALITY = "timing"
+
+PACKET_WORKLOAD_CONTRACTS: dict[str, dict[str, Any]] = {
+    "native_abi_packet_typed": {
+        "source": "benchmarks/compiler_output/fixtures/native_abi_packet_typed.ts",
+        "kind": "native_abi_packet_typed",
+        "zero_static_fields": (
+            "boxed_number_allocations_static",
+            "buffer_slow_path_accesses_static",
+        ),
+        "required_native_records": (
+            {
+                "name": "typed_unchecked_buffer_view",
+                "native_rep_name": "buffer_view",
+                "consumer_contains": "BufferView",
+                "access_mode": "unchecked_native",
+                "bounds_state": "proven_or_guarded",
+            },
+            {
+                "name": "typed_unchecked_u8_access",
+                "native_rep_name": "u8",
+                "consumer_contains": "u8_",
+                "access_mode": "unchecked_native",
+                "bounds_state": "proven_or_guarded",
+            },
+        ),
+    },
+    "native_abi_packet_control": {
+        "source": "benchmarks/compiler_output/fixtures/native_abi_packet_control.ts",
+        "kind": "native_abi_packet_control",
+        "positive_static_fields": (
+            "boxed_number_allocations_static",
+            "buffer_slow_path_accesses_static",
+        ),
+    },
+}
 
 
 def utc_now() -> str:
@@ -183,13 +246,25 @@ def rel(path: Path, root: Path) -> str:
 
 def ratio_delta(control: Optional[float], typed: Optional[float]) -> dict[str, Any]:
     if control is None or typed is None:
-        return {"control": control, "typed": typed, "delta": None, "delta_pct": None}
-    pct = None if control == 0 else ((typed - control) / control) * 100.0
+        return {
+            "control": control,
+            "typed": typed,
+            "delta": None,
+            "delta_pct": None,
+            "reduction_pct": None,
+            "speedup": None,
+        }
+    delta = typed - control
+    pct = None if control == 0 else (delta / control) * 100.0
+    reduction_pct = None if control == 0 else ((control - typed) / control) * 100.0
+    speedup = None if typed <= 0 else control / typed
     return {
         "control": control,
         "typed": typed,
-        "delta": typed - control,
+        "delta": delta,
         "delta_pct": None if pct is None else round(pct, 1),
+        "reduction_pct": None if reduction_pct is None else round(reduction_pct, 1),
+        "speedup": None if speedup is None else round(speedup, 3),
     }
 
 
@@ -280,6 +355,146 @@ def native_reps_ok(manifest: dict[str, Any], artifact_root: Path) -> bool:
     )
 
 
+def state_name(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and value:
+        return str(next(iter(value.keys())))
+    return str(value)
+
+
+def bounds_allows_inbounds(value: Any) -> bool:
+    return state_name(value) in {"proven", "guarded"}
+
+
+def native_rep_records(
+    manifest: dict[str, Any],
+    artifact_root: Path,
+) -> tuple[list[dict[str, Any]], int]:
+    retained = nested(manifest, "artifacts", "native_reps", default=[])
+    if not isinstance(retained, list):
+        return ([], 0)
+    records: list[dict[str, Any]] = []
+    artifact_count = 0
+    for row in retained:
+        if not isinstance(row, dict):
+            continue
+        path = resolve_path(row.get("native_reps_artifact"), artifact_root)
+        if not path or not path.exists():
+            continue
+        artifact_count += 1
+        artifact = load_json(path, {})
+        artifact_records = artifact.get("records", []) if isinstance(artifact, dict) else []
+        for record in artifact_records:
+            if isinstance(record, dict):
+                records.append(record)
+    return (records, artifact_count)
+
+
+def packet_record_matches(record: dict[str, Any], required: dict[str, Any]) -> bool:
+    if "native_rep_name" in required and state_name(record.get("native_rep_name")) != str(
+        required["native_rep_name"]
+    ):
+        return False
+    if "consumer_contains" in required and str(required["consumer_contains"]) not in str(
+        record.get("consumer") or ""
+    ):
+        return False
+    if "access_mode" in required and state_name(record.get("access_mode")) != str(
+        required["access_mode"]
+    ):
+        return False
+    if required.get("bounds_state") == "proven_or_guarded" and not bounds_allows_inbounds(
+        record.get("bounds_state")
+    ):
+        return False
+    return True
+
+
+def packet_workload_contract(
+    workload: str,
+    manifest: dict[str, Any],
+    artifact_root: Path,
+) -> dict[str, Any]:
+    contract = PACKET_WORKLOAD_CONTRACTS.get(workload)
+    if not contract:
+        return {"status": "skipped"}
+
+    errors: list[str] = []
+    if manifest.get("workload") != workload:
+        errors.append(
+            f"manifest workload must be {workload!r} (got {manifest.get('workload')!r})"
+        )
+    expected_kind = contract["kind"]
+    if manifest.get("workload_kind") != expected_kind:
+        errors.append(
+            f"manifest workload_kind must be {expected_kind!r} "
+            f"(got {manifest.get('workload_kind')!r})"
+        )
+    expected_source = contract["source"]
+    if manifest.get("source") != expected_source:
+        errors.append(
+            f"manifest source must be {expected_source!r} (got {manifest.get('source')!r})"
+        )
+
+    summary = manifest.get("runtime_counter_summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
+    static_counter_checks: list[dict[str, Any]] = []
+    for field in contract.get("zero_static_fields", ()) or ():
+        value = number_value(summary.get(field))
+        passed = value == 0
+        static_counter_checks.append(
+            {"field": field, "expected": "zero", "actual": value, "passed": passed}
+        )
+        if not passed:
+            errors.append(f"{field} must be zero for {workload} (got {value})")
+    for field in contract.get("positive_static_fields", ()) or ():
+        value = number_value(summary.get(field))
+        passed = value is not None and value > 0
+        static_counter_checks.append(
+            {"field": field, "expected": "positive", "actual": value, "passed": passed}
+        )
+        if not passed:
+            errors.append(f"{field} must be positive for {workload} (got {value})")
+
+    records, artifact_count = native_rep_records(manifest, artifact_root)
+    required_record_checks: list[dict[str, Any]] = []
+    for required in contract.get("required_native_records", ()) or ():
+        matches = [record for record in records if packet_record_matches(record, required)]
+        min_count = int(required.get("min", 1) or 1)
+        passed = len(matches) >= min_count
+        required_record_checks.append(
+            {
+                "name": required.get("name", "native_record"),
+                "required": required,
+                "matches": len(matches),
+                "min": min_count,
+                "passed": passed,
+            }
+        )
+        if not passed:
+            errors.append(
+                f"required native-rep record {required.get('name', 'native_record')!r} "
+                f"matched {len(matches)} records, expected at least {min_count}"
+            )
+
+    return {
+        "status": "fail" if errors else "pass",
+        "expected_source": expected_source,
+        "expected_kind": expected_kind,
+        "manifest_source": manifest.get("source"),
+        "manifest_workload_kind": manifest.get("workload_kind"),
+        "native_rep_artifacts": artifact_count,
+        "native_rep_records": len(records),
+        "static_counter_checks": static_counter_checks,
+        "required_native_records": required_record_checks,
+        "errors": errors,
+    }
+
+
 def compiler_output_summary(
     root: Path,
     metadata: dict[str, Any],
@@ -332,11 +547,36 @@ def compiler_output_summary(
         failing_safety = [
             check for check in safety_checks if check.get("status") != "pass"
         ]
+        required_stdout_name = REQUIRED_PACKET_STDOUT_CHECKS.get(name)
+        stdout_checks = []
+        missing_stdout_checks = []
+        failing_stdout_checks = []
+        if required_stdout_name:
+            stdout_checks = [
+                check
+                for check in structural.get("checks", []) or []
+                if isinstance(check, dict) and check.get("name") == required_stdout_name
+            ]
+            failing_stdout_checks = [
+                check for check in stdout_checks if check.get("status") != "pass"
+            ]
+            if not stdout_checks:
+                missing_stdout_checks.append(required_stdout_name)
+        packet_contract = packet_workload_contract(name, manifest, artifact_dir)
         workload_status = "pass"
         if row.get("status") != "pass" or structural.get("status") != "pass":
             workload_status = "fail"
         if missing_artifacts or failing_safety:
             workload_status = "fail"
+        if missing_stdout_checks or failing_stdout_checks:
+            workload_status = "fail"
+        if packet_contract.get("status") == "fail":
+            workload_status = "fail"
+        workload_errors = list(row.get("errors") or []) + list(structural.get("errors") or [])
+        if packet_contract.get("status") == "fail":
+            workload_errors.extend(
+                f"packet_contract: {error}" for error in packet_contract.get("errors", [])
+            )
         workloads[name] = {
             "status": workload_status,
             "suite_status": row.get("status"),
@@ -347,12 +587,19 @@ def compiler_output_summary(
             "missing_artifacts": missing_artifacts,
             "safety_checks": safety_checks,
             "failing_safety_checks": failing_safety,
+            "stdout_checks": stdout_checks,
+            "missing_stdout_checks": missing_stdout_checks,
+            "failing_stdout_checks": failing_stdout_checks,
+            "packet_contract": packet_contract,
             "runtime_counter_summary": manifest.get("runtime_counter_summary", {}),
             "benchmark": manifest.get("benchmark", {}),
-            "errors": list(row.get("errors") or []) + list(structural.get("errors") or []),
+            "errors": workload_errors,
         }
         if gate and workload_status != "pass":
-            errors.append(f"compiler-output:{name}: {workload_status}; {workloads[name]['errors'] or missing_artifacts}")
+            errors.append(
+                f"compiler-output:{name}: {workload_status}; "
+                f"{workloads[name]['errors'] or missing_artifacts or missing_stdout_checks or failing_stdout_checks}"
+            )
 
     required = {"native_abi_packet_typed", "native_abi_packet_control"}
     missing_required = sorted(required - set(workloads))
@@ -394,9 +641,90 @@ def benchmark_deltas(compiler: dict[str, Any], errors: list[str], *, gate: bool)
         number_value(nested(control, "benchmark", "mean_wall_ms")),
         number_value(nested(typed, "benchmark", "mean_wall_ms")),
     )
+    fields["p95_wall_ms"] = ratio_delta(
+        number_value(nested(control, "benchmark", "p95_wall_ms")),
+        number_value(nested(typed, "benchmark", "p95_wall_ms")),
+    )
     missing = [name for name, delta in fields.items() if delta["typed"] is None or delta["control"] is None]
     if gate and missing:
         errors.append(f"benchmark deltas missing values: {missing}")
+
+    material_failures: list[str] = []
+    material_passes: list[str] = []
+    benchmark_stat_quality = {
+        "typed": nested(typed, "benchmark", "stat_quality"),
+        "control": nested(control, "benchmark", "stat_quality"),
+    }
+    for role, quality in benchmark_stat_quality.items():
+        if quality != MATERIAL_REQUIRED_STAT_QUALITY:
+            material_failures.append(
+                f"{role} benchmark stat_quality must be {MATERIAL_REQUIRED_STAT_QUALITY!r} "
+                f"to prove p95 speedup (observed={quality!r})"
+            )
+
+    for field, minimum in MATERIAL_REDUCTION_THRESHOLDS.items():
+        delta = fields.get(field, {})
+        control_value = delta.get("control")
+        typed_value = delta.get("typed")
+        reduction_pct = delta.get("reduction_pct")
+        if control_value is None or typed_value is None:
+            continue
+        if control_value <= 0:
+            material_failures.append(
+                f"{field}: control baseline must be positive to prove >={minimum:.0f}% reduction "
+                f"(control={control_value}, typed={typed_value})"
+            )
+            continue
+        raw_reduction_pct = ((control_value - typed_value) / control_value) * 100.0
+        if raw_reduction_pct < minimum:
+            material_failures.append(
+                f"{field}: reduction must be >={minimum:.0f}% "
+                f"(control={control_value}, typed={typed_value}, reduction_pct={reduction_pct})"
+            )
+        else:
+            material_passes.append(field)
+
+    for field in MATERIAL_ELIMINATION_FIELDS:
+        delta = fields.get(field, {})
+        control_value = delta.get("control")
+        typed_value = delta.get("typed")
+        if control_value is None or typed_value is None:
+            continue
+        if control_value <= 0:
+            material_failures.append(
+                f"{field}: control baseline must be positive to prove elimination "
+                f"(control={control_value}, typed={typed_value})"
+            )
+        elif typed_value != 0:
+            material_failures.append(
+                f"{field}: typed value must be 0 for 100% elimination "
+                f"(control={control_value}, typed={typed_value})"
+            )
+        else:
+            material_passes.append(field)
+
+    for field, minimum in MATERIAL_SPEEDUP_THRESHOLDS.items():
+        delta = fields.get(field, {})
+        control_value = delta.get("control")
+        typed_value = delta.get("typed")
+        speedup = delta.get("speedup")
+        if control_value is None or typed_value is None:
+            continue
+        if control_value <= 0 or typed_value <= 0:
+            material_failures.append(
+                f"{field}: positive wall-time values are required to prove >={minimum:g}x speedup "
+                f"(control={control_value}, typed={typed_value})"
+            )
+            continue
+        raw_speedup = control_value / typed_value
+        if raw_speedup < minimum:
+            material_failures.append(
+                f"{field}: speedup must be >={minimum:g}x "
+                f"(control={control_value}, typed={typed_value}, speedup={speedup})"
+            )
+        else:
+            material_passes.append(field)
+
     non_improving = []
     zero_baseline_required_fields = []
     positive_required_improvements = []
@@ -428,11 +756,20 @@ def benchmark_deltas(compiler: dict[str, Any], errors: list[str], *, gate: bool)
         )
     if gate and non_improving:
         errors.append(f"benchmark deltas missing required improvements: {non_improving}")
+    if gate and material_failures:
+        errors.append(f"benchmark deltas miss material performance gate: {material_failures}")
     return {
-        "status": "pass" if not missing and not non_improving else "fail",
+        "status": "pass" if not missing and not non_improving and not material_failures else "fail",
         "typed_workload": "native_abi_packet_typed",
         "control_workload": "native_abi_packet_control",
         "required_improvement_fields": list(REQUIRED_IMPROVEMENT_FIELDS),
+        "material_reduction_thresholds": MATERIAL_REDUCTION_THRESHOLDS,
+        "material_elimination_fields": list(MATERIAL_ELIMINATION_FIELDS),
+        "material_speedup_thresholds": MATERIAL_SPEEDUP_THRESHOLDS,
+        "material_required_stat_quality": MATERIAL_REQUIRED_STAT_QUALITY,
+        "benchmark_stat_quality": benchmark_stat_quality,
+        "material_passes": material_passes,
+        "material_failures": material_failures,
         "positive_required_improvements": positive_required_improvements,
         "zero_baseline_required_fields": zero_baseline_required_fields,
         "missing_values": missing,
@@ -468,6 +805,39 @@ def runtime_safety_summary(
     }
 
 
+def release_symbol_summary(
+    root: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+    *,
+    gate: bool,
+) -> dict[str, Any]:
+    command = command_entry(metadata, "release", "runtime_symbols")
+    status = command_status(metadata, "release", "runtime_symbols")
+    log_path = resolve_path(command.get("log"), root)
+    log = read_text(log_path) if log_path else ""
+    missing_tokens = [token for token in REQUIRED_RELEASE_SYMBOL_TOKENS if token not in log]
+    archive = metadata.get("runtime_archive", "") if isinstance(metadata, dict) else ""
+    passed = status == "pass" and bool(log) and not missing_tokens
+    if gate and status != "pass":
+        errors.append(f"release:runtime_symbols: command status is {status}")
+    if gate and not log:
+        errors.append("release:runtime_symbols: symbol guard log is missing")
+    if gate and missing_tokens:
+        errors.append(
+            "release:runtime_symbols: expected proof tokens missing from log: "
+            f"{missing_tokens}"
+        )
+    return {
+        "status": "pass" if passed else "fail",
+        "command": command,
+        "runtime_archive": archive,
+        "log": str(log_path) if log_path else "",
+        "required_tokens": list(REQUIRED_RELEASE_SYMBOL_TOKENS),
+        "missing_tokens": missing_tokens,
+    }
+
+
 def build_packet(root: Path, metadata_path: Path, repo_root: Path, *, gate: bool) -> dict[str, Any]:
     metadata = load_json(metadata_path, {})
     errors: list[str] = []
@@ -476,6 +846,7 @@ def build_packet(root: Path, metadata_path: Path, repo_root: Path, *, gate: bool
     correctness = correctness_summary(root, metadata, errors, gate=gate)
     compiler = compiler_output_summary(root, metadata, errors, warnings, gate=gate)
     runtime = runtime_safety_summary(root, metadata, errors, gate=gate)
+    release_symbols = release_symbol_summary(root, metadata, errors, gate=gate)
     deltas = benchmark_deltas(compiler, errors, gate=gate)
 
     commands = metadata.get("commands", {}) if isinstance(metadata, dict) else {}
@@ -500,6 +871,7 @@ def build_packet(root: Path, metadata_path: Path, repo_root: Path, *, gate: bool
         "correctness": correctness,
         "native_call_lowering": compiler,
         "gc_root_safety": runtime,
+        "release_symbol_guard": release_symbols,
         "benchmark_deltas": deltas,
     }
     return packet
@@ -538,9 +910,13 @@ def markdown_for_packet(packet: dict[str, Any], repo_root: Path) -> str:
     lowering = packet.get("native_call_lowering", {})
     lines.append(f"- Suite: `{lowering.get('status', 'missing')}` report=`{lowering.get('suite_report', '')}`")
     for name, row in lowering.get("workloads", {}).items():
+        contract = row.get("packet_contract", {})
         lines.append(
             f"- `{name}`: `{row.get('status')}`; missing_artifacts={len(row.get('missing_artifacts', []))}; "
-            f"safety_failures={len(row.get('failing_safety_checks', []))}"
+            f"safety_failures={len(row.get('failing_safety_checks', []))}; "
+            f"stdout_missing={len(row.get('missing_stdout_checks', []))}; "
+            f"stdout_failures={len(row.get('failing_stdout_checks', []))}; "
+            f"packet_contract=`{contract.get('status', 'skipped')}`"
         )
 
     lines.append("")
@@ -552,12 +928,28 @@ def markdown_for_packet(packet: dict[str, Any], repo_root: Path) -> str:
     )
 
     lines.append("")
+    lines.append("## Release / LTO Symbol Guard")
+    symbols = packet.get("release_symbol_guard", {})
+    lines.append(
+        f"- Runtime symbol guard: `{symbols.get('status', 'missing')}`; "
+        f"archive=`{symbols.get('runtime_archive', '')}`; "
+        f"missing_tokens={symbols.get('missing_tokens', [])}"
+    )
+
+    lines.append("")
     lines.append("## Packet Deltas")
     deltas = packet.get("benchmark_deltas", {})
+    material_status = "pass" if deltas.get("status") == "pass" else "fail"
+    lines.append(f"- Material gate: `{material_status}`")
+    if deltas.get("material_failures"):
+        lines.extend(f"  - {failure}" for failure in deltas.get("material_failures", []))
+    if deltas.get("missing_values"):
+        lines.append(f"  - missing_values={deltas.get('missing_values')}")
     for field, delta in deltas.get("fields", {}).items():
         lines.append(
             f"- `{field}`: control={delta.get('control')} typed={delta.get('typed')} "
-            f"delta={delta.get('delta')} delta_pct={delta.get('delta_pct')}"
+            f"delta={delta.get('delta')} delta_pct={delta.get('delta_pct')} "
+            f"reduction_pct={delta.get('reduction_pct')} speedup={delta.get('speedup')}"
         )
 
     return "\n".join(lines) + "\n"

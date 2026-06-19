@@ -49,7 +49,7 @@ use super::{
     raw_f64_layout_fact, try_flat_const_2d_int, try_lower_flat_const_index_get,
     try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
     variant_name, BufferAccessSpec, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx,
-    PackedF64LoopFact, TypedFeedbackContract, TypedFeedbackKind,
+    PackedF64LoopFact, PackedNumericLoopKind, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
@@ -445,6 +445,7 @@ fn lower_packed_f64_loop_index_get(
     arr_box: &str,
     idx_i32: &str,
     guard_id: &str,
+    array_kind: PackedNumericLoopKind,
 ) -> String {
     let value = {
         let blk = ctx.block();
@@ -464,9 +465,9 @@ fn lower_packed_f64_loop_index_get(
         value: value.clone(),
     };
     ctx.record_lowered_value_with_access_mode_and_facts(
-        "PackedF64LoopLoad",
+        array_kind.load_expr_kind(),
         Some(arr_id),
-        "packed_f64_loop_load",
+        array_kind.load_consumer_f64(),
         &lowered,
         Some(BoundsState::Guarded {
             guard_id: guard_id.to_string(),
@@ -477,7 +478,12 @@ fn lower_packed_f64_loop_index_get(
         None,
         None,
         vec![
-            array_kind_fact(Some(arr_id), "consumed", "packed_f64", None),
+            array_kind_fact(
+                Some(arr_id),
+                "consumed",
+                array_kind.array_kind_label(),
+                None,
+            ),
             raw_f64_layout_fact(Some(arr_id), "consumed", guard_id, None),
         ],
         Vec::new(),
@@ -486,6 +492,7 @@ fn lower_packed_f64_loop_index_get(
         vec![
             "index_range=nonnegative_i32".to_string(),
             "length_range=guarded_i32".to_string(),
+            "storage_layout=raw_f64_numeric_slots".to_string(),
         ],
     );
     value
@@ -513,6 +520,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
                     &arr_box,
                     &idx_i32,
                     &fact.guard_id,
+                    fact.array_kind,
                 )));
             }
         }
@@ -1057,6 +1065,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &arr_box,
                                 &idx_i32,
                                 &fact.guard_id,
+                                fact.array_kind,
                             ));
                         }
                     }

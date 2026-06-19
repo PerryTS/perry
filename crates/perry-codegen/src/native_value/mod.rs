@@ -18,7 +18,8 @@ pub(crate) use buffer::{
 pub(crate) use materialize::{
     materialize_js_value, materialize_js_value_bits, materialize_js_value_without_record,
     materialize_native_handle_to_js_value, materialize_promise_boundary_to_js_value,
-    record_runtime_native_handle_box_transition, MaterializationReason,
+    materialize_small_bigint_pointer_to_js_value, record_runtime_native_handle_box_transition,
+    MaterializationReason,
 };
 pub(crate) use pod::{
     collect_pod_init_fields, field_expected_rep, layout_decision_for_type, layout_for_manifest_pod,

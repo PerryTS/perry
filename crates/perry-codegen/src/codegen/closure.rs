@@ -17,8 +17,9 @@ use super::opts::CrossModuleCtx;
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
     lower_typed_f64_body_with_seed_locals, lower_typed_i1_body_with_seed_locals,
-    lower_typed_string_body_with_seed_locals, typed_f64_closure_capture_reps,
-    typed_f64_closure_name, typed_i1_closure_capture_reps, typed_i1_closure_name,
+    lower_typed_i32_body_with_seed_locals, lower_typed_string_body_with_seed_locals,
+    typed_f64_closure_capture_reps, typed_f64_closure_name, typed_i1_closure_capture_reps,
+    typed_i1_closure_name, typed_i32_closure_capture_reps, typed_i32_closure_name,
     typed_param_reps_for_params, typed_string_closure_capture_reps, typed_string_closure_name,
     TypedFunctionTrampolineKind, TypedParamRep,
 };
@@ -46,7 +47,15 @@ fn emit_typed_closure_trampoline_fast_value(
             blk.call(DOUBLE, typed_name, &typed_args)
         }
         TypedFunctionTrampolineKind::I32 => {
-            unreachable!("typed-i32 closure trampolines are not emitted")
+            let mut raw_args = Vec::with_capacity(arg_names.len());
+            for arg in arg_names {
+                raw_args.push(blk.call(I32, "js_typed_i32_arg_to_raw", &[(DOUBLE, arg.as_str())]));
+            }
+            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
+            typed_args.push((I64, "%this_closure"));
+            typed_args.extend(raw_args.iter().map(|arg| (I32, arg.as_str())));
+            let raw_i32 = blk.call(I32, typed_name, &typed_args);
+            crate::expr::i32_to_nanbox(blk, &raw_i32)
         }
         TypedFunctionTrampolineKind::I1 => {
             let raw_args: Vec<String> = arg_names
@@ -101,17 +110,13 @@ fn emit_public_typed_closure_trampoline(
     let public_name = format!("perry_closure_{}__{}", module_prefix, func_id);
     let typed_name = match kind {
         TypedFunctionTrampolineKind::F64 => typed_f64_closure_name(&public_name),
-        TypedFunctionTrampolineKind::I32 => {
-            unreachable!("typed-i32 closure trampolines are not emitted")
-        }
+        TypedFunctionTrampolineKind::I32 => typed_i32_closure_name(&public_name),
         TypedFunctionTrampolineKind::I1 => typed_i1_closure_name(&public_name),
         TypedFunctionTrampolineKind::StringRef => typed_string_closure_name(&public_name),
     };
     let arg_reps = match kind {
         TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; params.len()],
-        TypedFunctionTrampolineKind::I32 => {
-            unreachable!("typed-i32 closure trampolines are not emitted")
-        }
+        TypedFunctionTrampolineKind::I32 => vec![TypedParamRep::I32; params.len()],
         TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::I1; params.len()]),
         TypedFunctionTrampolineKind::StringRef => vec![TypedParamRep::StringRef; params.len()],
@@ -383,6 +388,42 @@ pub(super) fn compile_typed_i1_closure(
     Ok(())
 }
 
+pub(super) fn compile_typed_i32_closure(
+    llmod: &mut LlModule,
+    func_id: perry_types::FuncId,
+    closure_expr: &perry_hir::Expr,
+    module_prefix: &str,
+    module_local_types: &HashMap<u32, perry_types::Type>,
+) -> Result<()> {
+    let (params, body) = match closure_expr {
+        perry_hir::Expr::Closure { params, body, .. } => (params, body),
+        _ => return Err(anyhow!("compile_typed_i32_closure: expected Expr::Closure")),
+    };
+
+    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let llvm_name = typed_i32_closure_name(&generic_name);
+    let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
+    llvm_params.push((I64, "%this_closure".to_string()));
+    llvm_params.extend(params.iter().map(|p| (I32, format!("%arg{}", p.id))));
+    let lf = llmod.define_function(&llvm_name, I32, llvm_params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        let mut seed_locals = HashMap::new();
+        if let Some(captures) = typed_i32_closure_capture_reps(closure_expr, module_local_types) {
+            for (idx, (id, rep)) in captures.iter().enumerate() {
+                seed_locals.insert(*id, load_typed_capture(blk, idx, *rep));
+            }
+        }
+        lower_typed_i32_body_with_seed_locals(blk, params, body, seed_locals)?
+    };
+    lf.block_mut(0).unwrap().ret(I32, &value);
+    Ok(())
+}
+
 /// Compile a closure body as a top-level LLVM function.
 ///
 /// Signature: `double perry_closure_<modprefix>__<func_id>(i64 this_closure,
@@ -456,6 +497,8 @@ pub(super) fn compile_closure(
     let public_llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
+    } else if cross_module.typed_i32_closures.contains(&func_id) {
+        Some(TypedFunctionTrampolineKind::I32)
     } else if cross_module.typed_i1_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::I1)
     } else if cross_module.typed_string_closures.contains(&func_id) {
@@ -754,8 +797,10 @@ pub(super) fn compile_closure(
         typed_f64_methods: &cross_module.typed_f64_methods,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
+        typed_string_methods: &cross_module.typed_string_methods,
         typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
         typed_f64_closures: &cross_module.typed_f64_closures,
+        typed_i32_closures: &cross_module.typed_i32_closures,
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,

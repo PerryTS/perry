@@ -10,7 +10,7 @@ use super::buffer::{AliasState, BoundsState, BufferAccessMode};
 use super::materialize::MaterializationReason;
 use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I128, I32, I64, I8, PTR};
 
 pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<()> {
     let mut errors = Vec::new();
@@ -624,7 +624,7 @@ fn validate_native_abi_type_record(
         "string" | "ptr" | "i64_str" => {
             matches!(
                 &record.native_rep,
-                NativeRep::NativeHandle | NativeRep::JsValue
+                NativeRep::StringRef | NativeRep::NativeHandle | NativeRep::JsValue
             )
         }
         "bool" => matches!(&record.native_rep, NativeRep::I1 | NativeRep::I32),
@@ -888,12 +888,14 @@ fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
         NativeRep::I1 => I1,
         NativeRep::F32 => F32,
         NativeRep::JsValueBits
+        | NativeRep::StringRef
         | NativeRep::I64
         | NativeRep::U64
         | NativeRep::USize
         | NativeRep::HandleId
         | NativeRep::NativeHandle
         | NativeRep::PromiseBoundary => I64,
+        NativeRep::SmallBigInt => I128,
         NativeRep::I32 | NativeRep::U32 => I32,
         NativeRep::BufferLen => I32,
         NativeRep::U8 => I8,
@@ -1072,6 +1074,7 @@ fn valid_native_abi_transition(
             }
             NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
             NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
+            NativeAbiTransitionOp::BigIntBox => from == "small_bigint" && !lossy,
         };
     }
     if to != NativeRep::JsValue.name() {
@@ -1094,10 +1097,13 @@ fn valid_native_abi_transition(
             ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
         }
         NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
-        NativeAbiTransitionOp::PointerBox => from == "native_handle" && !lossy,
+        NativeAbiTransitionOp::PointerBox => {
+            matches!(from, "native_handle" | "string_ref") && !lossy
+        }
         NativeAbiTransitionOp::NativeHandleBox => from == "native_handle" && !lossy,
         NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
         NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
+        NativeAbiTransitionOp::BigIntBox => from == "small_bigint" && !lossy,
     }
 }
 
@@ -1161,6 +1167,7 @@ mod tests {
             kind: "raw_f64_layout".to_string(),
             local_id: None,
             state: state.to_string(),
+            detail: state.to_string(),
             reason,
         }
     }

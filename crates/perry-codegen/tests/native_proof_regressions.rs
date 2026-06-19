@@ -483,6 +483,16 @@ fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     }
 }
 
+fn int32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Array(Box::new(Type::Int32)),
+        mutable: true,
+        init: Some(Expr::Array(values.into_iter().map(int).collect())),
+    }
+}
+
 fn bit_or_zero(value: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::BitOr,
@@ -682,7 +692,7 @@ fn artifact_schema_v6_records_consumed_native_facts_for_buffer_region() {
     ];
 
     let artifact = compile_artifact_json("artifact_positive_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 14);
+    assert_eq!(artifact["schema_version"], 15);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -715,7 +725,7 @@ fn artifact_schema_v6_records_rejected_facts_for_buffer_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_rejected_buffer_region.ts", body);
-    assert_eq!(artifact["schema_version"], 14);
+    assert_eq!(artifact["schema_version"], 15);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -761,7 +771,7 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
-    assert_eq!(artifact["schema_version"], 14);
+    assert_eq!(artifact["schema_version"], 15);
     assert_eq!(artifact["summary"]["pod_layout_count"], 1);
     assert_eq!(artifact["summary"]["pod_record_count"], 1);
     let layouts = artifact["pod_layouts"].as_array().unwrap();
@@ -1258,7 +1268,7 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
-    assert_eq!(artifact["schema_version"], 14);
+    assert_eq!(artifact["schema_version"], 15);
     assert!(
         artifact["records"]
             .as_array()
@@ -1484,7 +1494,7 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 14);
+    assert_eq!(artifact["schema_version"], 15);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert_eq!(artifact["summary"]["pod_record_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
@@ -1535,7 +1545,7 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
-    assert_eq!(artifact["schema_version"], 14);
+    assert_eq!(artifact["schema_version"], 15);
     assert_eq!(artifact["summary"]["pod_layout_count"], 0);
     assert!(artifact["pod_layouts"].as_array().unwrap().is_empty());
     assert!(
@@ -1853,6 +1863,63 @@ fn record_has_raw_f64_layout_fact(record: &serde_json::Value, list: &str, state:
         facts
             .iter()
             .any(|fact| fact["kind"] == "raw_f64_layout" && fact["state"] == state)
+    })
+}
+
+fn record_has_array_kind_fact(
+    record: &serde_json::Value,
+    list: &str,
+    state: &str,
+    detail: &str,
+) -> bool {
+    record[list].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "array_kind"
+                && fact["state"] == state
+                && fact["fact_id"]
+                    .as_str()
+                    .is_some_and(|fact_id| fact_id.ends_with(detail))
+        })
+    })
+}
+
+fn record_has_scalar_method_summary_fact(
+    record: &serde_json::Value,
+    list: &str,
+    state: &str,
+) -> bool {
+    record[list].as_array().is_some_and(|facts| {
+        facts
+            .iter()
+            .any(|fact| fact["kind"] == "scalar_method_summary" && fact["state"] == state)
+    })
+}
+
+fn record_has_scalar_method_summary_detail(
+    record: &serde_json::Value,
+    list: &str,
+    state: &str,
+    detail: &str,
+) -> bool {
+    record[list].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "scalar_method_summary"
+                && fact["state"] == state
+                && fact["detail"] == detail
+        })
+    })
+}
+
+fn record_has_type_fact(
+    record: &serde_json::Value,
+    list: &str,
+    fact_id: &str,
+    state: &str,
+) -> bool {
+    record[list].as_array().is_some_and(|facts| {
+        facts.iter().any(|fact| {
+            fact["kind"] == "type_fact" && fact["fact_id"] == fact_id && fact["state"] == state
+        })
     })
 }
 
@@ -2543,6 +2610,250 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
 }
 
 #[test]
+fn packed_i32_loop_read_materializes_integer_native_load_with_fallback() {
+    let module = module_with_classes_and_params(
+        "packed_i32_loop_read.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            int32_array_let(1, "values", vec![1, 2, 3]),
+            number_let(3, "sum", true, int(0)),
+            for_loop(
+                4,
+                length(1),
+                vec![Stmt::Expr(Expr::LocalSet(
+                    3,
+                    Box::new(bit_or_zero(add(local(3), index_get(1, local(4))))),
+                ))],
+            ),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "packed-i32 loop should reuse the numeric raw-f64 layout guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_i32_fast") && ir.contains("for.packed_i32_slow"),
+        "packed-i32 loop should emit fast and slow clones:\n{ir}"
+    );
+    assert!(
+        !ir.contains("for.packed_f64_fast"),
+        "Int32[] read loop should be tagged as packed-i32, not packed-f64:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedI32LoopGuard"
+                && record["consumer"] == "packed_i32_loop_guard"
+                && record["access_mode"] == "checked_native"
+                && record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_i32")
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+        }),
+        "expected packed-i32 guard proof record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedI32LoopGuard"
+                && record["consumer"] == "packed_i32_loop_fallback"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_array_kind_fact(record, "rejected_facts", "rejected", "packed_i32")
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
+        }),
+        "expected packed-i32 generic fallback evidence:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedI32LoopLoad"
+                && record["consumer"] == "packed_i32_loop_load"
+                && record["native_rep_name"] == "i32"
+                && record["llvm_ty"] == "i32"
+                && record["access_mode"] == "checked_native"
+                && record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_i32")
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+                && record_has_note(record, "integer_materialization=fptosi_guarded_packed_i32")
+        }),
+        "expected packed-i32 loop load to materialize an i32 native value:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
+    let module = module_with_classes_and_params(
+        "packed_f64_unary_math_store_side_exit.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![-1, 2, -3]),
+            for_loop(
+                4,
+                length(1),
+                vec![array_set(
+                    1,
+                    local(4),
+                    Expr::MathAbs(Box::new(index_get(1, local(4)))),
+                )],
+            ),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "unary numeric math store loop should get a packed-f64 loop guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_f64_fast") && ir.contains("for.packed_f64_slow"),
+        "unary numeric math store loop should emit fast and slow clones:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @llvm.fabs.f64"),
+        "fast RHS should lower Math.abs over arr[i] as native f64 math:\n{ir}"
+    );
+    let fast_body_start = ir
+        .find("for.packed_f64_fast.body")
+        .expect("expected packed-f64 fast body");
+    let fast_body_tail = &ir[fast_body_start..];
+    let fast_body_end = fast_body_tail
+        .find("for.packed_f64_fast.update")
+        .map(|offset| fast_body_start + offset)
+        .unwrap_or(ir.len());
+    let fast_body = &ir[fast_body_start..fast_body_end];
+    assert!(
+        !fast_body.contains("js_math_to_number"),
+        "packed fast body must not route Math.abs(arr[i]) through JSValue ToNumber:\n{fast_body}\n\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "fast unary math store should keep a runtime numeric/layout store guard:\n{ir}"
+    );
+
+    let fallback_start = ir
+        .find("\npacked_f64_loop_store.fallback.")
+        .map(|pos| pos + 1)
+        .expect("expected packed-f64 store fallback block");
+    let fallback_tail = &ir[fallback_start..];
+    let fallback_end = fallback_tail
+        .find("\n\n")
+        .map(|offset| fallback_start + offset)
+        .unwrap_or(ir.len());
+    let fallback_block = &ir[fallback_start..fallback_end];
+    assert!(
+        fallback_block.contains("br label %packed_f64.loop.slow.preheader."),
+        "unary math packed store guard failure must side-exit to the slow clone preheader:\n{fallback_block}\n\n{ir}"
+    );
+    assert!(
+        !fallback_block.contains("js_typed_feedback_array_index_set_fallback_boxed"),
+        "unary math packed fast clone must not perform a boxed fallback before side-exiting:\n{fallback_block}\n\n{ir}"
+    );
+    let slow_start = ir
+        .find("for.packed_f64_slow")
+        .expect("expected packed-f64 slow clone");
+    assert!(
+        ir[slow_start..].contains("call double @js_math_to_number"),
+        "unary math packed store side exit must restart in the slow clone that preserves ToNumber semantics:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedF64LoopLoad"
+                && record["consumer"] == "packed_f64_loop_load"
+                && record["access_mode"] == "checked_native"
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+        }),
+        "Math.abs operand arr[i] should use a packed raw-f64 loop load:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedF64LoopStore"
+                && record["consumer"] == "packed_f64_loop_store"
+                && record["access_mode"] == "checked_native"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "store_guard_failure=side_exit_slow_restart")
+                        && notes
+                            .iter()
+                            .any(|note| note == "rhs_unary_math=llvm.fabs.f64")
+                })
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+        }),
+        "expected checked packed raw-f64 loop store record for unary math RHS:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedF64LoopStore"
+                && record["consumer"] == "packed_f64_loop_store_side_exit"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record["fallback_reason"] == "runtime_api"
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
+        }),
+        "expected unary math packed store side-exit fallback evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn packed_f64_loop_rejects_coercive_unary_math_store_rhs() {
+    let module = module_with_classes_and_params(
+        "packed_f64_unary_math_store_coercion_rejected.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![1, 2, 3]),
+            for_loop(
+                4,
+                length(1),
+                vec![array_set(
+                    1,
+                    local(4),
+                    Expr::MathAbs(Box::new(Expr::String("2".to_string()))),
+                )],
+            ),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "Math.abs over a coercive JSValue operand must not get a packed-f64 fast clone:\n{ir}"
+    );
+    assert!(
+        !ir.contains("for.packed_f64_fast"),
+        "coercive unary math store body must stay out of the packed-f64 fast clone:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_math_to_number"),
+        "negative case must exercise the generic ToNumber-preserving math path:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            matches!(
+                record["expr_kind"].as_str(),
+                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+            )
+        }),
+        "coercive unary math store loop should not record packed-f64 loop facts:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn map_string_number_set_has_use_string_key_specialization() {
     let module = module_with_classes_and_params(
         "map_string_number_specialization.ts",
@@ -2586,6 +2897,18 @@ fn map_string_number_set_has_use_string_key_specialization() {
         "Map<string, number>.set should lower through the string-key/f64 helper:\n{probe_ir}"
     );
     assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_i32"),
+        "Map<string, number>.set should not use the narrower int32 value helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_u32"),
+        "Map<string, number>.set should not use the narrower uint32 value helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_f32"),
+        "Map<string, number>.set should not use the narrower float32 value helper:\n{probe_ir}"
+    );
+    assert!(
         probe_ir.contains("call i32 @js_map_has_string_key"),
         "Map<string, number>.has should lower through the string-key helper:\n{probe_ir}"
     );
@@ -2604,6 +2927,1466 @@ fn map_string_number_set_has_use_string_key_specialization() {
     assert!(
         !probe_ir.contains("call i32 @js_map_has("),
         "specialized map.has path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_number_key_set_get_has_delete_use_guarded_number_key_specialization() {
+    let module = module_with_classes_and_params(
+        "map_number_key_specialization.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::Number),
+            param(3, "value", Type::Boolean),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Number, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Let {
+                id: 4,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::MapGet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            }),
+            Stmt::Expr(Expr::MapDelete {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(4))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_key_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && probe_ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "Map<number, V> specialization should guard then unbox the key to raw f64:\n{probe_ir}"
+    );
+    for helper in [
+        "call i64 @js_map_set_number_key",
+        "call i32 @js_map_has_number_key",
+        "call double @js_map_get_number_key",
+        "call i32 @js_map_delete_number_key",
+    ] {
+        assert!(
+            probe_ir.contains(helper),
+            "Map<number, V> should use guarded numeric-key helper {helper}:\n{probe_ir}"
+        );
+    }
+    for fallback in [
+        "call i64 @js_map_set(",
+        "call i32 @js_map_has(",
+        "call double @js_map_get(",
+        "call i32 @js_map_delete(",
+    ] {
+        assert!(
+            probe_ir.contains(fallback),
+            "numeric-key guard failure must preserve generic fallback {fallback}:\n{probe_ir}"
+        );
+    }
+    for string_helper in [
+        "@js_map_set_string_key",
+        "@js_map_set_string_bool",
+        "@js_map_has_string_key",
+        "@js_map_delete_string_key",
+    ] {
+        assert!(
+            !probe_ir.contains(string_helper),
+            "numeric-key map lowering must not use string-key helper {string_helper}:\n{probe_ir}"
+        );
+    }
+}
+
+#[test]
+fn map_string_key_has_delete_specialize_independent_of_value_type() {
+    let module = module_with_classes_and_params(
+        "map_string_boolean_delete_specialization.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Let {
+                id: 4,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::MapDelete {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(4))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_map_string_boolean_delete_specialization_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_bool"),
+        "Map<string, boolean>.set should lower through the typed boolean string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_map_has_string_key"),
+        "Map<string, boolean>.has should lower through the string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_map_delete_string_key"),
+        "Map<string, boolean>.delete should lower through the string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set("),
+        "specialized string-key map.set path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_key"),
+        "typed boolean string-key map.set path should not call the generic-value string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_map_has("),
+        "specialized string-key map.has path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_map_delete("),
+        "specialized string-key map.delete path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_boolean_param_without_native_i1_proof_uses_generic_value_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_boolean_param_fallback.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::Boolean),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_boolean_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_key"),
+        "annotation-only boolean map values should keep the generic-value string-key helper until a native-i1 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_bool"),
+        "annotation-only boolean map values must not use the raw bool helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set("),
+        "static string-key map.set should still avoid the fully generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_int32_set_uses_typed_i32_value_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_int32_value_specialization.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Int32),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Integer(42)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_map_string_int32_value_specialization_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_i32"),
+        "Map<string, Int32>.set should lower through the typed int32-value helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_number"),
+        "typed int32-value map.set should avoid the f64 number helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set("),
+        "typed int32-value map.set should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_key"),
+        "typed int32-value map.set should not call the generic-value string-key helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_int32_param_fallback.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::Int32),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Int32),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_int32_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_number"),
+        "annotation-only Int32 values should keep the f64 helper until a native-i32 proof or guard exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_i32"),
+        "annotation-only Int32 values must not use the raw i32 helper without proof:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_u32_set_uses_typed_u32_value_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_u32_value_specialization.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Named("PerryU32".to_string())),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Integer(4_000_000_000)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_map_string_u32_value_specialization_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_u32"),
+        "Map<string, PerryU32>.set should lower through the typed uint32-value helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_number"),
+        "typed uint32-value map.set should avoid the f64 number helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set("),
+        "typed uint32-value map.set should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_key"),
+        "typed uint32-value map.set should not call the generic-value string-key helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_u32_param_without_native_u32_proof_uses_generic_value_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_u32_param_fallback.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::Named("PerryU32".to_string())),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Named("PerryU32".to_string())),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_u32_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_key"),
+        "annotation-only PerryU32 values should keep the generic-value string-key helper until a native-u32 proof or guard exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_u32"),
+        "annotation-only PerryU32 values must not use the raw u32 helper without proof:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_f32_set_uses_typed_f32_value_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_f32_value_specialization.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Named("PerryF32".to_string())),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Number(1.5)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_map_string_f32_value_specialization_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_f32"),
+        "Map<string, PerryF32>.set should lower through the typed float32-value helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_number"),
+        "typed float32-value map.set should avoid the f64 number helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set("),
+        "typed float32-value map.set should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_key"),
+        "typed float32-value map.set should not call the generic-value string-key helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_f32_param_without_native_f32_proof_uses_generic_value_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_f32_param_fallback.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::Named("PerryF32".to_string())),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Named("PerryF32".to_string())),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_string_f32_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_key"),
+        "annotation-only PerryF32 values should keep the generic-value string-key helper until a native-f32 proof or guard exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_f32"),
+        "annotation-only PerryF32 values must not use the raw f32 helper without proof:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_string_set_uses_typed_string_value_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_string_value_specialization.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::String),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::String),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_map_string_string_value_specialization_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_string"),
+        "Map<string, string>.set should lower through the typed string-value helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set("),
+        "specialized string-value map.set path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_key"),
+        "typed string-value map.set path should not call the generic-value string-key helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_string_any_set_uses_generic_value_string_key_helper() {
+    let module = module_with_classes_and_params(
+        "map_string_any_value_specialization.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String), param(3, "value", Type::Any)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Any),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_map_string_any_value_specialization_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_string_key"),
+        "Map<string, any>.set should keep the generic-value string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_string"),
+        "unproven string values must not use the typed string-value helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_bool"),
+        "unproven values must not use the typed boolean helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn map_unproven_number_key_keeps_generic_fallback() {
+    let module = module_with_classes_and_params(
+        "map_number_unproven_key_generic.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::Any), param(3, "value", Type::Boolean)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Number, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Let {
+                id: 4,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::MapDelete {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(4))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_unproven_key_generic_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_map_set("),
+        "Map<number, boolean>.set with an unproven key should keep the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_map_has("),
+        "Map<number, boolean>.has with an unproven key should keep the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_map_delete("),
+        "Map<number, boolean>.delete with an unproven key should keep the generic helper:\n{probe_ir}"
+    );
+    for number_helper in [
+        "@js_map_set_number_key",
+        "@js_map_has_number_key",
+        "@js_map_get_number_key",
+        "@js_map_delete_number_key",
+    ] {
+        assert!(
+            !probe_ir.contains(number_helper),
+            "unproven numeric map keys must not use helper {number_helper}:\n{probe_ir}"
+        );
+    }
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_bool"),
+        "non-string map.set must not use the string-key boolean helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_map_set_string_key"),
+        "non-string map.set must not use the string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_map_has_string_key"),
+        "non-string map.has must not use the string-key helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_map_delete_string_key"),
+        "non-string map.delete must not use the string-key helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_map_string_key_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_map_string_key_selection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Let {
+                id: 4,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::MapDelete {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(4))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapHas"
+                && record["consumer"] == "collection_string_key.map_has"
+                && record["native_rep_name"] == "string_ref"
+                && record["llvm_ty"] == "i64"
+                && record["native_value_state"] == "region_local"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_has_string_key")
+                && record_has_note(record, "boxed_key_avoided=true")
+        }),
+        "expected map.has string-key helper selection record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapDelete"
+                && record["consumer"] == "collection_string_key.map_delete"
+                && record["native_rep_name"] == "string_ref"
+                && record["llvm_ty"] == "i64"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_delete_string_key")
+        }),
+        "expected map.delete string-key helper selection record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_bool"
+                && record["native_rep_name"] == "i1"
+                && record["llvm_ty"] == "i1"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.boolean_value_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_set_string_bool")
+                && record_has_note(record, "value_rep=i1")
+                && record_has_note(record, "boxed_key_avoided=true")
+                && record_has_note(record, "boxed_value_avoided_until_map_slot=true")
+        }),
+        "expected map.set typed-boolean string-key helper selection record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_bool_key"
+                && record["native_rep_name"] == "string_ref"
+                && record_has_note(record, "selected_helper=js_map_set_string_bool")
+        }),
+        "expected map.set typed-boolean string-key helper key record:\n{artifact:#}"
+    );
+
+    let boolean_fallback_module = module_with_classes_and_params(
+        "artifact_map_string_boolean_value_rejection.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::Boolean),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+    let boolean_fallback_artifact = compile_artifact_json_for_module(boolean_fallback_module);
+    let boolean_fallback_records = boolean_fallback_artifact["records"].as_array().unwrap();
+    assert!(
+        boolean_fallback_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_key"
+                && record["native_rep_name"] == "string_ref"
+                && record_has_note(record, "selected_helper=js_map_set_string_key")
+                && record_has_note(record, "boxed_key_avoided=true")
+        }),
+        "expected annotation-only boolean map.set to use generic-value string-key helper:\n{boolean_fallback_artifact:#}"
+    );
+    assert!(
+        boolean_fallback_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_typed_value.map_set_string_bool_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "map.boolean_value_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_map_set_string_key")
+                && record_has_note(record, "typed_collection_rejected=value_expr_not_native_i1")
+                && record_has_note(record, "value_rep=js_value")
+        }),
+        "expected annotation-only boolean map.set typed-value rejection record:\n{boolean_fallback_artifact:#}"
+    );
+
+    let selected_i32_value_module = module_with_classes_and_params(
+        "artifact_map_string_i32_value_selection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Int32),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Integer(42)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+    let i32_value_artifact = compile_artifact_json_for_module(selected_i32_value_module);
+    let i32_value_records = i32_value_artifact["records"].as_array().unwrap();
+    assert!(
+        i32_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_i32"
+                && record["native_rep_name"] == "i32"
+                && record["llvm_ty"] == "i32"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.int32_value_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_set_string_i32")
+                && record_has_note(record, "value_rep=i32")
+                && record_has_note(record, "boxed_key_avoided=true")
+                && record_has_note(record, "boxed_value_avoided_until_map_slot=true")
+        }),
+        "expected map.set typed-int32 string-key helper value record:\n{i32_value_artifact:#}"
+    );
+    assert!(
+        i32_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_i32_key"
+                && record["native_rep_name"] == "string_ref"
+                && record_has_note(record, "selected_helper=js_map_set_string_i32")
+        }),
+        "expected map.set typed-int32 string-key helper key record:\n{i32_value_artifact:#}"
+    );
+
+    let selected_u32_value_module = module_with_classes_and_params(
+        "artifact_map_string_u32_value_selection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Named("PerryU32".to_string())),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Integer(4_000_000_000)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+    let u32_value_artifact = compile_artifact_json_for_module(selected_u32_value_module);
+    let u32_value_records = u32_value_artifact["records"].as_array().unwrap();
+    assert!(
+        u32_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_u32"
+                && record["native_rep_name"] == "u32"
+                && record["llvm_ty"] == "i32"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.uint32_value_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_set_string_u32")
+                && record_has_note(record, "value_rep=u32")
+                && record_has_note(record, "boxed_key_avoided=true")
+                && record_has_note(record, "boxed_value_avoided_until_map_slot=true")
+        }),
+        "expected map.set typed-uint32 string-key helper value record:\n{u32_value_artifact:#}"
+    );
+    assert!(
+        u32_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_u32_key"
+                && record["native_rep_name"] == "string_ref"
+                && record_has_note(record, "selected_helper=js_map_set_string_u32")
+        }),
+        "expected map.set typed-uint32 string-key helper key record:\n{u32_value_artifact:#}"
+    );
+
+    let selected_f32_value_module = module_with_classes_and_params(
+        "artifact_map_string_f32_value_selection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Named("PerryF32".to_string())),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Number(1.5)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+    let f32_value_artifact = compile_artifact_json_for_module(selected_f32_value_module);
+    let f32_value_records = f32_value_artifact["records"].as_array().unwrap();
+    assert!(
+        f32_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_f32"
+                && record["native_rep_name"] == "f32"
+                && record["llvm_ty"] == "float"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.float32_value_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_set_string_f32")
+                && record_has_note(record, "value_rep=f32")
+                && record_has_note(record, "boxed_key_avoided=true")
+                && record_has_note(record, "boxed_value_avoided_until_map_slot=true")
+        }),
+        "expected map.set typed-float32 string-key helper value record:\n{f32_value_artifact:#}"
+    );
+    assert!(
+        f32_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_f32_key"
+                && record["native_rep_name"] == "string_ref"
+                && record_has_note(record, "selected_helper=js_map_set_string_f32")
+        }),
+        "expected map.set typed-float32 string-key helper key record:\n{f32_value_artifact:#}"
+    );
+
+    let selected_string_value_module = module_with_classes_and_params(
+        "artifact_map_string_value_selection.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::String),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::String),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+    let string_value_artifact = compile_artifact_json_for_module(selected_string_value_module);
+    let string_value_records = string_value_artifact["records"].as_array().unwrap();
+    assert!(
+        string_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_string"
+                && record["native_rep_name"] == "string_ref"
+                && record["llvm_ty"] == "i64"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_value_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_set_string_string")
+                && record_has_note(record, "value_rep=string_ref")
+                && record_has_note(record, "boxed_key_avoided=true")
+                && record_has_note(record, "boxed_value_avoided_until_map_slot=true")
+        }),
+        "expected map.set typed-string string-key helper value record:\n{string_value_artifact:#}"
+    );
+    assert!(
+        string_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_string_key"
+                && record["native_rep_name"] == "string_ref"
+                && record_has_note(record, "selected_helper=js_map_set_string_string")
+        }),
+        "expected map.set typed-string string-key helper key record:\n{string_value_artifact:#}"
+    );
+
+    let generic_value_module = module_with_classes_and_params(
+        "artifact_map_string_any_value_selection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::String), param(3, "value", Type::Any)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Any),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+    let generic_value_artifact = compile_artifact_json_for_module(generic_value_module);
+    let generic_value_records = generic_value_artifact["records"].as_array().unwrap();
+    assert!(
+        generic_value_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_string_key"
+                && record["native_rep_name"] == "string_ref"
+                && record_has_note(record, "selected_helper=js_map_set_string_key")
+                && record_has_note(record, "boxed_key_avoided=true")
+        }),
+        "expected map.set generic-value string-key helper record:\n{generic_value_artifact:#}"
+    );
+
+    let selected_get_module = module_with_classes_and_params(
+        "artifact_map_string_get_selection.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::String),
+            param(3, "value", Type::Number),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::String, Type::Number),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::If {
+                condition: Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                },
+                then_branch: vec![Stmt::Return(Some(Expr::MapGet {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }))],
+                else_branch: Some(vec![Stmt::Return(Some(Expr::Number(0.0)))]),
+            },
+        ],
+    );
+    let get_artifact = compile_artifact_json_for_module(selected_get_module);
+    let get_records = get_artifact["records"].as_array().unwrap();
+    assert!(
+        get_records.iter().any(|record| {
+            record["expr_kind"] == "MapGet"
+                && record["consumer"] == "collection_string_key.map_get"
+                && record["native_rep_name"] == "string_ref"
+                && record["llvm_ty"] == "i64"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_key_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_get_string_key")
+                && record_has_note(record, "boxed_key_avoided=true")
+        }),
+        "expected map.get string-key helper selection record:\n{get_artifact:#}"
+    );
+
+    let fallback_module = module_with_classes_and_params(
+        "artifact_map_non_string_non_number_key_rejection.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::Boolean),
+            param(3, "value", Type::Boolean),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Boolean, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Let {
+                id: 4,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::MapDelete {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(4))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(fallback_module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "map.string_key_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_map_set")
+                && record_has_note(
+                    record,
+                    "typed_collection_rejected=receiver_or_key_not_static_string",
+                )
+        }),
+        "expected map.set non-string-key rejection record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapHas"
+                && record["consumer"] == "collection_string_key.map_has_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "map.string_key_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_map_has")
+                && record_has_note(
+                    record,
+                    "typed_collection_rejected=receiver_or_key_not_static_string",
+                )
+        }),
+        "expected map.has non-string-key rejection record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapDelete"
+                && record["consumer"] == "collection_string_key.map_delete_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "map.string_key_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_map_delete")
+        }),
+        "expected map.delete non-string-key rejection record:\n{artifact:#}"
+    );
+
+    let fallback_get_module = module_with_classes_and_params(
+        "artifact_map_non_string_non_number_get_rejection.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::Boolean),
+            param(3, "value", Type::Number),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Boolean, Type::Number),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::If {
+                condition: Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                },
+                then_branch: vec![Stmt::Return(Some(Expr::MapGet {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }))],
+                else_branch: Some(vec![Stmt::Return(Some(Expr::Number(0.0)))]),
+            },
+        ],
+    );
+    let get_artifact = compile_artifact_json_for_module(fallback_get_module);
+    let get_records = get_artifact["records"].as_array().unwrap();
+    assert!(
+        get_records.iter().any(|record| {
+            record["expr_kind"] == "MapGet"
+                && record["consumer"] == "collection_string_key.map_get_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "map.string_key_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_map_get")
+                && record_has_note(
+                    record,
+                    "typed_collection_rejected=receiver_or_key_not_static_string",
+                )
+        }),
+        "expected map.get non-string-key rejection record:\n{get_artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_map_number_key_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_map_number_key_selection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::Number)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Number, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Let {
+                id: 4,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::MapDelete {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(4))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "MapSet",
+            "collection_number_key.map_set",
+            "js_map_set_number_key",
+        ),
+        (
+            "MapHas",
+            "collection_number_key.map_has",
+            "js_map_has_number_key",
+        ),
+        (
+            "MapDelete",
+            "collection_number_key.map_delete",
+            "js_map_delete_number_key",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "f64"
+                    && record["llvm_ty"] == "double"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "map.number_key_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "key_rep=raw_f64")
+                    && record_has_note(record, "key_guard=js_typed_f64_arg_guard")
+            }),
+            "expected map numeric-key helper selection record {consumer}:\n{artifact:#}"
+        );
+    }
+    for (expr_kind, consumer, helper) in [
+        (
+            "MapSet",
+            "collection_number_key.map_set_generic",
+            "js_map_set",
+        ),
+        (
+            "MapHas",
+            "collection_number_key.map_has_generic",
+            "js_map_has",
+        ),
+        (
+            "MapDelete",
+            "collection_number_key.map_delete_generic",
+            "js_map_delete",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "js_value"
+                    && record_has_type_fact(
+                        record,
+                        "rejected_facts",
+                        "map.number_key_helper",
+                        "rejected",
+                    )
+                    && record_has_note(record, &format!("generic_helper={helper}"))
+                    && record_has_note(record, "typed_collection_rejected=runtime_key_guard_failed")
+                    && record_has_note(record, "key_rep=js_value")
+            }),
+            "expected map numeric-key guarded fallback record {consumer}:\n{artifact:#}"
+        );
+    }
+
+    let rejected_module = module_with_classes_and_params(
+        "artifact_map_number_key_rejection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::Any)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Number, Type::Boolean),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+    let rejected_artifact = compile_artifact_json_for_module(rejected_module);
+    let rejected_records = rejected_artifact["records"].as_array().unwrap();
+    assert!(
+        rejected_records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_string_key.map_set_generic"
+                && record_has_note(record, "generic_helper=js_map_set")
+                && record_has_note(record, "typed_collection_rejected=receiver_or_key_not_static_string")
+        }),
+        "unproven numeric-key map path should still record generic fallback evidence:\n{rejected_artifact:#}"
     );
 }
 
@@ -2670,6 +4453,1539 @@ fn set_string_add_has_delete_use_string_specialization() {
         !probe_ir.contains("call i32 @js_set_delete("),
         "specialized set.delete path should not call the generic helper:\n{probe_ir}"
     );
+}
+
+#[test]
+fn set_number_add_has_delete_use_guarded_number_specialization() {
+    let module = module_with_classes_and_params(
+        "set_number_specialization.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Number)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Number),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_number_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && probe_ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "Set<number> specialization should guard then unbox the value to raw f64:\n{probe_ir}"
+    );
+    for helper in [
+        "call i64 @js_set_add_number",
+        "call i32 @js_set_has_number",
+        "call i32 @js_set_delete_number",
+    ] {
+        assert!(
+            probe_ir.contains(helper),
+            "Set<number> should use guarded numeric helper {helper}:\n{probe_ir}"
+        );
+    }
+    for fallback in [
+        "call i64 @js_set_add(",
+        "call i32 @js_set_has(",
+        "call i32 @js_set_delete(",
+    ] {
+        assert!(
+            probe_ir.contains(fallback),
+            "numeric Set guard failure must preserve generic fallback {fallback}:\n{probe_ir}"
+        );
+    }
+}
+
+#[test]
+fn set_number_specialization_rejects_unproven_value() {
+    let module = module_with_classes_and_params(
+        "set_number_unproven.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Any)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Number),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(Expr::SetHas {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_number_unproven_ts__probe");
+    for helper in [
+        "@js_set_add_number",
+        "@js_set_has_number",
+        "@js_set_delete_number",
+    ] {
+        assert!(
+            !probe_ir.contains(helper),
+            "unproven Set<number> values must not use helper {helper}:\n{probe_ir}"
+        );
+    }
+    assert!(
+        probe_ir.contains("call i64 @js_set_add(") && probe_ir.contains("call i32 @js_set_has("),
+        "unproven value path should call generic Set helpers:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_int32_add_has_delete_use_i32_specialization() {
+    let module = module_with_classes_and_params(
+        "set_int32_specialization.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Int32),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Integer(42)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Integer(42)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Integer(42)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_int32_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add_i32"),
+        "Set<Int32>.add should lower through the raw int32 helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has_i32"),
+        "Set<Int32>.has should lower through the raw int32 helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete_i32"),
+        "Set<Int32>.delete should lower through the raw int32 helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add("),
+        "specialized int32 set.add path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has("),
+        "specialized int32 set.has path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete("),
+        "specialized int32 set.delete path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
+    let module = module_with_classes_and_params(
+        "set_int32_param_fallback.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Int32)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Int32),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_int32_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add("),
+        "annotation-only Int32 Set.add should keep the generic helper until a native-i32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has("),
+        "annotation-only Int32 Set.has should keep the generic helper until a native-i32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete("),
+        "annotation-only Int32 Set.delete should keep the generic helper until a native-i32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add_i32"),
+        "annotation-only Int32 Set.add must not use the raw int32 helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has_i32"),
+        "annotation-only Int32 Set.has must not use the raw int32 helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete_i32"),
+        "annotation-only Int32 Set.delete must not use the raw int32 helper without proof:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_u32_add_has_delete_use_u32_specialization() {
+    let module = module_with_classes_and_params(
+        "set_u32_specialization.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryU32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Integer(4_000_000_000)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Integer(4_000_000_000)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Integer(4_000_000_000)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_u32_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add_u32"),
+        "Set<PerryU32>.add should lower through the raw uint32 helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has_u32"),
+        "Set<PerryU32>.has should lower through the raw uint32 helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete_u32"),
+        "Set<PerryU32>.delete should lower through the raw uint32 helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add("),
+        "specialized uint32 set.add path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has("),
+        "specialized uint32 set.has path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete("),
+        "specialized uint32 set.delete path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_u32_param_without_native_u32_proof_uses_generic_helpers() {
+    let module = module_with_classes_and_params(
+        "set_u32_param_fallback.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Named("PerryU32".to_string()))],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryU32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_u32_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add("),
+        "annotation-only PerryU32 Set.add should keep the generic helper until a native-u32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has("),
+        "annotation-only PerryU32 Set.has should keep the generic helper until a native-u32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete("),
+        "annotation-only PerryU32 Set.delete should keep the generic helper until a native-u32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add_u32"),
+        "annotation-only PerryU32 Set.add must not use the raw u32 helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has_u32"),
+        "annotation-only PerryU32 Set.has must not use the raw u32 helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete_u32"),
+        "annotation-only PerryU32 Set.delete must not use the raw u32 helper without proof:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_f32_add_has_delete_use_f32_specialization() {
+    let module = module_with_classes_and_params(
+        "set_f32_specialization.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryF32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Number(1.5)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Number(1.5)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Number(1.5)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_f32_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add_f32"),
+        "Set<PerryF32>.add should lower through the raw float32 helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has_f32"),
+        "Set<PerryF32>.has should lower through the raw float32 helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete_f32"),
+        "Set<PerryF32>.delete should lower through the raw float32 helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add("),
+        "specialized float32 set.add path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has("),
+        "specialized float32 set.has path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete("),
+        "specialized float32 set.delete path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_f32_param_without_native_f32_proof_uses_generic_helpers() {
+    let module = module_with_classes_and_params(
+        "set_f32_param_fallback.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Named("PerryF32".to_string()))],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryF32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_f32_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add("),
+        "annotation-only PerryF32 Set.add should keep the generic helper until a native-f32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has("),
+        "annotation-only PerryF32 Set.has should keep the generic helper until a native-f32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete("),
+        "annotation-only PerryF32 Set.delete should keep the generic helper until a native-f32 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add_f32"),
+        "annotation-only PerryF32 Set.add must not use the raw f32 helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has_f32"),
+        "annotation-only PerryF32 Set.has must not use the raw f32 helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete_f32"),
+        "annotation-only PerryF32 Set.delete must not use the raw f32 helper without proof:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_boolean_add_has_delete_use_bool_specialization() {
+    let module = module_with_classes_and_params(
+        "set_boolean_specialization.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Boolean),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Bool(true)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_boolean_specialization_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add_bool"),
+        "Set<boolean>.add should lower through the raw boolean helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has_bool"),
+        "Set<boolean>.has should lower through the raw boolean helper:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete_bool"),
+        "Set<boolean>.delete should lower through the raw boolean helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add("),
+        "specialized boolean set.add path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has("),
+        "specialized boolean set.has path should not call the generic helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete("),
+        "specialized boolean set.delete path should not call the generic helper:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn set_boolean_param_without_native_i1_proof_uses_generic_helpers() {
+    let module = module_with_classes_and_params(
+        "set_boolean_param_fallback.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Boolean)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Boolean),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_set_boolean_param_fallback_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_set_add("),
+        "annotation-only boolean Set.add should keep the generic helper until a native-i1 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_has("),
+        "annotation-only boolean Set.has should keep the generic helper until a native-i1 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_set_delete("),
+        "annotation-only boolean Set.delete should keep the generic helper until a native-i1 proof exists:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_set_add_bool"),
+        "annotation-only boolean Set.add must not use the raw bool helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_has_bool"),
+        "annotation-only boolean Set.has must not use the raw bool helper without proof:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i32 @js_set_delete_bool"),
+        "annotation-only boolean Set.delete must not use the raw bool helper without proof:\n{probe_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_set_string_key_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_set_string_key_selection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::String)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::String),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_string_key.set_add",
+            "js_set_add_string",
+        ),
+        (
+            "SetHas",
+            "collection_string_key.set_has",
+            "js_set_has_string",
+        ),
+        (
+            "SetDelete",
+            "collection_string_key.set_delete",
+            "js_set_delete_string",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "string_ref"
+                    && record["llvm_ty"] == "i64"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "set.string_key_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "boxed_key_avoided=true")
+            }),
+            "expected {consumer} string-key helper selection record:\n{artifact:#}"
+        );
+    }
+
+    let fallback_module = module_with_classes_and_params(
+        "artifact_set_non_string_key_rejection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Number)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Any),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(fallback_module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "SetHas"
+                && record["consumer"] == "collection_string_key.set_has_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "set.string_key_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_set_has")
+                && record_has_note(
+                    record,
+                    "typed_collection_rejected=receiver_or_value_not_static_string",
+                )
+        }),
+        "expected set.has non-string rejection record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "SetDelete"
+                && record["consumer"] == "collection_string_key.set_delete_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "set.string_key_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_set_delete")
+        }),
+        "expected set.delete non-string rejection record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_set_number_value_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_set_number_value_selection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Number)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Number),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_number_value.set_add",
+            "js_set_add_number",
+        ),
+        (
+            "SetHas",
+            "collection_number_value.set_has",
+            "js_set_has_number",
+        ),
+        (
+            "SetDelete",
+            "collection_number_value.set_delete",
+            "js_set_delete_number",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "f64"
+                    && record["llvm_ty"] == "double"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "set.number_value_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "value_rep=raw_f64")
+                    && record_has_note(record, "value_guard=js_typed_f64_arg_guard")
+            }),
+            "expected Set<number> helper selection record {consumer}:\n{artifact:#}"
+        );
+    }
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_number_value.set_add_generic",
+            "js_set_add",
+        ),
+        (
+            "SetHas",
+            "collection_number_value.set_has_generic",
+            "js_set_has",
+        ),
+        (
+            "SetDelete",
+            "collection_number_value.set_delete_generic",
+            "js_set_delete",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "js_value"
+                    && record_has_type_fact(
+                        record,
+                        "rejected_facts",
+                        "set.number_value_helper",
+                        "rejected",
+                    )
+                    && record_has_note(record, &format!("generic_helper={helper}"))
+                    && record_has_note(
+                        record,
+                        "typed_collection_rejected=runtime_value_guard_failed",
+                    )
+                    && record_has_note(record, "value_rep=js_value")
+            }),
+            "expected Set<number> guarded fallback record {consumer}:\n{artifact:#}"
+        );
+    }
+
+    let rejected_module = module_with_classes_and_params(
+        "artifact_set_number_value_rejection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Any)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Number),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(Expr::SetHas {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            })),
+        ],
+    );
+    let rejected_artifact = compile_artifact_json_for_module(rejected_module);
+    let rejected_records = rejected_artifact["records"].as_array().unwrap();
+    assert!(
+        rejected_records.iter().any(|record| {
+            record["expr_kind"] == "SetAdd"
+                && record["consumer"] == "collection_number_value.set_add_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "set.number_value_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_set_add")
+                && record_has_note(record, "typed_collection_rejected=value_expr_not_numeric")
+        }),
+        "expected unproven Set<number> value rejection record:\n{rejected_artifact:#}"
+    );
+}
+
+#[test]
+fn artifact_records_set_int32_value_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_set_int32_value_selection.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Int32),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Integer(7)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Integer(7)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Integer(7)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_i32",
+            "js_set_add_i32",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_i32",
+            "js_set_has_i32",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_i32",
+            "js_set_delete_i32",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "i32"
+                    && record["llvm_ty"] == "i32"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "set.int32_value_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "value_rep=i32")
+                    && record_has_note(record, "boxed_value_avoided_until_set_slot=true")
+            }),
+            "expected {consumer} int32-value helper selection record:\n{artifact:#}"
+        );
+    }
+
+    let fallback_module = module_with_classes_and_params(
+        "artifact_set_int32_value_rejection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Int32)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Int32),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+    let fallback_artifact = compile_artifact_json_for_module(fallback_module);
+    let fallback_records = fallback_artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_generic",
+            "js_set_add",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_generic",
+            "js_set_has",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_generic",
+            "js_set_delete",
+        ),
+    ] {
+        assert!(
+            fallback_records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "js_value"
+                    && record_has_type_fact(
+                        record,
+                        "rejected_facts",
+                        "set.int32_value_helper",
+                        "rejected",
+                    )
+                    && record_has_note(record, &format!("generic_helper={helper}"))
+                    && record_has_note(
+                        record,
+                        "typed_collection_rejected=value_expr_not_native_i32",
+                    )
+                    && record_has_note(record, "value_rep=js_value")
+            }),
+            "expected {consumer} int32-value helper rejection record:\n{fallback_artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_set_u32_value_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_set_u32_value_selection.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryU32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Integer(4_000_000_000)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Integer(4_000_000_000)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Integer(4_000_000_000)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_u32",
+            "js_set_add_u32",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_u32",
+            "js_set_has_u32",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_u32",
+            "js_set_delete_u32",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "u32"
+                    && record["llvm_ty"] == "i32"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "set.uint32_value_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "value_rep=u32")
+                    && record_has_note(record, "boxed_value_avoided_until_set_slot=true")
+            }),
+            "expected {consumer} uint32-value helper selection record:\n{artifact:#}"
+        );
+    }
+
+    let fallback_module = module_with_classes_and_params(
+        "artifact_set_u32_value_rejection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Named("PerryU32".to_string()))],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryU32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+    let fallback_artifact = compile_artifact_json_for_module(fallback_module);
+    let fallback_records = fallback_artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_generic",
+            "js_set_add",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_generic",
+            "js_set_has",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_generic",
+            "js_set_delete",
+        ),
+    ] {
+        assert!(
+            fallback_records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "js_value"
+                    && record_has_type_fact(
+                        record,
+                        "rejected_facts",
+                        "set.uint32_value_helper",
+                        "rejected",
+                    )
+                    && record_has_note(record, &format!("generic_helper={helper}"))
+                    && record_has_note(
+                        record,
+                        "typed_collection_rejected=value_expr_not_native_u32",
+                    )
+                    && record_has_note(record, "value_rep=js_value")
+            }),
+            "expected {consumer} uint32-value helper rejection record:\n{fallback_artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_set_f32_value_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_set_f32_value_selection.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryF32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Number(1.5)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Number(1.5)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Number(1.5)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_f32",
+            "js_set_add_f32",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_f32",
+            "js_set_has_f32",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_f32",
+            "js_set_delete_f32",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "f32"
+                    && record["llvm_ty"] == "float"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "set.float32_value_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "value_rep=f32")
+                    && record_has_note(record, "boxed_value_avoided_until_set_slot=true")
+            }),
+            "expected {consumer} float32-value helper selection record:\n{artifact:#}"
+        );
+    }
+
+    let fallback_module = module_with_classes_and_params(
+        "artifact_set_f32_value_rejection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Named("PerryF32".to_string()))],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Named("PerryF32".to_string())),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+    let fallback_artifact = compile_artifact_json_for_module(fallback_module);
+    let fallback_records = fallback_artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_generic",
+            "js_set_add",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_generic",
+            "js_set_has",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_generic",
+            "js_set_delete",
+        ),
+    ] {
+        assert!(
+            fallback_records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "js_value"
+                    && record_has_type_fact(
+                        record,
+                        "rejected_facts",
+                        "set.float32_value_helper",
+                        "rejected",
+                    )
+                    && record_has_note(record, &format!("generic_helper={helper}"))
+                    && record_has_note(
+                        record,
+                        "typed_collection_rejected=value_expr_not_native_f32",
+                    )
+                    && record_has_note(record, "value_rep=js_value")
+            }),
+            "expected {consumer} float32-value helper rejection record:\n{fallback_artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_set_boolean_value_helper_selection_and_rejection() {
+    let selected_module = module_with_classes_and_params(
+        "artifact_set_boolean_value_selection.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Boolean),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(Expr::Bool(true)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(Expr::Bool(true)),
+            }),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+    let artifact = compile_artifact_json_for_module(selected_module);
+    let records = artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_bool",
+            "js_set_add_bool",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_bool",
+            "js_set_has_bool",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_bool",
+            "js_set_delete_bool",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "i1"
+                    && record["llvm_ty"] == "i1"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "set.boolean_value_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "value_rep=i1")
+                    && record_has_note(record, "boxed_value_avoided_until_set_slot=true")
+            }),
+            "expected {consumer} boolean-value helper selection record:\n{artifact:#}"
+        );
+    }
+
+    let fallback_module = module_with_classes_and_params(
+        "artifact_set_boolean_value_rejection.ts",
+        Vec::new(),
+        vec![param(2, "value", Type::Boolean)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: set_type(Type::Boolean),
+                mutable: true,
+                init: Some(Expr::SetNew),
+            },
+            Stmt::Expr(Expr::SetAdd {
+                set_id: 1,
+                value: Box::new(local(2)),
+            }),
+            Stmt::Let {
+                id: 3,
+                name: "present".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+            },
+            Stmt::Expr(Expr::SetDelete {
+                set: Box::new(local(1)),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+    let fallback_artifact = compile_artifact_json_for_module(fallback_module);
+    let fallback_records = fallback_artifact["records"].as_array().unwrap();
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_generic",
+            "js_set_add",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_generic",
+            "js_set_has",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_generic",
+            "js_set_delete",
+        ),
+    ] {
+        assert!(
+            fallback_records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "js_value"
+                    && record_has_type_fact(
+                        record,
+                        "rejected_facts",
+                        "set.boolean_value_helper",
+                        "rejected",
+                    )
+                    && record_has_note(record, &format!("generic_helper={helper}"))
+                    && record_has_note(record, "typed_collection_rejected=value_expr_not_native_i1")
+                    && record_has_note(record, "value_rep=js_value")
+            }),
+            "expected {consumer} boolean-value helper rejection record:\n{fallback_artifact:#}"
+        );
+    }
 }
 
 #[test]
@@ -3536,6 +6852,20 @@ fn compiler_private_async_iter_result_f64_body() -> Vec<Stmt> {
     ]
 }
 
+fn compiler_private_async_iter_result_i1_body() -> Vec<Stmt> {
+    vec![
+        Stmt::Expr(Expr::IterResultSet(Box::new(Expr::Bool(true)), false)),
+        Stmt::Let {
+            id: 21,
+            name: "__step_bool".to_string(),
+            ty: Type::Boolean,
+            mutable: false,
+            init: Some(Expr::BooleanCoerce(Box::new(Expr::IterResultGetValue))),
+        },
+        Stmt::Return(Some(Expr::LocalGet(21))),
+    ]
+}
+
 fn compiler_private_async_iter_result_generic_body() -> Vec<Stmt> {
     vec![
         Stmt::Expr(Expr::IterResultSet(
@@ -3549,6 +6879,13 @@ fn compiler_private_async_iter_result_generic_body() -> Vec<Stmt> {
 fn compiler_private_async_iter_result_annotated_numeric_param_body() -> Vec<Stmt> {
     vec![
         Stmt::Expr(Expr::IterResultSet(Box::new(Expr::LocalGet(30)), false)),
+        Stmt::Return(Some(Expr::IterResultGetValue)),
+    ]
+}
+
+fn compiler_private_async_iter_result_annotated_boolean_param_body() -> Vec<Stmt> {
+    vec![
+        Stmt::Expr(Expr::IterResultSet(Box::new(Expr::LocalGet(31)), false)),
         Stmt::Return(Some(Expr::IterResultGetValue)),
     ]
 }
@@ -3611,6 +6948,31 @@ fn compiler_private_async_iter_result_f64_slot_uses_typed_handoff() {
 }
 
 #[test]
+fn compiler_private_async_iter_result_i1_slot_uses_typed_handoff() {
+    let ir = compile_ir(
+        "compiler_private_async_iter_result_i1.ts",
+        compiler_private_async_iter_result_i1_body(),
+    );
+
+    assert!(
+        ir.contains("call double @js_iter_result_set_i1"),
+        "proven boolean async iter-result payload should use the raw i1 setter:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_iter_result_get_value_i1"),
+        "proven boolean async iter-result consumer should use the raw i1 getter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_set("),
+        "proven boolean async iter-result payload should avoid the generic JSValue setter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_is_truthy"),
+        "raw i1 async iter-result consumers should not re-enter generic truthiness in generated IR:\n{ir}"
+    );
+}
+
+#[test]
 fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_before_raw_slot() {
     let ir = compile_ir_for_module_with_opts(
         module_with_classes_and_params(
@@ -3635,6 +6997,30 @@ fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_befor
     assert!(
         !ir.contains("call double @js_iter_result_set("),
         "coerced numeric async payload should avoid the generic JSValue setter:\n{ir}"
+    );
+}
+
+#[test]
+fn compiler_private_async_iter_result_annotated_boolean_payload_stays_generic() {
+    let ir = compile_ir_for_module_with_opts(
+        module_with_classes_and_params(
+            "compiler_private_async_iter_result_annotated_boolean_param.ts",
+            Vec::new(),
+            vec![param(31, "value", Type::Boolean)],
+            Type::Boolean,
+            compiler_private_async_iter_result_annotated_boolean_param_body(),
+        ),
+        empty_opts(),
+    )
+    .unwrap();
+
+    assert!(
+        ir.contains("call double @js_iter_result_set("),
+        "annotation-only boolean async payloads must preserve the runtime JSValue:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_set_i1"),
+        "annotation-only boolean async payloads must not be narrowed to raw i1:\n{ir}"
     );
 }
 
@@ -3673,6 +7059,28 @@ fn artifact_records_compiler_private_async_iter_result_f64_handoff() {
                     && record["llvm_ty"] == "double"
             }),
             "expected async iter-result f64 artifact record {consumer}:\n{artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_compiler_private_async_iter_result_i1_handoff() {
+    let artifact = compile_artifact_json(
+        "artifact_compiler_private_async_iter_result_i1.ts",
+        compiler_private_async_iter_result_i1_body(),
+    );
+    let records = artifact["records"].as_array().unwrap();
+    for consumer in [
+        "compiler_private_async_iter_result_set_i1",
+        "compiler_private_async_iter_result_get_i1",
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["consumer"] == consumer
+                    && record["native_rep_name"] == "i1"
+                    && record["llvm_ty"] == "i1"
+            }),
+            "expected async iter-result i1 artifact record {consumer}:\n{artifact:#}"
         );
     }
 }
@@ -4738,6 +8146,152 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
     module("typed_f64_closure_abi.ts", body)
 }
 
+fn typed_i32_closure_clone_module(case: &str) -> Module {
+    let mut params = vec![param(31, "a", Type::Int32), param(32, "b", Type::Int32)];
+    let mut prefix = Vec::new();
+    let mut captures = Vec::new();
+    let mut mutable_captures = Vec::new();
+    let mut local_ty = Type::Function(perry_types::FunctionType {
+        params: vec![
+            ("a".to_string(), Type::Int32, false),
+            ("b".to_string(), Type::Int32, false),
+        ],
+        return_type: Box::new(Type::Int32),
+        is_async: false,
+        is_generator: false,
+    });
+    let mut return_type = Type::Int32;
+    let mut first_let_ty = Type::Int32;
+    let mut body_expr = Expr::Binary {
+        op: BinaryOp::BitXor,
+        left: Box::new(local(31)),
+        right: Box::new(local(32)),
+    };
+    let mut return_expr = Expr::Binary {
+        op: BinaryOp::BitOr,
+        left: Box::new(local(33)),
+        right: Box::new(int(7)),
+    };
+    match case {
+        "eligible" => {}
+        "capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "mask".to_string(),
+                ty: Type::Int32,
+                mutable: false,
+                init: Some(int(3)),
+            });
+            captures.push(30);
+            return_expr = Expr::Binary {
+                op: BinaryOp::BitAnd,
+                left: Box::new(return_expr),
+                right: Box::new(local(30)),
+            };
+        }
+        "number_param" => {
+            params[0].ty = Type::Number;
+            local_ty = Type::Function(perry_types::FunctionType {
+                params: vec![
+                    ("a".to_string(), Type::Number, false),
+                    ("b".to_string(), Type::Int32, false),
+                ],
+                return_type: Box::new(Type::Int32),
+                is_async: false,
+                is_generator: false,
+            });
+        }
+        "number_return" => {
+            return_type = Type::Number;
+            local_ty = Type::Function(perry_types::FunctionType {
+                params: vec![
+                    ("a".to_string(), Type::Int32, false),
+                    ("b".to_string(), Type::Int32, false),
+                ],
+                return_type: Box::new(Type::Number),
+                is_async: false,
+                is_generator: false,
+            });
+        }
+        "unsafe_add" => {
+            first_let_ty = Type::Int32;
+            body_expr = Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(31)),
+                right: Box::new(local(32)),
+            };
+        }
+        "mutable_capture" => {
+            prefix.push(Stmt::Let {
+                id: 30,
+                name: "mask".to_string(),
+                ty: Type::Int32,
+                mutable: true,
+                init: Some(int(3)),
+            });
+            captures.push(30);
+            mutable_captures.push(30);
+            return_expr = Expr::Binary {
+                op: BinaryOp::BitAnd,
+                left: Box::new(return_expr),
+                right: Box::new(local(30)),
+            };
+        }
+        "dynamic" => {
+            local_ty = Type::Any;
+        }
+        other => panic!("unknown typed-i32 closure fixture: {other}"),
+    }
+
+    let mut body = prefix;
+    body.extend([
+        Stmt::Let {
+            id: 10,
+            name: "mix_i32".to_string(),
+            ty: local_ty,
+            mutable: false,
+            init: Some(Expr::Closure {
+                func_id: 303,
+                params,
+                return_type: return_type.clone(),
+                body: vec![
+                    Stmt::Let {
+                        id: 33,
+                        name: "mixed".to_string(),
+                        ty: first_let_ty,
+                        mutable: false,
+                        init: Some(body_expr),
+                    },
+                    Stmt::Return(Some(return_expr)),
+                ],
+                captures,
+                mutable_captures,
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(local(10)),
+            args: vec![int(11), int(5)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ]);
+
+    module_with_classes_and_params(
+        &format!("typed_i32_closure_{case}.ts"),
+        Vec::new(),
+        Vec::new(),
+        return_type,
+        body,
+    )
+}
+
 fn typed_i1_method_clone_module(case: &str) -> Module {
     let mut switch = class(203, "Switch", Vec::new());
     let mut params = vec![param(21, "a", Type::Boolean), param(22, "b", Type::Boolean)];
@@ -4898,6 +8452,86 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
                 property: "mix_i32".to_string(),
             }),
             args: vec![local(2), local(3)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn typed_string_method_clone_module(case: &str) -> Module {
+    let mut labeler = class(206, "Labeler", Vec::new());
+    let mut params = vec![param(21, "s", Type::String)];
+    let mut return_type = Type::String;
+    let mut body = vec![
+        Stmt::Let {
+            id: 25,
+            name: "copy".to_string(),
+            ty: Type::String,
+            mutable: false,
+            init: Some(local(21)),
+        },
+        Stmt::Return(Some(local(25))),
+    ];
+    let mut receiver_ty = Type::Named("Labeler".to_string());
+    match case {
+        "eligible" => {}
+        "any_param" => {
+            params[0].ty = Type::Any;
+        }
+        "number_param" => {
+            params[0].ty = Type::Number;
+            return_type = Type::Number;
+            body = vec![Stmt::Return(Some(number(1.0)))];
+        }
+        "default_param" => {
+            params[0].default = Some(Expr::String("fallback".to_string()));
+        }
+        "rest_param" => {
+            params[0].is_rest = true;
+        }
+        "concat_body" => {
+            body = vec![Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(21)),
+                right: Box::new(local(21)),
+            }))];
+        }
+        "dynamic_receiver" => {
+            receiver_ty = Type::Any;
+        }
+        other => panic!("unknown typed-string method fixture: {other}"),
+    }
+    labeler.methods.push(Function {
+        id: 240,
+        name: "pick".to_string(),
+        type_params: Vec::new(),
+        params,
+        return_type,
+        body,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    module_with_classes_and_params(
+        &format!("typed_string_method_{case}.ts"),
+        vec![labeler],
+        vec![
+            param(1, "receiver", receiver_ty),
+            param(2, "x", Type::String),
+        ],
+        Type::String,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "pick".to_string(),
+            }),
+            args: vec![local(2)],
             type_args: Vec::new(),
             byte_offset: 0,
         }))],
@@ -5386,6 +9020,183 @@ fn scalar_method_boolean_public_numeric_arg_module(case: &str, arg_ty: Type) -> 
     module
 }
 
+fn scalar_method_boolean_public_numeric_expr_arg_module() -> Module {
+    let mut module = scalar_method_boolean_predicate_module();
+    module.name = "scalar_method_boolean_guarded_expr_arg.ts".to_string();
+    module.functions[0].params = vec![
+        param(70, "limit", Type::Number),
+        param(71, "delta", Type::Int32),
+    ];
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 20,
+            name: "p".to_string(),
+            ty: Type::Named("Point".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Point".to_string(),
+                args: vec![number(4.0), number(2.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(20)),
+                property: "isAbove".to_string(),
+            }),
+            args: vec![Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(70)),
+                right: Box::new(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(local(71)),
+                    right: Box::new(int(2)),
+                }),
+            }],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ];
+    module
+}
+
+fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) -> Module {
+    let mut flags = class(
+        111,
+        "Flags",
+        vec![
+            class_field("mask", field_ty.clone()),
+            class_field("salt", field_ty),
+        ],
+    );
+    flags.constructor = Some(Function {
+        id: 110,
+        name: "Flags_constructor".to_string(),
+        type_params: Vec::new(),
+        params: vec![
+            param(10, "mask", Type::Int32),
+            param(11, "salt", Type::Int32),
+        ],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "mask".to_string(),
+                value: Box::new(local(10)),
+            }),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "salt".to_string(),
+                value: Box::new(local(11)),
+            }),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    flags.methods.push(Function {
+        id: 111,
+        name: "mix".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(12, "extra", arg_ty.clone())],
+        return_type: Type::Int32,
+        body: vec![Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::BitAnd,
+            left: Box::new(Expr::Binary {
+                op: BinaryOp::BitOr,
+                left: Box::new(Expr::Binary {
+                    op: BinaryOp::BitXor,
+                    left: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "mask".to_string(),
+                    }),
+                    right: Box::new(local(12)),
+                }),
+                right: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "salt".to_string(),
+                }),
+            }),
+            right: Box::new(int(255)),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    let arg_is_any = matches!(&arg_ty, Type::Any);
+    let call_arg = if arg_is_any { local(70) } else { int(12) };
+    let params = if arg_is_any {
+        vec![param(70, "extra", Type::Any)]
+    } else {
+        Vec::new()
+    };
+    module_with_classes_and_params(
+        &format!("scalar_method_int32_bitwise_{case}.ts"),
+        vec![flags],
+        params,
+        Type::Int32,
+        vec![
+            Stmt::Let {
+                id: 20,
+                name: "flags".to_string(),
+                ty: Type::Named("Flags".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Flags".to_string(),
+                    args: vec![int(42), int(7)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(local(20)),
+                    property: "mix".to_string(),
+                }),
+                args: vec![call_arg],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            })),
+        ],
+    )
+}
+
+fn scalar_method_int32_bitwise_public_arg_module() -> Module {
+    let mut module = scalar_method_int32_bitwise_module("guarded_arg", Type::Int32, Type::Int32);
+    module.functions[0].params = vec![param(70, "extra", Type::Int32)];
+    if let Stmt::Return(Some(Expr::Call { args, .. })) = &mut module.functions[0].body[1] {
+        args[0] = local(70);
+    } else {
+        panic!("unexpected int32 bitwise scalar method fixture body");
+    }
+    module
+}
+
+fn scalar_method_int32_unsigned_shift_module() -> Module {
+    let mut module = scalar_method_int32_bitwise_module("unsigned_shift", Type::Int32, Type::Int32);
+    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::UShr,
+        left: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: "mask".to_string(),
+        }),
+        right: Box::new(int(0)),
+    }))];
+    module
+}
+
 fn scalar_method_boolean_negative_module(case: &str) -> Module {
     let mut module = scalar_method_boolean_predicate_module();
     module.name = format!("scalar_method_boolean_reject_{case}.ts");
@@ -5526,6 +9337,36 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                         property: "isAbove".to_string(),
                     }),
                     args: vec![local(70)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                })),
+            ];
+        }
+        "any_arg_expr" => {
+            module.functions[0].params = vec![param(70, "limit", Type::Any)];
+            module.functions[0].body = vec![
+                Stmt::Let {
+                    id: 20,
+                    name: "p".to_string(),
+                    ty: Type::Named("Point".to_string()),
+                    mutable: false,
+                    init: Some(Expr::New {
+                        class_name: "Point".to_string(),
+                        args: vec![number(4.0), number(2.0)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                },
+                Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(local(20)),
+                        property: "isAbove".to_string(),
+                    }),
+                    args: vec![Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(local(70)),
+                        right: Box::new(int(1)),
+                    }],
                     type_args: Vec::new(),
                     byte_offset: 0,
                 })),
@@ -6532,6 +10373,174 @@ fn typed_i32_method_clone_rejects_number_param_number_return_and_unsafe_add() {
 }
 
 #[test]
+fn typed_string_method_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_string_method_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_string_method_eligible_ts__Labeler__pick";
+    let typed = "perry_method_typed_string_method_eligible_ts__Labeler__pick__typed_string";
+    let generic_body = "perry_method_typed_string_method_eligible_ts__Labeler__pick__generic";
+    let caller = "perry_fn_typed_string_method_eligible_ts__probe";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!("define internal i64 @{typed}(i64 %arg21)")),
+        "typed-string method clone should use raw i64 StringHeader handles:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{public}(double %this_arg, double %arg21)"
+        )) && ir.contains(&format!(
+            "define internal double @{generic_body}(double %this_arg, double %arg21)"
+        )),
+        "typed-string method should expose a public JSValue wrapper and keep an internal generic body:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_string_arg_guard")
+            && wrapper_ir.contains("call i64 @js_typed_string_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i64 @{typed}(i64 "))
+            && wrapper_ir.contains("call double @js_nanbox_string(i64 ")
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public method wrapper should guard/unbox string args, call the raw clone, box the result, and keep generic fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call i32 @js_method_direct_shape_guard")
+            && caller_ir.contains("typed_string_method.fast")
+            && caller_ir.contains("typed_string_method.generic")
+            && caller_ir.contains("call i32 @js_typed_string_arg_guard")
+            && caller_ir.contains("call i64 @js_typed_string_arg_to_raw")
+            && caller_ir.contains(&format!("call i64 @{typed}(i64 "))
+            && caller_ir.contains("call double @js_nanbox_string(i64 "),
+        "exact direct method call should guard receiver/method identity, then guard/unbox string args and call the raw clone:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(")),
+        "direct typed-string guard failure should target the internal generic method body:\n{caller_ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call double @{public}(")),
+        "direct typed-string guard failure must not recurse through the public wrapper:\n{caller_ir}"
+    );
+    assert!(
+        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
+            && !ir.contains(&format!("ptrtoint ptr @{typed}"))
+            && !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
+            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        "runtime vtable must register the public wrapper, not internal typed/generic bodies:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_string_method_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_string_method_clone_module("eligible"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MethodCall"
+                && record["consumer"] == "typed_string_method_direct_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_method_typed_string_method_eligible_ts__Labeler__pick__typed_string",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note
+                            == "generic_method=perry_method_typed_string_method_eligible_ts__Labeler__pick__generic"
+                    }) && notes.iter().any(|note| note == "receiver_class=Labeler")
+                        && notes.iter().any(|note| note == "method=pick")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_signature=string(string)->string")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-string method direct-call artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_string_method_clone_rejects_unsupported_string_shapes() {
+    for case in [
+        "any_param",
+        "number_param",
+        "default_param",
+        "rest_param",
+        "concat_body",
+    ] {
+        let ir = String::from_utf8(
+            compile_module(&typed_string_method_clone_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_string") && !ir.contains("typed_string_method.fast"),
+            "{case} method must stay off the typed-string method ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_typed_string_method_clone_rejection_reason() {
+    let artifact = compile_artifact_json_for_module(typed_string_method_clone_module("any_param"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "typed_string_method_clone_decision"
+                && record["expr_kind"] == "TypedCloneDecision"
+                && record["native_rep_name"] == "js_value"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "typed_clone_rejected=param_not_string")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_clone_kind=typed_string_method")
+                        && notes.iter().any(|note| note == "class=Labeler")
+                        && notes.iter().any(|note| note == "method=pick")
+                })
+        }),
+        "expected typed-string method rejection artifact for unsupported param:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_string_method_clone_rejects_dynamic_receiver_direct_call_site() {
+    let ir = String::from_utf8(
+        compile_module(
+            &typed_string_method_clone_module("dynamic_receiver"),
+            empty_opts(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_string_method_dynamic_receiver_ts__Labeler__pick";
+    let typed = "perry_method_typed_string_method_dynamic_receiver_ts__Labeler__pick__typed_string";
+    let caller_ir = defined_function_ir_section(
+        &ir,
+        "perry_fn_typed_string_method_dynamic_receiver_ts__probe",
+    );
+
+    assert!(
+        ir.contains(&format!("define internal i64 @{typed}(i64 %arg21)"))
+            && ir.contains(&format!("define double @{public}(")),
+        "eligible method should still expose its public wrapper even when this call site is dynamic:\n{ir}"
+    );
+    assert!(
+        !caller_ir.contains("typed_string_method.fast")
+            && !caller_ir.contains(&format!("call i64 @{typed}(")),
+        "dynamic receiver call site must not route directly to the typed-string method clone:\n{caller_ir}"
+    );
+}
+
+#[test]
 fn typed_i1_method_clone_emits_internal_clone_and_guarded_direct_call() {
     let ir = String::from_utf8(
         compile_module(&typed_i1_method_clone_module("eligible"), empty_opts()).unwrap(),
@@ -7174,6 +11183,188 @@ fn typed_f64_closure_clone_rejects_any_parameter_and_mutable_capture() {
 }
 
 #[test]
+fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i32_closure_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_closure_typed_i32_closure_eligible_ts__303";
+    let generic_body = "perry_closure_typed_i32_closure_eligible_ts__303__generic";
+    let typed = "perry_closure_typed_i32_closure_eligible_ts__303__typed_i32";
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!(
+            "define internal i32 @{typed}(i64 %this_closure, i32 %arg31, i32 %arg32)"
+        )),
+        "typed-i32 closure clone should carry the closure handle plus i32 params and i32 return:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("define double @{public}(i64 %this_closure"))
+            && ir.contains(&format!(
+                "define internal double @{generic_body}(i64 %this_closure"
+            )),
+        "typed-i32 closure should expose a public wrapper and keep an internal generic body:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "call i64 @js_closure_alloc_singleton(ptr @{public}"
+        )),
+        "closure allocation must keep storing the public wrapper pointer:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i32 @{typed}(i64 %this_closure")),
+        "public closure wrapper should guard/unbox Int32 JSValue args and call the typed clone:\n{wrapper_ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("closure_direct.typed_i32")
+            && ir.contains("call i32 @js_typed_i32_arg_guard")
+            && ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && ir.contains(&format!("call i32 @{typed}(i64 ")),
+        "direct local closure call should guard/unbox Int32 args and call the raw clone:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "Int32-guard failure should target the internal generic closure body:\n{ir}"
+    );
+    assert!(
+        !ir.contains(&format!("call double @{public}(i64 ")),
+        "typed guard failure must not recursively call the public closure wrapper:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_closure_call2"),
+        "closure identity/arity guard failure should keep runtime dispatch fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_i32_closure_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_i32_closure_clone_module("eligible"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ClosureCall"
+                && record["consumer"] == "typed_i32_closure_direct_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_closure_typed_i32_closure_eligible_ts__303__typed_i32",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note == "generic_closure=perry_closure_typed_i32_closure_eligible_ts__303__generic"
+                    }) && notes.iter().any(|note| note == "closure_func_id=303")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_signature=i32(i64 closure, i32, ...)->i32")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-i32 closure clone selection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i32_closure_clone_accepts_immutable_i32_capture() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i32_closure_clone_module("capture"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let typed = "perry_closure_typed_i32_closure_capture_ts__303__typed_i32";
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    assert!(
+        typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && typed_ir.contains("bitcast i64")
+            && typed_ir.contains("call i32 @js_typed_i32_arg_to_raw"),
+        "typed-i32 captured closure should load immutable Int32 capture through the closure handle:\n{typed_ir}"
+    );
+    assert!(
+        ir.contains(&format!("call i32 @{typed}(i64 ")),
+        "typed direct call should pass the closure handle to the captured clone:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_i32_closure_clone_rejects_annotation_unsafe_and_mutable_capture() {
+    for case in [
+        "number_param",
+        "number_return",
+        "unsafe_add",
+        "mutable_capture",
+    ] {
+        let ir = String::from_utf8(
+            compile_module(&typed_i32_closure_clone_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_i32"),
+            "{case} closure must stay on the generic closure ABI:\n{ir}"
+        );
+    }
+
+    let artifact = compile_artifact_json_for_module(typed_i32_closure_clone_module("unsafe_add"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "typed_i32_closure_clone_decision"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note == "typed_clone_rejected=return_expr_not_typed_i32_safe"
+                            || note == "typed_clone_rejected=body_not_straight_line_typed"
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_clone_kind=typed_i32_closure")
+                })
+        }),
+        "expected typed-i32 closure rejection artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i32_closure_clone_rejects_dynamic_callee_call_site() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i32_closure_clone_module("dynamic"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let caller = "perry_fn_typed_i32_closure_dynamic_ts__probe";
+    let public = "perry_closure_typed_i32_closure_dynamic_ts__303";
+    let generic_body = "perry_closure_typed_i32_closure_dynamic_ts__303__generic";
+    let typed = "perry_closure_typed_i32_closure_dynamic_ts__303__typed_i32";
+    let caller_ir = function_ir_section(&ir, caller);
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        ir.contains(&format!("define internal i32 @{typed}(i64 %this_closure")),
+        "eligible closure should still have an internal typed-i32 clone:\n{ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call i32 @{typed}("))
+            && !caller_ir.contains("call i32 @js_typed_i32_arg_guard"),
+        "dynamic closure callee must not direct-call the typed-i32 clone:\n{caller_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains(&format!("call i32 @{typed}("))
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "dynamic runtime dispatch should enter the public closure wrapper, which owns typed-i32 guards:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call double @js_closure_call2"),
+        "dynamic closure callee should dispatch through the generic closure fallback:\n{ir}"
+    );
+}
+
+#[test]
 fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
     let ir = String::from_utf8(
         compile_module(&typed_i1_closure_clone_module("eligible"), empty_opts()).unwrap(),
@@ -7610,6 +11801,13 @@ fn artifact_records_scalar_replaced_method_summary_inline() {
                 && record["consumer"] == "scalar_method_summary_inline"
                 && record["local_id"] == 20
                 && record["native_value_state"] == "region_local"
+                && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "consumed_facts",
+                    "consumed",
+                    "exact_receiver_summary",
+                )
                 && record["notes"].as_array().is_some_and(|notes| {
                     notes.iter().any(|note| note == "class=Point")
                         && notes.iter().any(|note| note == "method=sum")
@@ -7664,6 +11862,22 @@ fn artifact_records_scalar_replaced_boolean_method_predicate_inline() {
         artifact_has_scalar_method_inline(&artifact, "isAbove"),
         "expected scalar boolean method predicate summary inline artifact:\n{artifact:#}"
     );
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "consumed_facts",
+                    "consumed",
+                    "exact_receiver_summary",
+                )
+                && record_has_note(record, "method=isAbove")
+        }),
+        "expected scalar boolean method predicate inline record to consume the scalar method summary fact:\n{artifact:#}"
+    );
 }
 
 #[test]
@@ -7717,6 +11931,68 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_arguments() {
         !artifact_has_scalar_method_inline(&artifact, "isAbove"),
         "any arg must not record a scalar method summary inline:\n{artifact:#}"
     );
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_materialized_fallback"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_scalar_method_summary_fact(record, "rejected_facts", "generic_arg")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "rejected_facts",
+                    "generic_arg",
+                    "generic_argument",
+                )
+                && record_has_note(record, "scalar_method_fallback=generic_arg")
+                && record_has_note(record, "method=isAbove")
+        }),
+        "any arg fallback should record rejected scalar method summary evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_boolean_predicate_rejects_unproven_numeric_argument_expressions() {
+    let module = scalar_method_boolean_negative_module("any_arg_expr");
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call double @js_native_call_method_by_id"),
+        "any arg expression must keep generic method dispatch:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i64 @js_object_alloc"),
+        "any arg expression fallback must materialize the scalar receiver before dispatch:\n{ir}"
+    );
+    assert!(
+        !ir.contains("scalar_method_arg_guard.fast"),
+        "any arg expression must not use the guarded scalar inline path:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        !artifact_has_scalar_method_inline(&artifact, "isAbove"),
+        "any arg expression must not record a scalar method summary inline:\n{artifact:#}"
+    );
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_materialized_fallback"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_scalar_method_summary_fact(record, "rejected_facts", "generic_arg")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "rejected_facts",
+                    "generic_arg",
+                    "generic_argument",
+                )
+                && record_has_note(record, "scalar_method_fallback=generic_arg")
+                && record_has_note(record, "method=isAbove")
+        }),
+        "any arg expression fallback should record rejected scalar method summary evidence:\n{artifact:#}"
+    );
 }
 
 #[test]
@@ -7750,6 +12026,274 @@ fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
         assert!(
             artifact_has_scalar_method_inline(&artifact, "isAbove"),
             "{case} public numeric arg should still record scalar inline fast path:\n{artifact:#}"
+        );
+        let records = artifact["records"].as_array().unwrap();
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == "ScalarMethodCall"
+                    && record["consumer"] == "scalar_method_summary_inline"
+                    && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                    && record_has_scalar_method_summary_detail(
+                        record,
+                        "consumed_facts",
+                        "consumed",
+                        "guarded_numeric_args_fast_path",
+                    )
+                    && record_has_note(record, "arg_guard=js_typed_f64_arg_guard")
+                    && record_has_note(record, "method=isAbove")
+            }),
+            "{case} public numeric arg should record guarded scalar inline summary evidence:\n{artifact:#}"
+        );
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == "ScalarMethodCall"
+                    && record["consumer"] == "scalar_method_summary_materialized_fallback"
+                    && record["access_mode"] == "dynamic_fallback"
+                    && record["materialization_reason"] == "runtime_api"
+                    && record_has_scalar_method_summary_fact(
+                        record,
+                        "rejected_facts",
+                        "arg_guard_failed",
+                    )
+                    && record_has_scalar_method_summary_detail(
+                        record,
+                        "rejected_facts",
+                        "arg_guard_failed",
+                        "guarded_numeric_args_fallback",
+                    )
+                    && record_has_note(record, "scalar_method_fallback=arg_guard_failed")
+                    && record_has_note(record, "arg_guard=js_typed_f64_arg_guard")
+                    && record_has_note(record, "method=isAbove")
+            }),
+            "{case} public numeric arg should record guarded scalar fallback summary evidence:\n{artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn scalar_method_boolean_predicate_guards_public_numeric_argument_expressions() {
+    let module = scalar_method_boolean_public_numeric_expr_arg_module();
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("scalar_method_arg_guard.fast")
+            && ir.contains("scalar_method_arg_guard.fallback")
+            && ir.matches("call i32 @js_typed_f64_arg_guard").count() >= 2
+            && ir.matches("call double @js_typed_f64_arg_to_raw").count() >= 2
+            && ir.contains("fmul double")
+            && ir.contains("fadd double"),
+        "public numeric arg expression should guard/unbox locals and rebuild arithmetic as raw f64 before scalar inline:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_native_call_method_by_id"),
+        "public numeric arg expression should keep a generic fallback:\n{ir}"
+    );
+    let fast = ir
+        .find("scalar_method_arg_guard.fast")
+        .unwrap_or_else(|| panic!("missing guarded fast block:\n{ir}"));
+    let fallback = ir
+        .find("scalar_method_arg_guard.fallback")
+        .unwrap_or_else(|| panic!("missing guarded fallback block:\n{ir}"));
+    let materialize = ir
+        .find("call i64 @js_object_alloc")
+        .unwrap_or_else(|| panic!("fallback should materialize receiver:\n{ir}"));
+    let dispatch = ir
+        .find("call double @js_native_call_method_by_id")
+        .unwrap_or_else(|| panic!("fallback should dispatch generically:\n{ir}"));
+    assert!(
+        fast < fallback && fallback < materialize && materialize < dispatch,
+        "guarded expression fast path must precede materialized generic fallback:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        artifact_has_scalar_method_inline(&artifact, "isAbove"),
+        "public numeric arg expression should record scalar inline fast path:\n{artifact:#}"
+    );
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "consumed_facts",
+                    "consumed",
+                    "guarded_numeric_args_fast_path",
+                )
+                && record_has_note(record, "method=isAbove")
+                && record_has_note(record, "receiver=scalar_replaced")
+                && record_has_note(record, "arg_guard=public_numeric_expr")
+                && record_has_note(record, "guarded_arg_count=1")
+        }),
+        "public numeric arg expression should record guarded scalar inline summary evidence:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_materialized_fallback"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_scalar_method_summary_fact(record, "rejected_facts", "arg_guard_failed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "rejected_facts",
+                    "arg_guard_failed",
+                    "guarded_numeric_args_fallback",
+                )
+                && record_has_note(record, "scalar_method_fallback=arg_guard_failed")
+                && record_has_note(record, "arg_guard=public_numeric_expr")
+                && record_has_note(record, "method=isAbove")
+        }),
+        "public numeric arg expression should record guarded scalar fallback summary evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_replaced_int32_bitwise_method_inlines_without_dispatch_or_allocation() {
+    let module = scalar_method_int32_bitwise_module("inline", Type::Int32, Type::Int32);
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        !ir.contains("call double @js_native_call_method"),
+        "scalar-replaced Int32 bitwise method should not dispatch dynamically:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @perry_method_scalar_method_int32_bitwise_inline_ts__Flags_mix"),
+        "scalar-replaced Int32 bitwise method should inline the method body:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_object_alloc"),
+        "scalar-replaced Int32 bitwise receiver should not heap-allocate:\n{ir}"
+    );
+    assert!(
+        ir.contains("xor i32") && ir.contains("or i32") && ir.contains("and i32"),
+        "Int32 bitwise summary should lower to native i32 operators in the inlined body:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record["local_id"] == 20
+                && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "consumed_facts",
+                    "consumed",
+                    "exact_receiver_summary",
+                )
+                && record_has_note(record, "class=Flags")
+                && record_has_note(record, "method=mix")
+                && record_has_note(record, "receiver=scalar_replaced")
+                && record_has_note(record, "summary_return=int32")
+        }),
+        "expected Int32 scalar method summary inline artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_int32_bitwise_guards_public_int32_argument_and_preserves_fallback() {
+    let module = scalar_method_int32_bitwise_public_arg_module();
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("scalar_method_arg_guard.fast")
+            && ir.contains("scalar_method_arg_guard.fallback")
+            && ir.contains("call i32 @js_typed_i32_arg_guard")
+            && ir.contains("call i32 @js_typed_i32_arg_to_raw"),
+        "public Int32 arg should guard/unbox before scalar Int32 summary inline:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_native_call_method_by_id"),
+        "public Int32 arg should keep a generic by-ID fallback:\n{ir}"
+    );
+    let materialize = ir
+        .find("call i64 @js_object_alloc")
+        .unwrap_or_else(|| panic!("fallback should materialize receiver:\n{ir}"));
+    let dispatch = ir
+        .find("call double @js_native_call_method_by_id")
+        .unwrap_or_else(|| panic!("fallback should dispatch generically:\n{ir}"));
+    assert!(
+        materialize < dispatch,
+        "fallback must materialize before generic dispatch:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "consumed_facts",
+                    "consumed",
+                    "guarded_numeric_args_fast_path",
+                )
+                && record_has_note(record, "method=mix")
+                && record_has_note(record, "summary_return=int32")
+                && record_has_note(record, "arg_guard=js_typed_i32_arg_guard")
+                && record_has_note(record, "guarded_arg_count=1")
+        }),
+        "guarded public Int32 arg should record scalar inline fast path:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_materialized_fallback"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_scalar_method_summary_fact(
+                    record,
+                    "rejected_facts",
+                    "arg_guard_failed",
+                )
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "rejected_facts",
+                    "arg_guard_failed",
+                    "guarded_numeric_args_fallback",
+                )
+                && record_has_note(record, "scalar_method_fallback=arg_guard_failed")
+                && record_has_note(record, "arg_guard=js_typed_i32_arg_guard")
+                && record_has_note(record, "method=mix")
+        }),
+        "guarded public Int32 arg should record scalar fallback evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_int32_bitwise_rejects_unproven_or_unsigned_shapes() {
+    for (case, module) in [
+        (
+            "number_field",
+            scalar_method_int32_bitwise_module("number_field", Type::Number, Type::Int32),
+        ),
+        (
+            "unsigned_shift",
+            scalar_method_int32_unsigned_shift_module(),
+        ),
+        (
+            "any_arg",
+            scalar_method_int32_bitwise_module("any_arg", Type::Int32, Type::Any),
+        ),
+    ] {
+        let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+        assert!(
+            ir.contains("call double @js_native_call_method"),
+            "{case} must keep dynamic method dispatch fallback:\n{ir}"
+        );
+        assert!(
+            ir.contains("call i64 @js_object_alloc"),
+            "{case} must keep heap allocation fallback for the receiver:\n{ir}"
+        );
+
+        let artifact = compile_artifact_json_for_module(module);
+        assert!(
+            !artifact_has_scalar_method_inline(&artifact, "mix"),
+            "{case} must not record a scalar Int32 method summary inline:\n{artifact:#}"
         );
     }
 }
