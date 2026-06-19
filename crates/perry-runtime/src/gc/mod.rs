@@ -397,9 +397,7 @@ pub fn gc_init() {
     // Generic per-handle expando properties (`blob.colors = [...]` and other
     // arbitrary own props on native HANDLE values). Keys are stable small handle
     // ids; only the stored VALUES are JS references that must be traced.
-    gc_register_mutable_root_scanner(
-        crate::object::handle_expando::scan_handle_expando_roots_mut,
-    );
+    gc_register_mutable_root_scanner(crate::object::handle_expando::scan_handle_expando_roots_mut);
     // Native-module callable export singletons and process stdio stream
     // singletons store heap pointers in TLS caches; keep them live and rewrite
     // them if a copying collection moves their backing allocations.

@@ -124,7 +124,10 @@ mod tests {
         assert!(handle_expando_get(h, "colors").is_none());
         let v = f64::from_bits(0x7FFD_AAAA_BBBB_CCCC);
         handle_expando_set(h, "colors", v);
-        assert_eq!(handle_expando_get(h, "colors").map(|x| x.to_bits()), Some(v.to_bits()));
+        assert_eq!(
+            handle_expando_get(h, "colors").map(|x| x.to_bits()),
+            Some(v.to_bits())
+        );
         assert!(handle_expando_has_any(h));
         // cleanup
         if let Ok(mut map) = table().lock() {
@@ -143,7 +146,10 @@ mod tests {
             let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
             scan_handle_expando_roots_mut(&mut visitor);
         }
-        assert!(seen.contains(&v_bits), "scanner must trace stored value, seen={seen:x?}");
+        assert!(
+            seen.contains(&v_bits),
+            "scanner must trace stored value, seen={seen:x?}"
+        );
         if let Ok(mut map) = table().lock() {
             map.remove(&h);
         }

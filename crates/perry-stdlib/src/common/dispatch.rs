@@ -2662,7 +2662,8 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     // package's `createDebug.colors[...]` reads back the array it assigned
     // instead of `undefined`. Specific typed properties were all tried above, so
     // a hit here is always a genuine user expando.
-    if let Some(v) = perry_runtime::object::handle_expando::handle_expando_get(handle, property_name)
+    if let Some(v) =
+        perry_runtime::object::handle_expando::handle_expando_get(handle, property_name)
     {
         return v;
     }

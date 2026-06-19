@@ -1681,11 +1681,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
-                } else if is_native_dispatch_member(
-                    &module_name,
-                    &class_name,
-                    &property_name,
-                ) {
+                } else if is_native_dispatch_member(&module_name, &class_name, &property_name) {
                     // #wall (debug `_.colors` / `_.init`): INVERTED DEFAULT.
                     // A bare native-instance member READ now defaults to a
                     // plain `PropertyGet` (the final `else` below). It only
