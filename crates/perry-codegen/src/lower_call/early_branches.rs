@@ -144,6 +144,7 @@ fn native_method_returns_self_instance(module: &str, method: &str) -> bool {
                 | "jpeg"
                 | "png"
                 | "webp"
+                | "avif"
         ),
         _ => false,
     }

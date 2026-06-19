@@ -517,6 +517,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== sharp / image ==========
     module.declare_function("js_sharp_auto_orient", I64, &[I64]);
+    module.declare_function("js_sharp_avif", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_blur", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_composite", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_extend", I64, &[I64, DOUBLE]);

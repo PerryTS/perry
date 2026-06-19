@@ -167,6 +167,7 @@ fn fmt_name(format: ImageFormat) -> &'static str {
         ImageFormat::Jpeg => "jpeg",
         ImageFormat::Png => "png",
         ImageFormat::WebP => "webp",
+        ImageFormat::Avif => "avif",
         ImageFormat::Gif => "gif",
         _ => "unknown",
     }
@@ -612,6 +613,45 @@ pub extern "C" fn js_sharp_webp(handle: Handle, quality: f64) -> Handle {
     -1
 }
 
+#[no_mangle]
+pub extern "C" fn js_sharp_avif(handle: Handle, quality: f64) -> Handle {
+    if let Some(sharp) = get_handle::<SharpHandle>(handle) {
+        return register_handle(SharpHandle {
+            image: sharp.image.clone(),
+            format: ImageFormat::Avif,
+            quality: if quality > 0.0 { quality as u8 } else { 50 },
+            orientation: sharp.orientation,
+        });
+    }
+    -1
+}
+
+/// Encode `image` to `format`, honouring `quality` for the formats whose
+/// encoders take one (JPEG, AVIF). Other formats use the default encoder.
+fn encode_to_vec(
+    image: &DynamicImage,
+    format: ImageFormat,
+    quality: u8,
+) -> image::ImageResult<Vec<u8>> {
+    let mut buf = Cursor::new(Vec::new());
+    match format {
+        ImageFormat::Jpeg => {
+            let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
+            image.write_with_encoder(enc)?;
+        }
+        ImageFormat::Avif => {
+            // speed 6 is a reasonable encode-time/quality balance.
+            let enc =
+                image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut buf, 6, quality);
+            image.write_with_encoder(enc)?;
+        }
+        other => {
+            image.write_to(&mut buf, other)?;
+        }
+    }
+    Ok(buf.into_inner())
+}
+
 /// # Safety
 /// `path_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
@@ -632,19 +672,29 @@ pub unsafe extern "C" fn js_sharp_to_file(
 
     spawn_blocking(move || {
         if let Some(sharp) = get_handle::<SharpHandle>(handle) {
-            match sharp.image.save(&path) {
-                Ok(_) => {
+            // Output format follows the path extension (sharp behavior),
+            // falling back to the pipeline's selected format. Encoding through
+            // `encode_to_vec` honours quality (JPEG/AVIF) and supports AVIF
+            // output, which `image::save` would do at default quality only.
+            let out_format = ImageFormat::from_path(&path).unwrap_or(sharp.format);
+            match encode_to_vec(&sharp.image, out_format, sharp.quality).and_then(|bytes| {
+                std::fs::write(&path, &bytes)
+                    .map(|_| bytes)
+                    .map_err(Into::into)
+            }) {
+                Ok(bytes) => {
                     // sharp's toFile resolves an `info` object, not a string:
                     // `{ format, width, height, channels, size }`.
                     let (width, height) = sharp.image.dimensions();
                     // Report the ENCODED output's channel count by re-reading
                     // the saved file (e.g. an RGBA source saved as JPEG is
                     // 3-channel on disk), falling back to the in-memory count.
+                    // (AVIF re-read fails — no decoder — so it uses the fallback.)
                     let channels = image::open(&path)
                         .map(|saved| saved.color().channel_count())
                         .unwrap_or_else(|_| sharp.image.color().channel_count());
-                    let format = fmt_name(sharp.format).to_string();
-                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let format = fmt_name(out_format).to_string();
+                    let size = bytes.len() as u64;
                     promise.resolve_with(move || {
                         let (packed, shape_id) =
                             build_object_shape(&["format", "width", "height", "channels", "size"]);
@@ -686,10 +736,8 @@ pub extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
 
     spawn_blocking(move || {
         if let Some(sharp) = get_handle::<SharpHandle>(handle) {
-            let mut buffer = Cursor::new(Vec::new());
-            match sharp.image.write_to(&mut buffer, sharp.format) {
-                Ok(_) => {
-                    let bytes = buffer.into_inner();
+            match encode_to_vec(&sharp.image, sharp.format, sharp.quality) {
+                Ok(bytes) => {
                     // Resolve with a REAL Node `Buffer` of the encoded image
                     // bytes. The Buffer must be allocated on the MAIN thread —
                     // the runtime arena is thread-local, so allocating it here

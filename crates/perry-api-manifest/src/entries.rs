@@ -2046,6 +2046,7 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sharp", "jpeg", true, None),
     method("sharp", "png", true, None),
     method("sharp", "webp", true, None),
+    method("sharp", "avif", true, None),
     method("sharp", "toFile", true, None),
     method("sharp", "toBuffer", true, None),
     method("sharp", "metadata", true, None),

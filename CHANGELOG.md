@@ -1,3 +1,27 @@
+## v0.5.1195 — feat(sharp): AVIF encode + quality-aware encoding
+
+- **`.avif(quality)`** — AVIF output via the `image` crate's `avif` feature (the pure-Rust
+  `ravif`/`rav1e` encoder). `sharp(input).resize(…).avif(50).toBuffer()` produces a real
+  AVIF Buffer (`ftyp`/`avif` box); `.toFile('out.avif')` writes a valid AVIF and reports
+  `format: "avif"`. Encode-only: AVIF **decode** is intentionally out (it needs the C
+  `dav1d` library; we keep the static-binary, no-system-deps model).
+- **Quality is now honoured for JPEG and AVIF.** Encoding routes through a new
+  `encode_to_vec` helper that uses `JpegEncoder::new_with_quality` / `AvifEncoder::
+  new_with_speed_quality`. Previously `.jpeg(q)` stored a quality that the default
+  `write_to` path ignored; now `.jpeg(20)` really is smaller than `.jpeg(95)`. `toFile`
+  also encodes by the output path's extension (so `.toFile('x.avif')` works) and honours
+  quality.
+
+Wired end-to-end (dispatch row, FFI decl, manifest entry, fluent-chain allowlist); docs
+regenerated (+`avif`). Validated e2e: `.avif().toBuffer()` → AVIF `ftyp avif` box;
+`.toFile('x.avif')` → `file(1)` reports `ISO Media, AVIF Image`; JPEG quality affects output
+size; `perry-ext-sharp` unit suite 9/9.
+
+Note: enabling AVIF pulls `rav1e` (a large pure-Rust AV1 encoder) into sharp binaries —
+a deliberate size trade for AVIF output. SVG rasterization (`resvg`) was evaluated and
+**deferred** to a separate opt-in PR to avoid bloating every sharp binary with its
+dependency tree.
+
 ## v0.5.1194 — feat(sharp): EXIF auto-orient, `.extend()`, `.trim()`, `.composite()`
 
 More sharp parity, pure-Rust (no libvips):

@@ -168,6 +168,15 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "sharp",
         has_receiver: true,
+        method: "avif",
+        class_filter: None,
+        runtime: "js_sharp_avif",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
         method: "toFile",
         class_filter: None,
         runtime: "js_sharp_to_file",
