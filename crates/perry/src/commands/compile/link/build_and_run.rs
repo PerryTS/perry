@@ -1736,7 +1736,7 @@ pub(crate) fn build_and_run_link(
     }
 
     let link_cache_status = prepare_link_cache_status(
-        &ctx.cache_root,
+        &ctx.cache_dir,
         target,
         &cmd,
         obj_paths,

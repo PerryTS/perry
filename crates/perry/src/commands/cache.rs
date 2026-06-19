@@ -1,16 +1,22 @@
 //! Cache management subcommands: `perry cache clean`, `perry cache info`.
 //!
-//! The on-disk object cache lives at `<project-root>/.perry-cache/objects/<target>/<key>.o`
-//! (see `commands/compile.rs :: ObjectCache`). These subcommands let users
-//! inspect and wipe it without resorting to `rm -rf`, which matters mostly for
-//! discoverability: if a user suspects a stale cache they can reach for
-//! `perry cache clean` rather than digging into a hidden directory.
+//! The on-disk object cache lives at
+//! `<cache-dir>/objects/<target>/<key>.o`, where `cache-dir` defaults to
+//! `<project-root>/node_modules/.cache/perry` and can be overridden via
+//! `--cache-dir`, `PERRY_CACHE_DIR`, perry.toml `[perry] cacheDir`, or
+//! package.json `perry.cacheDir`
+//! (see `commands/compile/object_cache.rs :: resolve_cache_dir`). These
+//! subcommands let users inspect and wipe it without resorting to `rm -rf`,
+//! which matters mostly for discoverability: if a user suspects a stale
+//! cache they can reach for `perry cache clean` rather than digging into a
+//! hidden directory.
 
 use anyhow::{anyhow, Result};
 use clap::{Args, Subcommand};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::compile::{cache_dir_override, resolve_cache_dir};
 use crate::OutputFormat;
 
 #[derive(Args, Debug)]
@@ -21,7 +27,8 @@ pub struct CacheArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum CacheCommand {
-    /// Delete the entire `.perry-cache/` directory for the current project.
+    /// Delete the entire Perry cache directory for the current project
+    /// (default `node_modules/.cache/perry`).
     Clean(CleanArgs),
     /// Show cache location, size, and per-target file counts.
     Info(InfoArgs),
@@ -58,7 +65,7 @@ fn resolve_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 fn clean(args: CleanArgs, format: OutputFormat) -> Result<()> {
     let root = resolve_root(args.project_root)?;
-    let cache_dir = root.join(".perry-cache");
+    let cache_dir = resolve_cache_dir(&root, cache_dir_override(&root).as_deref());
     if !cache_dir.exists() {
         match format {
             OutputFormat::Text => {
@@ -100,7 +107,7 @@ fn clean(args: CleanArgs, format: OutputFormat) -> Result<()> {
 
 fn info(args: InfoArgs, format: OutputFormat) -> Result<()> {
     let root = resolve_root(args.project_root)?;
-    let cache_dir = root.join(".perry-cache");
+    let cache_dir = resolve_cache_dir(&root, cache_dir_override(&root).as_deref());
     if !cache_dir.exists() {
         match format {
             OutputFormat::Text => {

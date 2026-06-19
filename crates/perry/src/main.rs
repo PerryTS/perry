@@ -146,7 +146,7 @@ enum Commands {
     /// Generate TypeScript type stubs for Perry built-in modules
     Types(commands::types::TypesArgs),
 
-    /// Manage the per-module object cache at `.perry-cache/`
+    /// Manage Perry's on-disk cache (default `node_modules/.cache/perry`)
     Cache(commands::cache::CacheArgs),
 
     /// Sign-side tooling for `@perry/updater` (closes #229).
