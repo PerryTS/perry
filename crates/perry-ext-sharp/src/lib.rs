@@ -152,15 +152,23 @@ pub unsafe extern "C" fn js_sharp_from_input(input_bits: i64) -> Handle {
         return -1;
     }
     if js_buffer_is_buffer(ptr) != 0 {
-        match read_buffer_bytes(ptr as *const BufferHeader) {
+        return match read_buffer_bytes(ptr as *const BufferHeader) {
             Some(bytes) => decode_image_bytes(bytes),
             None => -1,
-        }
-    } else {
-        match read_string(JsString::from_raw(ptr as *mut StringHeader)) {
-            Some(path) => open_image_path(path),
-            None => -1,
-        }
+        };
+    }
+    // A POINTER_TAG value that isn't a registered Buffer is a plain object /
+    // array — not a valid sharp input. `js_get_string_pointer_unified` hands
+    // back its heap pointer, which must NOT be read as a `StringHeader` (that
+    // would read arbitrary memory). Reject it the way sharp rejects an
+    // unsupported input. (Strings — long or short — and number-coerced keys
+    // are not `POINTER_TAG`, so the path-string case still flows through.)
+    if JsValue::from_bits(input_bits as u64).is_pointer() {
+        return -1;
+    }
+    match read_string(JsString::from_raw(ptr as *mut StringHeader)) {
+        Some(path) => open_image_path(path),
+        None => -1,
     }
 }
 
@@ -198,24 +206,18 @@ fn fast_resize(img: &DynamicImage, dw: u32, dh: u32) -> DynamicImage {
             .ok()?;
         let raw = dst.into_vec();
         let dyn_img = match pixel_type {
-            PixelType::U8 => {
-                DynamicImage::ImageLuma8(image::ImageBuffer::from_raw(dw, dh, raw)?)
-            }
+            PixelType::U8 => DynamicImage::ImageLuma8(image::ImageBuffer::from_raw(dw, dh, raw)?),
             PixelType::U8x2 => {
                 DynamicImage::ImageLumaA8(image::ImageBuffer::from_raw(dw, dh, raw)?)
             }
-            PixelType::U8x3 => {
-                DynamicImage::ImageRgb8(image::ImageBuffer::from_raw(dw, dh, raw)?)
-            }
+            PixelType::U8x3 => DynamicImage::ImageRgb8(image::ImageBuffer::from_raw(dw, dh, raw)?),
             _ => DynamicImage::ImageRgba8(image::ImageBuffer::from_raw(dw, dh, raw)?),
         };
         Some(dyn_img)
     })();
 
     // Fall back to the image crate if anything in the fast path failed.
-    resized.unwrap_or_else(|| {
-        img.resize_exact(dw, dh, image::imageops::FilterType::Lanczos3)
-    })
+    resized.unwrap_or_else(|| img.resize_exact(dw, dh, image::imageops::FilterType::Lanczos3))
 }
 
 #[no_mangle]
@@ -425,7 +427,12 @@ pub unsafe extern "C" fn js_sharp_to_file(
                     // sharp's toFile resolves an `info` object, not a string:
                     // `{ format, width, height, channels, size }`.
                     let (width, height) = sharp.image.dimensions();
-                    let channels = sharp.image.color().channel_count();
+                    // Report the ENCODED output's channel count by re-reading
+                    // the saved file (e.g. an RGBA source saved as JPEG is
+                    // 3-channel on disk), falling back to the in-memory count.
+                    let channels = image::open(&path)
+                        .map(|saved| saved.color().channel_count())
+                        .unwrap_or_else(|_| sharp.image.color().channel_count());
                     let format = fmt_name(sharp.format).to_string();
                     let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                     promise.resolve_with(move || {

@@ -25,13 +25,15 @@ Four sharp improvements toward real-world parity, all pure-Rust (no libvips):
   16-bit/float fall back to RGBA8, and any fast-path failure falls back to `image`'s
   resizer). Aspect-ratio (`height <= 0`) behavior preserved.
 
+`toFile`'s `channels` reflects the **encoded output** (re-read from the saved file, so an
+RGBA source saved as JPEG reports 3, not 4); `metadata`'s `channels` reflects the current
+in-memory pipeline image (matching sharp's `metadata()` semantics). `sharp(input)` rejects
+non-string/non-Buffer inputs (a `POINTER_TAG` object/array) instead of reading arbitrary
+memory as a string.
+
 Validated e2e: metadata/toFile object fields; `sharp(Buffer)` decode→resize→re-encode;
 `.extract()` dims + `.sharpen()` in chains; resize exact + aspect across RGBA/LumaA paths;
 toFile produces a valid JPEG; `perry-ext-sharp` unit suite 6/6; API docs regenerated.
-
-Known nuance: `toFile`/`metadata` `channels` reflects the in-memory image's channel count
-(e.g. 4 for an RGBA source saved as JPEG, where the file itself is 3-channel) rather than
-the encoded output's — a follow-up refinement.
 
 ## v0.5.1191 — fix(native): chained fluent method calls keep their module identity (sharp pipelines)
 
