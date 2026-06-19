@@ -40,6 +40,7 @@ pub(crate) struct RepresentationFacts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArrayKindFact {
     PackedI32,
+    PackedU32,
     PackedF64,
     PackedValue,
     HoleyValue,
@@ -137,6 +138,13 @@ impl TypeFacts {
 
     pub(crate) fn proves_packed_i32_array(&self, local_id: u32) -> bool {
         self.array_kind(local_id) == ArrayKindFact::PackedI32
+            && self.proves_noalias_array(local_id)
+            && self.proves_array_length_stable(local_id)
+            && !self.has_materialization_hazard(local_id)
+    }
+
+    pub(crate) fn proves_packed_u32_array(&self, local_id: u32) -> bool {
+        self.array_kind(local_id) == ArrayKindFact::PackedU32
             && self.proves_noalias_array(local_id)
             && self.proves_array_length_stable(local_id)
             && !self.has_materialization_hazard(local_id)
@@ -513,12 +521,11 @@ impl ArrayFactCollector {
             Stmt::Let { id, ty, init, .. } => {
                 let declared_kind = array_kind_from_declared_type(ty);
                 if declared_kind != ArrayKindFact::Unknown {
-                    let init_kind = init
+                    let combined_kind = init
                         .as_ref()
-                        .map(array_kind_from_initializer)
+                        .map(|expr| array_kind_from_declared_initializer(declared_kind, expr))
                         .unwrap_or(ArrayKindFact::Unknown);
-                    self.local_kinds
-                        .insert(*id, meet_array_kind(declared_kind, init_kind));
+                    self.local_kinds.insert(*id, combined_kind);
                 }
                 if let Some(init) = init {
                     self.collect_expr(init);
@@ -1059,6 +1066,9 @@ fn array_kind_from_declared_type(ty: &perry_types::Type) -> ArrayKindFact {
         perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Int32) => {
             ArrayKindFact::PackedI32
         }
+        perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Named(name) if name == "PerryU32") => {
+            ArrayKindFact::PackedU32
+        }
         perry_types::Type::Array(elem) if matches!(elem.as_ref(), perry_types::Type::Number) => {
             ArrayKindFact::PackedF64
         }
@@ -1071,6 +1081,9 @@ fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
     match expr {
         Expr::Array(elements) if elements.iter().all(expr_is_literal_i32) => {
             ArrayKindFact::PackedI32
+        }
+        Expr::Array(elements) if elements.iter().all(expr_is_literal_u32) => {
+            ArrayKindFact::PackedU32
         }
         Expr::Array(elements) if elements.iter().all(expr_is_literal_number) => {
             ArrayKindFact::PackedF64
@@ -1097,6 +1110,13 @@ fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
                 )
             }) {
                 ArrayKindFact::PackedI32
+            } else if elements.iter().all(|element| {
+                matches!(
+                    element,
+                    perry_hir::ArrayElement::Expr(expr) if expr_is_literal_u32(expr)
+                )
+            }) {
+                ArrayKindFact::PackedU32
             } else if all_numeric {
                 ArrayKindFact::PackedF64
             } else {
@@ -1104,6 +1124,37 @@ fn array_kind_from_initializer(expr: &Expr) -> ArrayKindFact {
             }
         }
         _ => ArrayKindFact::Unknown,
+    }
+}
+
+fn array_kind_from_declared_initializer(declared: ArrayKindFact, init: &Expr) -> ArrayKindFact {
+    if declared == ArrayKindFact::PackedU32 {
+        return if initializer_is_literal_u32_array(init) {
+            ArrayKindFact::PackedU32
+        } else {
+            match array_kind_from_initializer(init) {
+                ArrayKindFact::Unknown => ArrayKindFact::Unknown,
+                ArrayKindFact::PackedValue => ArrayKindFact::PackedValue,
+                ArrayKindFact::HoleyValue => ArrayKindFact::HoleyValue,
+                ArrayKindFact::PackedI32 | ArrayKindFact::PackedU32 | ArrayKindFact::PackedF64 => {
+                    ArrayKindFact::PackedF64
+                }
+            }
+        };
+    }
+    meet_declared_array_kind(declared, array_kind_from_initializer(init))
+}
+
+fn initializer_is_literal_u32_array(expr: &Expr) -> bool {
+    match expr {
+        Expr::Array(elements) => elements.iter().all(expr_is_literal_u32),
+        Expr::ArraySpread(elements) => elements.iter().all(|element| {
+            matches!(
+                element,
+                perry_hir::ArrayElement::Expr(expr) if expr_is_literal_u32(expr)
+            )
+        }),
+        _ => false,
     }
 }
 
@@ -1117,6 +1168,17 @@ fn expr_is_literal_i32(expr: &Expr) -> bool {
         Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
             let value = *n as i64;
             i32::try_from(value).is_ok() && *n == value as f64
+        }
+        _ => false,
+    }
+}
+
+fn expr_is_literal_u32(expr: &Expr) -> bool {
+    match expr {
+        Expr::Integer(n) => u32::try_from(*n).is_ok(),
+        Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+            let value = *n as i64;
+            u32::try_from(value).is_ok() && *n == value as f64
         }
         _ => false,
     }
@@ -1188,8 +1250,22 @@ fn meet_array_kind(left: ArrayKindFact, right: ArrayKindFact) -> ArrayKindFact {
         (HoleyValue, _) | (_, HoleyValue) => HoleyValue,
         (PackedValue, _) | (_, PackedValue) => PackedValue,
         (PackedI32, PackedI32) => PackedI32,
+        (PackedU32, PackedU32) => PackedU32,
         (PackedI32, PackedF64) | (PackedF64, PackedI32) => PackedF64,
+        (PackedU32, PackedF64) | (PackedF64, PackedU32) => PackedF64,
+        (PackedI32, PackedU32) | (PackedU32, PackedI32) => PackedF64,
         (PackedF64, PackedF64) => PackedF64,
+    }
+}
+
+fn meet_declared_array_kind(declared: ArrayKindFact, init: ArrayKindFact) -> ArrayKindFact {
+    use ArrayKindFact::*;
+    match (declared, init) {
+        (PackedU32, PackedU32) => PackedU32,
+        (PackedU32, PackedI32) => PackedF64,
+        (PackedU32, PackedF64) => PackedF64,
+        (PackedI32, PackedU32) => PackedF64,
+        _ => meet_array_kind(declared, init),
     }
 }
 
@@ -1240,6 +1316,18 @@ mod tests {
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Int32)),
+            mutable: true,
+            init: Some(Expr::Array(
+                values.iter().copied().map(Expr::Integer).collect(),
+            )),
+        }
+    }
+
+    fn u32_array_let(id: u32, values: &[i64]) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("a{}", id),
+            ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
             mutable: true,
             init: Some(Expr::Array(
                 values.iter().copied().map(Expr::Integer).collect(),
@@ -1401,6 +1489,32 @@ mod tests {
         assert!(!facts.proves_packed_i32_array(2));
         assert_eq!(facts.array_kind(3), ArrayKindFact::PackedF64);
         assert!(!facts.proves_packed_i32_array(3));
+    }
+
+    #[test]
+    fn packed_u32_array_fact_requires_perry_u32_array_with_u32_literal_initializer() {
+        let facts = collect_hir_facts(
+            &[
+                u32_array_let(1, &[0, 4_000_000_000]),
+                int32_array_let(2, &[0, 1]),
+                Stmt::Let {
+                    id: 3,
+                    name: "negative".to_string(),
+                    ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
+                    mutable: true,
+                    init: Some(Expr::Array(vec![Expr::Integer(-1)])),
+                },
+            ],
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(facts.array_kind(1), ArrayKindFact::PackedU32);
+        assert!(facts.proves_packed_u32_array(1));
+        assert_eq!(facts.array_kind(2), ArrayKindFact::PackedI32);
+        assert!(!facts.proves_packed_u32_array(2));
+        assert_eq!(facts.array_kind(3), ArrayKindFact::PackedF64);
+        assert!(!facts.proves_packed_u32_array(3));
     }
 
     #[test]

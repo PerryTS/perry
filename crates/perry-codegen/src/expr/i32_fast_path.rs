@@ -373,7 +373,27 @@ fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
         .cloned()
 }
 
+fn packed_u32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
+    let Expr::IndexGet { object, index } = e else {
+        return None;
+    };
+    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
+        return None;
+    };
+    ctx.packed_f64_loop_facts
+        .iter()
+        .find(|fact| {
+            fact.array_local_id == *arr_id
+                && fact.index_local_id == *idx_id
+                && fact.array_kind == PackedNumericLoopKind::U32
+        })
+        .cloned()
+}
+
 pub(crate) fn can_lower_expr_as_i32_in_current_region(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if matches!(e, Expr::IterResultGetValue) {
+        return true;
+    }
     if can_lower_expr_as_i32(
         e,
         &ctx.i32_counter_slots,
@@ -690,6 +710,69 @@ fn lower_packed_i32_loop_index_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Opti
     Ok(Some(lowered))
 }
 
+pub(crate) fn lower_packed_u32_loop_index_get(
+    ctx: &mut FnCtx<'_>,
+    e: &Expr,
+) -> Result<Option<LoweredValue>> {
+    let Expr::IndexGet { object, index } = e else {
+        return Ok(None);
+    };
+    let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
+        return Ok(None);
+    };
+    let Some(fact) = packed_u32_loop_index_get_fact(ctx, e) else {
+        return Ok(None);
+    };
+    let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() else {
+        return Ok(None);
+    };
+
+    let arr_box = lower_expr(ctx, object)?;
+    let idx_i32 = ctx.block().load(I32, &i32_slot);
+    let raw_f64 = {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64);
+        let idx_i64 = blk.zext(I32, &idx_i32, I64);
+        let byte_offset = blk.shl(I64, &idx_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        blk.load(DOUBLE, &element_ptr)
+    };
+    let value = ctx.block().fptoui(DOUBLE, &raw_f64, I32);
+    let lowered = LoweredValue::u32(value);
+    let guard_id = fact.guard_id.clone();
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "PackedU32LoopLoad",
+        Some(*arr_id),
+        "packed_u32_loop_load",
+        &lowered,
+        Some(BoundsState::Guarded {
+            guard_id: guard_id.clone(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        vec![
+            array_kind_fact(Some(*arr_id), "consumed", "packed_u32", None),
+            raw_f64_layout_fact(Some(*arr_id), "consumed", &guard_id, None),
+        ],
+        Vec::new(),
+        false,
+        false,
+        vec![
+            "index_range=nonnegative_i32".to_string(),
+            "length_range=guarded_i32".to_string(),
+            "storage_layout=raw_f64_numeric_slots".to_string(),
+            "integer_materialization=fptoui_guarded_packed_u32".to_string(),
+        ],
+    );
+    Ok(Some(lowered))
+}
+
 fn lower_expr_native_i1(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
     if matches!(e, Expr::IterResultGetValue) {
         let value_i32 = ctx.block().call(I32, "js_iter_result_get_value_i1", &[]);
@@ -745,6 +828,23 @@ fn lower_expr_native_i1(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
 }
 
 fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if matches!(e, Expr::IterResultGetValue) {
+        let value = ctx.block().call(I32, "js_iter_result_get_value_i32", &[]);
+        let lowered = i32_lowered(value);
+        ctx.record_lowered_value(
+            native_expr_kind(e),
+            None,
+            "compiler_private_async_iter_result_get_i32",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec!["slot_kind=raw_i32_or_toint32_jsvalue".to_string()],
+        );
+        return Ok(lowered);
+    }
     if let Some(lowered) = lower_packed_i32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
@@ -979,6 +1079,9 @@ fn lower_expr_native_js_value_bits(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Lowe
 }
 
 fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, e)? {
+        return Ok(lowered);
+    }
     if let Some(lowered) = crate::expr::lower_expr_value(ctx, e)? {
         let value = match lowered.rep {
             NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => Some(lowered.value),

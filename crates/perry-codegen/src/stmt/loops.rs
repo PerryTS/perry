@@ -296,16 +296,23 @@ fn lower_packed_f64_versioned_for(
 
     let arr_expr = perry_hir::Expr::LocalGet(matched.array_id);
     let arr_box = lower_expr(ctx, &arr_expr)?;
+    let guard_id = match matched.array_kind {
+        PackedNumericLoopKind::F64 => "packed_f64_array_loop_guard",
+        PackedNumericLoopKind::I32 => "packed_i32_array_loop_guard",
+        PackedNumericLoopKind::U32 => "packed_u32_array_loop_guard",
+    };
     let feedback_site_id = emit_typed_feedback_register_site(
         ctx,
         TypedFeedbackKind::ArrayElement,
         match matched.array_kind {
             PackedNumericLoopKind::F64 => "array[packed_f64_loop]",
             PackedNumericLoopKind::I32 => "array[packed_i32_loop]",
+            PackedNumericLoopKind::U32 => "array[packed_u32_loop]",
         },
         match matched.array_kind {
             PackedNumericLoopKind::F64 => TypedFeedbackContract::packed_f64_array_loop(),
             PackedNumericLoopKind::I32 => TypedFeedbackContract::packed_i32_array_loop(),
+            PackedNumericLoopKind::U32 => TypedFeedbackContract::packed_u32_array_loop(),
         },
     );
     let guard_ok = {
@@ -313,6 +320,7 @@ fn lower_packed_f64_versioned_for(
         let guard_fn = match matched.array_kind {
             PackedNumericLoopKind::F64 => "js_typed_feedback_packed_f64_array_loop_guard",
             PackedNumericLoopKind::I32 => "js_typed_feedback_packed_i32_array_loop_guard",
+            PackedNumericLoopKind::U32 => "js_typed_feedback_packed_u32_array_loop_guard",
         };
         let guard_i32 = blk.call(
             I32,
@@ -326,7 +334,7 @@ fn lower_packed_f64_versioned_for(
         ctx,
         matched.array_id,
         &arr_box,
-        "packed_f64_array_loop_guard",
+        guard_id,
         matched.array_kind,
     );
 
@@ -347,7 +355,7 @@ fn lower_packed_f64_versioned_for(
         index_local_id: matched.counter_id,
         array_local_id: matched.array_id,
         scope_id: packed_scope_id,
-        guard_id: "packed_f64_array_loop_guard".to_string(),
+        guard_id: guard_id.to_string(),
         store_side_exit_label: slow_pre_label.clone(),
         array_kind: matched.array_kind,
     });
@@ -538,8 +546,8 @@ fn match_packed_f64_versioned_loop(
     {
         return None;
     }
-    let body_is_supported_store =
-        body_is_supported_packed_f64_loop_store(ctx, body, hoist.arr_id, hoist.counter_id);
+    let body_is_supported_store = local_allows_packed_f64_loop_store(ctx, hoist.arr_id)
+        && body_is_supported_packed_f64_loop_store(ctx, body, hoist.arr_id, hoist.counter_id);
     let array_kind = if body_is_supported_store {
         if ctx.native_facts.proves_noalias_array(hoist.arr_id) {
             PackedNumericLoopKind::F64
@@ -550,6 +558,10 @@ fn match_packed_f64_versioned_loop(
         && local_is_int32_array(ctx, hoist.arr_id)
     {
         PackedNumericLoopKind::I32
+    } else if ctx.native_facts.proves_packed_u32_array(hoist.arr_id)
+        && local_is_u32_array(ctx, hoist.arr_id)
+    {
+        PackedNumericLoopKind::U32
     } else if ctx.native_facts.proves_packed_f64_array(hoist.arr_id) {
         PackedNumericLoopKind::F64
     } else {
@@ -577,6 +589,15 @@ fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
         ctx.local_types.get(&local_id),
         Some(perry_types::Type::Array(elem))
             if matches!(elem.as_ref(), perry_types::Type::Number | perry_types::Type::Int32)
+                || matches!(elem.as_ref(), perry_types::Type::Named(name) if name == "PerryU32")
+    )
+}
+
+fn local_allows_packed_f64_loop_store(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Array(elem))
+            if matches!(elem.as_ref(), perry_types::Type::Number | perry_types::Type::Int32)
     )
 }
 
@@ -584,6 +605,14 @@ fn local_is_int32_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         ctx.local_types.get(&local_id),
         Some(perry_types::Type::Array(elem)) if matches!(elem.as_ref(), perry_types::Type::Int32)
+    )
+}
+
+fn local_is_u32_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Array(elem))
+            if matches!(elem.as_ref(), perry_types::Type::Named(name) if name == "PerryU32")
     )
 }
 

@@ -66,6 +66,7 @@ SENTINELS=(
   js_typed_feedback_numeric_array_index_get_guard
   js_typed_feedback_packed_f64_array_loop_guard
   js_typed_feedback_packed_i32_array_loop_guard
+  js_typed_feedback_packed_u32_array_loop_guard
   js_typed_feedback_array_index_get_fallback_boxed
   js_typed_feedback_array_set_f64
   js_typed_feedback_array_set_f64_extend
@@ -118,9 +119,11 @@ SENTINELS=(
   js_bool_box_set
   js_iter_result_set
   js_iter_result_set_f64
+  js_iter_result_set_i32
   js_iter_result_set_i1
   js_iter_result_get_value
   js_iter_result_get_value_f64
+  js_iter_result_get_value_i32
   js_iter_result_get_value_i1
   js_iter_result_get_done
   js_typed_feedback_native_call_method_by_id

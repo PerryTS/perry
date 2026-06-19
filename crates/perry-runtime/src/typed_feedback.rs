@@ -1202,6 +1202,30 @@ fn packed_i32_array_loop_guard(arr: *const ArrayHeader) -> bool {
     true
 }
 
+fn packed_u32_array_loop_guard(arr: *const ArrayHeader) -> bool {
+    if !packed_f64_array_loop_guard(arr) {
+        return false;
+    }
+    let raw_addr = normalize_raw_object_addr(arr as u64);
+    unsafe {
+        let arr = raw_addr as *const ArrayHeader;
+        let len = (*arr).length as usize;
+        if len > 16_000_000 {
+            return false;
+        }
+        let elements =
+            (raw_addr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        for i in 0..len {
+            let value = *elements.add(i);
+            if !value.is_finite() || value.fract() != 0.0 || value < 0.0 || value > u32::MAX as f64
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let Some(header) = gc_header_for_user_addr(raw_addr) else {
@@ -1502,6 +1526,43 @@ pub extern "C" fn js_typed_feedback_packed_i32_array_loop_guard(
 #[used]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
     js_typed_feedback_packed_i32_array_loop_guard;
+
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_packed_u32_array_loop_guard(
+    site_id: u64,
+    receiver: f64,
+) -> i32 {
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    if !typed_feedback_enabled() {
+        return packed_u32_array_loop_guard(raw_addr as *const ArrayHeader) as i32;
+    }
+    let (class_id, heap_type, aux, element_kind) = classify_array(raw_addr, None);
+    let observation = Observation {
+        source: ObservationSource::Array,
+        object_addr: 0,
+        shape_addr: 0,
+        key_hash: 0,
+        class_id,
+        heap_type,
+        aux,
+        value_tag: element_kind,
+    };
+    let pass = guard_observe(
+        site_id,
+        TypedFeedbackSiteKind::ArrayElement,
+        observation,
+        packed_u32_array_loop_guard(raw_addr as *const ArrayHeader),
+    );
+    if pass {
+        1
+    } else {
+        0
+    }
+}
+
+#[used]
+static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
+    js_typed_feedback_packed_u32_array_loop_guard;
 
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(

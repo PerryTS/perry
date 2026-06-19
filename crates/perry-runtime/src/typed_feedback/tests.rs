@@ -810,6 +810,35 @@ fn typed_feedback_packed_i32_loop_guard_rejects_fractional_numeric_layout() {
 }
 
 #[test]
+fn typed_feedback_packed_u32_loop_guard_rejects_signed_fractional_and_overflow_layouts() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(71, TypedFeedbackSiteKind::ArrayElement, "packed_u32_loop");
+
+    let uints = [0.0, 4_294_967_295.0];
+    let uint_arr = crate::array::js_array_from_f64(uints.as_ptr(), uints.len() as u32);
+    let uint_box = crate::value::js_nanbox_pointer(uint_arr as i64);
+    assert_eq!(
+        js_typed_feedback_packed_u32_array_loop_guard(71, uint_box),
+        1
+    );
+
+    for values in [[-1.0, 2.0], [1.5, 2.0], [4_294_967_296.0, 2.0]] {
+        let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+        let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
+        assert_eq!(
+            js_typed_feedback_packed_u32_array_loop_guard(71, arr_box),
+            0
+        );
+    }
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 3);
+}
+
+#[test]
 fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();
@@ -1058,6 +1087,12 @@ fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
         "KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD",
         "static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
         "js_typed_feedback_packed_i32_array_loop_guard",
+    );
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
+        "js_typed_feedback_packed_u32_array_loop_guard",
     );
 }
 
@@ -1451,9 +1486,21 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             promise,
+            "KEEP_JS_ITER_RESULT_SET_I32",
+            "static KEEP_JS_ITER_RESULT_SET_I32: extern \"C\" fn(i32, i32) -> f64",
+            "js_iter_result_set_i32",
+        ),
+        (
+            promise,
             "KEEP_JS_ITER_RESULT_SET_I1",
             "static KEEP_JS_ITER_RESULT_SET_I1: extern \"C\" fn(i32, i32) -> f64",
             "js_iter_result_set_i1",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_GET_VALUE_I32",
+            "static KEEP_JS_ITER_RESULT_GET_VALUE_I32: extern \"C\" fn() -> i32",
+            "js_iter_result_get_value_i32",
         ),
         (
             promise,

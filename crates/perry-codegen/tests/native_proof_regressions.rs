@@ -493,9 +493,27 @@ fn int32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     }
 }
 
+fn u32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
+        mutable: true,
+        init: Some(Expr::Array(values.into_iter().map(int).collect())),
+    }
+}
+
 fn bit_or_zero(value: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::BitOr,
+        left: Box::new(value),
+        right: Box::new(int(0)),
+    }
+}
+
+fn ushr_zero(value: Expr) -> Expr {
+    Expr::Binary {
+        op: BinaryOp::UShr,
         left: Box::new(value),
         right: Box::new(int(0)),
     }
@@ -2680,6 +2698,81 @@ fn packed_i32_loop_read_materializes_integer_native_load_with_fallback() {
                 && record_has_note(record, "integer_materialization=fptosi_guarded_packed_i32")
         }),
         "expected packed-i32 loop load to materialize an i32 native value:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn packed_u32_loop_read_materializes_unsigned_native_load_with_fallback() {
+    let module = module_with_classes_and_params(
+        "packed_u32_loop_read.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            u32_array_let(1, "values", vec![0, 4_000_000_000]),
+            number_let(3, "word", true, ushr_zero(int(0))),
+            for_loop(
+                4,
+                length(1),
+                vec![Stmt::Expr(Expr::LocalSet(
+                    3,
+                    Box::new(ushr_zero(index_get(1, local(4)))),
+                ))],
+            ),
+            Stmt::Return(Some(local(3))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_u32_array_loop_guard"),
+        "packed-u32 loop should use the u32-specific raw numeric layout guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_u32_fast") && ir.contains("for.packed_u32_slow"),
+        "packed-u32 loop should emit fast and slow clones:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_i32_array_loop_guard")
+            && !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "PerryU32[] read loop should not reuse signed-i32 or f64 loop guards:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedU32LoopGuard"
+                && record["consumer"] == "packed_u32_loop_guard"
+                && record["access_mode"] == "checked_native"
+                && record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_u32")
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+        }),
+        "expected packed-u32 guard proof record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedU32LoopGuard"
+                && record["consumer"] == "packed_u32_loop_fallback"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_array_kind_fact(record, "rejected_facts", "rejected", "packed_u32")
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
+        }),
+        "expected packed-u32 generic fallback evidence:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedU32LoopLoad"
+                && record["consumer"] == "packed_u32_loop_load"
+                && record["native_rep_name"] == "u32"
+                && record["llvm_ty"] == "i32"
+                && record["access_mode"] == "checked_native"
+                && record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_u32")
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+                && record_has_note(record, "integer_materialization=fptoui_guarded_packed_u32")
+        }),
+        "expected packed-u32 loop load to materialize a u32 native value:\n{artifact:#}"
     );
 }
 
@@ -7023,6 +7116,24 @@ fn compiler_private_async_iter_result_i1_body() -> Vec<Stmt> {
     ]
 }
 
+fn compiler_private_async_iter_result_i32_body() -> Vec<Stmt> {
+    vec![
+        Stmt::Expr(Expr::IterResultSet(
+            Box::new(Expr::Binary {
+                op: BinaryOp::BitOr,
+                left: Box::new(Expr::Integer(17)),
+                right: Box::new(Expr::Integer(0)),
+            }),
+            false,
+        )),
+        Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::BitOr,
+            left: Box::new(Expr::IterResultGetValue),
+            right: Box::new(Expr::Integer(0)),
+        })),
+    ]
+}
+
 fn compiler_private_async_iter_result_generic_body() -> Vec<Stmt> {
     vec![
         Stmt::Expr(Expr::IterResultSet(
@@ -7043,6 +7154,13 @@ fn compiler_private_async_iter_result_annotated_numeric_param_body() -> Vec<Stmt
 fn compiler_private_async_iter_result_annotated_boolean_param_body() -> Vec<Stmt> {
     vec![
         Stmt::Expr(Expr::IterResultSet(Box::new(Expr::LocalGet(31)), false)),
+        Stmt::Return(Some(Expr::IterResultGetValue)),
+    ]
+}
+
+fn compiler_private_async_iter_result_annotated_i32_param_body() -> Vec<Stmt> {
+    vec![
+        Stmt::Expr(Expr::IterResultSet(Box::new(Expr::LocalGet(32)), false)),
         Stmt::Return(Some(Expr::IterResultGetValue)),
     ]
 }
@@ -7130,6 +7248,31 @@ fn compiler_private_async_iter_result_i1_slot_uses_typed_handoff() {
 }
 
 #[test]
+fn compiler_private_async_iter_result_i32_slot_uses_typed_handoff() {
+    let ir = compile_ir(
+        "compiler_private_async_iter_result_i32.ts",
+        compiler_private_async_iter_result_i32_body(),
+    );
+
+    assert!(
+        ir.contains("call double @js_iter_result_set_i32"),
+        "proven Int32 async iter-result payload should use the raw i32 setter:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_iter_result_get_value_i32"),
+        "Int32 async iter-result consumer should use the raw i32 getter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_set("),
+        "proven Int32 async iter-result payload should avoid the generic JSValue setter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_set_f64"),
+        "proven Int32 async iter-result payload should not widen through the raw f64 setter:\n{ir}"
+    );
+}
+
+#[test]
 fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_before_raw_slot() {
     let ir = compile_ir_for_module_with_opts(
         module_with_classes_and_params(
@@ -7182,6 +7325,30 @@ fn compiler_private_async_iter_result_annotated_boolean_payload_stays_generic() 
 }
 
 #[test]
+fn compiler_private_async_iter_result_annotated_i32_payload_stays_off_raw_i32_slot() {
+    let ir = compile_ir_for_module_with_opts(
+        module_with_classes_and_params(
+            "compiler_private_async_iter_result_annotated_i32_param.ts",
+            Vec::new(),
+            vec![param(32, "value", Type::Int32)],
+            Type::Int32,
+            compiler_private_async_iter_result_annotated_i32_param_body(),
+        ),
+        empty_opts(),
+    )
+    .unwrap();
+
+    assert!(
+        !ir.contains("call double @js_iter_result_set_i32"),
+        "annotation-only Int32 async payloads must not use the raw i32 slot without proof:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_iter_result_set_f64"),
+        "annotation-only Int32 async payloads should keep the existing numeric-compatible raw f64 slot:\n{ir}"
+    );
+}
+
+#[test]
 fn compiler_private_async_iter_result_non_numeric_payload_stays_generic() {
     let ir = compile_ir(
         "compiler_private_async_iter_result_generic.ts",
@@ -7216,6 +7383,28 @@ fn artifact_records_compiler_private_async_iter_result_f64_handoff() {
                     && record["llvm_ty"] == "double"
             }),
             "expected async iter-result f64 artifact record {consumer}:\n{artifact:#}"
+        );
+    }
+}
+
+#[test]
+fn artifact_records_compiler_private_async_iter_result_i32_handoff() {
+    let artifact = compile_artifact_json(
+        "artifact_compiler_private_async_iter_result_i32.ts",
+        compiler_private_async_iter_result_i32_body(),
+    );
+    let records = artifact["records"].as_array().unwrap();
+    for consumer in [
+        "compiler_private_async_iter_result_set_i32",
+        "compiler_private_async_iter_result_get_i32",
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["consumer"] == consumer
+                    && record["native_rep_name"] == "i32"
+                    && record["llvm_ty"] == "i32"
+            }),
+            "expected async iter-result i32 artifact record {consumer}:\n{artifact:#}"
         );
     }
 }

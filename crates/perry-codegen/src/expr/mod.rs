@@ -91,7 +91,8 @@ pub(crate) use helpers::{
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, is_known_finite,
-    lower_expr_as_i32, lower_expr_native, try_flat_const_2d_int, try_lower_flat_const_index_get,
+    lower_expr_as_i32, lower_expr_native, lower_packed_u32_loop_index_get, try_flat_const_2d_int,
+    try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
 pub(crate) use nanbox_inline::{
@@ -1089,6 +1090,7 @@ pub(crate) struct BoundedIndexPair {
 pub(crate) enum PackedNumericLoopKind {
     F64,
     I32,
+    U32,
 }
 
 impl PackedNumericLoopKind {
@@ -1096,6 +1098,7 @@ impl PackedNumericLoopKind {
         match self {
             Self::F64 => "packed_f64",
             Self::I32 => "packed_i32",
+            Self::U32 => "packed_u32",
         }
     }
 
@@ -1103,6 +1106,7 @@ impl PackedNumericLoopKind {
         match self {
             Self::F64 => "packed_f64",
             Self::I32 => "packed_i32",
+            Self::U32 => "packed_u32",
         }
     }
 
@@ -1110,6 +1114,7 @@ impl PackedNumericLoopKind {
         match self {
             Self::F64 => "PackedF64LoopGuard",
             Self::I32 => "PackedI32LoopGuard",
+            Self::U32 => "PackedU32LoopGuard",
         }
     }
 
@@ -1117,6 +1122,7 @@ impl PackedNumericLoopKind {
         match self {
             Self::F64 => "packed_f64_loop_guard",
             Self::I32 => "packed_i32_loop_guard",
+            Self::U32 => "packed_u32_loop_guard",
         }
     }
 
@@ -1124,6 +1130,7 @@ impl PackedNumericLoopKind {
         match self {
             Self::F64 => "packed_f64_loop_fallback",
             Self::I32 => "packed_i32_loop_fallback",
+            Self::U32 => "packed_u32_loop_fallback",
         }
     }
 
@@ -1131,6 +1138,7 @@ impl PackedNumericLoopKind {
         match self {
             Self::F64 => "PackedF64LoopLoad",
             Self::I32 => "PackedI32LoopLoad",
+            Self::U32 => "PackedU32LoopLoad",
         }
     }
 
@@ -1138,6 +1146,7 @@ impl PackedNumericLoopKind {
         match self {
             Self::F64 => "packed_f64_loop_load",
             Self::I32 => "packed_i32_loop_load_f64",
+            Self::U32 => "packed_u32_loop_load_f64",
         }
     }
 }
@@ -2072,6 +2081,9 @@ fn lower_numeric_operand_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             return Ok(Some(lowered));
         }
     }
+    if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, expr)? {
+        return Ok(Some(lowered));
+    }
     lower_expr_value(ctx, expr)
 }
 
@@ -2098,6 +2110,11 @@ fn native_number_to_f64(ctx: &mut FnCtx<'_>, lowered: &LoweredValue) -> Option<S
 fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
     if let Expr::Integer(value) = expr {
         return Ok(Some((*value as i32).to_string()));
+    }
+    if matches!(expr, Expr::IterResultGetValue) {
+        return Ok(Some(
+            lower_expr_native(ctx, expr, ExpectedNativeRep::I32)?.value,
+        ));
     }
     if let Expr::LocalGet(id) = expr {
         if let Some(slot) = ctx.i32_counter_slots.get(id).cloned() {

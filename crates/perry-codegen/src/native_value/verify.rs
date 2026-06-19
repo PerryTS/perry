@@ -298,6 +298,8 @@ fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
             | "js_array_numeric_set_f64_unboxed"
             | "js_array_numeric_push_f64_unboxed"
             | "packed_f64_loop_load"
+            | "packed_i32_loop_load"
+            | "packed_u32_loop_load"
             | "packed_f64_loop_store"
             | "class_field_get.raw_f64_load"
             | "class_field_set.raw_f64_store"
@@ -370,6 +372,8 @@ fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
                 "js_typed_feedback_array_index_set_fallback_boxed"
             )
             | ("PackedF64LoopGuard", "packed_f64_loop_fallback")
+            | ("PackedI32LoopGuard", "packed_i32_loop_fallback")
+            | ("PackedU32LoopGuard", "packed_u32_loop_fallback")
             | ("ClassFieldGet", "js_object_get_field_by_name_f64")
             | ("ClassFieldSet", "js_object_set_field_by_name")
     )
@@ -438,7 +442,13 @@ fn record_has_note(record: &NativeRepRecord, note: &str) -> bool {
 fn validate_packed_f64_loop_record(record: &NativeRepRecord, errors: &mut Vec<String>) {
     if !matches!(
         record.consumer.as_str(),
-        "packed_f64_loop_guard" | "packed_f64_loop_load" | "packed_f64_loop_store"
+        "packed_f64_loop_guard"
+            | "packed_f64_loop_load"
+            | "packed_f64_loop_store"
+            | "packed_i32_loop_guard"
+            | "packed_i32_loop_load"
+            | "packed_u32_loop_guard"
+            | "packed_u32_loop_load"
     ) {
         return;
     }

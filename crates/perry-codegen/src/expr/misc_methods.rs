@@ -143,6 +143,17 @@ fn lower_iter_result_i1_payload(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<Opt
     Ok(matches!(lowered.rep, NativeRep::I1).then_some(lowered))
 }
 
+fn lower_iter_result_i32_payload(
+    ctx: &mut FnCtx<'_>,
+    value: &Expr,
+) -> Result<Option<LoweredValue>> {
+    if !super::can_lower_expr_as_i32_in_current_region(ctx, value) {
+        return Ok(None);
+    }
+    let lowered = lower_expr_native(ctx, value, ExpectedNativeRep::I32)?;
+    Ok(matches!(lowered.rep, NativeRep::I32).then_some(lowered))
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::MathFround(operand) => {
@@ -836,6 +847,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     false,
                     false,
                     vec!["slot_kind=raw_i1_proven".to_string()],
+                );
+                Ok(result)
+            } else if let Some(raw) = lower_iter_result_i32_payload(ctx, value)? {
+                let result = ctx.block().call(
+                    DOUBLE,
+                    "js_iter_result_set_i32",
+                    &[(I32, raw.value.as_str()), (I32, done_str)],
+                );
+                ctx.record_lowered_value(
+                    "IterResultSet",
+                    None,
+                    "compiler_private_async_iter_result_set_i32",
+                    &raw,
+                    None,
+                    None,
+                    None,
+                    false,
+                    false,
+                    vec!["slot_kind=raw_i32_proven".to_string()],
                 );
                 Ok(result)
             } else if is_numeric_expr(ctx, value) {

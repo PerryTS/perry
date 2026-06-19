@@ -301,6 +301,17 @@ fn assert_no_packed_i32_loop(ir: &str) {
     );
 }
 
+fn assert_no_packed_u32_loop(ir: &str) {
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_u32_array_loop_guard"),
+        "invalidated array proof must not emit a packed-u32 loop guard:\n{ir}"
+    );
+    assert!(
+        !ir.contains("for.packed_u32_fast"),
+        "invalidated array proof must not emit a packed-u32 fast clone:\n{ir}"
+    );
+}
+
 fn assert_no_packed_i32_loop_artifacts(artifact: &serde_json::Value) {
     let records = artifact["records"].as_array().unwrap();
     assert!(
@@ -319,6 +330,27 @@ fn assert_no_packed_i32_loop_artifacts(artifact: &serde_json::Value) {
                 || record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_i32")
         }),
         "invalidated alias mutation must not emit packed-i32 loop artifact records:\n{artifact:#}"
+    );
+}
+
+fn assert_no_packed_u32_loop_artifacts(artifact: &serde_json::Value) {
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            matches!(
+                record["consumer"].as_str(),
+                Some(
+                    "packed_u32_loop_guard"
+                        | "packed_u32_loop_fallback"
+                        | "packed_u32_loop_load"
+                        | "packed_u32_loop_load_f64"
+                )
+            ) || record["expr_kind"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("PackedU32Loop"))
+                || record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_u32")
+        }),
+        "invalidated alias mutation must not emit packed-u32 loop artifact records:\n{artifact:#}"
     );
 }
 
@@ -861,6 +893,38 @@ fn loop_local_array_alias_push_blocks_packed_i32_loop_and_artifacts() {
 
     let artifact = compile_artifact_json("artifact_packed_i32_loop_local_alias_push.ts", body);
     assert_no_packed_i32_loop_artifacts(&artifact);
+}
+
+#[test]
+fn loop_local_array_alias_push_blocks_packed_u32_loop_and_artifacts() {
+    let body = vec![
+        u32_array_let(1, "arr", vec![0, 4_000_000_000]),
+        number_let(3, "word", true, ushr_zero(int(0))),
+        for_loop(
+            4,
+            length(1),
+            vec![
+                array_alias_let(2, "alias", 1),
+                Stmt::Expr(Expr::ArrayPush {
+                    array_id: 2,
+                    value: Box::new(int(5)),
+                }),
+                Stmt::Expr(Expr::LocalSet(
+                    3,
+                    Box::new(ushr_zero(index_get(1, local(4)))),
+                )),
+            ],
+        ),
+        Stmt::Return(Some(local(3))),
+    ];
+
+    let ir = compile_ir("packed_u32_loop_local_alias_push.ts", body.clone());
+    assert_no_packed_f64_loop(&ir);
+    assert_no_packed_i32_loop(&ir);
+    assert_no_packed_u32_loop(&ir);
+
+    let artifact = compile_artifact_json("artifact_packed_u32_loop_local_alias_push.ts", body);
+    assert_no_packed_u32_loop_artifacts(&artifact);
 }
 
 #[test]
