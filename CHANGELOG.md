@@ -1,3 +1,38 @@
+## v0.5.1192 — feat(sharp): metadata/toFile objects, Buffer-input factory, `.extract()`/`.sharpen()`, SIMD resize
+
+Four sharp improvements toward real-world parity, all pure-Rust (no libvips):
+
+- **`.metadata()` and `.toFile()` resolve real objects, not JSON strings.** Previously
+  `(await sharp(x).metadata()).width` was `undefined` because the Promise resolved with a
+  JSON *string*. Now `metadata()` resolves `{ format, width, height, channels, space,
+  hasAlpha }` and `toFile()` resolves the sharp `info` object `{ format, width, height,
+  channels, size }`. Built on the main thread via `resolve_with` + `js_object_alloc_with_shape`
+  / `js_object_set_field` (the object must be allocated on the main thread — the runtime
+  arena is thread-local, #1824).
+- **`sharp(input)` accepts a Buffer/Uint8Array**, not just a file path. The factory now
+  routes through `js_sharp_from_input`, which recovers the underlying pointer from the raw
+  NaN-boxed value and branches on the Buffer registry probe (`js_buffer_is_buffer`):
+  Buffer → `image::load_from_memory`, string → `image::open`. Enables in-memory pipelines
+  like `sharp(await res.arrayBuffer()).resize(...).toBuffer()`.
+- **`.extract({ left, top, width, height })` and `.sharpen()`** are now reachable and
+  chainable. `.extract()` reads its options object's numeric fields by name
+  (`js_object_get_field_by_name_f64`) and applies a region crop. Both are wired end-to-end
+  (dispatch row in `native_table/media.rs`, FFI decl, manifest entry, and the fluent-chain
+  allowlist in `early_branches.rs` — addressing the earlier CodeRabbit note on allowlist
+  completeness, this time *with* their dispatch rows).
+- **`resize()` uses `fast_image_resize` (SIMD)** instead of the `image` crate's scalar
+  Lanczos3, preserving the source pixel layout (Luma/LumaA/Rgb/Rgba 8-bit; uncommon
+  16-bit/float fall back to RGBA8, and any fast-path failure falls back to `image`'s
+  resizer). Aspect-ratio (`height <= 0`) behavior preserved.
+
+Validated e2e: metadata/toFile object fields; `sharp(Buffer)` decode→resize→re-encode;
+`.extract()` dims + `.sharpen()` in chains; resize exact + aspect across RGBA/LumaA paths;
+toFile produces a valid JPEG; `perry-ext-sharp` unit suite 6/6; API docs regenerated.
+
+Known nuance: `toFile`/`metadata` `channels` reflects the in-memory image's channel count
+(e.g. 4 for an RGBA source saved as JPEG, where the file itself is 3-channel) rather than
+the encoded output's — a follow-up refinement.
+
 ## v0.5.1191 — fix(native): chained fluent method calls keep their module identity (sharp pipelines)
 
 Real-world sharp usage chains: `sharp(input).resize(w, h).jpeg().toBuffer()`. Before

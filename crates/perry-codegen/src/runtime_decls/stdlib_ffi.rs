@@ -517,12 +517,15 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== sharp / image ==========
     module.declare_function("js_sharp_blur", I64, &[I64, DOUBLE]);
+    module.declare_function("js_sharp_extract", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_flip", I64, &[I64]);
     module.declare_function("js_sharp_flop", I64, &[I64]);
     module.declare_function("js_sharp_from_buffer", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_from_file", I64, &[I64]);
+    module.declare_function("js_sharp_from_input", I64, &[I64]);
     module.declare_function("js_sharp_grayscale", I64, &[I64]);
     module.declare_function("js_sharp_metadata", I64, &[I64]);
+    module.declare_function("js_sharp_sharpen", I64, &[I64]);
     module.declare_function("js_sharp_negate", I64, &[I64]);
     module.declare_function("js_sharp_quality", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_resize", I64, &[I64, DOUBLE, DOUBLE]);

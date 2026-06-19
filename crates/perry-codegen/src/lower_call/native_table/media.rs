@@ -4,13 +4,16 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
     // ========== sharp ==========
     // Factory: sharp(path) → js_sharp_from_file. Instance methods take
     // Handle (i64), compatible with the has_receiver:true dispatch path.
+    // `sharp(input)` accepts a file-path string OR a Buffer/Uint8Array of
+    // encoded image bytes. Pass the raw NaN-boxed value (NA_JSV) so
+    // `js_sharp_from_input` can branch on the Buffer registry probe.
     NativeModSig {
         module: "sharp",
         has_receiver: false,
         method: "default",
         class_filter: None,
-        runtime: "js_sharp_from_file",
-        args: &[NA_STR],
+        runtime: "js_sharp_from_input",
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -18,8 +21,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "sharp",
         class_filter: None,
-        runtime: "js_sharp_from_file",
-        args: &[NA_STR],
+        runtime: "js_sharp_from_input",
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -73,6 +76,26 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "blur",
         class_filter: None,
         runtime: "js_sharp_blur",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "sharpen",
+        class_filter: None,
+        runtime: "js_sharp_sharpen",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // `.extract({ left, top, width, height })` — the options object is passed
+    // as a NaN-boxed value (NA_F64 slot); `js_sharp_extract` reads its fields.
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "extract",
+        class_filter: None,
+        runtime: "js_sharp_extract",
         args: &[NA_F64],
         ret: NR_PTR,
     },

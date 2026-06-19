@@ -2037,6 +2037,8 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("sharp", "flop", true, None),
     method("sharp", "grayscale", true, None),
     method("sharp", "blur", true, None),
+    method("sharp", "sharpen", true, None),
+    method("sharp", "extract", true, None),
     method("sharp", "jpeg", true, None),
     method("sharp", "png", true, None),
     method("sharp", "webp", true, None),

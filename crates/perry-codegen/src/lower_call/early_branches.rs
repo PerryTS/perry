@@ -122,16 +122,9 @@ fn native_method_returns_self_instance(module: &str, method: &str) -> bool {
         //
         // This list mirrors the *dispatchable* fluent methods — every name
         // here also has an instance-returning (`NR_PTR`) row in
-        // `native_table/media.rs`. It is deliberately NOT the full set of
-        // Sharp-returning methods in the sharp API: `sharpen`/`crop` are
-        // implemented in perry-ext-sharp but have no dispatch row yet (and
-        // `crop` should land as sharp's real `.extract({...})` shape), so
-        // they are unreachable from JS. Listing them here without a dispatch
-        // row would be worse than omitting them: `recv.sharpen()` still
-        // wouldn't resolve (native_module_lookup misses), so the chain's
-        // terminal would run on a garbage receiver and reject with "Invalid
-        // sharp handle" instead of a clean "sharpen is not a function". Add
-        // a name here only together with its `media.rs` row.
+        // `native_table/media.rs`. Add a name here only together with its
+        // `media.rs` row, otherwise `recv.<name>()` wouldn't resolve and the
+        // chain's terminal would run on a garbage receiver.
         "sharp" => matches!(
             method,
             "default"
@@ -142,6 +135,8 @@ fn native_method_returns_self_instance(module: &str, method: &str) -> bool {
                 | "flop"
                 | "grayscale"
                 | "blur"
+                | "sharpen"
+                | "extract"
                 | "jpeg"
                 | "png"
                 | "webp"
