@@ -45,9 +45,9 @@ use super::{
     record_collection_number_key_fallback, record_collection_number_key_selected,
     record_collection_string_key_fallback, record_collection_string_key_selected,
     record_collection_string_key_value_selected, record_collection_typed_value_fallback,
-    try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
-    try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, ChannelReduction,
-    FlatConstInfo, FnCtx, I18nLowerCtx,
+    record_collection_typed_value_selected, try_flat_const_2d_int, try_lower_flat_const_index_get,
+    try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
+    variant_name, ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx,
 };
 
 fn is_static_string_number_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
@@ -206,6 +206,16 @@ fn is_static_number_key_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
     matches!(
         map_static_type_args(ctx, map),
         Some([HirType::Number | HirType::Int32, _])
+    )
+}
+
+fn is_static_number_string_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
+    matches!(
+        map_static_type_args(ctx, map),
+        Some([
+            HirType::Number | HirType::Int32,
+            HirType::String | HirType::StringLiteral(_)
+        ])
     )
 }
 
@@ -506,6 +516,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let use_number_key_map = !has_string_key_map
                 && is_static_number_key_map(ctx, map)
                 && is_numeric_expr(ctx, key);
+            let static_number_string_map =
+                use_number_key_map && is_static_number_string_map(ctx, map);
+            let use_number_string_map =
+                static_number_string_map && is_definitely_string_expr(ctx, value);
             let use_string_i32_map = is_static_string_i32_map(ctx, map)
                 && is_definitely_string_expr(ctx, key)
                 && can_use_string_i32_map_value(ctx, value);
@@ -741,8 +755,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                 }
                 new_handle
+            } else if use_number_string_map {
+                let v_box = lower_expr(ctx, value)?;
+                let (v_handle, v_slot_box) = {
+                    let blk = ctx.block();
+                    let v_handle = unbox_str_handle(blk, &v_box);
+                    let v_slot_box = nanbox_string_inline(blk, &v_handle);
+                    (v_handle, v_slot_box)
+                };
+                let lowered_value = crate::native_value::LoweredValue::string_ref(&v_handle);
+                record_collection_typed_value_selected(
+                    ctx,
+                    "MapSet",
+                    "collection_typed_value.map_set_number_string",
+                    &lowered_value,
+                    "map",
+                    "string_value_helper",
+                    "js_map_set_number_key",
+                    "map_slot",
+                );
+                guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_slot_box)
             } else if use_number_key_map {
                 let v_box = lower_expr(ctx, value)?;
+                if static_number_string_map {
+                    record_collection_typed_value_fallback(
+                        ctx,
+                        "MapSet",
+                        "collection_typed_value.map_set_number_string_generic",
+                        &v_box,
+                        "map",
+                        "string_value_helper",
+                        "js_map_set_number_key",
+                        "value_expr_not_definitely_string",
+                    );
+                }
                 guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_box)
             } else {
                 let v_box = lower_expr(ctx, value)?;

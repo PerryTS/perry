@@ -3018,6 +3018,163 @@ fn map_number_key_set_get_has_delete_use_guarded_number_key_specialization() {
 }
 
 #[test]
+fn map_number_key_string_value_set_uses_string_ref_until_slot() {
+    let module = module_with_classes_and_params(
+        "map_number_string_value_specialization.ts",
+        Vec::new(),
+        vec![
+            param(2, "key", Type::Number),
+            param(3, "value", Type::String),
+        ],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Number, Type::String),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    let probe_ir = function_ir_section(
+        &ir,
+        "perry_fn_map_number_string_value_specialization_ts__probe",
+    );
+    assert!(
+        probe_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && probe_ir.contains("call double @js_typed_f64_arg_to_raw"),
+        "Map<number, string>.set should keep the existing guarded numeric-key path:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_get_string_pointer_unified"),
+        "proven string values should be unboxed to a raw string handle before the map slot boundary:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_number_key"),
+        "Map<number, string>.set should still use the numeric-key helper at the slot boundary:\n{probe_ir}"
+    );
+    for string_key_helper in [
+        "@js_map_set_string_key",
+        "@js_map_set_string_string",
+        "@js_map_has_string_key",
+    ] {
+        assert!(
+            !probe_ir.contains(string_key_helper),
+            "numeric-key string-value lowering must not use string-key helper {string_key_helper}:\n{probe_ir}"
+        );
+    }
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_typed_value.map_set_number_string"
+                && record["native_rep_name"] == "string_ref"
+                && record["llvm_ty"] == "i64"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.string_value_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_set_number_key")
+                && record_has_note(record, "value_rep=string_ref")
+                && record_has_note(record, "boxed_value_avoided_until_map_slot=true")
+        }),
+        "expected Map<number, string>.set typed string-value selection record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_number_key.map_set"
+                && record_has_type_fact(
+                    record,
+                    "consumed_facts",
+                    "map.number_key_helper",
+                    "consumed",
+                )
+                && record_has_note(record, "selected_helper=js_map_set_number_key")
+        }),
+        "expected Map<number, string>.set numeric-key selection record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn map_number_key_string_value_rejects_unproven_value() {
+    let module = module_with_classes_and_params(
+        "map_number_string_value_rejection.ts",
+        Vec::new(),
+        vec![param(2, "key", Type::Number), param(3, "value", Type::Any)],
+        Type::Boolean,
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "m".to_string(),
+                ty: map_type(Type::Number, Type::String),
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
+            Stmt::Expr(Expr::MapSet {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+                value: Box::new(local(3)),
+            }),
+            Stmt::Return(Some(Expr::MapHas {
+                map: Box::new(local(1)),
+                key: Box::new(local(2)),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_map_number_string_value_rejection_ts__probe");
+    assert!(
+        probe_ir.contains("call i64 @js_map_set_number_key"),
+        "unproven string values should preserve the guarded numeric-key helper:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_get_string_pointer_unified"),
+        "unproven values must not be unboxed as string refs:\n{probe_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MapSet"
+                && record["consumer"] == "collection_typed_value.map_set_number_string_generic"
+                && record["native_rep_name"] == "js_value"
+                && record_has_type_fact(
+                    record,
+                    "rejected_facts",
+                    "map.string_value_helper",
+                    "rejected",
+                )
+                && record_has_note(record, "generic_helper=js_map_set_number_key")
+                && record_has_note(
+                    record,
+                    "typed_collection_rejected=value_expr_not_definitely_string",
+                )
+                && record_has_note(record, "value_rep=js_value")
+        }),
+        "expected Map<number, string>.set unproven string-value rejection record:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn map_string_key_has_delete_specialize_independent_of_value_type() {
     let module = module_with_classes_and_params(
         "map_string_boolean_delete_specialization.ts",
