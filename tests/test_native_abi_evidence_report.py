@@ -36,13 +36,15 @@ def correctness_tokens(tokens):
     return "\n".join(tokens) + "\n"
 
 
-def native_record(rep, consumer, *, access_mode="unchecked_native", bounds_state=None):
-    return {
+def native_record(rep, consumer, *, access_mode="unchecked_native", bounds_state=None, **overrides):
+    row = {
         "native_rep_name": rep,
         "consumer": consumer,
         "access_mode": access_mode,
         "bounds_state": bounds_state or {"proven": {"proof": "loop_guard"}},
     }
+    row.update(overrides)
+    return row
 
 
 def create_correctness(root):
@@ -162,6 +164,17 @@ def create_compiler_output(root):
         },
         25.0,
         p95=32.0,
+        native_records=[
+            native_record(
+                "js_value",
+                "js_buffer_get",
+                access_mode="dynamic_fallback",
+                bounds_state="unknown",
+                native_value_state="dynamic_fallback",
+                materialization_reason="runtime_api",
+                fallback_reason="runtime_api",
+            ),
+        ],
     )
     write_json(
         suite_root / "suite-report.json",
@@ -242,12 +255,25 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             markdown = REPORT.markdown_for_packet(packet, repo_root)
             self.assertIn("# Selected Native / Region-Local Evidence Packet: PASS", markdown)
             self.assertIn("## Scope", markdown)
+            self.assertIn("## Gate Matrix", markdown)
             self.assertIn("typed clones, or generic trampoline dispatch", markdown)
             self.assertIn("packet_contract=`pass`", markdown)
             self.assertIn("## Selected Native / Region-Local Lowering", markdown)
+            self.assertIn("explain_records=", markdown)
             self.assertIn("stdout_missing=0", markdown)
             self.assertIn("## Release / LTO Symbol Guard", markdown)
             self.assertIn("Runtime symbol guard: `pass`", markdown)
+            self.assertIn("## Material Accounting", markdown)
+            self.assertTrue(
+                all(row["status"] == "pass" for row in packet["gate_matrix"]),
+                packet["gate_matrix"],
+            )
+            self.assertEqual(
+                packet["native_call_lowering"]["workloads"]["native_abi_packet_control"][
+                    "explain_lowering_accounting"
+                ]["dynamic_fallbacks"],
+                1,
+            )
 
     def test_missing_artifact_fails_gate(self):
         temp, root, repo_root = self.make_packet()
@@ -398,6 +424,13 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             self.assertEqual(fields["median_wall_ms"]["speedup"], 2.5)
             self.assertEqual(fields["p95_wall_ms"]["speedup"], 1.6)
             self.assertIn("write_barriers_traced", fields)
+            self.assertIn("runtime_calls_static", fields)
+            accounting = {
+                row["field"]: row
+                for row in packet["benchmark_deltas"]["material_accounting"]
+            }
+            self.assertEqual(accounting["runtime_calls_static"]["status"], "pass")
+            self.assertEqual(accounting["write_barriers_static"]["status"], "pass")
             self.assertEqual(
                 packet["benchmark_deltas"]["benchmark_stat_quality"],
                 {"typed": "timing", "control": "timing"},
@@ -502,6 +535,44 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             self.assertEqual(packet["status"], "fail")
             failures = packet["benchmark_deltas"]["material_failures"]
             self.assertTrue(any("median_wall_ms" in failure for failure in failures))
+
+    def test_material_runtime_helper_thresholds_must_pass(self):
+        temp, root, repo_root = self.make_packet()
+        with temp:
+            manifest_path = (
+                root
+                / "compiler-output"
+                / "native-abi-proof"
+                / "native_abi_packet_typed"
+                / "manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["runtime_counter_summary"]["runtime_calls_static"] = 11
+            write_json(manifest_path, manifest)
+
+            packet = REPORT.build_packet(root, root / "metadata.json", repo_root, gate=True)
+            self.assertEqual(packet["status"], "fail")
+            failures = packet["benchmark_deltas"]["material_failures"]
+            self.assertTrue(any("runtime_calls_static" in failure for failure in failures))
+
+    def test_material_static_barrier_thresholds_must_pass(self):
+        temp, root, repo_root = self.make_packet()
+        with temp:
+            manifest_path = (
+                root
+                / "compiler-output"
+                / "native-abi-proof"
+                / "native_abi_packet_typed"
+                / "manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["runtime_counter_summary"]["write_barriers_static"] = 5
+            write_json(manifest_path, manifest)
+
+            packet = REPORT.build_packet(root, root / "metadata.json", repo_root, gate=True)
+            self.assertEqual(packet["status"], "fail")
+            failures = packet["benchmark_deltas"]["material_failures"]
+            self.assertTrue(any("write_barriers_static" in failure for failure in failures))
 
     def test_material_speedup_requires_timing_quality(self):
         temp, root, repo_root = self.make_packet()

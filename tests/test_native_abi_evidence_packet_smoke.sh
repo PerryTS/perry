@@ -55,7 +55,7 @@ if status == 0:
     assert packet["status"] == "pass", packet["errors"]
 else:
     assert packet["status"] == "fail", packet
-for section in ("correctness", "native_call_lowering", "gc_root_safety", "release_symbol_guard", "benchmark_deltas"):
+for section in ("gate_matrix", "correctness", "native_call_lowering", "gc_root_safety", "release_symbol_guard", "benchmark_deltas"):
     assert section in packet, packet.keys()
 PY
 
