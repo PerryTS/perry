@@ -1,4 +1,4 @@
-## v0.5.1197 — feat(codegen): representation-aware type lowering + native-ABI material evidence gate
+## v0.5.1198 — feat(codegen): representation-aware type lowering + native-ABI material evidence gate
 
 Merges the representation-aware type-lowering track (`codex/type-lowering-runtime-20260616`)
 into `main`. Builds on the earlier #5291 landing; the most recent integration was #5462 (the
@@ -26,6 +26,30 @@ One HEAD-only IR-shape regression test (`boxed_local_slot_uses_i64_js_value_bits
 was updated to assert the box-bits ABI invariant (no raw `double` operand reaches a bits helper)
 rather than one exact instruction sequence, since main's constant lowering now folds the
 `undefined` slot default straight to i64 bits. Follow-ups tracked in #5464.
+
+## v0.5.1197 — feat(runtime): #2656 — make WeakMap/WeakSet actually weak
+
+WeakMap/WeakSet previously stored entries as plain `[key, value]` pair arrays that the
+GC traced strongly, so keys were never collected — weak in API only. Entries are now
+`CLASS_ID_WEAK_ENTRY` objects whose field-0 key is a weak GC slot (skipped by the
+strong-edge scanners, exactly like a WeakRef target / finalization-record target), with
+the value in field 1 (strong; `undefined` for a WeakSet, so the member isn't pinned
+through the value slot). The post-mark weak pass tombstones entries whose key was
+collected — nulling both slots so the value is released — and lookups treat a
+tombstoned (undefined-key) entry as empty. `set` reuses tombstone slots and `delete`
+compacts them, bounding growth. This directly reuses the existing WeakRef/
+FinalizationRegistry weak-slot machinery (`is_weak_target_trace_slot`,
+`weak_target_should_clear`, the post-mark walk) — no new GC phase.
+
+A key/value reachable only through the collection is now collectible; live entries are
+retained and values released when their key dies. Verified under the default GC and the
+auto-evacuation policy. Regression test:
+`crates/perry/tests/issue_2656_weak_collections_actually_weak.rs`.
+
+Out of scope: the `PERRY_GC_FORCE_EVACUATE` full-evacuation debug-stress mode
+over-collects weak targets in general (FinalizationRegistry has the same limitation) and
+is also subject to the separate strong-array-in-closure bug #5467 — no production GC mode
+(default, auto-evacuation) is affected.
 
 ## v0.5.1196 — fix(codegen): #5431 — cross-module call to a `$`-named exported function returned `undefined`
 
