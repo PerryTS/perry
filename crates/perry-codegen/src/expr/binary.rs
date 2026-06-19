@@ -273,16 +273,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ));
                 }
                 if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) {
-                    if let Some(value) =
-                        try_lower_small_bigint_literal_binary(ctx, *op, left.as_ref(), right.as_ref())
-                    {
+                    if let Some(value) = try_lower_small_bigint_literal_binary(
+                        ctx,
+                        *op,
+                        left.as_ref(),
+                        right.as_ref(),
+                    ) {
                         return Ok(value);
                     }
                     let l = lower_expr(ctx, left)?;
                     let r = lower_expr(ctx, right)?;
-                    return Ok(ctx
-                        .block()
-                        .call(DOUBLE, "js_dynamic_add", &[(DOUBLE, &l), (DOUBLE, &r)]));
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_dynamic_add",
+                        &[(DOUBLE, &l), (DOUBLE, &r)],
+                    ));
                 }
                 // Refs #486: neither operand is statically known. Per JS
                 // spec for `+`, if EITHER side is a string at runtime, the
