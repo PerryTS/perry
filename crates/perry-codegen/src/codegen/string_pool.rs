@@ -758,6 +758,8 @@ pub(super) fn emit_string_pool(
     // matching the static `new` path. See `ctor_rest_regs` above.
     ctor_rest_regs.sort_unstable();
     for (ctor_symbol, rest_idx) in ctor_rest_regs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", ctor_symbol);
         blk.call_void(
             "js_register_closure_rest",
