@@ -412,13 +412,20 @@ pub(super) fn try_array_only_methods(
                             // `crates/perry-codegen/src/lower_call.rs:1313`, which
                             // routes `.forEach` / `.get` / `.has` / `.keys` /
                             // `.values` / `.entries` through the Headers FFI.
+                            // #5432: `res.headers.<m>()` where `res` came from a
+                            // member-call `app.fetch(req)` (Hono / WinterCG). It
+                            // is not a `register_native_instance` binding (that
+                            // would hijack every method on `res`), so consult the
+                            // narrow `fetch_call_response_locals` set too.
                             let is_fetch_headers = prop_ident.sym.as_ref() == "headers"
-                                && matches!(
+                                && (matches!(
                                     ctx.lookup_native_instance(obj_ident.sym.as_ref()),
                                     Some(("fetch", _))
                                         | Some(("Request", _))
                                         | Some(("Headers", _))
-                                );
+                                ) || ctx
+                                    .fetch_call_response_locals
+                                    .contains(obj_ident.sym.as_ref()));
                             if is_fetch_headers {
                                 true
                             } else {

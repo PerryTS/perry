@@ -875,39 +875,6 @@ pub(crate) fn lower_var_decl_with_destructuring(
 
             // Check if this is assigning from fetch() or await fetch() - register as fetch Response
             if let Some(init_expr) = &decl.init {
-                // Helper to check if an expression is a fetch-like call
-                // Returns the module name if it matches fetch/fetchWithAuth/fetchPostWithAuth
-                fn get_fetch_module(expr: &ast::Expr) -> Option<&'static str> {
-                    if let ast::Expr::Call(call_expr) = expr {
-                        if let ast::Callee::Expr(callee_expr) = &call_expr.callee {
-                            if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
-                                // Closes #644: all three return the same
-                                // Response handle, so they must register
-                                // under module="fetch". The codegen dispatch
-                                // in `lower_fetch_native_method` gates on
-                                // `module == "fetch"` — pre-fix, registering
-                                // under "fetchWithAuth"/"fetchPostWithAuth"
-                                // missed the gate so a post-narrowing
-                                // `r.status` lowered as a NativeMethodCall
-                                // with module="fetchWithAuth" and fell
-                                // through to a generic 0.0-returning arm.
-                                // (Without narrowing the access went through
-                                // generic PropertyGet → handle dispatch →
-                                // js_fetch_response_status, so the bug only
-                                // surfaced inside an `if r !== null/undefined`
-                                // block.)
-                                return match ident.sym.as_ref() {
-                                    "fetch" | "fetchWithAuth" | "fetchPostWithAuth" => {
-                                        Some("fetch")
-                                    }
-                                    _ => None,
-                                };
-                            }
-                        }
-                    }
-                    None
-                }
-
                 if crate::lower_types::is_node_readable_static_factory_call(ctx, init_expr) {
                     let readable = "Readable".to_string();
                     ty = Type::Named(readable.clone());
@@ -931,6 +898,17 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             "Response".to_string(),
                         );
                     }
+                }
+
+                // #5432: `const res = app.fetch(req)` / `await app.fetch(req)` —
+                // a member-call `.fetch(...)` is the Fetch-API server-handler
+                // convention (Hono `app.fetch`, itty-router, Cloudflare
+                // Workers) and yields a native fetch Response. Record it in a
+                // narrow set (NOT `register_native_instance`, which would hijack
+                // every method on `res`) so only `res.headers.<m>()` bails the
+                // array-method fold. See `fetch_call_response_locals`.
+                if is_member_fetch_call(init_expr) {
+                    ctx.fetch_call_response_locals.insert(name.clone());
                 }
 
                 // Web Fetch API: new Response(...) / new Headers(...) /

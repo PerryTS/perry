@@ -440,6 +440,21 @@ pub struct LoweringContext {
     /// default imports of actual classes (`import { MongoClient }`) are NOT in
     /// this set and keep the static-method path.
     pub(crate) namespace_import_locals: HashSet<String>,
+    /// #5432: locals initialized from a member-call `.fetch(...)` — the
+    /// Fetch-API / WinterCG convention every server framework exposes (Hono
+    /// `app.fetch`, itty-router, Cloudflare Workers handlers) returns a native
+    /// fetch `Response` whose `.headers` is a Headers handle. This set is
+    /// consulted ONLY by the `is_fetch_headers` guard in
+    /// `array_only_methods.rs` so `res.headers.forEach(cb)` /
+    /// `res.headers.entries()` bail the static array-method fold and route
+    /// through the Headers FFI instead of dispatching `js_array_forEach` on a
+    /// handle id (a SIGSEGV). It deliberately does NOT use
+    /// `register_native_instance`, which would hijack EVERY method/property
+    /// access on the local (e.g. a Bookshelf/Backbone `repo.fetch()` returning
+    /// a real array would then mis-route `.map`/`.forEach`). The narrow scope —
+    /// only `<name>.headers.<method>()` is affected — keeps the false-positive
+    /// surface to nil.
+    pub(crate) fetch_call_response_locals: HashSet<String>,
     /// Maps a namespace-import local (`import * as z from "src"`) to its source
     /// module. Used so a later bare `export { z }` re-export of that local routes
     /// to `Export::NamespaceReExport` (equivalent to `export * as z from "src"`)
