@@ -425,17 +425,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     })?;
                     let idx_str = capture_idx.to_string();
                     let blk = ctx.block();
-                    let cap_dbl = blk.call(
-                        DOUBLE,
-                        "js_closure_get_capture_f64",
+                    let box_ptr = blk.call(
+                        I64,
+                        "js_closure_get_capture_bits",
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
-                    let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
-                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
+                    let new_bits = blk.bitcast_double_to_i64(&new_box);
+                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
-                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
+                    let new_bits = blk.bitcast_double_to_i64(&new_box);
+                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                 }
                 return Ok(emit_array_handle_length(ctx, &new_handle));
             }
@@ -445,9 +446,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .clone()
                     .ok_or_else(|| anyhow!("ArrayPush captured but no current_closure_ptr"))?;
                 let idx_str = capture_idx.to_string();
+                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
                 ctx.block().call_void(
-                    "js_closure_set_capture_f64",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, &new_box)],
+                    "js_closure_set_capture_bits",
+                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
             } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                 ctx.block().store(DOUBLE, &new_box, &slot);
@@ -489,17 +491,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     })?;
                     let idx_str = capture_idx.to_string();
                     let blk = ctx.block();
-                    let cap_dbl = blk.call(
-                        DOUBLE,
-                        "js_closure_get_capture_f64",
+                    let box_ptr = blk.call(
+                        I64,
+                        "js_closure_get_capture_bits",
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
-                    let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
-                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
+                    let new_bits = blk.bitcast_double_to_i64(&new_box);
+                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
-                    blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, &new_box)]);
+                    let new_bits = blk.bitcast_double_to_i64(&new_box);
+                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                 }
                 return Ok(emit_array_handle_length(ctx, &new_handle));
             }
@@ -508,9 +511,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     anyhow!("ArrayPushSpread captured but no current_closure_ptr")
                 })?;
                 let idx_str = capture_idx.to_string();
+                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
                 ctx.block().call_void(
-                    "js_closure_set_capture_f64",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, &new_box)],
+                    "js_closure_set_capture_bits",
+                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
             } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                 ctx.block().store(DOUBLE, &new_box, &slot);

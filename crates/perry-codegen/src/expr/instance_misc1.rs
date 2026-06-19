@@ -114,29 +114,28 @@ fn store_prelowered_local(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> Result<S
         let idx_str = capture_idx.to_string();
         if ctx.boxed_vars.contains(&id) {
             let blk = ctx.block();
-            let cap_dbl = blk.call(
-                DOUBLE,
-                "js_closure_get_capture_f64",
+            let box_ptr = blk.call(
+                I64,
+                "js_closure_get_capture_bits",
                 &[(I64, &closure_ptr), (I32, &idx_str)],
             );
-            let box_ptr = blk.bitcast_double_to_i64(&cap_dbl);
-            blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, value)]);
-            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            let value_bits = blk.bitcast_double_to_i64(value);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
             emit_write_barrier(ctx, &box_ptr, &value_bits);
         } else {
-            ctx.block().call_void(
-                "js_closure_set_capture_f64",
-                &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, value)],
-            );
             let value_bits = ctx.block().bitcast_double_to_i64(value);
+            ctx.block().call_void(
+                "js_closure_set_capture_bits",
+                &[(I64, &closure_ptr), (I32, &idx_str), (I64, &value_bits)],
+            );
             emit_write_barrier(ctx, &closure_ptr, &value_bits);
         }
     } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {
         if let Some(slot) = ctx.locals.get(&id).cloned() {
             let blk = ctx.block();
             let box_ptr = blk.load(I64, &slot);
-            blk.call_void("js_box_set", &[(I64, &box_ptr), (DOUBLE, value)]);
-            let value_bits = ctx.block().bitcast_double_to_i64(value);
+            let value_bits = blk.bitcast_double_to_i64(value);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &value_bits)]);
             emit_write_barrier(ctx, &box_ptr, &value_bits);
         }
     } else if let Some(slot) = ctx.locals.get(&id).cloned() {

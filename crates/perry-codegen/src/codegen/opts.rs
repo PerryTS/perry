@@ -695,6 +695,10 @@ pub(crate) struct CrossModuleCtx {
     /// public wrapper keeps the JSValue ABI; direct numeric call sites may call
     /// the clone.
     pub typed_f64_functions: std::collections::HashSet<u32>,
+    /// User functions that have a generated internal typed-i32 clone. The
+    /// public wrapper keeps the JSValue ABI; direct call sites may call the
+    /// clone when every argument is proven and guarded as Int32-compatible.
+    pub typed_i32_functions: std::collections::HashSet<u32>,
     /// User functions that have a generated internal typed-i1 clone. The public
     /// wrapper keeps the JSValue ABI; direct call sites may call the clone when
     /// the caller can prove every argument matches the clone's native
@@ -740,8 +744,13 @@ pub(crate) struct CrossModuleCtx {
     pub typed_i1_closures: std::collections::HashSet<u32>,
     /// Inline closure bodies that have a generated internal typed-string clone.
     /// Only statically-known local closure calls may select these clones after
-    /// closure identity/arity and string argument guards pass.
+    /// closure identity/arity, string argument guards, and any required string
+    /// capture guards pass.
     pub typed_string_closures: std::collections::HashSet<u32>,
+    /// Number of immutable string captures consumed by each typed-string
+    /// closure clone. Direct local call sites use this to guard capture slots
+    /// before entering the raw string ABI.
+    pub typed_string_closure_capture_counts: std::collections::HashMap<u32, usize>,
     /// Per-closure typed-i1 clone parameter reps. This lets direct local
     /// closure calls target mixed native predicate clones such as
     /// `i1(i64 closure, double, double)` without routing through the public

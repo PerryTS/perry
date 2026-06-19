@@ -704,12 +704,14 @@ fn generic_fallback_reason(record: &Value, notes: &[String]) -> Option<String> {
 fn typed_clone_selection_reason(consumer: &str) -> String {
     match consumer {
         "typed_f64_func_ref_call" => "typed_f64_function_direct_call",
+        "typed_i32_func_ref_call" => "typed_i32_function_direct_call",
         "typed_i1_func_ref_call" => "typed_i1_function_direct_call",
         "typed_f64_method_direct_call" => "typed_f64_method_direct_call",
         "typed_i1_method_direct_call" => "typed_i1_method_direct_call",
         "typed_f64_closure_direct_call" => "typed_f64_closure_direct_call",
         "typed_i1_closure_direct_call" => "typed_i1_closure_direct_call",
         _ if consumer.contains("typed_f64") => "typed_f64_artifact_consumer",
+        _ if consumer.contains("typed_i32") => "typed_i32_artifact_consumer",
         _ if consumer.contains("typed_i1") => "typed_i1_artifact_consumer",
         _ => "typed_clone_artifact_note",
     }
@@ -1246,6 +1248,53 @@ mod tests {
                 .reason_category
                 .as_deref(),
             Some("param_not_i1")
+        );
+    }
+
+    #[test]
+    fn report_counts_typed_i32_selection_reason() {
+        let artifact = json!({
+            "schema_version": 14,
+            "module": "typed-i32.ts",
+            "records": [
+                {
+                    "function": "caller",
+                    "source_function": "caller",
+                    "expr_kind": "Call",
+                    "consumer": "typed_i32_func_ref_call",
+                    "native_rep_name": "js_value",
+                    "native_value_state": "region_local",
+                    "notes": [
+                        "typed_clone=perry_fn_typed__mix__typed_i32",
+                        "generic_wrapper=perry_fn_typed__mix__generic"
+                    ]
+                }
+            ]
+        });
+        let report = build_report_from_artifacts(
+            Path::new("/tmp/lowering"),
+            vec![(PathBuf::from("native-reps.json"), artifact)],
+        );
+
+        assert_eq!(
+            report
+                .summary
+                .typed_clone_selection_reason_counts
+                .get("typed_i32_function_direct_call"),
+            Some(&1)
+        );
+        assert_eq!(
+            report.evidence.typed_clone_decisions[0]
+                .reason_category
+                .as_deref(),
+            Some("typed_i32_function_direct_call")
+        );
+        assert_eq!(
+            report
+                .summary
+                .generic_fallback_reason_counts
+                .get("generic_wrapper"),
+            Some(&1)
         );
     }
 

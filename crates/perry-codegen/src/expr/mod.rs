@@ -95,8 +95,8 @@ pub(crate) use i32_fast_path::{
 };
 pub(crate) use index::lower_index_set_fast;
 pub(crate) use nanbox_inline::{
-    i32_bool_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline, nanbox_pointer_inline_pub,
-    nanbox_string_inline,
+    i32_bool_to_nanbox, i32_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline,
+    nanbox_pointer_inline_pub, nanbox_string_inline,
 };
 pub(crate) use native_record::{array_kind_fact, effect_fact, raw_f64_layout_fact};
 pub(crate) use object_literal::lower_object_literal;
@@ -306,7 +306,7 @@ pub(crate) struct FnCtx<'a> {
     pub closure_captures: std::collections::HashMap<u32, u32>,
     /// Inside a closure body, the LLVM SSA value name for the current
     /// closure pointer (`%this_closure`). `Expr::LocalGet` of a captured
-    /// id uses this as the first arg to `js_closure_get_capture_f64`.
+    /// id uses this as the first arg to `js_closure_get_capture_bits`.
     pub current_closure_ptr: Option<String>,
     /// Map from (enum_name, member_name) → enum value. Built once in
     /// `compile_module` from `hir.enums`. Used by `Expr::EnumMember`
@@ -369,7 +369,7 @@ pub(crate) struct FnCtx<'a> {
     /// the produced class's static methods, matching the post-#912
     /// `Cls = make(); Cls.pipe(...)` shape.
     pub func_returns_class: &'a std::collections::HashMap<u32, String>,
-    /// LocalIds that must be stored in heap boxes (`js_box_alloc`)
+    /// LocalIds that must be stored in heap boxes (`js_box_alloc_bits`)
     /// instead of stack allocas. A local gets boxed when at least
     /// one closure captures it AND it's written to (either by the
     /// enclosing function or inside a closure). Boxing guarantees
@@ -378,18 +378,18 @@ pub(crate) struct FnCtx<'a> {
     /// vars` for the detection rule.
     ///
     /// For ids in this set:
-    /// - Stmt::Let allocates a box via `js_box_alloc(init)` and
+    /// - Stmt::Let allocates a box via `js_box_alloc_bits(init_bits)` and
     ///   stores the box pointer (i64) in a local alloca slot.
-    /// - LocalGet reads the slot, unboxes, and calls `js_box_get`.
+    /// - LocalGet reads the slot, unboxes, and calls `js_box_get_bits`.
     /// - LocalSet/Update reads the slot, unboxes, and calls
-    ///   `js_box_set`.
+    ///   `js_box_set_bits`.
     /// - Closure creation captures the box pointer directly so
     ///   the closure body sees the same storage.
     pub boxed_vars: std::collections::HashSet<u32>,
     /// LocalIds whose slot+box was allocated up-front via `Stmt::
     /// PreallocateBoxes` (issue #569). When a later `Stmt::Let` is
     /// processed for an id in this set, codegen skips the slot/box
-    /// allocation and just `js_box_set`s the init value into the
+    /// allocation and just `js_box_set_bits`s the init value into the
     /// pre-allocated box. The id is added to `boxed_vars` automatically
     /// so subsequent `LocalGet`/`LocalSet`/`Update` go through the box.
     pub prealloc_boxes: std::collections::HashSet<u32>,
@@ -851,6 +851,7 @@ pub(crate) struct FnCtx<'a> {
     pub integer_returning_functions: &'a std::collections::HashSet<u32>,
     pub i32_identity_functions: &'a std::collections::HashSet<u32>,
     pub typed_f64_functions: &'a std::collections::HashSet<u32>,
+    pub typed_i32_functions: &'a std::collections::HashSet<u32>,
     pub typed_string_functions: &'a std::collections::HashSet<u32>,
     pub typed_i1_function_param_reps:
         &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
@@ -863,6 +864,7 @@ pub(crate) struct FnCtx<'a> {
     pub typed_i1_closure_param_reps:
         &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
     pub typed_string_closures: &'a std::collections::HashSet<u32>,
+    pub typed_string_closure_capture_counts: &'a std::collections::HashMap<u32, usize>,
 
     /// True if `perry_transform::unroll_static_loops` expanded any
     /// static-trip-count for-loop in the function this FnCtx is lowering
@@ -1542,12 +1544,12 @@ pub(crate) fn load_boxed_local_pointer(ctx: &mut FnCtx<'_>, id: u32) -> Result<O
             .current_closure_ptr
             .clone()
             .ok_or_else(|| anyhow!("boxed local capture but no current_closure_ptr"))?;
-        let cap_dbl = ctx.block().call(
-            DOUBLE,
-            "js_closure_get_capture_f64",
+        let cap_bits = ctx.block().call(
+            I64,
+            "js_closure_get_capture_bits",
             &[(I64, &closure_ptr), (I32, &capture_idx.to_string())],
         );
-        return Ok(Some(ctx.block().bitcast_double_to_i64(&cap_dbl)));
+        return Ok(Some(cap_bits));
     }
     if let Some(slot) = ctx.locals.get(&id).cloned() {
         return Ok(Some(ctx.block().load(I64, &slot)));
@@ -1999,6 +2001,25 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 false,
                 false,
                 Vec::new(),
+            );
+            Ok(Some(lowered))
+        }
+        Expr::IterResultGetValue => {
+            let value = ctx
+                .block()
+                .call(DOUBLE, "js_iter_result_get_value_f64", &[]);
+            let lowered = LoweredValue::f64(value);
+            ctx.record_lowered_value(
+                "IterResultGetValue",
+                None,
+                "compiler_private_async_iter_result_get_f64",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec!["slot_kind=raw_f64_or_coerced_jsvalue".to_string()],
             );
             Ok(Some(lowered))
         }

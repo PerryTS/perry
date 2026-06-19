@@ -789,12 +789,7 @@ fn lower_expr_native_js_value_bits(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Lowe
     let bits = if let Some(id) = boxed_local_id {
         if let Some(slot) = ctx.locals.get(&id).cloned() {
             let box_ptr = ctx.block().load(I64, &slot);
-            let value = ctx.block().call(DOUBLE, "js_box_get", &[(I64, &box_ptr)]);
-            materialize_js_value_bits(
-                ctx,
-                LoweredValue::js_value(value),
-                MaterializationReason::RuntimeApi,
-            )
+            ctx.block().call(I64, "js_box_get_bits", &[(I64, &box_ptr)])
         } else {
             let value = lower_expr(ctx, e)?;
             materialize_js_value_bits(
@@ -967,6 +962,25 @@ fn lower_expr_native_usize(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue
 }
 
 fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if matches!(e, Expr::IterResultGetValue) {
+        let value = ctx
+            .block()
+            .call(DOUBLE, "js_iter_result_get_value_f64", &[]);
+        let lowered = f64_lowered(value);
+        ctx.record_lowered_value(
+            native_expr_kind(e),
+            None,
+            "compiler_private_async_iter_result_get_f64",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec!["slot_kind=raw_f64_or_coerced_jsvalue".to_string()],
+        );
+        return Ok(lowered);
+    }
     if let Some(value) =
         crate::expr::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, e)?
     {

@@ -1032,6 +1032,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
     let map = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/map.rs"));
     let set = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/set.rs"));
     let boxes = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/box.rs"));
+    let closure_alloc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/closure/alloc.rs"));
 
     for (src, static_name, signature, target) in [
         (
@@ -1045,6 +1046,18 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
             "KEEP_JS_TYPED_F64_ARG_TO_RAW",
             "static KEEP_JS_TYPED_F64_ARG_TO_RAW: extern \"C\" fn(f64) -> f64",
             "js_typed_f64_arg_to_raw",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I32_ARG_GUARD",
+            "static KEEP_JS_TYPED_I32_ARG_GUARD: extern \"C\" fn(f64) -> i32",
+            "js_typed_i32_arg_guard",
+        ),
+        (
+            native_abi,
+            "KEEP_JS_TYPED_I32_ARG_TO_RAW",
+            "static KEEP_JS_TYPED_I32_ARG_TO_RAW: extern \"C\" fn(f64) -> i32",
+            "js_typed_i32_arg_to_raw",
         ),
         (
             native_abi,
@@ -1069,6 +1082,36 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
             "KEEP_JS_TYPED_STRING_ARG_TO_RAW",
             "static KEEP_JS_TYPED_STRING_ARG_TO_RAW: extern \"C\" fn(f64) -> i64",
             "js_typed_string_arg_to_raw",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOX_ALLOC_BITS",
+            "static KEEP_JS_BOX_ALLOC_BITS: extern \"C\" fn(i64) -> *mut Box",
+            "js_box_alloc_bits",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOX_GET_BITS",
+            "static KEEP_JS_BOX_GET_BITS: extern \"C\" fn(*mut Box) -> i64",
+            "js_box_get_bits",
+        ),
+        (
+            boxes,
+            "KEEP_JS_BOX_SET_BITS",
+            "static KEEP_JS_BOX_SET_BITS: extern \"C\" fn(*mut Box, i64)",
+            "js_box_set_bits",
+        ),
+        (
+            closure_alloc,
+            "KEEP_JS_CLOSURE_GET_CAPTURE_BITS",
+            "static KEEP_JS_CLOSURE_GET_CAPTURE_BITS: extern \"C\" fn(*const ClosureHeader, u32) -> u64",
+            "js_closure_get_capture_bits",
+        ),
+        (
+            closure_alloc,
+            "KEEP_JS_CLOSURE_SET_CAPTURE_BITS",
+            "static KEEP_JS_CLOSURE_SET_CAPTURE_BITS: extern \"C\" fn(*mut ClosureHeader, u32, u64)",
+            "js_closure_set_capture_bits",
         ),
         (
             native_abi,

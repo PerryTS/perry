@@ -50,6 +50,7 @@ mod opts;
 mod string_pool;
 mod typed_abi;
 
+pub(crate) use closure::emit_typed_string_capture_guard;
 pub use helpers::resolve_target_triple;
 pub(crate) use helpers::{default_target_triple, write_barriers_enabled};
 pub use opts::{
@@ -60,14 +61,14 @@ pub(crate) use typed_abi::{
     generic_closure_body_name, generic_function_body_name, generic_method_body_name,
     typed_f64_closure_name, typed_f64_function_name, typed_f64_method_name,
     typed_f64_receiver_method_info, typed_f64_receiver_method_name, typed_i1_closure_name,
-    typed_i1_function_name, typed_i1_method_name, typed_string_closure_name,
-    typed_string_function_name, TypedParamRep, TypedReceiverMethodInfo,
+    typed_i1_function_name, typed_i1_method_name, typed_i32_function_name,
+    typed_string_closure_name, typed_string_function_name, TypedParamRep, TypedReceiverMethodInfo,
 };
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
 use function::{
     compile_function, compile_typed_f64_function, compile_typed_i1_function,
-    compile_typed_string_function,
+    compile_typed_i32_function, compile_typed_string_function,
 };
 use helpers::{
     collect_return_class, emit_buffer_alias_metadata, function_body_returns_generator_object,
@@ -93,6 +94,7 @@ fn should_record_typed_clone_rejection(reason: typed_abi::TypedCloneRejectionRea
         reason,
         typed_abi::TypedCloneRejectionReason::NotClosure
             | typed_abi::TypedCloneRejectionReason::ReturnTypeNotF64
+            | typed_abi::TypedCloneRejectionReason::ReturnTypeNotI32
             | typed_abi::TypedCloneRejectionReason::ReturnTypeNotI1
             | typed_abi::TypedCloneRejectionReason::ReturnTypeNotString
             | typed_abi::TypedCloneRejectionReason::NoReceiverField
@@ -1169,6 +1171,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             == Some("1");
     let mut typed_clone_rejection_records = Vec::new();
     let mut typed_f64_functions = std::collections::HashSet::new();
+    let mut typed_i32_functions = std::collections::HashSet::new();
     let mut typed_i1_functions = std::collections::HashSet::new();
     let mut typed_string_functions = std::collections::HashSet::new();
     let mut typed_i1_function_param_reps = std::collections::HashMap::new();
@@ -1184,6 +1187,22 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 reason,
                 vec![
                     "typed_clone_kind=typed_f64_function".to_string(),
+                    format!("function_id={}", f.id),
+                    format!("symbol={}", f.name),
+                ],
+            ),
+        }
+        match typed_abi::typed_i32_function_rejection_reason(f) {
+            None => {
+                typed_i32_functions.insert(f.id);
+            }
+            Some(reason) => record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                f.name.clone(),
+                "typed_i32_function_clone_decision",
+                reason,
+                vec![
+                    "typed_clone_kind=typed_i32_function".to_string(),
                     format!("function_id={}", f.id),
                     format!("symbol={}", f.name),
                 ],
@@ -1447,6 +1466,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .map(|f| f.id)
             .collect(),
         typed_f64_functions,
+        typed_i32_functions,
         typed_i1_functions,
         typed_string_functions,
         typed_i1_function_param_reps,
@@ -1457,6 +1477,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_f64_closures: std::collections::HashSet::new(),
         typed_i1_closures: std::collections::HashSet::new(),
         typed_string_closures: std::collections::HashSet::new(),
+        typed_string_closure_capture_counts: std::collections::HashMap::new(),
         typed_i1_closure_param_reps: std::collections::HashMap::new(),
         compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals,
@@ -2411,6 +2432,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     cross_module.typed_f64_closures.clear();
     cross_module.typed_i1_closures.clear();
     cross_module.typed_string_closures.clear();
+    cross_module.typed_string_closure_capture_counts.clear();
     cross_module.typed_i1_closure_param_reps.clear();
     for (func_id, expr) in &closures {
         match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &module_local_types) {
@@ -2468,6 +2490,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         {
             None => {
                 cross_module.typed_string_closures.insert(*func_id);
+                let capture_count =
+                    typed_abi::typed_string_closure_capture_reps(expr, &module_local_types)
+                        .map(|captures| captures.len())
+                        .unwrap_or(0);
+                cross_module
+                    .typed_string_closure_capture_counts
+                    .insert(*func_id, capture_count);
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -2675,6 +2704,22 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 ],
             );
         }
+        if i64_specialized.contains(&f.id) && cross_module.typed_i32_functions.contains(&f.id) {
+            record_typed_clone_rejection(
+                &mut typed_clone_rejection_records,
+                f.name.clone(),
+                "typed_i32_function_clone_decision",
+                typed_abi::TypedCloneRejectionReason::I64Specialized,
+                vec![
+                    "typed_clone_kind=typed_i32_function".to_string(),
+                    format!("function_id={}", f.id),
+                    format!(
+                        "symbol={}",
+                        func_names.get(&f.id).map(String::as_str).unwrap_or(&f.name)
+                    ),
+                ],
+            );
+        }
         if i64_specialized.contains(&f.id) && cross_module.typed_i1_functions.contains(&f.id) {
             record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -2696,6 +2741,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .typed_f64_functions
         .retain(|id| !i64_specialized.contains(id));
     cross_module
+        .typed_i32_functions
+        .retain(|id| !i64_specialized.contains(id));
+    cross_module
         .typed_i1_functions
         .retain(|id| !i64_specialized.contains(id));
     cross_module
@@ -2711,6 +2759,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         compile_typed_f64_function(&mut llmod, f, &func_names)
             .with_context(|| format!("lowering typed-f64 clone for function '{}'", f.name))?;
+    }
+
+    // Emit internal typed-i32 clones before their public/generic wrappers. The
+    // public wrapper keeps the JSValue ABI; it and direct proven Int32 call
+    // sites guard and unbox into this clone, then re-box at the ABI boundary.
+    for f in &hir.functions {
+        if !cross_module.typed_i32_functions.contains(&f.id) {
+            continue;
+        }
+        compile_typed_i32_function(&mut llmod, f, &func_names)
+            .with_context(|| format!("lowering typed-i32 clone for function '{}'", f.name))?;
     }
 
     // Emit internal typed-i1 clones before their public/generic wrappers. The
@@ -2742,6 +2801,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         let typed_public_trampoline = if cross_module.typed_f64_functions.contains(&f.id) {
             Some(typed_abi::TypedFunctionTrampolineKind::F64)
+        } else if cross_module.typed_i32_functions.contains(&f.id) {
+            Some(typed_abi::TypedFunctionTrampolineKind::I32)
         } else if cross_module.typed_i1_functions.contains(&f.id) {
             Some(typed_abi::TypedFunctionTrampolineKind::I1)
         } else if cross_module.typed_string_functions.contains(&f.id) {

@@ -18,9 +18,9 @@ use super::helpers::shadow_stack_enabled;
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_function_body_name, lower_typed_f64_body,
-    lower_typed_i1_body, lower_typed_string_body, typed_f64_function_name, typed_i1_function_name,
-    typed_param_reps_for_params, typed_string_function_name, TypedFunctionTrampolineKind,
-    TypedParamRep,
+    lower_typed_i1_body, lower_typed_i32_body, lower_typed_string_body, typed_f64_function_name,
+    typed_i1_function_name, typed_i32_function_name, typed_param_reps_for_params,
+    typed_string_function_name, TypedFunctionTrampolineKind, TypedParamRep,
 };
 
 /// Compile the internal typed-f64 clone for a conservatively eligible user
@@ -52,6 +52,37 @@ pub(super) fn compile_typed_f64_function(
         lower_typed_f64_body(blk, &f.params, &f.body)?
     };
     lf.block_mut(0).unwrap().ret(DOUBLE, &value);
+    Ok(())
+}
+
+/// Compile the internal typed-i32 clone for a conservatively eligible user
+/// function. The public JSValue trampoline guards/unboxes Int32-compatible
+/// arguments, calls this raw clone, and boxes the i32 result at the ABI edge.
+pub(super) fn compile_typed_i32_function(
+    llmod: &mut LlModule,
+    f: &Function,
+    func_names: &HashMap<u32, String>,
+) -> Result<()> {
+    let generic_name = func_names
+        .get(&f.id)
+        .cloned()
+        .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    let llvm_name = typed_i32_function_name(&generic_name);
+    let params: Vec<(LlvmType, String)> = f
+        .params
+        .iter()
+        .map(|p| (I32, format!("%arg{}", p.id)))
+        .collect();
+    let lf = llmod.define_function(&llvm_name, I32, params);
+    lf.linkage = "internal".to_string();
+    lf.force_inline = true;
+    let _ = lf.create_block("entry");
+
+    let value = {
+        let blk = lf.block_mut(0).unwrap();
+        lower_typed_i32_body(blk, &f.params, &f.body)?
+    };
+    lf.block_mut(0).unwrap().ret(I32, &value);
     Ok(())
 }
 
@@ -142,6 +173,16 @@ fn emit_typed_public_trampoline_fast_value(
                 raw_args.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
             blk.call(DOUBLE, typed_name, &typed_args)
         }
+        TypedFunctionTrampolineKind::I32 => {
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .map(|arg| blk.call(I32, "js_typed_i32_arg_to_raw", &[(DOUBLE, arg.as_str())]))
+                .collect();
+            let typed_args: Vec<(LlvmType, &str)> =
+                raw_args.iter().map(|arg| (I32, arg.as_str())).collect();
+            let raw_i32 = blk.call(I32, typed_name, &typed_args);
+            crate::expr::i32_to_nanbox(blk, &raw_i32)
+        }
         TypedFunctionTrampolineKind::I1 => {
             let raw_args: Vec<String> = arg_names
                 .iter()
@@ -180,11 +221,13 @@ fn emit_public_typed_function_trampoline(
 ) {
     let typed_name = match kind {
         TypedFunctionTrampolineKind::F64 => typed_f64_function_name(public_name),
+        TypedFunctionTrampolineKind::I32 => typed_i32_function_name(public_name),
         TypedFunctionTrampolineKind::I1 => typed_i1_function_name(public_name),
         TypedFunctionTrampolineKind::StringRef => typed_string_function_name(public_name),
     };
     let arg_reps = match kind {
         TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; f.params.len()],
+        TypedFunctionTrampolineKind::I32 => vec![TypedParamRep::I32; f.params.len()],
         TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(&f.params)
             .unwrap_or_else(|| vec![TypedParamRep::I1; f.params.len()]),
         TypedFunctionTrampolineKind::StringRef => vec![TypedParamRep::StringRef; f.params.len()],
@@ -504,6 +547,7 @@ pub(super) fn compile_function(
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
         typed_f64_functions: &cross_module.typed_f64_functions,
+        typed_i32_functions: &cross_module.typed_i32_functions,
         typed_string_functions: &cross_module.typed_string_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
@@ -513,6 +557,7 @@ pub(super) fn compile_function(
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
+        typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
         was_unrolled: f.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),

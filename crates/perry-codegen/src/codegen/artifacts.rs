@@ -164,10 +164,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             .with_context(|| format!("lowering typed-i1 closure clone func_id={}", func_id))?;
         }
         if cross_module.typed_string_closures.contains(func_id) {
-            compile_typed_string_closure(llmod, *func_id, closure_expr, module_prefix)
-                .with_context(|| {
-                    format!("lowering typed-string closure clone func_id={}", func_id)
-                })?;
+            compile_typed_string_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                module_prefix,
+                module_local_types,
+            )
+            .with_context(|| format!("lowering typed-string closure clone func_id={}", func_id))?;
         }
         compile_closure(
             llmod,

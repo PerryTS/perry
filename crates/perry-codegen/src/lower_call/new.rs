@@ -45,11 +45,16 @@ pub(crate) fn bind_inline_constructor_params(
     crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
     let values = inline_constructor_param_values(ctx, params, lowered_args);
     for (param, arg_val) in params.iter().zip(values.iter()) {
-        let slot = ctx.func.alloca_entry(DOUBLE);
-        if ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
-            let box_ptr = ctx.block().call(I64, "js_box_alloc", &[(DOUBLE, arg_val)]);
-            let boxed = ctx.block().bitcast_i64_to_double(&box_ptr);
-            ctx.block().store(DOUBLE, &boxed, &slot);
+        let boxed_param = ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none();
+        let slot = ctx
+            .func
+            .alloca_entry(if boxed_param { I64 } else { DOUBLE });
+        if boxed_param {
+            let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
+            let box_ptr = ctx
+                .block()
+                .call(I64, "js_box_alloc_bits", &[(I64, &arg_bits)]);
+            ctx.block().store(I64, &box_ptr, &slot);
         } else {
             ctx.block().store(DOUBLE, arg_val, &slot);
         }
@@ -849,7 +854,7 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // function that captures `t` (the `const t = this` alias). When `new F`
     // inside that arrow is inlined, the inlined ctor's `const t = this` reuses
     // the same LocalId — which is a capture in this closure — so reads/writes
-    // of `t` resolve through `js_closure_get_capture_f64` and land on the
+    // of `t` resolve through `js_closure_get_capture_bits` and land on the
     // CAPTURED outer instance instead of the freshly-allocated one (the new
     // instance gets no fields → wall 44 `BaseContext.setValue` → "Cannot read
     // properties of undefined"). The standalone symbol takes `this` as an

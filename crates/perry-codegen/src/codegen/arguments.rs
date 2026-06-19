@@ -28,7 +28,8 @@ pub(crate) fn store_param_slot(
     let boxed_param = boxed_vars.contains(&param.id) && param.arguments_object.is_none();
     let slot = blk.alloca(if boxed_param { I64 } else { DOUBLE });
     if boxed_param {
-        let box_ptr = blk.call(I64, "js_box_alloc", &[(DOUBLE, arg_name)]);
+        let arg_bits = blk.bitcast_double_to_i64(arg_name);
+        let box_ptr = blk.call(I64, "js_box_alloc_bits", &[(I64, &arg_bits)]);
         blk.store(I64, &box_ptr, &slot);
     } else {
         blk.store(DOUBLE, arg_name, &slot);

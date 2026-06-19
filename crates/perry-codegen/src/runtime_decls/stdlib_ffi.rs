@@ -1802,7 +1802,9 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // in a thread-local cell that the async-step driver consumes
     // immediately.
     module.declare_function("js_iter_result_set", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_iter_result_set_f64", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_iter_result_get_value", DOUBLE, &[]);
+    module.declare_function("js_iter_result_get_value_f64", DOUBLE, &[]);
     module.declare_function("js_iter_result_get_done", DOUBLE, &[]);
     // Optimized async-step chain: replaces
     // `Promise.resolve(value).then(then_v_arrow, then_e_arrow)` in

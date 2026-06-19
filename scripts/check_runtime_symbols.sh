@@ -40,10 +40,17 @@ SENTINELS=(
   js_array_numeric_push_f64_unboxed
   js_typed_f64_arg_guard
   js_typed_f64_arg_to_raw
+  js_typed_i32_arg_guard
+  js_typed_i32_arg_to_raw
   js_typed_i1_arg_guard
   js_typed_i1_arg_to_raw
   js_typed_string_arg_guard
   js_typed_string_arg_to_raw
+  js_box_alloc_bits
+  js_box_get_bits
+  js_box_set_bits
+  js_closure_get_capture_bits
+  js_closure_set_capture_bits
   js_object_get_field_by_property_id_f64
   js_object_set_field_by_property_id
   js_native_call_method_by_id
@@ -82,6 +89,11 @@ SENTINELS=(
   js_bool_box_alloc
   js_bool_box_get
   js_bool_box_set
+  js_iter_result_set
+  js_iter_result_set_f64
+  js_iter_result_get_value
+  js_iter_result_get_value_f64
+  js_iter_result_get_done
   js_typed_feedback_native_call_method_by_id
   js_typed_feedback_native_call_method_apply_by_id
 )

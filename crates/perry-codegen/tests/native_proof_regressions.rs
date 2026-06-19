@@ -3201,6 +3201,46 @@ fn boxed_local_capture_module(name: &str) -> Module {
     )
 }
 
+fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Module {
+    module(
+        name,
+        vec![
+            Stmt::Let {
+                id: 10,
+                name: "cell".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(init),
+            },
+            Stmt::Let {
+                id: 11,
+                name: "writer".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 30,
+                    params: Vec::new(),
+                    return_type: Type::Any,
+                    body: vec![
+                        Stmt::Expr(Expr::LocalSet(10, Box::new(replacement))),
+                        Stmt::Return(Some(local(10))),
+                    ],
+                    captures: vec![10],
+                    mutable_captures: vec![10],
+                    captures_this: false,
+                    captures_new_target: false,
+                    enclosing_class: None,
+                    is_arrow: false,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                }),
+            },
+            Stmt::Return(Some(local(11))),
+        ],
+    )
+}
+
 fn boxed_param_capture_module(name: &str) -> Module {
     module_with_classes_and_params(
         name,
@@ -3232,7 +3272,7 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
     let module = boxed_local_capture_module("boxed_local_js_value_bits_ir.ts");
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
     let box_alloc = ir
-        .find("call i64 @js_box_alloc")
+        .find("call i64 @js_box_alloc_bits")
         .expect("fixture should allocate a mutable-capture box");
     let first_array_alloc = ir[box_alloc..]
         .find("call i64 @js_array_alloc")
@@ -3261,15 +3301,43 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
         "boxed local reads should load the box pointer as i64:\n{ir}"
     );
     assert!(
-        ir.contains("call void @js_box_set(i64 ") && ir.contains("call double @js_box_get(i64 "),
-        "runtime box helpers should remain i64-pointer helper edges:\n{ir}"
+        ir.contains("call void @js_box_set_bits(i64 ")
+            && ir.contains("call i64 @js_box_get_bits(i64 "),
+        "runtime box helpers should use i64 JSValueBits payload edges:\n{ir}"
+    );
+    for old_helper in [
+        "call i64 @js_box_alloc(double",
+        "call void @js_box_set(i64 ",
+        "call double @js_box_get(i64 ",
+    ] {
+        assert!(
+            !ir.contains(old_helper),
+            "boxed local storage should not use old f64 helper edge {old_helper}:\n{ir}"
+        );
+    }
+    assert!(
+        ir.contains("bitcast double ") && ir.contains(" to i64"),
+        "ordinary lowered JSValue doubles should bitcast to bits at box helper boundaries:\n{ir}"
     );
     assert!(
-        ir.contains("bitcast i64 ")
-            && (ir.contains("call void @js_closure_set_capture_f64")
-                || ir.contains("call i64 @js_closure_alloc_with_captures_singleton")),
-        "closure capture ABI should bitcast only at the double capture-helper edge:\n{ir}"
+        ir.contains("bitcast i64 ") && ir.contains(" to double"),
+        "boxed reads should bitcast JSValueBits back to the lower_expr double ABI:\n{ir}"
     );
+    assert!(
+        ir.contains("call i64 @js_closure_get_capture_bits")
+            && (ir.contains("call void @js_closure_set_capture_bits")
+                || ir.contains("call i64 @js_closure_alloc_with_captures_singleton")),
+        "generated boxed capture traffic should use exact i64 closure capture slots:\n{ir}"
+    );
+    for old_helper in [
+        "call void @js_closure_set_capture_f64",
+        "call double @js_closure_get_capture_f64",
+    ] {
+        assert!(
+            !ir.contains(old_helper),
+            "generated boxed capture traffic should not use old f64 helper edge {old_helper}:\n{ir}"
+        );
+    }
 }
 
 #[test]
@@ -3277,7 +3345,7 @@ fn boxed_param_slot_uses_i64_js_value_bits_until_helper_edges() {
     let module = boxed_param_capture_module("boxed_param_js_value_bits_ir.ts");
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
     let box_alloc = ir
-        .find("call i64 @js_box_alloc(double %arg20)")
+        .find("call i64 @js_box_alloc_bits(i64 ")
         .expect("fixture should allocate a mutable-capture param box");
     let store_i64 = ir[box_alloc..]
         .find("store i64 ")
@@ -3287,12 +3355,98 @@ fn boxed_param_slot_uses_i64_js_value_bits_until_helper_edges() {
 
     assert!(
         ir[..box_alloc].contains(" = alloca i64"),
-        "boxed param should allocate an i64 slot before js_box_alloc:\n{ir}"
+        "boxed param should allocate an i64 slot before js_box_alloc_bits:\n{ir}"
     );
     assert!(
         !param_slot.contains("store double ") && !param_slot.contains("bitcast i64"),
         "boxed param slot setup must not materialize the box pointer as double:\n{param_slot}\n\n{ir}"
     );
+    assert!(
+        ir[..box_alloc].contains("bitcast double %arg20 to i64"),
+        "boxed param should convert the incoming JSValue ABI double to bits before allocation:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_box_alloc(double"),
+        "boxed param allocation should not use old f64 payload helper:\n{ir}"
+    );
+}
+
+#[test]
+fn boxed_jsvalue_storage_uses_bits_helpers_for_strings_objects_and_tags() {
+    let short_string_expr = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::String("a".to_string())),
+        right: Box::new(Expr::String("b".to_string())),
+    };
+    let cases = [
+        (
+            "heap_string",
+            boxed_local_storage_module(
+                "boxed_heap_string_bits.ts",
+                Expr::String("captured".to_string()),
+                Expr::String("replacement".to_string()),
+            ),
+            "js_string_from_bytes",
+        ),
+        (
+            "short_string_candidate",
+            boxed_local_storage_module(
+                "boxed_short_string_bits.ts",
+                short_string_expr.clone(),
+                short_string_expr,
+            ),
+            "js_string_concat_box",
+        ),
+        (
+            "object",
+            boxed_local_storage_module(
+                "boxed_object_bits.ts",
+                Expr::Object(vec![(
+                    "kind".to_string(),
+                    Expr::String("object".to_string()),
+                )]),
+                Expr::Object(vec![("next".to_string(), Expr::Bool(true))]),
+            ),
+            "js_object_alloc",
+        ),
+        (
+            "tagged_primitive",
+            boxed_local_storage_module(
+                "boxed_tagged_primitive_bits.ts",
+                Expr::Null,
+                Expr::Bool(true),
+            ),
+            "bitcast double 0x7FFC000000000002 to i64",
+        ),
+    ];
+
+    for (label, module, marker) in cases {
+        let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+        assert!(
+            ir.contains(marker),
+            "fixture {label} should exercise marker {marker}:\n{ir}"
+        );
+        for helper in [
+            "call i64 @js_box_alloc_bits(i64 ",
+            "call void @js_box_set_bits(i64 ",
+            "call i64 @js_box_get_bits(i64 ",
+        ] {
+            assert!(
+                ir.contains(helper),
+                "boxed {label} storage should use bits helper {helper}:\n{ir}"
+            );
+        }
+        for old_helper in [
+            "call i64 @js_box_alloc(double",
+            "call void @js_box_set(i64 ",
+            "call double @js_box_get(i64 ",
+        ] {
+            assert!(
+                !ir.contains(old_helper),
+                "boxed {label} storage should not use old f64 helper edge {old_helper}:\n{ir}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -3368,6 +3522,37 @@ fn compiler_private_async_control_body() -> Vec<Stmt> {
     ]
 }
 
+fn compiler_private_async_iter_result_f64_body() -> Vec<Stmt> {
+    vec![
+        Stmt::Expr(Expr::IterResultSet(Box::new(Expr::Number(41.5)), false)),
+        Stmt::Let {
+            id: 20,
+            name: "__step_value".to_string(),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(Expr::IterResultGetValue),
+        },
+        Stmt::Return(Some(Expr::LocalGet(20))),
+    ]
+}
+
+fn compiler_private_async_iter_result_generic_body() -> Vec<Stmt> {
+    vec![
+        Stmt::Expr(Expr::IterResultSet(
+            Box::new(Expr::String("generic".to_string())),
+            false,
+        )),
+        Stmt::Return(Some(Expr::IterResultGetValue)),
+    ]
+}
+
+fn compiler_private_async_iter_result_annotated_numeric_param_body() -> Vec<Stmt> {
+    vec![
+        Stmt::Expr(Expr::IterResultSet(Box::new(Expr::LocalGet(30)), false)),
+        Stmt::Return(Some(Expr::IterResultGetValue)),
+    ]
+}
+
 #[test]
 fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
     let ir = compile_ir(
@@ -3400,6 +3585,94 @@ fn compiler_private_async_control_cells_use_primitive_heap_boxes() {
         assert!(
             !ir.contains(generic_box_call),
             "compiler-private control cells must not use generic JSValue boxes ({generic_box_call}):\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn compiler_private_async_iter_result_f64_slot_uses_typed_handoff() {
+    let ir = compile_ir(
+        "compiler_private_async_iter_result_f64.ts",
+        compiler_private_async_iter_result_f64_body(),
+    );
+
+    assert!(
+        ir.contains("call double @js_iter_result_set_f64"),
+        "numeric async iter-result payload should use the raw f64 setter:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_iter_result_get_value_f64"),
+        "numeric async iter-result consumer should use the raw f64 getter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_set("),
+        "numeric async iter-result payload should avoid the generic JSValue setter:\n{ir}"
+    );
+}
+
+#[test]
+fn compiler_private_async_iter_result_annotated_numeric_payload_is_coerced_before_raw_slot() {
+    let ir = compile_ir_for_module_with_opts(
+        module_with_classes_and_params(
+            "compiler_private_async_iter_result_annotated_numeric_param.ts",
+            Vec::new(),
+            vec![param(30, "value", Type::Number)],
+            Type::Number,
+            compiler_private_async_iter_result_annotated_numeric_param_body(),
+        ),
+        empty_opts(),
+    )
+    .unwrap();
+
+    assert!(
+        ir.contains("call double @js_number_coerce"),
+        "annotation-only numeric async payloads must be coerced before raw f64 storage:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_iter_result_set_f64"),
+        "coerced numeric async payload should still use the raw f64 scratch slot:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_set("),
+        "coerced numeric async payload should avoid the generic JSValue setter:\n{ir}"
+    );
+}
+
+#[test]
+fn compiler_private_async_iter_result_non_numeric_payload_stays_generic() {
+    let ir = compile_ir(
+        "compiler_private_async_iter_result_generic.ts",
+        compiler_private_async_iter_result_generic_body(),
+    );
+
+    assert!(
+        ir.contains("call double @js_iter_result_set("),
+        "non-numeric async iter-result payload should use the generic JSValue setter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_set_f64"),
+        "non-numeric async iter-result payload must not use the raw f64 setter:\n{ir}"
+    );
+}
+
+#[test]
+fn artifact_records_compiler_private_async_iter_result_f64_handoff() {
+    let artifact = compile_artifact_json(
+        "artifact_compiler_private_async_iter_result_f64.ts",
+        compiler_private_async_iter_result_f64_body(),
+    );
+    let records = artifact["records"].as_array().unwrap();
+    for consumer in [
+        "compiler_private_async_iter_result_set_f64",
+        "compiler_private_async_iter_result_get_f64",
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["consumer"] == consumer
+                    && record["native_rep_name"] == "f64"
+                    && record["llvm_ty"] == "double"
+            }),
+            "expected async iter-result f64 artifact record {consumer}:\n{artifact:#}"
         );
     }
 }
@@ -3815,6 +4088,201 @@ fn typed_i1_numeric_predicate_module() -> Module {
                 type_params: Vec::new(),
                 params: vec![param(3, "x", Type::Number), param(4, "y", Type::Number)],
                 return_type: Type::Boolean,
+                body: vec![Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![local(3), local(4)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+        ],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
+    }
+}
+
+fn typed_i1_i32_predicate_module() -> Module {
+    Module {
+        name: "typed_i1_i32_predicate.ts".to_string(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![
+            Function {
+                id: 1,
+                name: "above_i32".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(1, "a", Type::Int32), param(2, "b", Type::Int32)],
+                return_type: Type::Boolean,
+                body: vec![Stmt::Return(Some(Expr::Compare {
+                    op: CompareOp::Gt,
+                    left: Box::new(local(1)),
+                    right: Box::new(local(2)),
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+            Function {
+                id: 2,
+                name: "caller".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(3, "x", Type::Int32), param(4, "y", Type::Int32)],
+                return_type: Type::Boolean,
+                body: vec![Stmt::Return(Some(Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![local(3), local(4)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }))],
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+        ],
+        init: Vec::new(),
+        exported_native_instances: Vec::new(),
+        exported_func_return_native_instances: Vec::new(),
+        exported_objects: Vec::new(),
+        exported_functions: Vec::new(),
+        widgets: Vec::new(),
+        uses_fetch: false,
+        uses_webassembly: false,
+        extern_funcs: Vec::new(),
+        init_was_unrolled: false,
+        has_top_level_await: false,
+        init_kind: ModuleInitKind::Eager,
+        async_step_closures: std::collections::HashSet::new(),
+        closure_display_names: std::collections::HashMap::new(),
+        closure_source_text: std::collections::HashMap::new(),
+        async_generator_funcs: std::collections::HashSet::new(),
+        gen_param_prologue_len: std::collections::HashMap::new(),
+    }
+}
+
+fn typed_i32_return_module(case: &str) -> Module {
+    let (params, return_type, body) = match case {
+        "positive" => (
+            vec![param(1, "a", Type::Int32), param(2, "b", Type::Int32)],
+            Type::Int32,
+            vec![
+                Stmt::Let {
+                    id: 5,
+                    name: "mixed".to_string(),
+                    ty: Type::Int32,
+                    mutable: false,
+                    init: Some(Expr::Binary {
+                        op: BinaryOp::BitXor,
+                        left: Box::new(local(1)),
+                        right: Box::new(local(2)),
+                    }),
+                },
+                Stmt::Return(Some(Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left: Box::new(local(5)),
+                    right: Box::new(Expr::Integer(7)),
+                })),
+            ],
+        ),
+        "number_param" => (
+            vec![param(1, "a", Type::Number), param(2, "b", Type::Int32)],
+            Type::Int32,
+            vec![Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::BitXor,
+                left: Box::new(local(1)),
+                right: Box::new(local(2)),
+            }))],
+        ),
+        "number_return" => (
+            vec![param(1, "a", Type::Int32), param(2, "b", Type::Int32)],
+            Type::Number,
+            vec![Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::BitXor,
+                left: Box::new(local(1)),
+                right: Box::new(local(2)),
+            }))],
+        ),
+        "unsafe_add" => (
+            vec![param(1, "a", Type::Int32), param(2, "b", Type::Int32)],
+            Type::Int32,
+            vec![Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(1)),
+                right: Box::new(local(2)),
+            }))],
+        ),
+        other => panic!("unknown typed-i32 return fixture: {other}"),
+    };
+
+    Module {
+        name: format!("typed_i32_return_{case}.ts"),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        classes: Vec::new(),
+        interfaces: Vec::new(),
+        type_aliases: Vec::new(),
+        enums: Vec::new(),
+        globals: Vec::new(),
+        functions: vec![
+            Function {
+                id: 1,
+                name: "mix_i32".to_string(),
+                type_params: Vec::new(),
+                params,
+                return_type,
+                body,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+                was_plain_async: false,
+                was_unrolled: false,
+            },
+            Function {
+                id: 2,
+                name: "caller".to_string(),
+                type_params: Vec::new(),
+                params: vec![param(3, "x", Type::Int32), param(4, "y", Type::Int32)],
+                return_type: Type::Int32,
                 body: vec![Stmt::Return(Some(Expr::Call {
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![local(3), local(4)],
@@ -5306,7 +5774,8 @@ fn artifact_records_typed_clone_rejection_reasons() {
         "expected typed-f64 mutable-capture rejection artifact:\n{artifact:#}"
     );
 
-    let artifact = compile_artifact_json_for_module(typed_string_closure_clone_module("capture"));
+    let artifact =
+        compile_artifact_json_for_module(typed_string_closure_clone_module("mutable_capture"));
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -5322,7 +5791,7 @@ fn artifact_records_typed_clone_rejection_reasons() {
                         && notes.iter().any(|note| note == "closure_func_id=302")
                 })
         }),
-        "expected typed-string captured-closure rejection artifact:\n{artifact:#}"
+        "expected typed-string mutable-capture rejection artifact:\n{artifact:#}"
     );
 }
 
@@ -5640,6 +6109,176 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
         }),
         "expected numeric-predicate direct call artifact to record f64 typed signature:\n{artifact:#}"
     );
+}
+
+#[test]
+fn typed_i1_i32_predicate_function_uses_i32_params_and_public_wrapper() {
+    let ir =
+        String::from_utf8(compile_module(&typed_i1_i32_predicate_module(), empty_opts()).unwrap())
+            .unwrap();
+    let public = "perry_fn_typed_i1_i32_predicate_ts__above_i32";
+    let typed = "perry_fn_typed_i1_i32_predicate_ts__above_i32__typed_i1";
+    let generic_body = "perry_fn_typed_i1_i32_predicate_ts__above_i32__generic";
+    let caller = "perry_fn_typed_i1_i32_predicate_ts__caller";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!(
+            "define internal i1 @{typed}(i32 %arg1, i32 %arg2)"
+        )),
+        "Int32 predicate clone should use raw i32 params and i1 return:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains("icmp sgt i32 %arg1, %arg2") && !typed_ir.contains("fcmp "),
+        "Int32 predicate body should stay in native i32/i1 SSA:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i1 @{typed}(i32 ")),
+        "public wrapper should guard/unbox Int32 args before the i1 clone:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public wrapper should retain a generic JSValue fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && caller_ir.contains(&format!("call i1 @{typed}(i32 ")),
+        "direct FuncRef lowering should use the i32 typed-i1 clone after Int32 guards:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(")),
+        "direct caller should retain the generic body fallback on guard failure:\n{caller_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_i1_i32_predicate_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_i1_func_ref_call"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("typed_clone={typed}"))
+                                && text.contains(&format!("generic_body={generic_body}"))
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=i1(i32, ...)->i1")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected Int32 predicate direct call artifact to record i32 typed signature:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i32_return_module("positive"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    const INT32_TAG_I64: &str = "9222809086901354496";
+    let public = "perry_fn_typed_i32_return_positive_ts__mix_i32";
+    let typed = "perry_fn_typed_i32_return_positive_ts__mix_i32__typed_i32";
+    let generic_body = "perry_fn_typed_i32_return_positive_ts__mix_i32__generic";
+    let caller = "perry_fn_typed_i32_return_positive_ts__caller";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!(
+            "define internal i32 @{typed}(i32 %arg1, i32 %arg2)"
+        )),
+        "typed-i32 clone should use raw i32 params and i32 return:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains(" xor i32 %arg1, %arg2")
+            && typed_ir.contains(" or i32 ")
+            && !typed_ir.contains(" fadd ")
+            && !typed_ir.contains(" sitofp "),
+        "typed-i32 body should stay in native i32 SSA:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
+            && wrapper_ir.contains(INT32_TAG_I64),
+        "public wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public wrapper should retain a generic JSValue fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("typed_i32_call.fast")
+            && caller_ir.contains("typed_i32_call.fallback")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
+            && caller_ir.contains(INT32_TAG_I64),
+        "direct FuncRef lowering should use the raw i32 clone after guards and box at the call boundary:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(")),
+        "direct caller should retain the generic body fallback on guard failure:\n{caller_ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call double @{public}(")),
+        "same-module direct caller should not bounce through the public JSValue wrapper:\n{caller_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_i32_function_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_i32_return_module("positive"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_i32_func_ref_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_fn_typed_i32_return_positive_ts__mix_i32__typed_i32",
+                            )
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=i32(i32, ...)->i32")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-i32 direct-call artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i32_return_function_rejects_annotation_only_or_unsafe_shapes() {
+    for case in ["number_param", "number_return", "unsafe_add"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_i32_return_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_i32") && !ir.contains("__generic"),
+            "{case} must stay on the ordinary JSValue ABI:\n{ir}"
+        );
+    }
 }
 
 #[test]
@@ -6259,9 +6898,10 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
     let typed = "perry_closure_typed_f64_closure_abi_ts__300__typed_f64";
     let typed_ir = defined_function_ir_section(&ir, typed);
     assert!(
-        typed_ir.contains("call double @js_closure_get_capture_f64(i64 %this_closure, i32 0)")
+        typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && typed_ir.contains("bitcast i64")
             && typed_ir.contains("call double @js_typed_f64_arg_to_raw"),
-        "typed-f64 captured closure should load immutable numeric capture through the closure handle:\n{typed_ir}"
+        "typed-f64 captured closure should load immutable numeric capture as JSValue bits through the closure handle:\n{typed_ir}"
     );
     assert!(
         ir.contains(&format!("call double @{typed}(i64 ")),
@@ -6462,9 +7102,10 @@ fn typed_i1_closure_clone_accepts_immutable_boolean_capture() {
     let typed = "perry_closure_typed_i1_closure_capture_ts__301__typed_i1";
     let typed_ir = defined_function_ir_section(&ir, typed);
     assert!(
-        typed_ir.contains("call double @js_closure_get_capture_f64(i64 %this_closure, i32 0)")
+        typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && typed_ir.contains("bitcast i64")
             && typed_ir.contains("call i32 @js_typed_i1_arg_to_raw"),
-        "typed-i1 captured closure should load immutable boolean capture through the closure handle:\n{typed_ir}"
+        "typed-i1 captured closure should load immutable boolean capture as JSValue bits through the closure handle:\n{typed_ir}"
     );
     assert!(
         ir.contains(&format!("call i1 @{typed}(i64 ")),
@@ -6582,6 +7223,38 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
 }
 
 #[test]
+fn typed_string_closure_clone_accepts_immutable_string_capture() {
+    let ir = String::from_utf8(
+        compile_module(&typed_string_closure_clone_module("capture"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_closure_typed_string_closure_capture_ts__302";
+    let generic_body = "perry_closure_typed_string_closure_capture_ts__302__generic";
+    let typed = "perry_closure_typed_string_closure_capture_ts__302__typed_string";
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let wrapper_ir = function_ir_section(&ir, public);
+    assert!(
+        typed_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && typed_ir.contains("bitcast i64")
+            && typed_ir.contains("call i64 @js_typed_string_arg_to_raw"),
+        "typed-string captured closure should load immutable string capture as guarded JSValue bits through the closure handle:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i64 @js_closure_get_capture_bits(i64 %this_closure, i32 0)")
+            && wrapper_ir.contains("call i32 @js_typed_string_arg_guard"),
+        "public typed-string closure wrapper should guard immutable string captures before entering the raw clone:\n{wrapper_ir}"
+    );
+    assert!(
+        ir.contains("closure_direct.typed_string")
+            && ir.contains("call i64 @js_closure_get_capture_bits")
+            && ir.contains("call i32 @js_typed_string_arg_guard")
+            && ir.contains(&format!("call i64 @{typed}(i64 "))
+            && ir.contains(&format!("call double @{generic_body}(i64 ")),
+        "direct local call should guard string captures, call the raw clone on success, and keep a generic fallback:\n{ir}"
+    );
+}
+
+#[test]
 fn artifact_records_typed_string_closure_clone_selection() {
     let artifact = compile_artifact_json_for_module(typed_string_closure_clone_module("eligible"));
     let records = artifact["records"].as_array().unwrap();
@@ -6615,8 +7288,8 @@ fn artifact_records_typed_string_closure_clone_selection() {
 }
 
 #[test]
-fn typed_string_closure_clone_rejects_any_and_captures() {
-    for case in ["any", "capture", "mutable_capture"] {
+fn typed_string_closure_clone_rejects_any_and_mutable_capture() {
+    for case in ["any", "mutable_capture"] {
         let ir = String::from_utf8(
             compile_module(&typed_string_closure_clone_module(case), empty_opts()).unwrap(),
         )

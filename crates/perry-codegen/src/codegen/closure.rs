@@ -17,9 +17,10 @@ use super::opts::CrossModuleCtx;
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
     lower_typed_f64_body_with_seed_locals, lower_typed_i1_body_with_seed_locals,
-    lower_typed_string_body, typed_f64_closure_capture_reps, typed_f64_closure_name,
-    typed_i1_closure_capture_reps, typed_i1_closure_name, typed_param_reps_for_params,
-    typed_string_closure_name, TypedFunctionTrampolineKind, TypedParamRep,
+    lower_typed_string_body_with_seed_locals, typed_f64_closure_capture_reps,
+    typed_f64_closure_name, typed_i1_closure_capture_reps, typed_i1_closure_name,
+    typed_param_reps_for_params, typed_string_closure_capture_reps, typed_string_closure_name,
+    TypedFunctionTrampolineKind, TypedParamRep,
 };
 
 fn emit_typed_closure_trampoline_fast_value(
@@ -43,6 +44,9 @@ fn emit_typed_closure_trampoline_fast_value(
             typed_args.push((I64, "%this_closure"));
             typed_args.extend(raw_args.iter().map(|arg| (DOUBLE, arg.as_str())));
             blk.call(DOUBLE, typed_name, &typed_args)
+        }
+        TypedFunctionTrampolineKind::I32 => {
+            unreachable!("typed-i32 closure trampolines are not emitted")
         }
         TypedFunctionTrampolineKind::I1 => {
             let raw_args: Vec<String> = arg_names
@@ -84,6 +88,7 @@ fn emit_public_typed_closure_trampoline(
     module_prefix: &str,
     generic_body_name: &str,
     kind: TypedFunctionTrampolineKind,
+    string_capture_count: usize,
 ) -> Result<()> {
     let params = match closure_expr {
         perry_hir::Expr::Closure { params, .. } => params,
@@ -96,11 +101,17 @@ fn emit_public_typed_closure_trampoline(
     let public_name = format!("perry_closure_{}__{}", module_prefix, func_id);
     let typed_name = match kind {
         TypedFunctionTrampolineKind::F64 => typed_f64_closure_name(&public_name),
+        TypedFunctionTrampolineKind::I32 => {
+            unreachable!("typed-i32 closure trampolines are not emitted")
+        }
         TypedFunctionTrampolineKind::I1 => typed_i1_closure_name(&public_name),
         TypedFunctionTrampolineKind::StringRef => typed_string_closure_name(&public_name),
     };
     let arg_reps = match kind {
         TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; params.len()],
+        TypedFunctionTrampolineKind::I32 => {
+            unreachable!("typed-i32 closure trampolines are not emitted")
+        }
         TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::I1; params.len()]),
         TypedFunctionTrampolineKind::StringRef => vec![TypedParamRep::StringRef; params.len()],
@@ -123,6 +134,16 @@ fn emit_public_typed_closure_trampoline(
                 Some(prev) => blk.and(I1, &prev, &ok),
                 None => ok,
             });
+        }
+        if string_capture_count > 0 {
+            if let Some(capture_guard) =
+                emit_typed_string_capture_guard(blk, "%this_closure", string_capture_count)
+            {
+                guard = Some(match guard {
+                    Some(prev) => blk.and(I1, &prev, &capture_guard),
+                    None => capture_guard,
+                });
+            }
         }
     }
 
@@ -179,15 +200,21 @@ fn load_typed_capture(
     rep: TypedParamRep,
 ) -> String {
     let idx = capture_index.to_string();
-    let captured = blk.call(
-        DOUBLE,
-        "js_closure_get_capture_f64",
+    let captured_bits = blk.call(
+        I64,
+        "js_closure_get_capture_bits",
         &[(I64, "%this_closure"), (I32, &idx)],
     );
+    let captured = blk.bitcast_i64_to_double(&captured_bits);
     match rep {
         TypedParamRep::F64 => blk.call(
             DOUBLE,
             "js_typed_f64_arg_to_raw",
+            &[(DOUBLE, captured.as_str())],
+        ),
+        TypedParamRep::I32 => blk.call(
+            I32,
+            "js_typed_i32_arg_to_raw",
             &[(DOUBLE, captured.as_str())],
         ),
         TypedParamRep::I1 => {
@@ -198,10 +225,40 @@ fn load_typed_capture(
             );
             blk.icmp_ne(I32, &raw_i32, "0")
         }
-        TypedParamRep::StringRef => {
-            unreachable!("typed-string closure captures are not emitted")
-        }
+        TypedParamRep::StringRef => blk.call(
+            I64,
+            "js_typed_string_arg_to_raw",
+            &[(DOUBLE, captured.as_str())],
+        ),
     }
+}
+
+pub(crate) fn emit_typed_string_capture_guard(
+    blk: &mut crate::block::LlBlock,
+    closure_handle: &str,
+    capture_count: usize,
+) -> Option<String> {
+    let mut guard: Option<String> = None;
+    for idx in 0..capture_count {
+        let idx = idx.to_string();
+        let captured_bits = blk.call(
+            I64,
+            "js_closure_get_capture_bits",
+            &[(I64, closure_handle), (I32, &idx)],
+        );
+        let captured = blk.bitcast_i64_to_double(&captured_bits);
+        let raw = blk.call(
+            I32,
+            "js_typed_string_arg_guard",
+            &[(DOUBLE, captured.as_str())],
+        );
+        let ok = blk.icmp_ne(I32, &raw, "0");
+        guard = Some(match guard {
+            Some(prev) => blk.and(I1, &prev, &ok),
+            None => ok,
+        });
+    }
+    guard
 }
 
 pub(super) fn compile_typed_string_closure(
@@ -209,6 +266,7 @@ pub(super) fn compile_typed_string_closure(
     func_id: perry_types::FuncId,
     closure_expr: &perry_hir::Expr,
     module_prefix: &str,
+    module_local_types: &HashMap<u32, perry_types::Type>,
 ) -> Result<()> {
     let (params, body) = match closure_expr {
         perry_hir::Expr::Closure { params, body, .. } => (params, body),
@@ -231,7 +289,14 @@ pub(super) fn compile_typed_string_closure(
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
-        lower_typed_string_body(blk, params, body)?
+        let mut seed_locals = HashMap::new();
+        if let Some(captures) = typed_string_closure_capture_reps(closure_expr, module_local_types)
+        {
+            for (idx, (id, rep)) in captures.iter().enumerate() {
+                seed_locals.insert(*id, load_typed_capture(blk, idx, *rep));
+            }
+        }
+        lower_typed_string_body_with_seed_locals(blk, params, body, seed_locals)?
     };
     lf.block_mut(0).unwrap().ret(I64, &value);
     Ok(())
@@ -503,11 +568,12 @@ pub(super) fn compile_closure(
         let blk = lf.block_mut(0).unwrap();
         let slot = blk.alloca(DOUBLE);
         let idx_str = new_target_cap_idx.to_string();
-        let v = blk.call(
-            DOUBLE,
-            "js_closure_get_capture_f64",
+        let bits = blk.call(
+            I64,
+            "js_closure_get_capture_bits",
             &[(I64, "%this_closure"), (I32, &idx_str)],
         );
+        let v = blk.bitcast_i64_to_double(&bits);
         blk.store(DOUBLE, &v, &slot);
         vec![slot]
     } else {
@@ -520,11 +586,12 @@ pub(super) fn compile_closure(
         let slot = blk.alloca(DOUBLE);
         if captures_this {
             let idx_str = this_cap_idx.to_string();
-            let v = blk.call(
-                DOUBLE,
-                "js_closure_get_capture_f64",
+            let bits = blk.call(
+                I64,
+                "js_closure_get_capture_bits",
                 &[(I64, "%this_closure"), (I32, &idx_str)],
             );
+            let v = blk.bitcast_i64_to_double(&bits);
             blk.store(DOUBLE, &v, &slot);
         } else {
             blk.store(DOUBLE, "0.0", &slot);
@@ -681,6 +748,7 @@ pub(super) fn compile_closure(
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
         typed_f64_functions: &cross_module.typed_f64_functions,
+        typed_i32_functions: &cross_module.typed_i32_functions,
         typed_string_functions: &cross_module.typed_string_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
@@ -690,6 +758,7 @@ pub(super) fn compile_closure(
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
+        typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
         was_unrolled: false,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
@@ -763,6 +832,15 @@ pub(super) fn compile_closure(
         llmod.add_raw_global(raw.clone());
     }
     if let Some(kind) = typed_public_trampoline {
+        let string_capture_count = if matches!(kind, TypedFunctionTrampolineKind::StringRef) {
+            cross_module
+                .typed_string_closure_capture_counts
+                .get(&func_id)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        };
         emit_public_typed_closure_trampoline(
             llmod,
             func_id,
@@ -770,6 +848,7 @@ pub(super) fn compile_closure(
             module_prefix,
             &llvm_name,
             kind,
+            string_capture_count,
         )?;
     }
     Ok(())

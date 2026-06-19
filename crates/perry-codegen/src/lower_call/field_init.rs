@@ -258,9 +258,10 @@ pub(crate) fn apply_field_initializers_recursive(
                 let bits = blk.bitcast_double_to_i64(&closure_val);
                 let closure_handle = blk.and(I64, &bits, POINTER_MASK_I64);
                 let idx_str = this_idx.to_string();
+                let this_bits = blk.bitcast_double_to_i64(&this_val);
                 blk.call_void(
-                    "js_closure_set_capture_f64",
-                    &[(I64, &closure_handle), (I32, &idx_str), (DOUBLE, &this_val)],
+                    "js_closure_set_capture_bits",
+                    &[(I64, &closure_handle), (I32, &idx_str), (I64, &this_bits)],
                 );
 
                 // Now store the patched closure as the field. Emit the

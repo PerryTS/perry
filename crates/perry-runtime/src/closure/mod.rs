@@ -18,10 +18,11 @@ pub(crate) use alloc::gc_capture_slot_range;
 pub use alloc::{
     closure_alloc_storage, closure_capture_slots_mut, closure_payload_size, js_closure_alloc,
     js_closure_alloc_singleton, js_closure_alloc_with_captures_singleton,
-    js_closure_get_capture_f64, js_closure_get_capture_ptr, js_closure_get_func,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, note_closure_capture_slot,
-    rebuild_closure_layout_and_barriers, scan_singleton_closure_roots_mut, ClosureHeader,
-    CLOSURE_ALLOC_COUNT, CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
+    js_closure_get_capture_bits, js_closure_get_capture_f64, js_closure_get_capture_ptr,
+    js_closure_get_func, js_closure_set_capture_bits, js_closure_set_capture_f64,
+    js_closure_set_capture_ptr, note_closure_capture_slot, rebuild_closure_layout_and_barriers,
+    scan_singleton_closure_roots_mut, ClosureHeader, CLOSURE_ALLOC_COUNT,
+    CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
 };
 
 pub use registry::{

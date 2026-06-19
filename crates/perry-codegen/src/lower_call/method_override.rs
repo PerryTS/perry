@@ -14,14 +14,7 @@ use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64};
 
 fn typed_i1_method_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
-    let first = reps
-        .first()
-        .map(|rep| match rep {
-            crate::codegen::TypedParamRep::F64 => "f64",
-            crate::codegen::TypedParamRep::I1 => "i1",
-            crate::codegen::TypedParamRep::StringRef => "string",
-        })
-        .unwrap_or("void");
+    let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
     if reps.len() <= 1 {
         format!("typed_signature=i1({first})->i1")
     } else {
@@ -481,6 +474,9 @@ pub(super) fn emit_guarded_direct_method_call(
                     crate::codegen::TypedParamRep::F64 => {
                         ctx.block()
                             .call(DOUBLE, rep.unbox_fn(), &[(DOUBLE, *value)])
+                    }
+                    crate::codegen::TypedParamRep::I32 => {
+                        ctx.block().call(I32, rep.unbox_fn(), &[(DOUBLE, *value)])
                     }
                     crate::codegen::TypedParamRep::I1 => {
                         let raw_i32 = ctx.block().call(I32, rep.unbox_fn(), &[(DOUBLE, *value)]);

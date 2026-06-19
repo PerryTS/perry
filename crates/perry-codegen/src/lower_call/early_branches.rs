@@ -23,14 +23,7 @@ use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64};
 
 fn typed_i1_closure_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
-    let first = reps
-        .first()
-        .map(|rep| match rep {
-            crate::codegen::TypedParamRep::F64 => "f64",
-            crate::codegen::TypedParamRep::I1 => "i1",
-            crate::codegen::TypedParamRep::StringRef => "string",
-        })
-        .unwrap_or("void");
+    let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
     if reps.len() <= 1 {
         format!("typed_signature=i1(i64 closure, {first})->i1")
     } else {
@@ -359,6 +352,18 @@ pub fn try_lower_closure_typed_local_call(
                                     crate::codegen::TypedParamRep::F64 => {
                                         crate::type_analysis::is_numeric_expr(ctx, arg)
                                     }
+                                    crate::codegen::TypedParamRep::I32 => {
+                                        matches!(
+                                            crate::type_analysis::static_type_of(ctx, arg),
+                                            Some(HirType::Int32)
+                                        ) || matches!(
+                                            arg,
+                                            Expr::Integer(n)
+                                                if (i64::from(i32::MIN)
+                                                    ..=i64::from(i32::MAX))
+                                                    .contains(n)
+                                        )
+                                    }
                                     crate::codegen::TypedParamRep::I1 => {
                                         crate::type_analysis::is_bool_expr(ctx, arg)
                                     }
@@ -479,6 +484,25 @@ pub fn try_lower_closure_typed_local_call(
                                 None => ok,
                             });
                         }
+                        let capture_count = ctx
+                            .typed_string_closure_capture_counts
+                            .get(&func_id)
+                            .copied()
+                            .unwrap_or(0);
+                        if capture_count > 0 {
+                            if let Some(capture_guard) =
+                                crate::codegen::emit_typed_string_capture_guard(
+                                    ctx.block(),
+                                    &closure_handle,
+                                    capture_count,
+                                )
+                            {
+                                typed_guard = Some(match typed_guard {
+                                    Some(prev) => ctx.block().and(I1, &prev, &capture_guard),
+                                    None => capture_guard,
+                                });
+                            }
+                        }
 
                         let typed_idx = ctx.new_block("closure_direct.typed_string");
                         let generic_idx = ctx.new_block("closure_direct.generic");
@@ -592,6 +616,11 @@ pub fn try_lower_closure_typed_local_call(
                             typed_args_storage.push(match rep {
                                 crate::codegen::TypedParamRep::F64 => ctx.block().call(
                                     DOUBLE,
+                                    rep.unbox_fn(),
+                                    &[(DOUBLE, value.as_str())],
+                                ),
+                                crate::codegen::TypedParamRep::I32 => ctx.block().call(
+                                    I32,
                                     rep.unbox_fn(),
                                     &[(DOUBLE, value.as_str())],
                                 ),

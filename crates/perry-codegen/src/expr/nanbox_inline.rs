@@ -2,7 +2,7 @@
 //! #1098). Pure move — no logic changes.
 
 use crate::block::LlBlock;
-use crate::nanbox::{BIGINT_TAG_I64, POINTER_TAG_I64, STRING_TAG_I64};
+use crate::nanbox::{BIGINT_TAG_I64, INT32_TAG_I64, POINTER_TAG_I64, STRING_TAG_I64};
 use crate::types::{I1, I32, I64};
 
 /// Inline NaN-box of a raw heap pointer with `POINTER_TAG`.
@@ -45,5 +45,13 @@ pub(crate) fn i32_bool_to_nanbox(blk: &mut LlBlock, i32_val: &str) -> String {
         crate::nanbox::TAG_TRUE_I64,
         crate::nanbox::TAG_FALSE_I64,
     );
+    blk.bitcast_i64_to_double(&tagged)
+}
+
+/// Inline NaN-box of a raw signed i32. The low 32 payload bits are interpreted
+/// as `u32`, matching `JSValue::int32` in the runtime.
+pub(crate) fn i32_to_nanbox(blk: &mut LlBlock, i32_val: &str) -> String {
+    let payload = blk.zext(I32, i32_val, I64);
+    let tagged = blk.or(I64, &payload, INT32_TAG_I64);
     blk.bitcast_i64_to_double(&tagged)
 }

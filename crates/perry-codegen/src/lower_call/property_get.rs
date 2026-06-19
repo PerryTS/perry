@@ -2095,6 +2095,18 @@ pub fn try_lower_property_get_method_call(
                                     crate::codegen::TypedParamRep::F64 => {
                                         crate::type_analysis::is_numeric_expr(ctx, arg)
                                     }
+                                    crate::codegen::TypedParamRep::I32 => {
+                                        matches!(
+                                            crate::type_analysis::static_type_of(ctx, arg),
+                                            Some(perry_types::Type::Int32)
+                                        ) || matches!(
+                                            arg,
+                                            Expr::Integer(n)
+                                                if (i64::from(i32::MIN)
+                                                    ..=i64::from(i32::MAX))
+                                                    .contains(n)
+                                        )
+                                    }
                                     crate::codegen::TypedParamRep::I1 => {
                                         crate::type_analysis::is_bool_expr(ctx, arg)
                                     }

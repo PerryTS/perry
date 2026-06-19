@@ -86,6 +86,40 @@ pub extern "C" fn js_typed_f64_arg_to_raw(value: f64) -> f64 {
     crate::builtins::js_number_coerce(value)
 }
 
+/// Guard for internal typed-i32 Perry function clones.
+///
+/// This is intentionally non-throwing. Tagged JS int32 values are accepted
+/// directly; plain JS numbers are accepted only when they are finite, integral,
+/// and in the signed 32-bit range. Everything else must use the generic
+/// JSValue body.
+#[no_mangle]
+pub extern "C" fn js_typed_i32_arg_guard(value: f64) -> i32 {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_int32() {
+        return 1;
+    }
+    if !js_value.is_number() {
+        return 0;
+    }
+    let number = js_value.as_number();
+    (number.is_finite()
+        && number.fract() == 0.0
+        && number >= i32::MIN as f64
+        && number <= i32::MAX as f64) as i32
+}
+
+/// Convert an already-guarded JS number/int32 argument to the raw i32 ABI used
+/// by internal typed-i32 parameter slots.
+#[no_mangle]
+pub extern "C" fn js_typed_i32_arg_to_raw(value: f64) -> i32 {
+    let js_value = JSValue::from_bits(value.to_bits());
+    if js_value.is_int32() {
+        js_value.as_int32()
+    } else {
+        js_value.as_number() as i32
+    }
+}
+
 /// Guard for internal typed-i1 Perry function clones.
 ///
 /// This deliberately accepts only the exact JS boolean singleton tags. Truthy
@@ -130,6 +164,10 @@ pub extern "C" fn js_typed_string_arg_to_raw(value: f64) -> i64 {
 static KEEP_JS_TYPED_F64_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_f64_arg_guard;
 #[used]
 static KEEP_JS_TYPED_F64_ARG_TO_RAW: extern "C" fn(f64) -> f64 = js_typed_f64_arg_to_raw;
+#[used]
+static KEEP_JS_TYPED_I32_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_i32_arg_guard;
+#[used]
+static KEEP_JS_TYPED_I32_ARG_TO_RAW: extern "C" fn(f64) -> i32 = js_typed_i32_arg_to_raw;
 #[used]
 static KEEP_JS_TYPED_I1_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_i1_arg_guard;
 #[used]
@@ -347,6 +385,25 @@ mod tests {
         let s = crate::string::js_string_from_bytes(b"no".as_ptr(), 2);
         let string = f64::from_bits(JSValue::string_ptr(s).bits());
         assert_eq!(js_typed_f64_arg_guard(string), 0);
+    }
+
+    #[test]
+    fn typed_i32_arg_guard_is_non_throwing_and_int32_only() {
+        let tagged = f64::from_bits(crate::value::JSValue::int32(-7).bits());
+        assert_eq!(js_typed_i32_arg_guard(tagged), 1);
+        assert_eq!(js_typed_i32_arg_to_raw(tagged), -7);
+
+        assert_eq!(js_typed_i32_arg_guard(12.0), 1);
+        assert_eq!(js_typed_i32_arg_to_raw(12.0), 12);
+        assert_eq!(js_typed_i32_arg_guard(12.5), 0);
+        assert_eq!(js_typed_i32_arg_guard(f64::NAN), 0);
+        assert_eq!(js_typed_i32_arg_guard(i32::MAX as f64 + 1.0), 0);
+        assert_eq!(js_typed_i32_arg_guard(i32::MIN as f64 - 1.0), 0);
+        assert_eq!(js_typed_i32_arg_guard(f64::from_bits(TAG_TRUE)), 0);
+
+        let s = crate::string::js_string_from_bytes(b"no".as_ptr(), 2);
+        let string = f64::from_bits(JSValue::string_ptr(s).bits());
+        assert_eq!(js_typed_i32_arg_guard(string), 0);
     }
 
     #[test]

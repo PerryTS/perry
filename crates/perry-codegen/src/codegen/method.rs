@@ -42,6 +42,9 @@ fn emit_typed_method_trampoline_fast_value(
                 raw_args.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
             blk.call(DOUBLE, typed_name, &typed_args)
         }
+        TypedFunctionTrampolineKind::I32 => {
+            unreachable!("typed-i32 method trampolines are not emitted")
+        }
         TypedFunctionTrampolineKind::I1 => {
             let raw_args: Vec<String> = arg_names
                 .iter()
@@ -72,6 +75,9 @@ fn emit_public_typed_method_trampoline(
 ) {
     let typed_name = match kind {
         TypedFunctionTrampolineKind::F64 => typed_f64_method_name(public_name),
+        TypedFunctionTrampolineKind::I32 => {
+            unreachable!("typed-i32 method trampolines are not emitted")
+        }
         TypedFunctionTrampolineKind::I1 => typed_i1_method_name(public_name),
         TypedFunctionTrampolineKind::StringRef => {
             unreachable!("typed-string method trampolines are not emitted")
@@ -79,6 +85,9 @@ fn emit_public_typed_method_trampoline(
     };
     let arg_reps = match kind {
         TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; method.params.len()],
+        TypedFunctionTrampolineKind::I32 => {
+            unreachable!("typed-i32 method trampolines are not emitted")
+        }
         TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(&method.params)
             .unwrap_or_else(|| vec![TypedParamRep::I1; method.params.len()]),
         TypedFunctionTrampolineKind::StringRef => {
@@ -427,6 +436,7 @@ pub(super) fn compile_method(
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
         typed_f64_functions: &cross_module.typed_f64_functions,
+        typed_i32_functions: &cross_module.typed_i32_functions,
         typed_string_functions: &cross_module.typed_string_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
@@ -436,6 +446,7 @@ pub(super) fn compile_method(
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
+        typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
         was_unrolled: method.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),
@@ -1085,6 +1096,7 @@ pub(super) fn compile_static_method(
         integer_returning_functions: &cross_module.returns_int_functions,
         i32_identity_functions: &cross_module.i32_identity_functions,
         typed_f64_functions: &cross_module.typed_f64_functions,
+        typed_i32_functions: &cross_module.typed_i32_functions,
         typed_string_functions: &cross_module.typed_string_functions,
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
@@ -1094,6 +1106,7 @@ pub(super) fn compile_static_method(
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,
+        typed_string_closure_capture_counts: &cross_module.typed_string_closure_capture_counts,
         was_unrolled: f.was_unrolled,
         ic_site_counter: ic_base,
         ic_globals: Vec::new(),

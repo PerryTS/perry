@@ -1088,9 +1088,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .clone()
                     .ok_or_else(|| anyhow!("ArrayUnshift captured but no current_closure_ptr"))?;
                 let idx_str = capture_idx.to_string();
+                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
                 ctx.block().call_void(
-                    "js_closure_set_capture_f64",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (DOUBLE, &new_box)],
+                    "js_closure_set_capture_bits",
+                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
             } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                 ctx.block().store(DOUBLE, &new_box, &slot);

@@ -553,7 +553,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // Issue #569: pre-allocate slot+box for hoisted FnDecl ids and any
         // function-body let/const captured by a hoisted closure. Each id
         // gets an alloca'd entry-block slot whose value is a pointer to a
-        // `js_box_alloc(undefined)` heap cell. Subsequent `Stmt::Let`s for
+        // `js_box_alloc_bits(undefined_bits)` heap cell. Subsequent `Stmt::Let`s for
         // these ids skip the allocation and only `js_box_set` the init
         // value. `LocalGet` / `LocalSet` / `Update` already route through
         // the box because the id is in `ctx.boxed_vars`.
@@ -566,8 +566,6 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                     ctx.boxed_vars.insert(*id);
                     continue;
                 }
-                let undef =
-                    crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let is_i32_control =
                     crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
                 let is_i1_control =
@@ -592,8 +590,13 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         "primitive_i1_control_cell",
                     )
                 } else {
+                    let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
                     (
-                        blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]),
+                        blk.call(
+                            crate::types::I64,
+                            "js_box_alloc_bits",
+                            &[(crate::types::I64, &undef_bits)],
+                        ),
                         "jsvalue_box_cell",
                     )
                 };

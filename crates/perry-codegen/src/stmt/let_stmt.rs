@@ -821,7 +821,7 @@ pub(crate) fn lower_let(
     if ctx.boxed_vars.contains(&id) {
         // Issue #569: if `Stmt::PreallocateBoxes` already alloca'd
         // a slot+box for this id at function-body entry, skip the
-        // fresh alloc and just `js_box_set` the init value into
+        // fresh alloc and just `js_box_set_bits` the init value into
         // the existing box. The slot is already registered in
         // `ctx.locals` from the prealloc pass.
         if ctx.prealloc_boxes.contains(&id) {
@@ -842,18 +842,22 @@ pub(crate) fn lower_let(
                 } else {
                     let init_val =
                         lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
+                    let init_bits = ctx.block().bitcast_double_to_i64(&init_val);
                     ctx.block().call_void(
-                        "js_box_set",
-                        &[(crate::types::I64, &bptr), (DOUBLE, &init_val)],
+                        "js_box_set_bits",
+                        &[(crate::types::I64, &bptr), (I64, &init_bits)],
                     );
                 }
             }
             return Ok(());
         }
-        // Step 1: allocate box with undefined sentinel.
-        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        // Step 1: allocate box with undefined sentinel bits.
         let blk = ctx.block();
-        let box_ptr = blk.call(crate::types::I64, "js_box_alloc", &[(DOUBLE, &undef)]);
+        let box_ptr = blk.call(
+            crate::types::I64,
+            "js_box_alloc_bits",
+            &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
+        );
         // Slot must live in the entry block — closures from sibling
         // branches may capture this id later, and an alloca placed
         // here would not dominate those branches' loads.
@@ -865,7 +869,7 @@ pub(crate) fn lower_let(
         // switch fallthrough, hoisted-`var` use in a minified function)
         // loads an uninitialized slot — LLVM folds that load to `undef`
         // and regalloc substitutes whatever register happens to be live,
-        // handing `js_box_set`/`js_box_get` an arbitrary "plausible"
+        // handing `js_box_set_bits`/`js_box_get_bits` an arbitrary "plausible"
         // pointer. Initialize the slot to TAG_UNDEFINED in the entry
         // block (mirroring the non-boxed path) so skipped-init paths
         // read a defined non-pointer sentinel that the runtime rejects
@@ -882,13 +886,14 @@ pub(crate) fn lower_let(
         if let Some(init_expr) = init {
             let init_val = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
             // Read the box pointer back from the slot and
-            // js_box_set the real init value.
+            // js_box_set_bits the real init value.
             let slot_clone = ctx.locals[&id].clone();
             let blk = ctx.block();
             let bptr = blk.load(I64, &slot_clone);
+            let init_bits = blk.bitcast_double_to_i64(&init_val);
             blk.call_void(
-                "js_box_set",
-                &[(crate::types::I64, &bptr), (DOUBLE, &init_val)],
+                "js_box_set_bits",
+                &[(crate::types::I64, &bptr), (I64, &init_bits)],
             );
         }
         return Ok(());

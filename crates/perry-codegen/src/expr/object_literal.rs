@@ -320,7 +320,7 @@ pub(crate) fn lower_object_literal(
     // path (and saves the keys_array realloc when `getDetailedIdType`-style
     // returns are evaluated 10k×/round). Closure-with-`this` props still
     // need the by-name path because `this_patches` populates them post-build
-    // via `js_closure_set_capture_f64`, which assumes the key is already in
+    // via `js_closure_set_capture_bits`, which assumes the key is already in
     // keys_array — fine here since the shape allocator pre-populates it.
     let any_method_closure = !generator_iterator_object
         && props.iter().any(|(_, v)| {
@@ -507,13 +507,10 @@ pub(crate) fn lower_object_literal(
             let bits = blk.bitcast_double_to_i64(closure_val);
             let closure_handle = blk.and(I64, &bits, POINTER_MASK_I64);
             let idx_str = this_idx.to_string();
+            let obj_bits = blk.bitcast_double_to_i64(&obj_tagged);
             blk.call_void(
-                "js_closure_set_capture_f64",
-                &[
-                    (I64, &closure_handle),
-                    (I32, &idx_str),
-                    (DOUBLE, &obj_tagged),
-                ],
+                "js_closure_set_capture_bits",
+                &[(I64, &closure_handle), (I32, &idx_str), (I64, &obj_bits)],
             );
         }
     }

@@ -271,6 +271,7 @@ pub(crate) fn mt_profile_register() {
 thread_local! {
     static ITER_RESULT_VALUE: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
     static ITER_RESULT_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ITER_RESULT_VALUE_IS_RAW_F64: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub static MT_ITER_RESULT_SET_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -283,6 +284,18 @@ pub extern "C" fn js_iter_result_set(value: f64, done: i32) -> f64 {
     bump(&MT_ITER_RESULT_SET_COUNT);
     ITER_RESULT_VALUE.with(|c| c.set(value));
     ITER_RESULT_DONE.with(|c| c.set(done != 0));
+    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Write a raw numeric iter-result payload. The value half is not a JSValue
+/// root and must not be scanned by GC while the side flag is set.
+#[no_mangle]
+pub extern "C" fn js_iter_result_set_f64(value: f64, done: i32) -> f64 {
+    bump(&MT_ITER_RESULT_SET_COUNT);
+    ITER_RESULT_VALUE.with(|c| c.set(value));
+    ITER_RESULT_DONE.with(|c| c.set(done != 0));
+    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(true));
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -290,6 +303,18 @@ pub extern "C" fn js_iter_result_set(value: f64, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
     ITER_RESULT_VALUE.with(|c| c.get())
+}
+
+/// Read the value half for numeric consumers. Raw-f64 writes return directly;
+/// generic JSValue writes are coerced using ordinary JS number coercion.
+#[no_mangle]
+pub extern "C" fn js_iter_result_get_value_f64() -> f64 {
+    let value = ITER_RESULT_VALUE.with(|c| c.get());
+    if ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
+        value
+    } else {
+        crate::builtins::js_number_coerce(value)
+    }
 }
 
 /// Read the done half as a NaN-boxed bool (TAG_TRUE / TAG_FALSE) so it
@@ -313,10 +338,23 @@ pub fn scan_iter_result_root(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_iter_result_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    ITER_RESULT_VALUE.with(|c| {
-        visitor.visit_cell_f64_slot(c);
-    });
+    if !ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
+        ITER_RESULT_VALUE.with(|c| {
+            visitor.visit_cell_f64_slot(c);
+        });
+    }
 }
+
+#[used]
+static KEEP_JS_ITER_RESULT_SET: extern "C" fn(f64, i32) -> f64 = js_iter_result_set;
+#[used]
+static KEEP_JS_ITER_RESULT_SET_F64: extern "C" fn(f64, i32) -> f64 = js_iter_result_set_f64;
+#[used]
+static KEEP_JS_ITER_RESULT_GET_VALUE: extern "C" fn() -> f64 = js_iter_result_get_value;
+#[used]
+static KEEP_JS_ITER_RESULT_GET_VALUE_F64: extern "C" fn() -> f64 = js_iter_result_get_value_f64;
+#[used]
+static KEEP_JS_ITER_RESULT_GET_DONE: extern "C" fn() -> f64 = js_iter_result_get_done;
 
 /// Promise state
 #[repr(u8)]

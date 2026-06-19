@@ -5,10 +5,20 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline, FnCtx};
+use crate::expr::{i32_bool_to_nanbox, i32_to_nanbox, lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
+
+fn is_i32_expr(ctx: &FnCtx<'_>, arg: &Expr) -> bool {
+    match arg {
+        Expr::Integer(n) => (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n),
+        _ => matches!(
+            crate::type_analysis::static_type_of(ctx, arg),
+            Some(perry_types::Type::Int32)
+        ),
+    }
+}
 
 fn typed_i1_param_reps_match_args(
     ctx: &FnCtx<'_>,
@@ -18,6 +28,7 @@ fn typed_i1_param_reps_match_args(
     reps.len() == args.len()
         && args.iter().zip(reps.iter()).all(|(arg, rep)| match rep {
             crate::codegen::TypedParamRep::F64 => crate::type_analysis::is_numeric_expr(ctx, arg),
+            crate::codegen::TypedParamRep::I32 => is_i32_expr(ctx, arg),
             crate::codegen::TypedParamRep::I1 => crate::type_analysis::is_bool_expr(ctx, arg),
             crate::codegen::TypedParamRep::StringRef => {
                 crate::type_analysis::is_definitely_string_expr(ctx, arg)
@@ -26,18 +37,19 @@ fn typed_i1_param_reps_match_args(
 }
 
 fn typed_i1_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
-    let first = reps
-        .first()
-        .map(|rep| match rep {
-            crate::codegen::TypedParamRep::F64 => "f64",
-            crate::codegen::TypedParamRep::I1 => "i1",
-            crate::codegen::TypedParamRep::StringRef => "string",
-        })
-        .unwrap_or("void");
+    let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
     if reps.len() <= 1 {
         format!("typed_signature=i1({first})->i1")
     } else {
         format!("typed_signature=i1({first}, ...)->i1")
+    }
+}
+
+fn typed_i32_signature_note(arg_count: usize) -> String {
+    match arg_count {
+        0 => "typed_signature=i32()->i32".to_string(),
+        1 => "typed_signature=i32(i32)->i32".to_string(),
+        _ => "typed_signature=i32(i32, ...)->i32".to_string(),
     }
 }
 
@@ -262,6 +274,12 @@ pub fn try_lower_func_ref_call(
         && args
             .iter()
             .all(|arg| crate::type_analysis::is_numeric_expr(ctx, arg));
+    let uses_typed_i32_clone = !resets_this
+        && !has_rest
+        && !ctx.func_synthetic_arguments.contains(fid)
+        && ctx.typed_i32_functions.contains(fid)
+        && declared_count == args.len()
+        && args.iter().all(|arg| is_i32_expr(ctx, arg));
     let uses_typed_string_clone = !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
@@ -355,6 +373,84 @@ pub fn try_lower_func_ref_call(
             vec![format!(
                 "typed_clone={typed_name}; generic_body={generic_body_name}"
             )],
+        );
+        result
+    } else if uses_typed_i32_clone {
+        let typed_name = crate::codegen::typed_i32_function_name(&fname);
+        let generic_body_name = crate::codegen::generic_function_body_name(&fname);
+        let mut guard: Option<String> = None;
+        for value in &lowered {
+            let raw = ctx
+                .block()
+                .call(I32, "js_typed_i32_arg_guard", &[(DOUBLE, value.as_str())]);
+            let ok = ctx.block().icmp_ne(I32, &raw, "0");
+            guard = Some(match guard {
+                Some(prev) => ctx.block().and(I1, &prev, &ok),
+                None => ok,
+            });
+        }
+        let fast_idx = ctx.new_block("typed_i32_call.fast");
+        let fallback_idx = ctx.new_block("typed_i32_call.fallback");
+        let merge_idx = ctx.new_block("typed_i32_call.merge");
+        let fast_label = ctx.block_label(fast_idx);
+        let fallback_label = ctx.block_label(fallback_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        if let Some(guard) = guard {
+            ctx.block().cond_br(&guard, &fast_label, &fallback_label);
+        } else {
+            ctx.block().br(&fast_label);
+        }
+
+        ctx.current_block = fast_idx;
+        let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered.len());
+        for value in &lowered {
+            typed_args_storage.push(ctx.block().call(
+                I32,
+                "js_typed_i32_arg_to_raw",
+                &[(DOUBLE, value.as_str())],
+            ));
+        }
+        let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
+            .iter()
+            .map(|s| (I32, s.as_str()))
+            .collect();
+        let raw_i32 = ctx.block().call(I32, &typed_name, &typed_args);
+        let fast_value = i32_to_nanbox(ctx.block(), &raw_i32);
+        let after_fast = ctx.block().label.clone();
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+
+        ctx.current_block = fallback_idx;
+        let fallback_value = ctx.block().call(DOUBLE, &generic_body_name, &arg_slices);
+        let after_fallback = ctx.block().label.clone();
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+
+        ctx.current_block = merge_idx;
+        let result = ctx.block().phi(
+            DOUBLE,
+            &[
+                (fast_value.as_str(), after_fast.as_str()),
+                (fallback_value.as_str(), after_fallback.as_str()),
+            ],
+        );
+        ctx.record_lowered_value(
+            "Call",
+            None,
+            "typed_i32_func_ref_call",
+            &LoweredValue::js_value(result.clone()),
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![
+                format!("typed_clone={typed_name}; generic_body={generic_body_name}"),
+                typed_i32_signature_note(lowered.len()),
+                "boxed_result_at=direct_call_boundary".to_string(),
+            ],
         );
         result
     } else if uses_typed_string_clone {
@@ -472,6 +568,10 @@ pub fn try_lower_func_ref_call(
                 crate::codegen::TypedParamRep::F64 => {
                     ctx.block()
                         .call(DOUBLE, rep.unbox_fn(), &[(DOUBLE, value.as_str())])
+                }
+                crate::codegen::TypedParamRep::I32 => {
+                    ctx.block()
+                        .call(I32, rep.unbox_fn(), &[(DOUBLE, value.as_str())])
                 }
                 crate::codegen::TypedParamRep::I1 => {
                     let raw_i32 =

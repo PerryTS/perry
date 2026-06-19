@@ -13,6 +13,7 @@ use perry_types::Type;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TypedFunctionTrampolineKind {
     F64,
+    I32,
     I1,
     StringRef,
 }
@@ -20,6 +21,7 @@ pub(crate) enum TypedFunctionTrampolineKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TypedParamRep {
     F64,
+    I32,
     I1,
     StringRef,
 }
@@ -28,6 +30,7 @@ impl TypedParamRep {
     pub(crate) fn llvm_ty(self) -> crate::types::LlvmType {
         match self {
             Self::F64 => crate::types::DOUBLE,
+            Self::I32 => crate::types::I32,
             Self::I1 => crate::types::I1,
             Self::StringRef => crate::types::I64,
         }
@@ -36,6 +39,7 @@ impl TypedParamRep {
     pub(crate) fn guard_fn(self) -> &'static str {
         match self {
             Self::F64 => "js_typed_f64_arg_guard",
+            Self::I32 => "js_typed_i32_arg_guard",
             Self::I1 => "js_typed_i1_arg_guard",
             Self::StringRef => "js_typed_string_arg_guard",
         }
@@ -44,14 +48,26 @@ impl TypedParamRep {
     pub(crate) fn unbox_fn(self) -> &'static str {
         match self {
             Self::F64 => "js_typed_f64_arg_to_raw",
+            Self::I32 => "js_typed_i32_arg_to_raw",
             Self::I1 => "js_typed_i1_arg_to_raw",
             Self::StringRef => "js_typed_string_arg_to_raw",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::F64 => "f64",
+            Self::I32 => "i32",
+            Self::I1 => "i1",
+            Self::StringRef => "string",
         }
     }
 }
 
 pub(crate) fn typed_param_rep_for_type(ty: &Type) -> Option<TypedParamRep> {
-    if is_f64_type(ty) {
+    if matches!(ty, Type::Int32) {
+        Some(TypedParamRep::I32)
+    } else if is_f64_type(ty) {
         Some(TypedParamRep::F64)
     } else if matches!(ty, Type::Boolean) {
         Some(TypedParamRep::I1)
@@ -103,6 +119,24 @@ pub(crate) fn typed_i1_closure_capture_reps(
     Some(reps)
 }
 
+pub(crate) fn typed_string_closure_capture_reps(
+    expr: &Expr,
+    module_local_types: &HashMap<u32, Type>,
+) -> Option<Vec<(u32, TypedParamRep)>> {
+    let Expr::Closure { captures, .. } = expr else {
+        return None;
+    };
+    let mut reps = Vec::with_capacity(captures.len());
+    for id in captures {
+        let ty = module_local_types.get(id)?;
+        if !is_string_type(ty) {
+            return None;
+        }
+        reps.push((*id, TypedParamRep::StringRef));
+    }
+    Some(reps)
+}
+
 pub(crate) fn emit_typed_arg_guard(
     blk: &mut crate::block::LlBlock,
     rep: TypedParamRep,
@@ -124,6 +158,11 @@ pub(crate) fn emit_typed_arg_to_raw(
     match rep {
         TypedParamRep::F64 => blk.call(
             crate::types::DOUBLE,
+            rep.unbox_fn(),
+            &[(crate::types::DOUBLE, arg)],
+        ),
+        TypedParamRep::I32 => blk.call(
+            crate::types::I32,
             rep.unbox_fn(),
             &[(crate::types::DOUBLE, arg)],
         ),
@@ -151,9 +190,11 @@ pub(crate) enum TypedCloneRejectionReason {
     CapturesThis,
     CapturesNewTarget,
     ReturnTypeNotF64,
+    ReturnTypeNotI32,
     ReturnTypeNotI1,
     ReturnTypeNotString,
     ParamNotF64,
+    ParamNotI32,
     ParamNotI1,
     ParamNotString,
     ParamDefault,
@@ -162,6 +203,7 @@ pub(crate) enum TypedCloneRejectionReason {
     BodyNotSingleReturn,
     BodyNotStraightLineTyped,
     ReturnExprNotTypedF64Safe,
+    ReturnExprNotTypedI32Safe,
     ReturnExprNotTypedI1Safe,
     ReturnExprNotTypedStringSafe,
     I64Specialized,
@@ -184,9 +226,11 @@ impl TypedCloneRejectionReason {
             Self::CapturesThis => "captures_this",
             Self::CapturesNewTarget => "captures_new_target",
             Self::ReturnTypeNotF64 => "return_type_not_f64",
+            Self::ReturnTypeNotI32 => "return_type_not_i32",
             Self::ReturnTypeNotI1 => "return_type_not_i1",
             Self::ReturnTypeNotString => "return_type_not_string",
             Self::ParamNotF64 => "param_not_f64",
+            Self::ParamNotI32 => "param_not_i32",
             Self::ParamNotI1 => "param_not_i1",
             Self::ParamNotString => "param_not_string",
             Self::ParamDefault => "param_default",
@@ -195,6 +239,7 @@ impl TypedCloneRejectionReason {
             Self::BodyNotSingleReturn => "body_not_single_return",
             Self::BodyNotStraightLineTyped => "body_not_straight_line_typed",
             Self::ReturnExprNotTypedF64Safe => "return_expr_not_typed_f64_safe",
+            Self::ReturnExprNotTypedI32Safe => "return_expr_not_typed_i32_safe",
             Self::ReturnExprNotTypedI1Safe => "return_expr_not_typed_i1_safe",
             Self::ReturnExprNotTypedStringSafe => "return_expr_not_typed_string_safe",
             Self::I64Specialized => "i64_specialized",
@@ -246,6 +291,10 @@ pub(crate) fn typed_f64_function_name(generic_name: &str) -> String {
     format!("{generic_name}__typed_f64")
 }
 
+pub(crate) fn typed_i32_function_name(generic_name: &str) -> String {
+    format!("{generic_name}__typed_i32")
+}
+
 pub(crate) fn typed_i1_function_name(generic_name: &str) -> String {
     format!("{generic_name}__typed_i1")
 }
@@ -284,6 +333,11 @@ pub(crate) fn is_typed_f64_function_candidate(function: &Function) -> bool {
 }
 
 #[allow(dead_code)]
+pub(crate) fn is_typed_i32_function_candidate(function: &Function) -> bool {
+    typed_i32_function_rejection_reason(function).is_none()
+}
+
+#[allow(dead_code)]
 pub(crate) fn is_typed_i1_function_candidate(function: &Function) -> bool {
     typed_i1_function_rejection_reason_impl(function).is_none()
 }
@@ -307,6 +361,12 @@ pub(crate) fn typed_f64_function_rejection_reason(
     function: &Function,
 ) -> Option<TypedCloneRejectionReason> {
     typed_f64_callable_rejection_reason(function)
+}
+
+pub(crate) fn typed_i32_function_rejection_reason(
+    function: &Function,
+) -> Option<TypedCloneRejectionReason> {
+    typed_i32_function_rejection_reason_impl(function)
 }
 
 pub(crate) fn typed_i1_function_rejection_reason(
@@ -410,7 +470,7 @@ pub(crate) fn typed_f64_closure_rejection_reason_with_types(
     if *captures_new_target {
         return Some(TypedCloneRejectionReason::CapturesNewTarget);
     }
-    if captures.iter().any(|id| mutable_captures.contains(id)) {
+    if !mutable_captures.is_empty() || captures.iter().any(|id| mutable_captures.contains(id)) {
         return Some(TypedCloneRejectionReason::Captures);
     }
 
@@ -519,7 +579,7 @@ pub(crate) fn typed_string_closure_rejection_reason(
 
 pub(crate) fn typed_string_closure_rejection_reason_with_types(
     expr: &Expr,
-    _module_local_types: &HashMap<u32, Type>,
+    module_local_types: &HashMap<u32, Type>,
 ) -> Option<TypedCloneRejectionReason> {
     let Expr::Closure {
         params,
@@ -544,7 +604,7 @@ pub(crate) fn typed_string_closure_rejection_reason_with_types(
     if *captures_new_target {
         return Some(TypedCloneRejectionReason::CapturesNewTarget);
     }
-    if !captures.is_empty() || !mutable_captures.is_empty() {
+    if captures.iter().any(|id| mutable_captures.contains(id)) {
         return Some(TypedCloneRejectionReason::Captures);
     }
 
@@ -563,6 +623,12 @@ pub(crate) fn typed_string_closure_rejection_reason_with_types(
             return Some(TypedCloneRejectionReason::ParamNotString);
         }
         locals.insert(param.id);
+    }
+    let Some(capture_reps) = typed_string_closure_capture_reps(expr, module_local_types) else {
+        return Some(TypedCloneRejectionReason::Captures);
+    };
+    for (capture_id, _) in capture_reps {
+        locals.insert(capture_id);
     }
 
     typed_string_body_rejection_reason(body, locals)
@@ -601,6 +667,39 @@ fn typed_i1_function_rejection_reason_impl(
     typed_i1_body_rejection_reason(&function.body, locals)
 }
 
+fn typed_i32_function_rejection_reason_impl(
+    function: &Function,
+) -> Option<TypedCloneRejectionReason> {
+    if function.is_async || function.is_generator || function.was_plain_async {
+        return Some(TypedCloneRejectionReason::AsyncOrGenerator);
+    }
+    if !function.captures.is_empty() {
+        return Some(TypedCloneRejectionReason::Captures);
+    }
+    if !matches!(function.return_type, Type::Int32) {
+        return Some(TypedCloneRejectionReason::ReturnTypeNotI32);
+    }
+
+    let mut locals = HashMap::new();
+    for param in &function.params {
+        if param.default.is_some() {
+            return Some(TypedCloneRejectionReason::ParamDefault);
+        }
+        if param.is_rest {
+            return Some(TypedCloneRejectionReason::RestParam);
+        }
+        if param.arguments_object.is_some() {
+            return Some(TypedCloneRejectionReason::ArgumentsObject);
+        }
+        if !matches!(param.ty, Type::Int32) {
+            return Some(TypedCloneRejectionReason::ParamNotI32);
+        }
+        locals.insert(param.id, TypedParamRep::I32);
+    }
+
+    typed_i32_body_rejection_reason(&function.body, locals)
+}
+
 fn typed_f64_callable_rejection_reason(function: &Function) -> Option<TypedCloneRejectionReason> {
     if function.is_async || function.is_generator || function.was_plain_async {
         return Some(TypedCloneRejectionReason::AsyncOrGenerator);
@@ -633,11 +732,27 @@ fn typed_f64_callable_rejection_reason(function: &Function) -> Option<TypedClone
 }
 
 fn is_f64_type(ty: &Type) -> bool {
+    matches!(ty, Type::Number)
+}
+
+fn is_numeric_typed_type(ty: &Type) -> bool {
     matches!(ty, Type::Number | Type::Int32)
 }
 
 fn is_string_type(ty: &Type) -> bool {
     matches!(ty, Type::String | Type::StringLiteral(_))
+}
+
+fn typed_rep_for_declared_numeric_type(ty: &Type) -> Option<TypedParamRep> {
+    match ty {
+        Type::Number => Some(TypedParamRep::F64),
+        Type::Int32 => Some(TypedParamRep::I32),
+        _ => None,
+    }
+}
+
+fn integer_literal_fits_i32(n: i64) -> bool {
+    (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&n)
 }
 
 fn typed_receiver_own_field_index(
@@ -850,6 +965,34 @@ fn typed_f64_body_rejection_reason(
     }
 }
 
+fn typed_i32_body_rejection_reason(
+    body: &[Stmt],
+    mut locals: HashMap<u32, TypedParamRep>,
+) -> Option<TypedCloneRejectionReason> {
+    let Some((last, prefix)) = body.split_last() else {
+        return Some(TypedCloneRejectionReason::BodyNotSingleReturn);
+    };
+    for stmt in prefix {
+        match stmt {
+            Stmt::Let {
+                id,
+                ty: Type::Int32,
+                mutable: false,
+                init: Some(expr),
+                ..
+            } if expr_is_typed_i32_safe(expr, &locals) => {
+                locals.insert(*id, TypedParamRep::I32);
+            }
+            _ => return Some(TypedCloneRejectionReason::BodyNotStraightLineTyped),
+        }
+    }
+    match last {
+        Stmt::Return(Some(expr)) if expr_is_typed_i32_safe(expr, &locals) => None,
+        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI32Safe),
+        _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
+    }
+}
+
 fn typed_i1_body_rejection_reason(
     body: &[Stmt],
     mut locals: HashMap<u32, TypedParamRep>,
@@ -874,8 +1017,8 @@ fn typed_i1_body_rejection_reason(
                 mutable: false,
                 init: Some(expr),
                 ..
-            } if is_f64_type(ty) && expr_is_typed_f64_safe(expr, &locals) => {
-                locals.insert(*id, TypedParamRep::F64);
+            } if is_numeric_typed_type(ty) && expr_is_typed_f64_safe(expr, &locals) => {
+                locals.insert(*id, typed_rep_for_declared_numeric_type(ty).unwrap());
             }
             _ => return Some(TypedCloneRejectionReason::BodyNotStraightLineTyped),
         }
@@ -918,7 +1061,10 @@ fn typed_string_body_rejection_reason(
 fn expr_is_typed_f64_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
-        Expr::LocalGet(id) => matches!(locals.get(id), Some(TypedParamRep::F64)),
+        Expr::LocalGet(id) => matches!(
+            locals.get(id),
+            Some(TypedParamRep::F64 | TypedParamRep::I32)
+        ),
         Expr::Unary { op, operand } => {
             matches!(op, UnaryOp::Pos | UnaryOp::Neg) && expr_is_typed_f64_safe(operand, locals)
         }
@@ -928,6 +1074,29 @@ fn expr_is_typed_f64_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> 
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
             ) && expr_is_typed_f64_safe(left, locals)
                 && expr_is_typed_f64_safe(right, locals)
+        }
+        _ => false,
+    }
+}
+
+fn expr_is_typed_i32_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> bool {
+    match expr {
+        Expr::Integer(n) => integer_literal_fits_i32(*n),
+        Expr::LocalGet(id) => matches!(locals.get(id), Some(TypedParamRep::I32)),
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            operand,
+        } => expr_is_typed_i32_safe(operand, locals),
+        Expr::Binary { op, left, right } => {
+            matches!(
+                op,
+                BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            ) && expr_is_typed_i32_safe(left, locals)
+                && expr_is_typed_i32_safe(right, locals)
         }
         _ => false,
     }
@@ -971,28 +1140,36 @@ fn lower_typed_f64_expr_with_env(
     blk: &mut crate::block::LlBlock,
     expr: &Expr,
     locals: &HashMap<u32, String>,
+    reps: &HashMap<u32, TypedParamRep>,
 ) -> anyhow::Result<String> {
     match expr {
         Expr::Number(n) => Ok(crate::nanbox::double_literal(*n)),
         Expr::Integer(n) => Ok(format!("{}.0", *n)),
-        Expr::LocalGet(id) => Ok(locals
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| format!("%arg{id}"))),
+        Expr::LocalGet(id) => {
+            let value = locals
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| format!("%arg{id}"));
+            if matches!(reps.get(id), Some(TypedParamRep::I32)) {
+                Ok(blk.sitofp(crate::types::I32, &value, crate::types::DOUBLE))
+            } else {
+                Ok(value)
+            }
+        }
         Expr::Unary {
             op: UnaryOp::Pos,
             operand,
-        } => lower_typed_f64_expr_with_env(blk, operand, locals),
+        } => lower_typed_f64_expr_with_env(blk, operand, locals, reps),
         Expr::Unary {
             op: UnaryOp::Neg,
             operand,
         } => {
-            let v = lower_typed_f64_expr_with_env(blk, operand, locals)?;
+            let v = lower_typed_f64_expr_with_env(blk, operand, locals, reps)?;
             Ok(blk.fneg(&v))
         }
         Expr::Binary { op, left, right } => {
-            let l = lower_typed_f64_expr_with_env(blk, left, locals)?;
-            let r = lower_typed_f64_expr_with_env(blk, right, locals)?;
+            let l = lower_typed_f64_expr_with_env(blk, left, locals, reps)?;
+            let r = lower_typed_f64_expr_with_env(blk, right, locals, reps)?;
             Ok(match op {
                 BinaryOp::Add => blk.fadd(&l, &r),
                 BinaryOp::Sub => blk.fsub(&l, &r),
@@ -1006,6 +1183,48 @@ fn lower_typed_f64_expr_with_env(
         }
         _ => anyhow::bail!(
             "typed-f64 clone cannot lower expression kind {}",
+            crate::expr::variant_name(expr)
+        ),
+    }
+}
+
+fn lower_typed_i32_expr_with_env(
+    blk: &mut crate::block::LlBlock,
+    expr: &Expr,
+    locals: &HashMap<u32, String>,
+) -> anyhow::Result<String> {
+    match expr {
+        Expr::Integer(n) if integer_literal_fits_i32(*n) => Ok(n.to_string()),
+        Expr::LocalGet(id) => Ok(locals
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| format!("%arg{id}"))),
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            operand,
+        } => {
+            let v = lower_typed_i32_expr_with_env(blk, operand, locals)?;
+            Ok(blk.xor(crate::types::I32, &v, "-1"))
+        }
+        Expr::Binary { op, left, right } => {
+            let l = lower_typed_i32_expr_with_env(blk, left, locals)?;
+            let r_raw = lower_typed_i32_expr_with_env(blk, right, locals)?;
+            let r = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+                blk.and(crate::types::I32, &r_raw, "31")
+            } else {
+                r_raw
+            };
+            Ok(match op {
+                BinaryOp::BitAnd => blk.and(crate::types::I32, &l, &r),
+                BinaryOp::BitOr => blk.or(crate::types::I32, &l, &r),
+                BinaryOp::BitXor => blk.xor(crate::types::I32, &l, &r),
+                BinaryOp::Shl => blk.shl(crate::types::I32, &l, &r),
+                BinaryOp::Shr => blk.ashr(crate::types::I32, &l, &r),
+                _ => anyhow::bail!("typed-i32 clone cannot lower non-bitwise expression"),
+            })
+        }
+        _ => anyhow::bail!(
+            "typed-i32 clone cannot lower expression kind {}",
             crate::expr::variant_name(expr)
         ),
     }
@@ -1058,8 +1277,24 @@ fn lower_typed_i1_expr_with_env(
                 });
             }
             if expr_is_typed_f64_safe(left, reps) && expr_is_typed_f64_safe(right, reps) {
-                let l = lower_typed_f64_expr_with_env(blk, left, locals)?;
-                let r = lower_typed_f64_expr_with_env(blk, right, locals)?;
+                if expr_is_typed_i32_safe(left, reps) && expr_is_typed_i32_safe(right, reps) {
+                    let l = lower_typed_i32_expr_with_env(blk, left, locals)?;
+                    let r = lower_typed_i32_expr_with_env(blk, right, locals)?;
+                    return Ok(match op {
+                        CompareOp::Eq | CompareOp::LooseEq => {
+                            blk.icmp_eq(crate::types::I32, &l, &r)
+                        }
+                        CompareOp::Ne | CompareOp::LooseNe => {
+                            blk.icmp_ne(crate::types::I32, &l, &r)
+                        }
+                        CompareOp::Lt => blk.icmp_slt(crate::types::I32, &l, &r),
+                        CompareOp::Le => blk.icmp_sle(crate::types::I32, &l, &r),
+                        CompareOp::Gt => blk.icmp_sgt(crate::types::I32, &l, &r),
+                        CompareOp::Ge => blk.icmp_sge(crate::types::I32, &l, &r),
+                    });
+                }
+                let l = lower_typed_f64_expr_with_env(blk, left, locals, reps)?;
+                let r = lower_typed_f64_expr_with_env(blk, right, locals, reps)?;
                 let cond = match op {
                     CompareOp::Eq | CompareOp::LooseEq => "oeq",
                     CompareOp::Ne | CompareOp::LooseNe => "une",
@@ -1101,8 +1336,10 @@ pub(crate) fn lower_typed_f64_body_with_seed_locals(
     body: &[Stmt],
     mut locals: HashMap<u32, String>,
 ) -> anyhow::Result<String> {
+    let mut reps = HashMap::new();
     for param in params {
         locals.insert(param.id, format!("%arg{}", param.id));
+        reps.insert(param.id, TypedParamRep::F64);
     }
     let Some((last, prefix)) = body.split_last() else {
         anyhow::bail!("typed-f64 clone cannot lower empty body");
@@ -1116,14 +1353,15 @@ pub(crate) fn lower_typed_f64_body_with_seed_locals(
                 init: Some(expr),
                 ..
             } if is_f64_type(ty) => {
-                let value = lower_typed_f64_expr_with_env(blk, expr, &locals)?;
+                let value = lower_typed_f64_expr_with_env(blk, expr, &locals, &reps)?;
                 locals.insert(*id, value);
+                reps.insert(*id, TypedParamRep::F64);
             }
             _ => anyhow::bail!("typed-f64 clone cannot lower non-straight-line statement"),
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_f64_expr_with_env(blk, expr, &locals),
+        Stmt::Return(Some(expr)) => lower_typed_f64_expr_with_env(blk, expr, &locals, &reps),
         _ => anyhow::bail!("typed-f64 clone requires a final return value"),
     }
 }
@@ -1136,12 +1374,45 @@ pub(crate) fn lower_typed_f64_body(
     lower_typed_f64_body_with_seed_locals(blk, params, body, HashMap::new())
 }
 
-pub(crate) fn lower_typed_string_body(
-    _blk: &mut crate::block::LlBlock,
+pub(crate) fn lower_typed_i32_body(
+    blk: &mut crate::block::LlBlock,
     params: &[perry_hir::Param],
     body: &[Stmt],
 ) -> anyhow::Result<String> {
     let mut locals = HashMap::new();
+    for param in params {
+        locals.insert(param.id, format!("%arg{}", param.id));
+    }
+    let Some((last, prefix)) = body.split_last() else {
+        anyhow::bail!("typed-i32 clone cannot lower empty body");
+    };
+    for stmt in prefix {
+        match stmt {
+            Stmt::Let {
+                id,
+                ty: Type::Int32,
+                mutable: false,
+                init: Some(expr),
+                ..
+            } => {
+                let value = lower_typed_i32_expr_with_env(blk, expr, &locals)?;
+                locals.insert(*id, value);
+            }
+            _ => anyhow::bail!("typed-i32 clone cannot lower non-straight-line statement"),
+        }
+    }
+    match last {
+        Stmt::Return(Some(expr)) => lower_typed_i32_expr_with_env(blk, expr, &locals),
+        _ => anyhow::bail!("typed-i32 clone requires a final return value"),
+    }
+}
+
+pub(crate) fn lower_typed_string_body_with_seed_locals(
+    _blk: &mut crate::block::LlBlock,
+    params: &[perry_hir::Param],
+    body: &[Stmt],
+    mut locals: HashMap<u32, String>,
+) -> anyhow::Result<String> {
     for param in params {
         locals.insert(param.id, format!("%arg{}", param.id));
     }
@@ -1167,6 +1438,14 @@ pub(crate) fn lower_typed_string_body(
         Stmt::Return(Some(expr)) => lower_typed_string_expr_with_env(expr, &locals),
         _ => anyhow::bail!("typed-string clone requires a final return value"),
     }
+}
+
+pub(crate) fn lower_typed_string_body(
+    blk: &mut crate::block::LlBlock,
+    params: &[perry_hir::Param],
+    body: &[Stmt],
+) -> anyhow::Result<String> {
+    lower_typed_string_body_with_seed_locals(blk, params, body, HashMap::new())
 }
 
 fn lower_typed_f64_receiver_field(blk: &mut crate::block::LlBlock, field_index: u32) -> String {
@@ -1304,9 +1583,20 @@ pub(crate) fn lower_typed_i1_body_with_seed_locals(
                 init: Some(expr),
                 ..
             } if is_f64_type(ty) => {
-                let value = lower_typed_f64_expr_with_env(blk, expr, &locals)?;
+                let value = lower_typed_f64_expr_with_env(blk, expr, &locals, &reps)?;
                 locals.insert(*id, value);
                 reps.insert(*id, TypedParamRep::F64);
+            }
+            Stmt::Let {
+                id,
+                ty: Type::Int32,
+                mutable: false,
+                init: Some(expr),
+                ..
+            } => {
+                let value = lower_typed_i32_expr_with_env(blk, expr, &locals)?;
+                locals.insert(*id, value);
+                reps.insert(*id, TypedParamRep::I32);
             }
             _ => anyhow::bail!("typed-i1 clone cannot lower non-straight-line statement"),
         }

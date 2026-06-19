@@ -137,8 +137,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // - js_closure_alloc(func_ptr, capture_count) -> *mut ClosureHeader
     //     Allocates a closure object pointing at the given function with
     //     space for `capture_count` captured-value slots.
+    // - js_closure_set/get_capture_bits(closure, idx, bits)
+    //     Read/write a captured value's raw JSValueBits at slot `idx`.
     // - js_closure_set/get_capture_f64(closure, idx, value)
-    //     Read/write a captured value (NaN-boxed double) at slot `idx`.
+    //     Compatibility shims over the bits helpers for legacy f64 call sites.
     // - js_closure_call0..call16(closure, args…) -> double
     //     Invoke the closure with N args. The runtime extracts the
     //     function pointer from the closure header and calls it with
@@ -160,6 +162,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         I64,
         &[PTR, I32, PTR],
     );
+    module.declare_function("js_closure_set_capture_bits", VOID, &[I64, I32, I64]);
+    module.declare_function("js_closure_get_capture_bits", I64, &[I64, I32]);
     module.declare_function("js_closure_set_capture_f64", VOID, &[I64, I32, DOUBLE]);
     module.declare_function("js_closure_get_capture_f64", DOUBLE, &[I64, I32]);
     // Issue #493: register a closure body's rest-param arity in the runtime
@@ -862,6 +866,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // See crates/perry-runtime/src/box.rs. These let multiple
     // closures share mutable state (e.g. a counter captured by
     // both inc() and get() in a returned object literal).
+    module.declare_function("js_box_alloc_bits", I64, &[I64]);
+    module.declare_function("js_box_get_bits", I64, &[I64]);
+    module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
     module.declare_function("js_box_alloc", I64, &[DOUBLE]);
     module.declare_function("js_box_get", DOUBLE, &[I64]);
     module.declare_function("js_box_set", VOID, &[I64, DOUBLE]);

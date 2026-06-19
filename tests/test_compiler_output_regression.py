@@ -1251,6 +1251,11 @@ idxset.bounded_numeric_merge.5:
             "js_bool_box_alloc",
             "js_bool_box_get",
             "js_bool_box_set",
+            "js_iter_result_set",
+            "js_iter_result_set_f64",
+            "js_iter_result_get_value",
+            "js_iter_result_get_value_f64",
+            "js_iter_result_get_done",
         ):
             self.assertIn(symbol, guard)
 
