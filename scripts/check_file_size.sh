@@ -329,6 +329,21 @@ crates/perry/src/commands/compile/optimized_libs.rs
 crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs
 crates/perry-hir/src/destructuring/var_decl.rs
 crates/perry-hir/src/lower/expr_new.rs
+# Representation-aware type lowering (PR #5466 / #5462, umbrella #793): the
+# type-lowering tracks grew these files past the gate — the packed-numeric loop
+# versioning + kind inference (loops.rs, hir_facts.rs), the i32/u32/f32/string
+# native collection helpers (map.rs, set.rs), the typed-feedback guards + their
+# anchor/keepalive tests (typed_feedback.rs, typed_feedback/tests.rs), and the
+# lowering-decision artifact reporter (lowering_report.rs). Topical splits (by
+# guard family / collection element type / loop-kind) are reasonable follow-ups,
+# deferred to keep the type-lowering integration focused.
+crates/perry-codegen/src/stmt/loops.rs
+crates/perry-codegen/src/collectors/hir_facts.rs
+crates/perry-runtime/src/map.rs
+crates/perry-runtime/src/set.rs
+crates/perry-runtime/src/typed_feedback.rs
+crates/perry-runtime/src/typed_feedback/tests.rs
+crates/perry/src/commands/compile/lowering_report.rs
 EOF
 )
 
