@@ -197,6 +197,60 @@ pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Stri
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
+/// Read a body `*const StringHeader` losslessly as raw bytes (no UTF-8
+/// validation). Mirrors `string_from_header` but never round-trips through
+/// `str::from_utf8`, so a binary body materialized by `js_response_body_init_ptr`
+/// (a Buffer / Uint8Array / ArrayBuffer copied verbatim into a StringHeader)
+/// keeps every byte instead of being dropped when the bytes aren't valid UTF-8.
+/// Refs #5435. `None` for a null/sub-page pointer (no body).
+pub(crate) unsafe fn body_bytes_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    Some(std::slice::from_raw_parts(data_ptr, len).to_vec())
+}
+
+/// If `value` is a binary body — a typed array, Buffer/Uint8Array, or
+/// ArrayBuffer — return a copy of its raw bytes; `None` for anything else
+/// (strings, stream handles, numbers) so callers fall back to string coercion.
+///
+/// A typed array / buffer is laid out as `BufferHeader` (length at offset 0,
+/// data at offset 8) or `TypedArrayHeader`, NOT `StringHeader` (data at offset
+/// 20). Feeding such a pointer straight to `string_from_header` read the byte
+/// length correctly but the data at the wrong offset — zero-filled padding —
+/// so `new Response(new Uint8Array([1,2,3]))` came back all zeroes (#5435).
+/// Materializing the real bytes here lets the body round-trip byte-for-byte.
+pub(crate) unsafe fn body_value_buffer_bytes(value: f64) -> Option<Vec<u8>> {
+    let bits = value.to_bits();
+    // Buffers / typed arrays are POINTER_TAG (0x7FFD); also accept a raw
+    // untagged heap pointer. STRING_TAG (0x7FFF) is deliberately excluded so a
+    // string body never takes this path.
+    let top = bits >> 48;
+    let addr = if top == 0x7FFD {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+    } else if top == 0 && bits >= 0x10000 {
+        bits as usize
+    } else {
+        return None;
+    };
+    if addr < 0x1000 {
+        return None;
+    }
+    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
+        return perry_runtime::typedarray::typed_array_bytes(ta).map(|b| b.to_vec());
+    }
+    if perry_runtime::buffer::is_registered_buffer(addr) {
+        let ptr = addr as *const perry_runtime::buffer::BufferHeader;
+        let len = (*ptr).length as usize;
+        let data = perry_runtime::buffer::buffer_data(ptr);
+        return Some(std::slice::from_raw_parts(data, len).to_vec());
+    }
+    None
+}
+
 /// Diagnostic: return the number of FETCH_RESPONSES entries.
 /// Useful for detecting response handle leaks in long-running services.
 #[no_mangle]
@@ -1217,10 +1271,13 @@ pub unsafe extern "C" fn js_response_new(
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
-    let body_opt = string_from_header(body_ptr);
+    // Read the body losslessly as raw bytes. A binary body (Buffer /
+    // Uint8Array / ArrayBuffer) is materialized into a StringHeader by
+    // `js_response_body_init_ptr`; reading it via `str::from_utf8` would drop
+    // non-UTF-8 bytes (zero/empty body, #5435), so read the bytes verbatim.
+    let body_opt = body_bytes_from_header(body_ptr);
     let body_present = body_opt.is_some();
-    let body_str = body_opt.unwrap_or_default();
-    let body = body_str.into_bytes();
+    let body = body_opt.unwrap_or_default();
     // NaN / 0.0 are the codegen "no status field" sentinels. Node defaults
     // missing status to 200; any explicit value is truncated toward zero
     // then range-checked against 200..=599 (199.9 → RangeError, 599.9 →

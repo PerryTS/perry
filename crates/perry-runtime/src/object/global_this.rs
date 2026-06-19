@@ -164,16 +164,6 @@ fn global_this_fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::
     crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
 }
 
-fn global_this_body_string_ptr(value: f64) -> *const crate::StringHeader {
-    if matches!(
-        value.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return std::ptr::null();
-    }
-    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
-}
-
 fn global_this_headers_handle_from_value(value: f64) -> f64 {
     if matches!(
         value.to_bits(),
@@ -237,7 +227,19 @@ pub(crate) extern "C" fn global_this_response_thunk(
     body: f64,
     init: f64,
 ) -> f64 {
-    let body_ptr = global_this_body_string_ptr(body);
+    // Route the body through the registered body-init helper (stdlib
+    // `js_response_body_init_ptr`) so a binary body — Buffer / Uint8Array /
+    // ArrayBuffer — copies its raw bytes instead of being stringified to a
+    // zero-filled payload (#5435). String bodies fall back to the ordinary
+    // coercion. Mirrors the Request thunk's body handling above.
+    let body_ptr = if matches!(
+        body.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        std::ptr::null()
+    } else {
+        super::global_fetch::call_global_body_init_ptr(body)
+    };
     let status = global_this_fetch_option(init, b"status");
     let status = if status.to_bits() == crate::value::TAG_UNDEFINED {
         0.0

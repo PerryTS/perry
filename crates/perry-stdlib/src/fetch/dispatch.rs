@@ -30,6 +30,15 @@ use perry_runtime::js_get_string_pointer_unified;
 /// (`c.json`/`c.text`) are unaffected.
 #[no_mangle]
 pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
+    // A binary body — Buffer / Uint8Array / typed array / ArrayBuffer — must
+    // copy its RAW bytes. Such a value is a BufferHeader/TypedArrayHeader
+    // pointer, NOT a StringHeader; passing it straight to `string_from_header`
+    // read the byte length but data at the wrong offset (zero-fill), so the
+    // payload came back all zeroes (#5435). Materialize the bytes into a heap
+    // StringHeader so `js_response_new`'s lossless byte read recovers them.
+    if let Some(bytes) = unsafe { super::body_value_buffer_bytes(value) } {
+        return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
+    }
     // A non-integral or out-of-range value can't be a stream, so skip the
     // registry probe for the common cases.
     if value.is_finite()
