@@ -47,5 +47,7 @@ pub(crate) use infer::{
 };
 pub(crate) use inference_lookup::{ClassInfo, FuncInfo, InferenceLookup};
 pub(crate) use mangle::{generate_specialized_name, mangle_type_args};
+#[cfg(test)]
+pub(crate) use mangle::mangle_type;
 pub(crate) use substitute_expr::{substitute_expr, substitute_stmts};
 pub(crate) use update_call_sites::update_call_sites;
