@@ -18,6 +18,8 @@ use std::collections::HashMap;
 use perry_ffi::{spawn_blocking_with_reactor as spawn_blocking, with_handle_mut, Handle};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use bytes::Bytes;
+
 use crate::plain_client::parse_http_response;
 use crate::{push_event, ClientRequestHandle, PendingHttpEvent};
 
@@ -270,7 +272,7 @@ async fn run_exchange(
     if !parsed.body.is_empty() {
         push_event(PendingHttpEvent::ResponseChunk {
             request_handle,
-            chunk: parsed.body,
+            chunk: Bytes::from(parsed.body),
         });
     }
     push_event(PendingHttpEvent::ResponseEnd { request_handle });

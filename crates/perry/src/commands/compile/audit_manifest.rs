@@ -5,7 +5,7 @@
 //! - `package_name_for_path` — used by the perry-jsruntime refusal diagnostic
 //!   (#499) to attribute a JS-runtime importer back to its owning npm package.
 //! - `write_audit_manifest` / `write_audit_manifest_logging_failures` — emit
-//!   `.perry-cache/audit.json` (#495 behavioral SBOM).
+//!   `<cache_dir>/audit.json` (#495 behavioral SBOM).
 //! - `allowlist_matches` — the host-allowlist pattern matcher for
 //!   `perry.nativeLibrary` / `perry.compilePackages` (#497).
 
@@ -43,7 +43,8 @@ pub(super) fn package_name_for_path(source_path: &str) -> Option<String> {
 }
 
 /// #495: serialize the per-module behavioral SBOM to
-/// `.perry-cache/audit.json` under the current project root. Walks
+/// `<cache_dir>/audit.json` (default
+/// `<project>/node_modules/.cache/perry/audit.json`). Walks
 /// every collected native HIR module (skips JS-runtime modules — they
 /// don't have HIR), groups records by stable canonical-path order
 /// so the JSON is byte-deterministic across builds.
@@ -56,8 +57,8 @@ fn write_audit_manifest(ctx: &CompilationContext) -> std::io::Result<()> {
         let record = perry_hir::audit_module(hir_module, &source);
         manifest.modules.push(record);
     }
-    let dir = ctx.cache_root.join(".perry-cache");
-    fs::create_dir_all(&dir)?;
+    let dir = &ctx.cache_dir;
+    fs::create_dir_all(dir)?;
     let path = dir.join("audit.json");
     let json = serde_json::to_string_pretty(&manifest)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -98,7 +99,7 @@ pub(crate) fn allowlist_matches(name: &str, patterns: &[String]) -> bool {
     false
 }
 
-/// #495 wrapper: emit the behavioral SBOM at `.perry-cache/audit.json`,
+/// #495 wrapper: emit the behavioral SBOM at `<cache_dir>/audit.json`,
 /// best-effort. The SBOM is observational metadata, not a correctness
 /// gate, so an I/O failure becomes a warning and the build continues.
 pub(super) fn write_audit_manifest_logging_failures(
@@ -108,7 +109,7 @@ pub(super) fn write_audit_manifest_logging_failures(
     if let Err(e) = write_audit_manifest(ctx) {
         match format {
             OutputFormat::Text => {
-                eprintln!("warning: failed to write .perry-cache/audit.json: {}", e);
+                eprintln!("warning: failed to write audit.json: {}", e);
             }
             OutputFormat::Json => {}
         }

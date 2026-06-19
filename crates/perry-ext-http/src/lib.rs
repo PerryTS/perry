@@ -96,6 +96,7 @@ mod transport_error;
 mod response_headers;
 use response_headers::build_response_headers_object;
 
+use bytes::Bytes;
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
@@ -140,10 +141,13 @@ pub(crate) enum PendingHttpEvent {
         status_message: String,
         headers: Vec<(String, String)>,
     },
-    /// One streamed body chunk following a `ResponseHead`.
+    /// One streamed body chunk following a `ResponseHead`. Carried as a
+    /// refcounted `Bytes` (reqwest hands `chunk()` out this way) so the
+    /// streaming path stays zero-copy from the receive buffer to the drain
+    /// handler, which only ever borrows it as `&[u8]`.
     ResponseChunk {
         request_handle: Handle,
-        chunk: Vec<u8>,
+        chunk: Bytes,
     },
     /// The streamed body finished — `'end'` on the message, `'close'` on
     /// the request.

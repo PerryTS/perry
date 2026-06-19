@@ -611,7 +611,7 @@ fn stream_write(handle: i64, bytes: &[u8]) {
                 Some(cs) => match cs.write_chunk(bytes) {
                     Ok(()) => {
                         let out = cs.drain();
-                        (!out.is_empty()).then(|| ZlibEvent::Data(handle, out))
+                        (!out.is_empty()).then_some(ZlibEvent::Data(handle, out))
                     }
                     Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
                 },

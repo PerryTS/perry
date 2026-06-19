@@ -87,7 +87,7 @@ pub fn select_linker_command(
             .unwrap_or_else(|| "main_ts".to_string());
         // The entry object is the one that defines the `_main` text symbol.
         // Object files are content-hash-named in the per-module cache
-        // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
+        // (`<cache_dir>/objects/<hash>.o`), so the old filename-stem heuristic
         // silently missed them — the objcopy rename then no-op'd and the link
         // failed with undefined `__perry_user_main`. Query each object's symbol
         // table instead; fall back to the stem match only if `nm` is unavailable.
@@ -289,7 +289,7 @@ pub fn select_linker_command(
                 .unwrap_or_else(|| "main_ts".to_string());
             // The entry object is the one that defines the `_main` text symbol.
             // Object files are content-hash-named in the per-module cache
-            // (`.perry-cache/objects/<hash>.o`), so the old filename-stem heuristic
+            // (`<cache_dir>/objects/<hash>.o`), so the old filename-stem heuristic
             // silently missed them — the objcopy rename then no-op'd and the link
             // failed with undefined `__perry_user_main`. Query each object's symbol
             // table instead; fall back to the stem match only if `nm` is unavailable.

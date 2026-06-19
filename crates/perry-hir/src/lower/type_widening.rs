@@ -15,12 +15,19 @@
 //! be non-numeric trigger widening, so number-typed fast paths for actual
 //! numeric code are untouched (zero-regression requirement).
 
+use crate::analysis::{infer_expr_type, HirTypeEnv};
 use crate::ir::*;
 use perry_types::{LocalId, Type};
 use std::collections::HashSet;
 
+fn type_is_certainly_object_like(ty: &Type) -> bool {
+    ty.is_reference_like()
+        || matches!(ty, Type::Void | Type::Null)
+        || matches!(ty, Type::Union(variants) if variants.iter().all(type_is_certainly_object_like))
+}
+
 /// RHS shapes that can never evaluate to a JS number.
-fn rhs_certainly_object_like(expr: &Expr) -> bool {
+fn rhs_certainly_object_like(expr: &Expr, env: &HirTypeEnv) -> bool {
     matches!(
         expr,
         Expr::This
@@ -33,70 +40,73 @@ fn rhs_certainly_object_like(expr: &Expr) -> bool {
             | Expr::New { .. }
             | Expr::Null
             | Expr::Undefined
-    )
+    ) || type_is_certainly_object_like(&infer_expr_type(expr, env))
 }
 
-/// RHS shapes that are primitives but not numbers (still wrong for a
-/// `Type::Number`-declared slot).
-fn rhs_certainly_string_or_bool(expr: &Expr) -> bool {
-    matches!(expr, Expr::String(_) | Expr::Bool(_))
+/// RHS shapes that are primitives but not JS numbers (still wrong for a
+/// `Type::Number`/`Type::Int32`-declared slot).
+fn rhs_certainly_non_number_primitive(expr: &Expr, env: &HirTypeEnv) -> bool {
+    let ty = infer_expr_type(expr, env);
+    !matches!(ty, Type::Never)
+        && ty.is_definitely_non_number_like()
+        && !type_is_certainly_object_like(&ty)
 }
 
 #[derive(Default)]
 struct WidenSets {
     /// Assigned an object-like value → widen any primitive declared type.
     object_like: HashSet<LocalId>,
-    /// Assigned a string/bool literal → widen a numeric declared type.
-    string_or_bool: HashSet<LocalId>,
+    /// Assigned a primitive that is not a JS number → widen a numeric declared type.
+    non_number_primitive: HashSet<LocalId>,
 }
 
-fn visit_expr(expr: &Expr, out: &mut WidenSets) {
+fn visit_expr(expr: &Expr, out: &mut WidenSets, env: &HirTypeEnv) {
     if let Expr::LocalSet(id, rhs) = expr {
-        if rhs_certainly_object_like(rhs) {
+        if rhs_certainly_object_like(rhs, env) {
             out.object_like.insert(*id);
-        } else if rhs_certainly_string_or_bool(rhs) {
-            out.string_or_bool.insert(*id);
+        } else if rhs_certainly_non_number_primitive(rhs, env) {
+            out.non_number_primitive.insert(*id);
         }
     }
     if let Expr::Closure { params, body, .. } = expr {
         for p in params {
             if let Some(d) = &p.default {
-                visit_expr(d, out);
+                visit_expr(d, out, env);
             }
         }
         for s in body {
-            visit_stmt(s, out);
+            visit_stmt(s, out, env);
         }
         return;
     }
-    crate::walker::walk_expr_children(expr, &mut |child| visit_expr(child, out));
+    crate::walker::walk_expr_children(expr, &mut |child| visit_expr(child, out, env));
 }
 
-fn visit_stmt(stmt: &Stmt, out: &mut WidenSets) {
+fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
     match stmt {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Return(Some(e))
-        | Stmt::Throw(e) => visit_expr(e, out),
+        | Stmt::Throw(e) => visit_expr(e, out, env),
         Stmt::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            visit_expr(condition, out);
+            visit_expr(condition, out, env);
             for s in then_branch {
-                visit_stmt(s, out);
+                visit_stmt(s, out, env);
             }
             if let Some(b) = else_branch {
                 for s in b {
-                    visit_stmt(s, out);
+                    visit_stmt(s, out, env);
                 }
             }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            visit_expr(condition, out);
+            visit_expr(condition, out, env);
             for s in body {
-                visit_stmt(s, out);
+                visit_stmt(s, out, env);
             }
         }
         Stmt::For {
@@ -106,35 +116,35 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets) {
             body,
         } => {
             if let Some(s) = init {
-                visit_stmt(s, out);
+                visit_stmt(s, out, env);
             }
             if let Some(e) = condition {
-                visit_expr(e, out);
+                visit_expr(e, out, env);
             }
             if let Some(e) = update {
-                visit_expr(e, out);
+                visit_expr(e, out, env);
             }
             for s in body {
-                visit_stmt(s, out);
+                visit_stmt(s, out, env);
             }
         }
-        Stmt::Labeled { body, .. } => visit_stmt(body, out),
+        Stmt::Labeled { body, .. } => visit_stmt(body, out, env),
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
             for s in body {
-                visit_stmt(s, out);
+                visit_stmt(s, out, env);
             }
             if let Some(c) = catch {
                 for s in &c.body {
-                    visit_stmt(s, out);
+                    visit_stmt(s, out, env);
                 }
             }
             if let Some(f) = finally {
                 for s in f {
-                    visit_stmt(s, out);
+                    visit_stmt(s, out, env);
                 }
             }
         }
@@ -142,13 +152,13 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets) {
             discriminant,
             cases,
         } => {
-            visit_expr(discriminant, out);
+            visit_expr(discriminant, out, env);
             for c in cases {
                 if let Some(t) = &c.test {
-                    visit_expr(t, out);
+                    visit_expr(t, out, env);
                 }
                 for s in &c.body {
-                    visit_stmt(s, out);
+                    visit_stmt(s, out, env);
                 }
             }
         }
@@ -161,7 +171,7 @@ fn widen_lets_stmt(stmt: &mut Stmt, sets: &WidenSets) {
         Stmt::Let { id, ty, .. } => {
             let widen = match ty {
                 Type::Number | Type::Int32 => {
-                    sets.object_like.contains(id) || sets.string_or_bool.contains(id)
+                    sets.object_like.contains(id) || sets.non_number_primitive.contains(id)
                 }
                 Type::String | Type::Boolean => sets.object_like.contains(id),
                 _ => false,
@@ -228,34 +238,274 @@ fn widen_lets_stmt(stmt: &mut Stmt, sets: &WidenSets) {
     }
 }
 
-/// Run the pass over one body: collect non-numeric assignments (recursing
-/// into closure bodies), then widen the matching `Stmt::Let` declared types.
-/// Collection and rewriting both stay within the given body slice — HIR
-/// LocalIds are unique module-wide, so cross-body collection is handled by
-/// the caller passing every body through `collect` first.
+/// Module-scoped widening state.
+///
+/// Callers collect assignments from every body first, then apply the final
+/// sets back to every body. HIR `LocalId`s are module-unique, so an assignment
+/// inside a nested closure can safely widen the matching `Stmt::Let` even when
+/// that declaration lives in another body.
 pub(crate) struct TypeWidening {
+    env: HirTypeEnv,
     sets: WidenSets,
 }
 
 impl TypeWidening {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn from_module(module: &Module) -> Self {
         Self {
+            env: HirTypeEnv::from_module(module),
             sets: WidenSets::default(),
         }
     }
 
     pub(crate) fn collect(&mut self, stmts: &[Stmt]) {
         for s in stmts {
-            visit_stmt(s, &mut self.sets);
+            visit_stmt(s, &mut self.sets, &self.env);
         }
     }
 
+    /// Like [`collect`], but with `this`/`super` bound to `class_name` so member
+    /// reads (`this.name`, `super.x`) inside class method bodies infer real
+    /// types instead of `Any` — otherwise a numeric local assigned from a
+    /// known-string member would silently keep its `Number` type.
+    pub(crate) fn collect_in_class(&mut self, class_name: &str, stmts: &[Stmt]) {
+        let prev = self.env.set_current_class(Some(class_name.to_string()));
+        for s in stmts {
+            visit_stmt(s, &mut self.sets, &self.env);
+        }
+        self.env.set_current_class(prev);
+    }
+
     pub(crate) fn apply(&self, stmts: &mut [Stmt]) {
-        if self.sets.object_like.is_empty() && self.sets.string_or_bool.is_empty() {
+        if self.sets.object_like.is_empty() && self.sets.non_number_primitive.is_empty() {
             return;
         }
         for s in stmts {
             widen_lets_stmt(s, &self.sets);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn let_ty(stmts: &[Stmt], id: LocalId) -> &Type {
+        stmts
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::Let {
+                    id: stmt_id, ty, ..
+                } if *stmt_id == id => Some(ty),
+                _ => None,
+            })
+            .expect("missing let statement")
+    }
+
+    #[test]
+    fn widens_numeric_local_assigned_string_typed_local() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "s".to_string(),
+                ty: Type::String,
+                mutable: false,
+                init: Some(Expr::String("value".to_string())),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(2)))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+        assert_eq!(let_ty(&module.init, 2), &Type::String);
+    }
+
+    #[test]
+    fn preserves_numeric_local_assigned_number_typed_local() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "target".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "source".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Number(2.0)),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(2)))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Number);
+        assert_eq!(let_ty(&module.init, 2), &Type::Number);
+    }
+
+    #[test]
+    fn widens_numeric_local_assigned_named_object_typed_local() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "d".to_string(),
+                ty: Type::Named("Date".to_string()),
+                mutable: false,
+                init: Some(Expr::DateNew(vec![])),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(2)))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    #[test]
+    fn widens_numeric_local_assigned_bigint_typed_local() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "b".to_string(),
+                ty: Type::BigInt,
+                mutable: false,
+                init: Some(Expr::BigInt("1".to_string())),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(2)))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    #[test]
+    fn widens_numeric_local_assigned_bigint_expression() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::ProcessHrtimeBigint))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    #[test]
+    fn widens_numeric_local_assigned_optional_string_array_element() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "items".to_string(),
+                ty: Type::Array(Box::new(Type::String)),
+                mutable: true,
+                init: Some(Expr::Array(vec![])),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::ArrayPop(2)))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    #[test]
+    fn widens_primitive_local_assigned_object_null_union() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "s".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String("value".to_string())),
+            },
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::ObjectGetPrototypeOf(Box::new(Expr::Object(vec![])))),
+            )),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    #[test]
+    fn preserves_numeric_local_assigned_never_expression() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "n".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(1.0)),
+            },
+            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::ProcessExit(None)))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Number);
     }
 }

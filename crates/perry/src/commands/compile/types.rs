@@ -204,7 +204,7 @@ pub struct CompileArgs {
     #[arg(long)]
     pub debug_symbols: bool,
 
-    /// Disable the per-module object cache at `.perry-cache/objects/`.
+    /// Disable the per-module object cache.
     /// By default Perry caches each module's object bytes keyed by a
     /// hash of the source plus every `CompileOptions` field that can
     /// affect codegen, so unchanged modules skip the LLVM pipeline on
@@ -213,6 +213,21 @@ pub struct CompileArgs {
     /// around a suspected stale cache.
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Directory for Perry's on-disk caches (objects, build manifests,
+    /// link manifests, audit.json). Defaults to
+    /// `<project-root>/node_modules/.cache/perry` (the find-cache-dir
+    /// convention used by babel-loader / eslint / etc.), so the cache is
+    /// auto-ignored along with `node_modules/`. Also settable via the
+    /// `PERRY_CACHE_DIR` env var, `[perry] cacheDir` in perry.toml, or
+    /// `"perry": { "cacheDir": "<path>" }` in package.json; precedence is
+    /// CLI flag > env > perry.toml > package.json. A relative path resolves
+    /// against the project root. Useful for read-only project roots and
+    /// per-machine CI caches; the object cache is machine-local (native
+    /// `.o` bytes keyed by CPU/OS/toolchain), so avoid sharing one
+    /// directory across heterogeneous build machines.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
 
     /// Enable LLVM `reassoc` per-instruction fast-math flags on every
     /// f64 op. Off by default — Perry produces bit-exact f64 output with
@@ -494,10 +509,20 @@ pub struct CompilationContext {
     pub needs_stdlib: bool,
     /// Project root (where we start looking for node_modules)
     pub project_root: PathBuf,
-    /// Root for `.perry-cache` artifacts. Usually the package/config root
-    /// or current working directory; kept separate from `project_root` so
-    /// legacy module-prefix behavior does not force caches under `src/`.
+    /// Root for cache artifacts. Usually the package/config root or current
+    /// working directory; kept separate from `project_root` so legacy
+    /// module-prefix behavior does not force caches under `src/`. This is the
+    /// base the cache directory resolves against, NOT the cache directory
+    /// itself — read `cache_dir` for where bytes actually land.
     pub cache_root: PathBuf,
+    /// Resolved on-disk cache directory for this build, computed once via
+    /// `resolve_cache_dir`. Every on-disk cache (objects, audit.json, build,
+    /// link, sandbox profiles) lives directly under this dir; `--trace`
+    /// dumps are written separately under `.perry-trace/` (see that flag).
+    /// Precedence: `--cache-dir` → `PERRY_CACHE_DIR` → perry.toml
+    /// `[perry] cacheDir` → package.json `perry.cacheDir` → default
+    /// `<cache_root>/node_modules/.cache/perry`.
+    pub cache_dir: PathBuf,
     /// External native libraries discovered from package dependencies
     pub native_libraries: Vec<NativeLibraryManifest>,
     /// Package aliases: maps npm package name → replacement package name (from perry.packageAliases)
@@ -926,6 +951,7 @@ impl CompilationContext {
             needs_plugins: false,
             needs_stdlib: false,
             cache_root: project_root.clone(),
+            cache_dir: super::object_cache::resolve_cache_dir(&project_root, None),
             project_root,
             native_libraries: Vec::new(),
             package_aliases: HashMap::new(),

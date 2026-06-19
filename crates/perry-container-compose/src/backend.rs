@@ -1831,7 +1831,7 @@ async fn probe_candidate(name: &str) -> std::result::Result<Box<dyn ContainerBac
             let bin = which_bin("podman")?;
             if cfg!(target_os = "macos") {
                 let out = Command::new(&bin)
-                    .args(&["machine", "list", "--format", "json"])
+                    .args(["machine", "list", "--format", "json"])
                     .output()
                     .await
                     .map_err(|_| "podman machine list failed")?;
@@ -1869,7 +1869,7 @@ async fn probe_candidate(name: &str) -> std::result::Result<Box<dyn ContainerBac
         "lima" => {
             let bin = which_bin("limactl")?;
             let out = Command::new(&bin)
-                .args(&["list", "--json"])
+                .args(["list", "--json"])
                 .output()
                 .await
                 .map_err(|_| "limactl list failed")?;

@@ -8,7 +8,16 @@ use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type as HirType;
 
 use crate::expr::FnCtx;
+use crate::type_analysis_facts::{
+    function_type_from_decl, hir_inferred_refinable_type, hir_inferred_static_type,
+};
 use crate::type_analysis_net::{net_result_class, net_result_type};
+
+#[cfg(test)]
+pub(crate) use crate::type_analysis_facts::{
+    hir_inferred_refinable_type_from_facts, hir_inferred_refinable_type_from_locals,
+    hir_inferred_static_type_from_locals, CodegenTypeFacts,
+};
 
 // Class-field layout / declared-type resolution lives in a sibling module
 // (file-size gate). Re-exported here so existing `type_analysis::*` call
@@ -16,19 +25,6 @@ use crate::type_analysis_net::{net_result_class, net_result_type};
 pub(crate) use crate::type_analysis_class_fields::{
     class_field_declared_type, class_field_global_index, declared_field_type,
 };
-
-fn function_type_from_decl(function: &perry_hir::Function) -> HirType {
-    HirType::Function(perry_types::FunctionType {
-        params: function
-            .params
-            .iter()
-            .map(|param| (param.name.clone(), param.ty.clone(), false))
-            .collect(),
-        return_type: Box::new(function.return_type.clone()),
-        is_async: function.is_async || function.was_plain_async,
-        is_generator: function.is_generator,
-    })
-}
 
 pub(crate) fn is_global_constructor_expr(e: &Expr, name: &str) -> bool {
     matches!(e, Expr::GlobalGet(_))
@@ -116,7 +112,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::Array(_) | Expr::ArraySpread(_) => {
             Some(HirType::Array(Box::new(HirType::Any)))
         }
-        // `new Array(n)` / `new Array(a, b, ...)` — the static_type_of arm
+        // `new Array(n)` / `new Array(a, b, ...)` — the shared HIR inference
         // already maps this to Array<Any>, so the let-binding refinement
         // must agree. Without it, `const xs = new Array(4); xs[i]` falls
         // through to the generic Object index path which doesn't translate
@@ -142,7 +138,8 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::ArrayEntries { .. }
         | Expr::ArrayKeys { .. }
         | Expr::ArrayValues { .. }
-        | Expr::StringMatch { .. } => Some(HirType::Array(Box::new(HirType::Any))),
+        | Expr::StringMatch { .. } => hir_inferred_refinable_type(ctx, init)
+            .or_else(|| Some(HirType::Array(Box::new(HirType::Any)))),
         Expr::StringMatchAll { .. } => Some(HirType::Any),
         // TextEncoder.encode(str) — runtime returns a BufferHeader with
         // packed u8 bytes (same shape as `new Uint8Array([...])`). Refining
@@ -160,18 +157,14 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::StringSplit { .. } => Some(HirType::Array(Box::new(HirType::String))),
         // Set.values() / Set.keys() → iterable, but Array.from wraps it
         // into an Array. Without an Array.from wrap, it's still iterable.
-        // Set/Map constructors refine to `Generic { base, type_args: [] }` —
+        // Set/Map constructors refine to `Generic { base, type_args }` —
         // `is_set_expr` / `is_map_expr` check `base == "Set" / "Map"` on the
         // Generic variant, so `Named("Set")` here used to silently miss the
-        // fast path and `s.has(v)` returned undefined.
-        Expr::SetNewFromArray(_) | Expr::SetNew => Some(HirType::Generic {
-            base: "Set".into(),
-            type_args: Vec::new(),
-        }),
-        Expr::MapNewFromArray(_) | Expr::MapNew => Some(HirType::Generic {
-            base: "Map".into(),
-            type_args: Vec::new(),
-        }),
+        // fast path and `s.has(v)` returned undefined. Delegate to shared HIR
+        // inference so constructor inputs can preserve key/value element facts.
+        Expr::SetNewFromArray(_) | Expr::SetNew | Expr::MapNewFromArray(_) | Expr::MapNew => {
+            hir_inferred_refinable_type(ctx, init)
+        }
         // Object.keys() / for-in keys always return string handles.
         Expr::ObjectKeys(_) | Expr::ForInKeys(_) => {
             Some(HirType::Array(Box::new(HirType::String)))
@@ -514,19 +507,6 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
                     return Some(HirType::String);
                 }
             }
-            // Cross-module function calls: refine from the imported return
-            // type table. Without this, `const name = getFileName(path)`
-            // stays typed as Any even though `getFileName` declares
-            // `return_type: String` in the source module. This causes
-            // `name.charCodeAt(i)` to fall through to the generic method
-            // dispatcher (which returns [object Object] for strings).
-            if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
-                if let Some(ret_ty) = ctx.imported_func_return_types.get(name) {
-                    if !matches!(ret_ty, HirType::Any | HirType::Void) {
-                        return Some(ret_ty.clone());
-                    }
-                }
-            }
             if let Some(ret_ty) = static_type_of(ctx, init) {
                 if !matches!(ret_ty, HirType::Any | HirType::Void | HirType::Function(_)) {
                     return Some(ret_ty);
@@ -534,7 +514,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             None
         }
-        _ => None,
+        _ => hir_inferred_refinable_type(ctx, init),
     }
 }
 
@@ -2158,17 +2138,20 @@ pub(crate) fn is_native_module_dynamic_index(e: &Expr) -> bool {
 /// type when it's cheap to determine (literals, locals, field accesses
 /// on known classes). Returns `None` when computing the type would
 /// require a fuller type-checker pass.
+/// Extract a non-negative integer literal index from an index expression, if it
+/// is one. Used to type tuple element accesses only for in-bounds literal
+/// indices (dynamic indices into a heterogeneous tuple aren't statically known).
+fn tuple_index_literal(index: &Expr) -> Option<usize> {
+    match index {
+        Expr::Integer(n) if *n >= 0 => Some(*n as usize),
+        Expr::Number(f) if *f >= 0.0 && f.fract() == 0.0 => Some(*f as usize),
+        _ => None,
+    }
+}
+
 pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
     match e {
         Expr::Array(_) => Some(HirType::Array(Box::new(HirType::Any))),
-        // Built-in `new Array(...)` produces a real array, not a generic
-        // class instance. Without this, the receiver of any chained
-        // `.fill()` / `.push()` / `.length` would not be recognized by
-        // `is_array_expr`, falling out of the array method dispatch
-        // and crashing.
-        Expr::New { class_name, .. } if class_name == "Array" => {
-            Some(HirType::Array(Box::new(HirType::Any)))
-        }
         Expr::String(_) | Expr::WtfString(_) => Some(HirType::String),
         Expr::Number(_) | Expr::Integer(_) => Some(HirType::Number),
         Expr::Bool(_) => Some(HirType::Boolean),
@@ -2218,104 +2201,83 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             {
                 return Some(static_method_ty);
             }
-            // If the object is a known class instance, look up the field
-            // type from the class definition.
-            let receiver_class = receiver_class_name(ctx, object)?;
-            if let Some(class) = ctx.classes.get(&receiver_class) {
-                if let Some(field_ty) = class
-                    .fields
-                    .iter()
-                    .find(|f| f.name == *property)
-                    .map(|f| f.ty.clone())
-                    .or_else(|| {
-                        // Walk up the inheritance chain.
-                        let mut parent = class.extends_name.as_deref();
-                        while let Some(p) = parent {
-                            if let Some(pc) = ctx.classes.get(p) {
-                                if let Some(field) = pc.fields.iter().find(|f| f.name == *property)
-                                {
-                                    return Some(field.ty.clone());
+            if let Some(receiver_class) = receiver_class_name(ctx, object) {
+                // If the object is a known class instance, look up the field
+                // type from the class definition.
+                if let Some(class) = ctx.classes.get(&receiver_class) {
+                    if let Some(field_ty) = class
+                        .fields
+                        .iter()
+                        .find(|f| f.name == *property)
+                        .map(|f| f.ty.clone())
+                        .or_else(|| {
+                            // Walk up the inheritance chain.
+                            let mut parent = class.extends_name.as_deref();
+                            while let Some(p) = parent {
+                                if let Some(pc) = ctx.classes.get(p) {
+                                    if let Some(field) =
+                                        pc.fields.iter().find(|f| f.name == *property)
+                                    {
+                                        return Some(field.ty.clone());
+                                    }
+                                    parent = pc.extends_name.as_deref();
+                                } else {
+                                    break;
                                 }
-                                parent = pc.extends_name.as_deref();
-                            } else {
-                                break;
                             }
-                        }
-                        None
-                    })
-                {
-                    return Some(field_ty);
+                            None
+                        })
+                    {
+                        return Some(field_ty);
+                    }
+                    if let Some(method_ty) = class
+                        .methods
+                        .iter()
+                        .find(|method| method.name == *property)
+                        .map(function_type_from_decl)
+                    {
+                        return Some(method_ty);
+                    }
                 }
-                if let Some(method_ty) = class
-                    .methods
-                    .iter()
-                    .find(|method| method.name == *property)
-                    .map(function_type_from_decl)
-                {
-                    return Some(method_ty);
-                }
-            }
-            // Issue #655: receiver may be typed against a TS `interface`
-            // rather than a class. The runtime layout is identical to a
-            // plain object literal, so the property's declared type is
-            // the right answer for the array fast-path / `length=` setter
-            // path. Walks the `extends` chain too so chained interfaces
-            // (`interface Sub extends Base { ... }`) resolve.
-            if let Some(iface) = ctx.interfaces.get(&receiver_class) {
-                if let Some(p) = iface.properties.iter().find(|p| p.name == *property) {
-                    return Some(p.ty.clone());
-                }
-                if let Some(method) = iface.methods.iter().find(|method| method.name == *property) {
-                    return Some(HirType::Function(perry_types::FunctionType {
-                        params: method.params.clone(),
-                        return_type: Box::new(method.return_type.clone()),
-                        is_async: false,
-                        is_generator: false,
-                    }));
-                }
-                for ext in &iface.extends {
-                    if let HirType::Named(parent_name) = ext {
-                        if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
-                            if let Some(p) =
-                                parent_iface.properties.iter().find(|p| p.name == *property)
-                            {
-                                return Some(p.ty.clone());
+                // Issue #655: receiver may be typed against a TS `interface`
+                // rather than a class. The runtime layout is identical to a
+                // plain object literal, so the property's declared type is
+                // the right answer for the array fast-path / `length=` setter
+                // path. Walks the `extends` chain too so chained interfaces
+                // (`interface Sub extends Base { ... }`) resolve.
+                if let Some(iface) = ctx.interfaces.get(&receiver_class) {
+                    if let Some(p) = iface.properties.iter().find(|p| p.name == *property) {
+                        return Some(p.ty.clone());
+                    }
+                    if let Some(method) =
+                        iface.methods.iter().find(|method| method.name == *property)
+                    {
+                        return Some(HirType::Function(perry_types::FunctionType {
+                            params: method.params.clone(),
+                            return_type: Box::new(method.return_type.clone()),
+                            is_async: false,
+                            is_generator: false,
+                        }));
+                    }
+                    for ext in &iface.extends {
+                        if let HirType::Named(parent_name) = ext {
+                            if let Some(parent_iface) = ctx.interfaces.get(parent_name) {
+                                if let Some(p) =
+                                    parent_iface.properties.iter().find(|p| p.name == *property)
+                                {
+                                    return Some(p.ty.clone());
+                                }
                             }
                         }
                     }
                 }
             }
-            None
+            hir_inferred_static_type(ctx, e)
         }
         Expr::This => {
             let cls = ctx.class_stack.last()?.clone();
             Some(HirType::Named(cls))
         }
-        Expr::ArrayMap { .. }
-        | Expr::ArrayFilter { .. }
-        | Expr::ArraySpread(_)
-        | Expr::ArraySlice { .. }
-        | Expr::ArrayToReversed { .. }
-        | Expr::ArrayToSorted { .. }
-        | Expr::ArrayToSpliced { .. }
-        | Expr::ArrayWith { .. }
-        | Expr::ArrayFlat { .. }
-        | Expr::ArrayFlatMap { .. }
-        | Expr::ArrayFromMapped { .. }
-        | Expr::ArrayFrom(_)
-        | Expr::ArrayFromArrayLikeHoley(_)
-        | Expr::ArrayEntries(_)
-        | Expr::ArrayKeys(_)
-        | Expr::ArrayValues(_)
-        | Expr::ObjectKeys(_)
-        | Expr::ForInKeys(_)
-        | Expr::ObjectValues(_)
-        | Expr::ObjectEntries(_) => Some(HirType::Array(Box::new(HirType::Any))),
-        // `process.argv` is a real Array<string> at runtime (see
-        // `js_process_argv` in perry-runtime/os.rs). Without this entry
-        // `is_array_expr(Expr::ProcessArgv)` is false and `argv.includes(x)`
-        // takes the string-method dispatch path (issue #346) — closes #346.
-        Expr::ProcessArgv => Some(HirType::Array(Box::new(HirType::String))),
         // `str.split(delim)` returns Array<String>. Catches the generic
         // Call form that bypasses the `Expr::StringSplit` variant — e.g.
         // `"a,b,c".split(",")` in an expression position where we need
@@ -2360,7 +2322,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             if let Some(HirType::Function(ft)) = static_type_of(ctx, callee.as_ref()) {
                 return Some((*ft.return_type).clone());
             }
-            None
+            hir_inferred_static_type(ctx, e)
         }
         // `arr[i]` where `arr: Array<T>` has static type `T`. This lets
         // nested access like `grid[i][j]` and `grid[i].length` reach
@@ -2368,13 +2330,25 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // statically known to be `Array<Array<T>>` / `Array<Tuple<...>>`.
         // Also handles `Record<K, V>[key]` → V so `groups["a"].length`
         // on `Record<string, number[]>` finds the array fast path.
-        Expr::IndexGet { object, .. } => match static_type_of(ctx, object)? {
-            HirType::Array(inner) => Some(*inner),
-            HirType::Tuple(elems) if !elems.is_empty() => Some(elems[0].clone()),
-            HirType::Generic { base, type_args } if base == "Record" && type_args.len() == 2 => {
+        Expr::IndexGet { object, index } => match static_type_of(ctx, object) {
+            Some(HirType::Array(inner)) => Some(*inner),
+            // A literal, in-bounds index has the exact element type. A dynamic
+            // index could hit any element, so it's only sound when the tuple is
+            // homogeneous — otherwise stay conservative (e.g. `[string, number]`
+            // must not type `t[i]` as `string`).
+            Some(HirType::Tuple(elems)) if !elems.is_empty() => match tuple_index_literal(index) {
+                Some(i) => elems.get(i).cloned(),
+                None => {
+                    let first = &elems[0];
+                    elems.iter().all(|t| t == first).then(|| first.clone())
+                }
+            },
+            Some(HirType::Generic { base, type_args })
+                if base == "Record" && type_args.len() == 2 =>
+            {
                 Some(type_args[1].clone())
             }
-            _ => None,
+            _ => hir_inferred_static_type(ctx, e),
         },
         // `a || b` and `a ?? b` lower to `Expr::Logical`. Recognize the
         // result as Array-typed when EITHER branch is Array — `is_array_expr`
@@ -2409,6 +2383,10 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                 _ => None,
             }
         }
-        _ => None,
+        _ => hir_inferred_static_type(ctx, e),
     }
 }
+
+#[cfg(test)]
+#[path = "type_analysis_tests.rs"]
+mod tests;

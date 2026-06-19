@@ -1,7 +1,8 @@
 # Behavioral SBOM (`perry audit --sbom`)
 
-Every Perry compile writes a behavioral SBOM to
-`<project>/.perry-cache/audit.json` — a per-module manifest of the
+Every Perry compile writes a behavioral SBOM to `audit.json` in the
+project's cache dir (default
+`<project>/node_modules/.cache/perry/audit.json`) — a per-module manifest of the
 stdlib symbols the build actually calls. The manifest is the
 foundation for the rest of the supply-chain hardening series and gives
 reviewers a way to see exactly what surface a dependency touches
@@ -67,9 +68,12 @@ capability a dependency reaches surfaces as added lines.
 
 `perry audit --sbom [PATH]`
 
-- Reads the manifest from `<PATH>/.perry-cache/audit.json`, walking
-  up the directory tree if needed (same shape `perry compile` walks
-  up to find `package.json`).
+- Reads the manifest from `audit.json` in the resolved cache dir
+  (default `<PATH>/node_modules/.cache/perry/audit.json`; honors
+  `--cache-dir` / `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` /
+  package.json `perry.cacheDir`), walking up
+  the directory tree if needed (same shape `perry compile` walks up
+  to find `package.json`).
 - Default `PATH`: current directory.
 - In `--format json` mode dumps the raw manifest pretty-printed.
 - In text mode groups modules by owning npm package; host source is
@@ -90,7 +94,7 @@ Scope of this first cut (MVP):
 - **`perry audit --sbom --diff`** — the bytes-deterministic JSON
   shape already enables the diff workflow via plain `diff` /
   `git diff`; a built-in `--diff` is a follow-up that picks a
-  baseline (`.perry-cache/audit.last.json`) and pretty-prints the
+  baseline (`audit.last.json` in the cache dir) and pretty-prints the
   change set.
 
 The manifest shape is versioned (`version: 1`) so consumers can

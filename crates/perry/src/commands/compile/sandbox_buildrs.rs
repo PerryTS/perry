@@ -119,14 +119,16 @@ fn which_cargo() -> std::path::PathBuf {
     std::path::PathBuf::from("cargo")
 }
 
-/// Write a per-build sandbox-exec profile to `<project>/.perry-cache/buildrs-<pkg>.sandbox`.
+/// Write a per-build sandbox-exec profile to
+/// `<cache_dir>/buildrs-<pkg>.sandbox` (default
+/// `<project>/node_modules/.cache/perry/buildrs-<pkg>.sandbox`).
 /// Returns the absolute path so `sandbox-exec -f <path>` can pick it up.
 fn write_macos_buildrs_profile(
     ctx: &CompilationContext,
     package_name: &str,
 ) -> std::io::Result<std::path::PathBuf> {
-    let dir = ctx.project_root.join(".perry-cache");
-    std::fs::create_dir_all(&dir)?;
+    let dir = &ctx.cache_dir;
+    std::fs::create_dir_all(dir)?;
     // Sanitize the package name into a single path component so a
     // hostile `name: "../etc/passwd"` can't escape the cache dir.
     let safe = package_name
