@@ -70,9 +70,7 @@ fn collect_js_files_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
         };
         if file_type.is_dir() {
             collect_js_files_recursive(&path, out);
-        } else if file_type.is_file()
-            && path.extension().and_then(|e| e.to_str()) == Some("js")
-        {
+        } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("js") {
             out.push(path);
         }
     }

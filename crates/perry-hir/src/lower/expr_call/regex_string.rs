@@ -105,7 +105,10 @@ pub(super) fn try_regex_string_methods(
                         ast::Expr::Lit(ast::Lit::Str(_)) => true,
                         ast::Expr::Tpl(_) => true,
                         ast::Expr::Ident(ident) => {
-                            matches!(ctx.lookup_local_type(ident.sym.as_ref()), Some(Type::String))
+                            matches!(
+                                ctx.lookup_local_type(ident.sym.as_ref()),
+                                Some(Type::String)
+                            )
                         }
                         _ => false,
                     };

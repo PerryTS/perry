@@ -67,8 +67,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                                         call.args.first().map(|a| a.expr.as_ref())
                                     {
                                         if let Some(spec) = s.value.as_str() {
-                                            let bare =
-                                                spec.strip_prefix("node:").unwrap_or(spec);
+                                            let bare = spec.strip_prefix("node:").unwrap_or(spec);
                                             return perry_api_manifest::is_node_core_module(bare);
                                         }
                                     }

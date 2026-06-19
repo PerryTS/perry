@@ -501,14 +501,10 @@ pub(super) fn compile_method(
             // runtime dynamic-parent super dispatcher, mirroring the explicit
             // `Expr::SuperCall` dynamic-parent path in `expr/this_super_call.rs`.
             if builtin_parent_runtime.is_none() && class.extends_expr.is_some() {
-                if let Some(cid) =
-                    ctx.class_ids.get(&class.name).copied().filter(|c| *c != 0)
-                {
-                    let undef_lit = crate::nanbox::double_literal(f64::from_bits(
-                        crate::nanbox::TAG_UNDEFINED,
-                    ));
-                    let mut lowered_args: Vec<String> =
-                        Vec::with_capacity(method.params.len());
+                if let Some(cid) = ctx.class_ids.get(&class.name).copied().filter(|c| *c != 0) {
+                    let undef_lit =
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let mut lowered_args: Vec<String> = Vec::with_capacity(method.params.len());
                     for p in &method.params {
                         if let Some(slot) = ctx.locals.get(&p.id).cloned() {
                             lowered_args.push(ctx.block().load(DOUBLE, &slot));
@@ -524,14 +520,11 @@ pub(super) fn compile_method(
                     let (args_ptr, args_len) = if lowered_args.is_empty() {
                         ("null".to_string(), "0".to_string())
                     } else {
-                        let buf_reg =
-                            ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+                        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
                         for (i, a_val) in lowered_args.iter().enumerate() {
-                            let slot = ctx.block().gep(
-                                DOUBLE,
-                                &buf_reg,
-                                &[(I64, &format!("{}", i))],
-                            );
+                            let slot =
+                                ctx.block()
+                                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
                             ctx.block().store(DOUBLE, a_val, &slot);
                         }
                         let ptr_reg = ctx.block().next_reg();

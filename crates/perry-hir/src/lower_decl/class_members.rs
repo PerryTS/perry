@@ -46,7 +46,7 @@ pub fn lower_constructor(
                 let is_rest = is_rest_param(&p.pat);
                 let param_id = ctx.define_local(param_name.clone(), param_type.clone());
                 ctx.shadow_native_instance_if_present(&param_name);
-                    ctx.shadow_native_module_if_present(&param_name);
+                ctx.shadow_native_module_if_present(&param_name);
                 params.push(Param {
                     id: param_id,
                     name: param_name,
@@ -103,7 +103,7 @@ pub fn lower_constructor(
                 };
                 let param_id = ctx.define_local(param_name.clone(), param_type.clone());
                 ctx.shadow_native_instance_if_present(&param_name);
-                    ctx.shadow_native_module_if_present(&param_name);
+                ctx.shadow_native_module_if_present(&param_name);
                 // Record this param for synthesizing `this.field = param` assignment
                 param_prop_assignments.push((param_id, param_name.clone()));
                 params.push(Param {
@@ -503,7 +503,7 @@ pub fn lower_class_method_with_name(
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         ctx.shadow_native_instance_if_present(&param_name);
-                    ctx.shadow_native_module_if_present(&param_name);
+        ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,
@@ -811,7 +811,7 @@ pub fn lower_setter_method_with_name(
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
         ctx.shadow_native_instance_if_present(&param_name);
-                    ctx.shadow_native_module_if_present(&param_name);
+        ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,

@@ -181,11 +181,9 @@ pub(crate) fn lower_native_method_call(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
                     |arg| lower_expr(ctx, arg),
                 )?;
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_require_path_module",
-                    &[(DOUBLE, &path)],
-                ));
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_require_path_module", &[(DOUBLE, &path)]));
             }
             _ => {}
         }
