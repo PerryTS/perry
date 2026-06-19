@@ -5,6 +5,9 @@
 //! body is either:
 //! - `return <numeric expression>` over numeric parameters, numeric literals,
 //!   and direct `this.field` reads of public numeric fields; or
+//! - `return <Int32 expression>` over public Int32 fields/params/in-range
+//!   integer literals, signed bitwise binary operators, and immutable local
+//!   temporaries built from those expressions; or
 //! - `return <numeric expression> <cmp> <numeric expression>` for boolean
 //!   predicates over the same safe numeric expression subset.
 
@@ -16,6 +19,7 @@ use perry_types::Type;
 #[derive(Clone, Copy)]
 enum ScalarMethodReturnKind {
     Numeric,
+    Int32,
     Boolean,
 }
 
@@ -55,27 +59,86 @@ pub(crate) fn is_simple_scalar_method(
         return false;
     }
 
-    let mut numeric_params = HashSet::new();
+    let mut numeric_locals = HashSet::new();
     for param in &method.params {
+        let param_type_is_safe = match return_kind {
+            ScalarMethodReturnKind::Int32 => is_int32_type(&param.ty),
+            ScalarMethodReturnKind::Numeric | ScalarMethodReturnKind::Boolean => {
+                is_numeric_type(&param.ty)
+            }
+        };
         if param.default.is_some()
             || param.is_rest
             || param.arguments_object.is_some()
             || !param.decorators.is_empty()
-            || !is_numeric_type(&param.ty)
+            || !param_type_is_safe
         {
             return false;
         }
-        numeric_params.insert(param.id);
+        numeric_locals.insert(param.id);
     }
 
-    let [Stmt::Return(Some(expr))] = method.body.as_slice() else {
+    let Some((return_expr, local_temps)) = scalar_method_straight_line_return(method, return_kind)
+    else {
         return false;
     };
-    scalar_method_return_expr_is_safe(classes, class_name, expr, &numeric_params, return_kind)
+    for (id, init) in local_temps {
+        if !scalar_method_return_expr_is_safe(
+            classes,
+            class_name,
+            init,
+            &numeric_locals,
+            return_kind,
+        ) {
+            return false;
+        }
+        numeric_locals.insert(id);
+    }
+    scalar_method_return_expr_is_safe(
+        classes,
+        class_name,
+        return_expr,
+        &numeric_locals,
+        return_kind,
+    )
+}
+
+fn scalar_method_straight_line_return<'a>(
+    method: &'a Function,
+    return_kind: ScalarMethodReturnKind,
+) -> Option<(&'a Expr, Vec<(u32, &'a Expr)>)> {
+    let mut local_temps = Vec::new();
+    for (idx, stmt) in method.body.iter().enumerate() {
+        match stmt {
+            Stmt::Let {
+                id,
+                ty,
+                mutable,
+                init: Some(init),
+                ..
+            } if !*mutable && scalar_method_temp_type_is_safe(ty, return_kind) => {
+                local_temps.push((*id, init));
+            }
+            Stmt::Return(Some(expr)) if idx + 1 == method.body.len() => {
+                return Some((expr, local_temps));
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn scalar_method_temp_type_is_safe(ty: &Type, return_kind: ScalarMethodReturnKind) -> bool {
+    match return_kind {
+        ScalarMethodReturnKind::Int32 => is_int32_type(ty),
+        ScalarMethodReturnKind::Numeric | ScalarMethodReturnKind::Boolean => is_numeric_type(ty),
+    }
 }
 
 fn scalar_method_return_kind(ty: &Type) -> Option<ScalarMethodReturnKind> {
-    if is_numeric_type(ty) {
+    if matches!(ty, Type::Int32) {
+        Some(ScalarMethodReturnKind::Int32)
+    } else if matches!(ty, Type::Number) {
         Some(ScalarMethodReturnKind::Numeric)
     } else if matches!(ty, Type::Boolean) {
         Some(ScalarMethodReturnKind::Boolean)
@@ -94,6 +157,9 @@ fn scalar_method_return_expr_is_safe(
     match return_kind {
         ScalarMethodReturnKind::Numeric => {
             numeric_scalar_method_expr_is_safe(classes, class_name, expr, numeric_params)
+        }
+        ScalarMethodReturnKind::Int32 => {
+            int32_scalar_method_expr_is_safe(classes, class_name, expr, numeric_params)
         }
         ScalarMethodReturnKind::Boolean => {
             boolean_scalar_method_expr_is_safe(classes, class_name, expr, numeric_params)
@@ -151,8 +217,39 @@ fn numeric_scalar_method_expr_is_safe(
     }
 }
 
+fn int32_scalar_method_expr_is_safe(
+    classes: &HashMap<String, &Class>,
+    class_name: &str,
+    expr: &Expr,
+    numeric_params: &HashSet<u32>,
+) -> bool {
+    match expr {
+        Expr::Integer(value) => i32::try_from(*value).is_ok(),
+        Expr::LocalGet(id) => numeric_params.contains(id),
+        Expr::Binary { op, left, right } => {
+            matches!(
+                op,
+                BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            ) && int32_scalar_method_expr_is_safe(classes, class_name, left, numeric_params)
+                && int32_scalar_method_expr_is_safe(classes, class_name, right, numeric_params)
+        }
+        Expr::PropertyGet { object, property } if matches!(object.as_ref(), Expr::This) => {
+            public_int32_field(classes, class_name, property)
+        }
+        _ => false,
+    }
+}
+
 fn is_numeric_type(ty: &Type) -> bool {
     matches!(ty, Type::Number | Type::Int32)
+}
+
+fn is_int32_type(ty: &Type) -> bool {
+    matches!(ty, Type::Int32)
 }
 
 fn public_numeric_field(
@@ -181,6 +278,40 @@ fn public_numeric_field(
                 && !field.is_private
                 && field.name == field_name
                 && is_numeric_type(&field.ty)
+        }) {
+            return true;
+        }
+        current = class.extends_name.clone();
+    }
+    false
+}
+
+fn public_int32_field(
+    classes: &HashMap<String, &Class>,
+    class_name: &str,
+    field_name: &str,
+) -> bool {
+    let mut current = Some(class_name.to_string());
+    let mut seen = HashSet::new();
+    let mut depth = 0usize;
+    while let Some(name) = current {
+        depth += 1;
+        if depth > 64 || !seen.insert(name.clone()) {
+            return false;
+        }
+        let Some(class) = classes.get(&name).copied() else {
+            return false;
+        };
+        if class.getters.iter().any(|(name, _)| name == field_name)
+            || class.setters.iter().any(|(name, _)| name == field_name)
+        {
+            return false;
+        }
+        if class.fields.iter().any(|field| {
+            field.key_expr.is_none()
+                && !field.is_private
+                && field.name == field_name
+                && is_int32_type(&field.ty)
         }) {
             return true;
         }

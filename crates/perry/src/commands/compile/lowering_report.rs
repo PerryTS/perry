@@ -113,6 +113,11 @@ pub(super) struct LoweringSummary {
     pub barrier_eliminations: u64,
     pub barrier_emissions: u64,
     pub scalar_replacements: u64,
+    pub scalar_replacement_fallbacks: u64,
+    pub scalar_replacement_rejections: u64,
+    pub typed_path_selections: u64,
+    pub typed_path_fallbacks: u64,
+    pub typed_path_rejections: u64,
     pub typed_clone_selections: u64,
     pub typed_clone_fallback_decisions: u64,
     pub generic_fallback_emissions: u64,
@@ -123,6 +128,10 @@ pub(super) struct LoweringSummary {
     pub pod_records: u64,
     pub pod_record_views: u64,
     pub pod_materializations: u64,
+    pub collection_helper_selections: u64,
+    pub collection_helper_fallback_decisions: u64,
+    pub collection_typed_value_selections: u64,
+    pub collection_typed_value_fallback_decisions: u64,
     pub native_rep_counts: BTreeMap<String, u64>,
     pub native_value_state_counts: BTreeMap<String, u64>,
     pub access_mode_counts: BTreeMap<String, u64>,
@@ -132,12 +141,28 @@ pub(super) struct LoweringSummary {
     pub typed_clone_decision_counts: BTreeMap<String, u64>,
     pub typed_clone_selection_reason_counts: BTreeMap<String, u64>,
     pub typed_clone_rejection_reason_counts: BTreeMap<String, u64>,
+    pub typed_path_decision_counts: BTreeMap<String, u64>,
+    pub typed_path_selection_reason_counts: BTreeMap<String, u64>,
+    pub typed_path_fallback_reason_counts: BTreeMap<String, u64>,
+    pub typed_path_rejection_reason_counts: BTreeMap<String, u64>,
+    pub collection_helper_decision_counts: BTreeMap<String, u64>,
+    pub collection_helper_family_counts: BTreeMap<String, u64>,
+    pub collection_helper_selection_reason_counts: BTreeMap<String, u64>,
+    pub collection_helper_rejection_reason_counts: BTreeMap<String, u64>,
+    pub collection_typed_value_decision_counts: BTreeMap<String, u64>,
+    pub collection_typed_value_selection_reason_counts: BTreeMap<String, u64>,
+    pub collection_typed_value_rejection_reason_counts: BTreeMap<String, u64>,
     pub generic_fallback_reason_counts: BTreeMap<String, u64>,
     pub dynamic_boundary_reason_counts: BTreeMap<String, u64>,
     pub box_reason_counts: BTreeMap<String, u64>,
     pub unbox_or_coercion_reason_counts: BTreeMap<String, u64>,
     pub runtime_property_get_reason_counts: BTreeMap<String, u64>,
     pub direct_field_load_reason_counts: BTreeMap<String, u64>,
+    pub scalar_replacement_decision_counts: BTreeMap<String, u64>,
+    pub scalar_replacement_selection_reason_counts: BTreeMap<String, u64>,
+    pub scalar_replacement_rejection_reason_counts: BTreeMap<String, u64>,
+    pub scalar_replacement_fallback_reason_counts: BTreeMap<String, u64>,
+    pub scalar_replacement_reason_counts: BTreeMap<String, u64>,
     pub bounds_eliminated_reason_counts: BTreeMap<String, u64>,
     pub bounds_kept_reason_counts: BTreeMap<String, u64>,
     pub barrier_elimination_reason_counts: BTreeMap<String, u64>,
@@ -155,6 +180,9 @@ pub(super) struct LoweringEvidence {
     pub direct_field_loads: Vec<EvidenceRow>,
     pub runtime_property_gets: Vec<EvidenceRow>,
     pub scalar_replacements: Vec<EvidenceRow>,
+    pub collection_helper_decisions: Vec<EvidenceRow>,
+    pub collection_typed_value_decisions: Vec<EvidenceRow>,
+    pub typed_path_decisions: Vec<EvidenceRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +200,8 @@ pub(super) struct EvidenceRow {
     pub reason_category: Option<String>,
     pub typed_clone: Option<String>,
     pub generic_fallback: Option<String>,
+    pub consumed_facts: Vec<String>,
+    pub rejected_facts: Vec<String>,
     pub notes: Vec<String>,
 }
 
@@ -340,6 +370,14 @@ fn aggregate_record(
     if is_dynamic_fallback {
         let reason = dynamic_boundary_reason(record);
         increment(&mut summary.dynamic_boundary_reason_counts, &reason);
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "fallback",
+            format!("dynamic_boundary:{reason}"),
+        );
         push_evidence(
             &mut evidence.dynamic_fallbacks,
             module,
@@ -416,14 +454,128 @@ fn aggregate_record(
         );
     }
 
-    if expr_kind.starts_with("Scalar") || consumer.starts_with("scalar_object_") {
-        summary.scalar_replacements += 1;
+    if let Some((decision, reason)) = scalar_replacement_decision(record, &expr_kind, &consumer) {
+        increment(&mut summary.scalar_replacement_decision_counts, &decision);
+        match decision.as_str() {
+            "selected" => {
+                summary.scalar_replacements += 1;
+                increment(
+                    &mut summary.scalar_replacement_selection_reason_counts,
+                    &reason,
+                );
+            }
+            "fallback" => {
+                summary.scalar_replacement_fallbacks += 1;
+                increment(
+                    &mut summary.scalar_replacement_fallback_reason_counts,
+                    &reason,
+                );
+            }
+            "rejected" => {
+                summary.scalar_replacement_rejections += 1;
+                increment(
+                    &mut summary.scalar_replacement_rejection_reason_counts,
+                    &reason,
+                );
+            }
+            _ => {}
+        }
+        increment(&mut summary.scalar_replacement_reason_counts, &reason);
         push_evidence(
             &mut evidence.scalar_replacements,
             module,
             record,
-            Some("scalar_replacement".to_string()),
-            Some(NOT_RECORDED.to_string()),
+            Some(format!("scalar_replacement_{decision}")),
+            Some(reason),
+        );
+    }
+
+    if let Some(family) = collection_helper_family(&consumer) {
+        increment(&mut summary.collection_helper_family_counts, &family);
+        if let Some(reason) = collection_helper_selection_reason(&consumer, &notes) {
+            summary.collection_helper_selections += 1;
+            increment(&mut summary.collection_helper_decision_counts, "selected");
+            increment(
+                &mut summary.collection_helper_selection_reason_counts,
+                &reason,
+            );
+            push_evidence(
+                &mut evidence.collection_helper_decisions,
+                module,
+                record,
+                Some("collection_helper_selected".to_string()),
+                Some(reason),
+            );
+        } else if let Some(reason) = collection_helper_rejection_reason(record, &notes) {
+            summary.collection_helper_fallback_decisions += 1;
+            summary.generic_fallback_emissions += 1;
+            increment(&mut summary.collection_helper_decision_counts, "rejected");
+            increment(
+                &mut summary.collection_helper_rejection_reason_counts,
+                &reason,
+            );
+            if let Some(generic_reason) = collection_generic_fallback_reason(&consumer, &notes) {
+                increment(&mut summary.generic_fallback_reason_counts, &generic_reason);
+            }
+            push_evidence(
+                &mut evidence.collection_helper_decisions,
+                module,
+                record,
+                Some("collection_helper_rejected".to_string()),
+                Some(reason),
+            );
+        }
+    }
+
+    if let Some(reason) = collection_typed_value_selection_reason(record, &notes) {
+        summary.collection_typed_value_selections += 1;
+        increment(
+            &mut summary.collection_typed_value_decision_counts,
+            "selected",
+        );
+        increment(
+            &mut summary.collection_typed_value_selection_reason_counts,
+            &reason,
+        );
+        push_evidence(
+            &mut evidence.collection_typed_value_decisions,
+            module,
+            record,
+            Some("collection_typed_value_selected".to_string()),
+            Some(reason.clone()),
+        );
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "selected",
+            "collection_typed_value_selected".to_string(),
+        );
+    } else if let Some(reason) = collection_typed_value_rejection_reason(record, &notes) {
+        summary.collection_typed_value_fallback_decisions += 1;
+        increment(
+            &mut summary.collection_typed_value_decision_counts,
+            "rejected",
+        );
+        increment(
+            &mut summary.collection_typed_value_rejection_reason_counts,
+            &reason,
+        );
+        push_evidence(
+            &mut evidence.collection_typed_value_decisions,
+            module,
+            record,
+            Some("collection_typed_value_rejected".to_string()),
+            Some(reason.clone()),
+        );
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "rejected",
+            format!("collection_typed_value:{reason}"),
         );
     }
 
@@ -432,9 +584,25 @@ fn aggregate_record(
         increment(&mut summary.typed_clone_decision_counts, "selected");
         let reason = typed_clone_selection_reason(&consumer);
         increment(&mut summary.typed_clone_selection_reason_counts, &reason);
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "selected",
+            format!("typed_clone:{reason}"),
+        );
         if let Some(reason) = generic_fallback_reason(record, &notes) {
             summary.generic_fallback_emissions += 1;
             increment(&mut summary.generic_fallback_reason_counts, &reason);
+            push_typed_path_evidence(
+                summary,
+                evidence,
+                module,
+                record,
+                "fallback",
+                format!("generic_fallback:{reason}"),
+            );
         }
         if generic_fallback_name(&notes).is_some() || notes_text.contains("fallback") {
             summary.typed_clone_fallback_decisions += 1;
@@ -449,6 +617,14 @@ fn aggregate_record(
     } else if let Some(reason) = typed_clone_rejection_reason(record, &notes) {
         increment(&mut summary.typed_clone_decision_counts, "rejected");
         increment(&mut summary.typed_clone_rejection_reason_counts, &reason);
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "rejected",
+            format!("typed_clone:{reason}"),
+        );
         push_evidence(
             &mut evidence.typed_clone_decisions,
             module,
@@ -483,12 +659,31 @@ fn print_text_report(report: &ExplainLoweringReport) {
         summary.typed_clone_fallback_decisions
     );
     println!(
+        "  typed paths: {} selected  {} fallback  {} rejected",
+        summary.typed_path_selections, summary.typed_path_fallbacks, summary.typed_path_rejections
+    );
+    println!(
         "  runtime property gets: {}  direct field loads: {}  bounds eliminations: {}",
         summary.runtime_property_gets, summary.direct_field_loads, summary.bounds_eliminations
     );
     println!(
         "  barrier eliminations: {}  barrier emissions: {}  scalar replacements: {}",
         summary.barrier_eliminations, summary.barrier_emissions, summary.scalar_replacements
+    );
+    if summary.scalar_replacement_fallbacks > 0 || summary.scalar_replacement_rejections > 0 {
+        println!(
+            "  scalar replacement fallbacks: {}  rejections: {}",
+            summary.scalar_replacement_fallbacks, summary.scalar_replacement_rejections
+        );
+    }
+    println!(
+        "  collection helpers: {} selected  {} rejected/generic",
+        summary.collection_helper_selections, summary.collection_helper_fallback_decisions
+    );
+    println!(
+        "  collection typed values: {} selected  {} rejected/generic",
+        summary.collection_typed_value_selections,
+        summary.collection_typed_value_fallback_decisions
     );
 
     if !summary.native_rep_counts.is_empty() {
@@ -527,6 +722,78 @@ fn print_text_report(report: &ExplainLoweringReport) {
             format_counts(&summary.typed_clone_rejection_reason_counts)
         );
     }
+    if !summary.typed_path_decision_counts.is_empty() {
+        println!(
+            "  typed path decisions: {}",
+            format_counts(&summary.typed_path_decision_counts)
+        );
+    }
+    if !summary.typed_path_selection_reason_counts.is_empty() {
+        println!(
+            "  typed path selection reasons: {}",
+            format_counts(&summary.typed_path_selection_reason_counts)
+        );
+    }
+    if !summary.typed_path_fallback_reason_counts.is_empty() {
+        println!(
+            "  typed path fallback reasons: {}",
+            format_counts(&summary.typed_path_fallback_reason_counts)
+        );
+    }
+    if !summary.typed_path_rejection_reason_counts.is_empty() {
+        println!(
+            "  typed path rejection reasons: {}",
+            format_counts(&summary.typed_path_rejection_reason_counts)
+        );
+    }
+    if !summary.collection_helper_decision_counts.is_empty() {
+        println!(
+            "  collection helper decisions: {}",
+            format_counts(&summary.collection_helper_decision_counts)
+        );
+    }
+    if !summary.collection_helper_family_counts.is_empty() {
+        println!(
+            "  collection helper families: {}",
+            format_counts(&summary.collection_helper_family_counts)
+        );
+    }
+    if !summary.collection_helper_selection_reason_counts.is_empty() {
+        println!(
+            "  collection helper selection reasons: {}",
+            format_counts(&summary.collection_helper_selection_reason_counts)
+        );
+    }
+    if !summary.collection_helper_rejection_reason_counts.is_empty() {
+        println!(
+            "  collection helper rejection reasons: {}",
+            format_counts(&summary.collection_helper_rejection_reason_counts)
+        );
+    }
+    if !summary.collection_typed_value_decision_counts.is_empty() {
+        println!(
+            "  collection typed value decisions: {}",
+            format_counts(&summary.collection_typed_value_decision_counts)
+        );
+    }
+    if !summary
+        .collection_typed_value_selection_reason_counts
+        .is_empty()
+    {
+        println!(
+            "  collection typed value selection reasons: {}",
+            format_counts(&summary.collection_typed_value_selection_reason_counts)
+        );
+    }
+    if !summary
+        .collection_typed_value_rejection_reason_counts
+        .is_empty()
+    {
+        println!(
+            "  collection typed value rejection reasons: {}",
+            format_counts(&summary.collection_typed_value_rejection_reason_counts)
+        );
+    }
     if !summary.generic_fallback_reason_counts.is_empty() {
         println!(
             "  generic fallback reasons: {}",
@@ -549,6 +816,42 @@ fn print_text_report(report: &ExplainLoweringReport) {
         println!(
             "  unbox/coercion reasons: {}",
             format_counts(&summary.unbox_or_coercion_reason_counts)
+        );
+    }
+    if !summary.scalar_replacement_reason_counts.is_empty() {
+        println!(
+            "  scalar replacement reasons: {}",
+            format_counts(&summary.scalar_replacement_reason_counts)
+        );
+    }
+    if !summary.scalar_replacement_decision_counts.is_empty() {
+        println!(
+            "  scalar replacement decisions: {}",
+            format_counts(&summary.scalar_replacement_decision_counts)
+        );
+    }
+    if !summary
+        .scalar_replacement_selection_reason_counts
+        .is_empty()
+    {
+        println!(
+            "  scalar replacement selection reasons: {}",
+            format_counts(&summary.scalar_replacement_selection_reason_counts)
+        );
+    }
+    if !summary.scalar_replacement_fallback_reason_counts.is_empty() {
+        println!(
+            "  scalar replacement fallback reasons: {}",
+            format_counts(&summary.scalar_replacement_fallback_reason_counts)
+        );
+    }
+    if !summary
+        .scalar_replacement_rejection_reason_counts
+        .is_empty()
+    {
+        println!(
+            "  scalar replacement rejection reasons: {}",
+            format_counts(&summary.scalar_replacement_rejection_reason_counts)
         );
     }
     if !summary.bounds_eliminated_reason_counts.is_empty() {
@@ -611,8 +914,43 @@ fn push_evidence(
         reason_category,
         typed_clone: typed_clone_name(&notes),
         generic_fallback: generic_fallback_name(&notes),
+        consumed_facts: fact_labels(record, "consumed_facts"),
+        rejected_facts: fact_labels(record, "rejected_facts"),
         notes,
     });
+}
+
+fn push_typed_path_evidence(
+    summary: &mut LoweringSummary,
+    evidence: &mut LoweringEvidence,
+    module: &str,
+    record: &Value,
+    decision: &str,
+    reason: String,
+) {
+    match decision {
+        "selected" => {
+            summary.typed_path_selections += 1;
+            increment(&mut summary.typed_path_selection_reason_counts, &reason);
+        }
+        "fallback" => {
+            summary.typed_path_fallbacks += 1;
+            increment(&mut summary.typed_path_fallback_reason_counts, &reason);
+        }
+        "rejected" => {
+            summary.typed_path_rejections += 1;
+            increment(&mut summary.typed_path_rejection_reason_counts, &reason);
+        }
+        _ => {}
+    }
+    increment(&mut summary.typed_path_decision_counts, decision);
+    push_evidence(
+        &mut evidence.typed_path_decisions,
+        module,
+        record,
+        Some(format!("typed_path_{decision}")),
+        Some(reason),
+    );
 }
 
 fn increment(counts: &mut BTreeMap<String, u64>, key: &str) {
@@ -652,6 +990,27 @@ fn notes(record: &Value) -> Vec<String> {
                 .iter()
                 .filter_map(Value::as_str)
                 .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn fact_labels(record: &Value, field: &str) -> Vec<String> {
+    record
+        .get(field)
+        .and_then(Value::as_array)
+        .map(|facts| {
+            facts
+                .iter()
+                .filter_map(|fact| {
+                    let fact_id = string_field(fact, "fact_id")?;
+                    let state =
+                        string_field(fact, "state").unwrap_or_else(|| NOT_RECORDED.to_string());
+                    let reason = string_field(fact, "reason")
+                        .or_else(|| string_field(fact, "detail"))
+                        .unwrap_or_else(|| NOT_RECORDED.to_string());
+                    Some(format!("{fact_id}:{state}:{reason}"))
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -701,6 +1060,77 @@ fn generic_fallback_reason(record: &Value, notes: &[String]) -> Option<String> {
     None
 }
 
+fn collection_helper_family(consumer: &str) -> Option<String> {
+    consumer
+        .strip_prefix("collection_string_key.")
+        .map(|_| "collection_string_key".to_string())
+        .or_else(|| {
+            consumer
+                .strip_prefix("collection_typed_value.")
+                .map(|_| "collection_typed_value".to_string())
+        })
+}
+
+fn collection_helper_selection_reason(consumer: &str, notes: &[String]) -> Option<String> {
+    let helper = note_value(notes, "selected_helper")?;
+    Some(format!("{consumer}:{helper}"))
+}
+
+fn collection_helper_rejection_reason(record: &Value, notes: &[String]) -> Option<String> {
+    note_value(notes, "typed_collection_rejected")
+        .or_else(|| native_fact_reason(record, "rejected_facts", "type_fact"))
+        .map(|reason| {
+            let helper =
+                note_value(notes, "generic_helper").unwrap_or_else(|| "generic".to_string());
+            format!("{reason}:{helper}")
+        })
+}
+
+fn collection_generic_fallback_reason(consumer: &str, notes: &[String]) -> Option<String> {
+    note_value(notes, "generic_helper").map(|helper| format!("{consumer}:{helper}"))
+}
+
+fn collection_typed_value_selection_reason(record: &Value, notes: &[String]) -> Option<String> {
+    let (fact_id, _) = collection_typed_value_fact(record, "consumed_facts", "consumed")?;
+    let helper = note_value(notes, "selected_helper").unwrap_or_else(|| "selected".to_string());
+    Some(format!("{fact_id}:{helper}"))
+}
+
+fn collection_typed_value_rejection_reason(record: &Value, notes: &[String]) -> Option<String> {
+    let (fact_id, fact_reason) = collection_typed_value_fact(record, "rejected_facts", "rejected")?;
+    let reason = note_value(notes, "typed_collection_rejected")
+        .or(fact_reason)
+        .unwrap_or_else(|| NOT_RECORDED.to_string());
+    let helper = note_value(notes, "generic_helper").unwrap_or_else(|| "generic".to_string());
+    Some(format!("{fact_id}:{reason}:{helper}"))
+}
+
+fn collection_typed_value_fact(
+    record: &Value,
+    field: &str,
+    state: &str,
+) -> Option<(String, Option<String>)> {
+    record
+        .get(field)
+        .and_then(Value::as_array)?
+        .iter()
+        .find_map(|fact| {
+            if string_field(fact, "kind").as_deref() != Some("type_fact") {
+                return None;
+            }
+            if string_field(fact, "state").as_deref() != Some(state) {
+                return None;
+            }
+            let fact_id = string_field(fact, "fact_id")?;
+            if !matches!(fact_id.split_once('.'), Some(("map" | "set", _)))
+                || !fact_id.ends_with("_value_helper")
+            {
+                return None;
+            }
+            Some((fact_id, string_field(fact, "reason")))
+        })
+}
+
 fn typed_clone_selection_reason(consumer: &str) -> String {
     match consumer {
         "typed_f64_func_ref_call" => "typed_f64_function_direct_call",
@@ -735,6 +1165,7 @@ fn native_fact_reason(record: &Value, field: &str, kind_prefix: &str) -> Option<
                 return None;
             }
             string_field(fact, "reason")
+                .or_else(|| string_field(fact, "detail"))
                 .or_else(|| string_field(fact, "state"))
                 .or_else(|| Some(NOT_RECORDED.to_string()))
         })
@@ -844,6 +1275,55 @@ fn direct_field_load_reason(record: &Value) -> String {
         })
         .or_else(|| string_field(record, "access_mode"))
         .unwrap_or_else(|| NOT_RECORDED.to_string())
+}
+
+fn scalar_replacement_reason(record: &Value) -> String {
+    let notes = notes(record);
+    native_fact_reason(record, "consumed_facts", "scalar_method_summary")
+        .map(|reason| format!("scalar_method_summary:{reason}"))
+        .or_else(|| {
+            native_fact_reason(record, "rejected_facts", "scalar_method_summary")
+                .map(|reason| format!("scalar_method_materialized_fallback:{reason}"))
+        })
+        .or_else(|| {
+            note_value(&notes, "scalar_method_fallback")
+                .map(|reason| format!("scalar_method_materialized_fallback:{reason}"))
+        })
+        .or_else(|| {
+            let direct_reason = direct_field_load_reason(record);
+            (direct_reason != NOT_RECORDED).then_some(direct_reason)
+        })
+        .or_else(|| {
+            let consumer = string_field(record, "consumer").unwrap_or_default();
+            match consumer.as_str() {
+                "scalar_method_summary_inline" => Some("scalar_method_summary_inline".to_string()),
+                "scalar_method_summary_materialized_fallback" => {
+                    Some("scalar_method_materialized_fallback".to_string())
+                }
+                _ => None,
+            }
+        })
+        .unwrap_or_else(|| NOT_RECORDED.to_string())
+}
+
+fn scalar_replacement_decision(
+    record: &Value,
+    expr_kind: &str,
+    consumer: &str,
+) -> Option<(String, String)> {
+    let reason = scalar_replacement_reason(record);
+    let decision = match consumer {
+        "scalar_method_summary_inline" => "selected",
+        "scalar_method_summary_materialized_fallback" | "scalar_method_summary_fallback" => {
+            "fallback"
+        }
+        "scalar_method_summary_rejected" => "rejected",
+        _ if expr_kind.starts_with("Scalar") || consumer.starts_with("scalar_object_") => {
+            "selected"
+        }
+        _ => return None,
+    };
+    Some((decision.to_string(), reason))
 }
 
 fn barrier_elimination_reason(
@@ -1090,6 +1570,37 @@ mod tests {
             report.summary.typed_clone_decision_counts.get("selected"),
             Some(&1)
         );
+        assert_eq!(report.summary.typed_path_selections, 1);
+        assert_eq!(report.summary.typed_path_fallbacks, 2);
+        assert_eq!(
+            report.summary.typed_path_decision_counts.get("selected"),
+            Some(&1)
+        );
+        assert_eq!(
+            report.summary.typed_path_decision_counts.get("fallback"),
+            Some(&2)
+        );
+        assert_eq!(
+            report
+                .summary
+                .typed_path_selection_reason_counts
+                .get("typed_clone:typed_f64_function_direct_call"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .typed_path_fallback_reason_counts
+                .get("generic_fallback:generic_wrapper"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .typed_path_fallback_reason_counts
+                .get("dynamic_boundary:runtime_api"),
+            Some(&1)
+        );
         assert_eq!(
             report.summary.typed_clone_decision_counts.get(NOT_RECORDED),
             Some(&1)
@@ -1170,10 +1681,12 @@ mod tests {
 
         let json = serde_json::to_value(&report).unwrap();
         assert!(json["summary"]["typed_clone_selection_reason_counts"].is_object());
+        assert!(json["summary"]["typed_path_decision_counts"].is_object());
         assert!(json["summary"]["dynamic_boundary_reason_counts"].is_object());
         assert!(json["summary"]["box_reason_counts"].is_object());
         assert!(json["summary"]["unbox_or_coercion_reason_counts"].is_object());
         assert!(json["evidence"]["typed_clone_decisions"][0]["typed_clone"].is_string());
+        assert!(json["evidence"]["typed_path_decisions"].is_array());
     }
 
     #[test]
@@ -1216,6 +1729,12 @@ mod tests {
         );
         assert_eq!(
             report.summary.typed_clone_decision_counts.get("rejected"),
+            Some(&1)
+        );
+        assert_eq!(report.summary.typed_path_selections, 1);
+        assert_eq!(report.summary.typed_path_rejections, 1);
+        assert_eq!(
+            report.summary.typed_path_decision_counts.get("rejected"),
             Some(&1)
         );
         assert_eq!(
@@ -1296,6 +1815,220 @@ mod tests {
                 .get("generic_wrapper"),
             Some(&1)
         );
+    }
+
+    #[test]
+    fn report_counts_collection_helper_selection_and_rejection_reasons() {
+        let artifact = json!({
+            "schema_version": 14,
+            "module": "collections.ts",
+            "records": [
+                {
+                    "function": "probe",
+                    "source_function": "probe",
+                    "expr_kind": "MapSet",
+                    "consumer": "collection_string_key.map_set_string_bool",
+                    "native_rep_name": "i1",
+                    "native_value_state": "region_local",
+                    "consumed_facts": [
+                        {
+                            "fact_id": "map.string_key_helper",
+                            "kind": "type_fact",
+                            "local_id": null,
+                            "state": "consumed"
+                        },
+                        {
+                            "fact_id": "map.boolean_value_helper",
+                            "kind": "type_fact",
+                            "local_id": null,
+                            "state": "consumed"
+                        }
+                    ],
+                    "notes": [
+                        "selected_helper=js_map_set_string_bool",
+                        "key_rep=string_ref",
+                        "value_rep=i1",
+                        "boxed_key_avoided=true",
+                        "boxed_value_avoided_until_map_slot=true"
+                    ]
+                },
+                {
+                    "function": "probe",
+                    "source_function": "probe",
+                    "expr_kind": "SetAdd",
+                    "consumer": "collection_typed_value.set_add_bool",
+                    "native_rep_name": "i1",
+                    "native_value_state": "region_local",
+                    "consumed_facts": [
+                        {
+                            "fact_id": "set.boolean_value_helper",
+                            "kind": "type_fact",
+                            "local_id": null,
+                            "state": "consumed"
+                        }
+                    ],
+                    "notes": [
+                        "selected_helper=js_set_add_bool",
+                        "value_rep=i1",
+                        "boxed_value_avoided_until_set_slot=true"
+                    ]
+                },
+                {
+                    "function": "probe",
+                    "source_function": "probe",
+                    "expr_kind": "SetHas",
+                    "consumer": "collection_typed_value.set_has_generic",
+                    "native_rep_name": "js_value",
+                    "native_value_state": "region_local",
+                    "rejected_facts": [
+                        {
+                            "fact_id": "set.boolean_value_helper",
+                            "kind": "type_fact",
+                            "local_id": null,
+                            "state": "rejected"
+                        }
+                    ],
+                    "notes": [
+                        "generic_helper=js_set_has",
+                        "typed_collection_rejected=value_expr_not_native_i1",
+                        "value_rep=js_value"
+                    ]
+                }
+            ]
+        });
+        let report = build_report_from_artifacts(
+            Path::new("/tmp/lowering"),
+            vec![(PathBuf::from("native-reps.json"), artifact)],
+        );
+
+        assert_eq!(report.summary.collection_helper_selections, 2);
+        assert_eq!(report.summary.collection_helper_fallback_decisions, 1);
+        assert_eq!(report.summary.collection_typed_value_selections, 2);
+        assert_eq!(report.summary.collection_typed_value_fallback_decisions, 1);
+        assert_eq!(report.summary.generic_fallback_emissions, 1);
+        assert_eq!(
+            report
+                .summary
+                .collection_helper_decision_counts
+                .get("selected"),
+            Some(&2)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_helper_decision_counts
+                .get("rejected"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_helper_family_counts
+                .get("collection_string_key"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_helper_family_counts
+                .get("collection_typed_value"),
+            Some(&2)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_helper_selection_reason_counts
+                .get("collection_string_key.map_set_string_bool:js_map_set_string_bool"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_helper_selection_reason_counts
+                .get("collection_typed_value.set_add_bool:js_set_add_bool"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_helper_rejection_reason_counts
+                .get("value_expr_not_native_i1:js_set_has"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .generic_fallback_reason_counts
+                .get("collection_typed_value.set_has_generic:js_set_has"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_typed_value_decision_counts
+                .get("selected"),
+            Some(&2)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_typed_value_decision_counts
+                .get("rejected"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_typed_value_selection_reason_counts
+                .get("map.boolean_value_helper:js_map_set_string_bool"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_typed_value_selection_reason_counts
+                .get("set.boolean_value_helper:js_set_add_bool"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .collection_typed_value_rejection_reason_counts
+                .get("set.boolean_value_helper:value_expr_not_native_i1:js_set_has"),
+            Some(&1)
+        );
+        assert_eq!(report.evidence.collection_helper_decisions.len(), 3);
+        assert_eq!(report.evidence.collection_typed_value_decisions.len(), 3);
+        assert_eq!(
+            report.evidence.collection_helper_decisions[0]
+                .decision
+                .as_deref(),
+            Some("collection_helper_selected")
+        );
+        assert_eq!(
+            report.evidence.collection_helper_decisions[2]
+                .decision
+                .as_deref(),
+            Some("collection_helper_rejected")
+        );
+        assert_eq!(
+            report.evidence.collection_typed_value_decisions[0]
+                .decision
+                .as_deref(),
+            Some("collection_typed_value_selected")
+        );
+        assert_eq!(
+            report.evidence.collection_typed_value_decisions[2]
+                .decision
+                .as_deref(),
+            Some("collection_typed_value_rejected")
+        );
+
+        let json = serde_json::to_value(&report).unwrap();
+        assert!(json["summary"]["collection_helper_decision_counts"].is_object());
+        assert!(json["summary"]["collection_typed_value_decision_counts"].is_object());
+        assert!(json["evidence"]["collection_helper_decisions"].is_array());
+        assert!(json["evidence"]["collection_typed_value_decisions"].is_array());
     }
 
     #[test]
@@ -1388,6 +2121,19 @@ mod tests {
         assert_eq!(
             report
                 .summary
+                .scalar_replacement_reason_counts
+                .get("scalar_replacement_raw_f64_field"),
+            Some(&1)
+        );
+        assert_eq!(
+            report.evidence.scalar_replacements[0]
+                .reason_category
+                .as_deref(),
+            Some("scalar_replacement_raw_f64_field")
+        );
+        assert_eq!(
+            report
+                .summary
                 .bounds_eliminated_reason_counts
                 .get("loop_guard"),
             Some(&1)
@@ -1469,11 +2215,193 @@ mod tests {
             .contains_key(NOT_RECORDED));
         assert!(!report
             .summary
+            .scalar_replacement_reason_counts
+            .contains_key(NOT_RECORDED));
+        assert!(!report
+            .summary
             .barrier_emission_reason_counts
             .contains_key(NOT_RECORDED));
         assert!(!report
             .summary
             .bounds_kept_reason_counts
             .contains_key(NOT_RECORDED));
+    }
+
+    #[test]
+    fn report_classifies_scalar_method_inline_and_materialized_fallback_facts() {
+        let artifact = json!({
+            "schema_version": 14,
+            "module": "scalar_methods.ts",
+            "records": [
+                {
+                    "function": "probe",
+                    "source_function": "probe",
+                    "expr_kind": "ScalarMethodCall",
+                    "consumer": "scalar_method_summary_inline",
+                    "native_rep_name": "f64",
+                    "native_value_state": "region_local",
+                    "consumed_facts": [
+                        {
+                            "fact_id": "native_region.scalar_method_summary.1.Point.len",
+                            "kind": "scalar_method_summary",
+                            "local_id": 1,
+                            "state": "consumed",
+                            "detail": "exact_receiver_summary"
+                        }
+                    ],
+                    "notes": [
+                        "class=Point",
+                        "method=len",
+                        "receiver=scalar_replaced",
+                        "arg_proof=proven_numeric"
+                    ]
+                },
+                {
+                    "function": "probe",
+                    "source_function": "probe",
+                    "expr_kind": "ScalarMethodCall",
+                    "consumer": "scalar_method_summary_materialized_fallback",
+                    "native_rep_name": "js_value",
+                    "native_value_state": "materialized",
+                    "access_mode": "dynamic_fallback",
+                    "materialization_reason": "runtime_api",
+                    "rejected_facts": [
+                        {
+                            "fact_id": "native_region.scalar_method_summary.1.Point.len",
+                            "kind": "scalar_method_summary",
+                            "local_id": 1,
+                            "state": "arg_guard_failed",
+                            "detail": "guarded_numeric_args_fallback"
+                        }
+                    ],
+                    "notes": [
+                        "class=Point",
+                        "method=len",
+                        "receiver=scalar_replaced",
+                        "scalar_method_fallback=arg_guard_failed",
+                        "arg_guard=js_typed_f64_arg_guard"
+                    ]
+                },
+                {
+                    "function": "probe",
+                    "source_function": "probe",
+                    "expr_kind": "ScalarMethodCall",
+                    "consumer": "scalar_method_summary_materialized_fallback",
+                    "native_rep_name": "js_value",
+                    "native_value_state": "materialized",
+                    "access_mode": "dynamic_fallback",
+                    "materialization_reason": "runtime_api",
+                    "rejected_facts": [
+                        {
+                            "fact_id": "native_region.scalar_method_summary.1.Point.len",
+                            "kind": "scalar_method_summary",
+                            "local_id": 1,
+                            "state": "generic_arg",
+                            "detail": "generic_argument"
+                        }
+                    ],
+                    "notes": [
+                        "class=Point",
+                        "method=len",
+                        "receiver=scalar_replaced",
+                        "scalar_method_fallback=generic_arg"
+                    ]
+                }
+            ]
+        });
+        let report = build_report_from_artifacts(
+            Path::new("/tmp/lowering"),
+            vec![(PathBuf::from("native-reps.json"), artifact)],
+        );
+
+        assert_eq!(report.summary.scalar_replacements, 1);
+        assert_eq!(report.summary.scalar_replacement_fallbacks, 2);
+        assert_eq!(report.summary.scalar_replacement_rejections, 0);
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_decision_counts
+                .get("selected"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_decision_counts
+                .get("fallback"),
+            Some(&2)
+        );
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_reason_counts
+                .get("scalar_method_summary:exact_receiver_summary"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_reason_counts
+                .get("scalar_method_materialized_fallback:guarded_numeric_args_fallback"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_reason_counts
+                .get("scalar_method_materialized_fallback:generic_argument"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_selection_reason_counts
+                .get("scalar_method_summary:exact_receiver_summary"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_fallback_reason_counts
+                .get("scalar_method_materialized_fallback:guarded_numeric_args_fallback"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .scalar_replacement_fallback_reason_counts
+                .get("scalar_method_materialized_fallback:generic_argument"),
+            Some(&1)
+        );
+        assert_eq!(
+            report.evidence.scalar_replacements[0].decision.as_deref(),
+            Some("scalar_replacement_selected")
+        );
+        assert_eq!(
+            report.evidence.scalar_replacements[0]
+                .reason_category
+                .as_deref(),
+            Some("scalar_method_summary:exact_receiver_summary")
+        );
+        assert_eq!(
+            report.evidence.scalar_replacements[1].decision.as_deref(),
+            Some("scalar_replacement_fallback")
+        );
+        assert_eq!(
+            report.evidence.scalar_replacements[1]
+                .reason_category
+                .as_deref(),
+            Some("scalar_method_materialized_fallback:guarded_numeric_args_fallback")
+        );
+        assert_eq!(
+            report.evidence.scalar_replacements[2].decision.as_deref(),
+            Some("scalar_replacement_fallback")
+        );
+        assert_eq!(
+            report.evidence.scalar_replacements[2]
+                .reason_category
+                .as_deref(),
+            Some("scalar_method_materialized_fallback:generic_argument")
+        );
     }
 }

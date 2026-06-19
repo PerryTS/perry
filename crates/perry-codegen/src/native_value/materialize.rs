@@ -1,8 +1,8 @@
 use serde::Serialize;
 
 use crate::expr::FnCtx;
-use crate::nanbox::POINTER_TAG_I64;
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8};
+use crate::nanbox::{BIGINT_TAG_I64, POINTER_TAG_I64};
+use crate::types::{DOUBLE, F32, I1, I128, I32, I64, I8};
 
 use super::artifact::{NativeAbiTransitionOp, NativeAbiTransitionRecord};
 use super::rep::{LoweredValue, NativeRep, SemanticKind};
@@ -51,7 +51,8 @@ fn transition_lossy(rep: &NativeRep, op: &NativeAbiTransitionOp) -> bool {
         | NativeAbiTransitionOp::PointerBox
         | NativeAbiTransitionOp::NativeHandleBox
         | NativeAbiTransitionOp::PromiseBox
-        | NativeAbiTransitionOp::BoolToJsValue => false,
+        | NativeAbiTransitionOp::BoolToJsValue
+        | NativeAbiTransitionOp::BigIntBox => false,
     }
 }
 
@@ -219,6 +220,43 @@ pub(crate) fn materialize_promise_boundary_to_js_value(
     )
 }
 
+pub(crate) fn materialize_small_bigint_pointer_to_js_value(
+    ctx: &mut FnCtx<'_>,
+    ptr_i64: &str,
+    reason: MaterializationReason,
+) -> String {
+    let tagged = ctx.block().or(I64, ptr_i64, BIGINT_TAG_I64);
+    let value = ctx.block().bitcast_i64_to_double(&tagged);
+    let materialized = LoweredValue {
+        semantic: SemanticKind::JsValue,
+        rep: NativeRep::JsValue,
+        llvm_ty: DOUBLE,
+        value: value.clone(),
+    };
+    record_materialized_transition(
+        ctx,
+        "materialize_js_value",
+        "materialize_small_bigint",
+        &materialized,
+        NativeRep::SmallBigInt.name().to_string(),
+        NativeAbiTransitionOp::BigIntBox,
+        reason,
+        false,
+    );
+    value
+}
+
+fn box_small_bigint_i128_to_js_value(ctx: &mut FnCtx<'_>, value_i128: &str) -> String {
+    let lo = ctx.block().trunc(I128, value_i128, I64);
+    let hi_wide = ctx.block().ashr(I128, value_i128, "64");
+    let hi = ctx.block().trunc(I128, &hi_wide, I64);
+    let ptr = ctx
+        .block()
+        .call(I64, "js_bigint_from_i128_parts", &[(I64, &lo), (I64, &hi)]);
+    let tagged = ctx.block().or(I64, &ptr, BIGINT_TAG_I64);
+    ctx.block().bitcast_i64_to_double(&tagged)
+}
+
 pub(crate) fn materialize_js_value_bits(
     ctx: &mut FnCtx<'_>,
     lowered: LoweredValue,
@@ -245,9 +283,30 @@ pub(crate) fn materialize_js_value_bits(
             "materialize_promise_boundary_bits",
         );
     }
+    if matches!(lowered.rep, NativeRep::SmallBigInt) {
+        let from_native_rep = lowered.rep.name().to_string();
+        let value = box_small_bigint_i128_to_js_value(ctx, &lowered.value);
+        let bits = ctx.block().bitcast_double_to_i64(&value);
+        let materialized = LoweredValue::js_value_bits(bits.clone());
+        record_transition(
+            ctx,
+            "materialize_js_value_bits",
+            "materialize_small_bigint_bits",
+            &materialized,
+            from_native_rep,
+            NativeRep::JsValueBits.name().to_string(),
+            NativeAbiTransitionOp::BigIntBox,
+            reason,
+            false,
+        );
+        return bits;
+    }
     if matches!(
         lowered.rep,
-        NativeRep::BufferView(_) | NativeRep::PodRecord { .. } | NativeRep::PodRecordView { .. }
+        NativeRep::StringRef
+            | NativeRep::BufferView(_)
+            | NativeRep::PodRecord { .. }
+            | NativeRep::PodRecordView { .. }
     ) {
         let js_value = materialize_js_value(ctx, lowered, reason.clone());
         let bits = ctx.block().bitcast_double_to_i64(&js_value);
@@ -281,9 +340,11 @@ pub(crate) fn materialize_js_value_bits(
         NativeRep::BufferView(_)
         | NativeRep::PodRecord { .. }
         | NativeRep::PodRecordView { .. }
+        | NativeRep::StringRef
         | NativeRep::JsValueBits
         | NativeRep::NativeHandle
-        | NativeRep::PromiseBoundary => NativeAbiTransitionOp::None,
+        | NativeRep::PromiseBoundary
+        | NativeRep::SmallBigInt => NativeAbiTransitionOp::None,
     };
     let lossy = transition_lossy(&lowered.rep, &conversion_op);
     let bits = match &lowered.rep {
@@ -328,9 +389,11 @@ pub(crate) fn materialize_js_value_bits(
         NativeRep::BufferView(_)
         | NativeRep::PodRecord { .. }
         | NativeRep::PodRecordView { .. }
+        | NativeRep::StringRef
         | NativeRep::JsValueBits
         | NativeRep::NativeHandle
-        | NativeRep::PromiseBoundary => {
+        | NativeRep::PromiseBoundary
+        | NativeRep::SmallBigInt => {
             unreachable!("handled before direct js_value_bits materialization")
         }
     };
@@ -387,6 +450,22 @@ pub(crate) fn materialize_js_value(
     if matches!(&lowered.rep, NativeRep::PromiseBoundary) {
         return materialize_promise_boundary_to_js_value(ctx, lowered, reason);
     }
+    if matches!(&lowered.rep, NativeRep::SmallBigInt) {
+        let from_native_rep = lowered.rep.name().to_string();
+        let value = box_small_bigint_i128_to_js_value(ctx, &lowered.value);
+        let materialized = LoweredValue::js_value(value.clone());
+        record_materialized_transition(
+            ctx,
+            "materialize_js_value",
+            "materialize_small_bigint",
+            &materialized,
+            from_native_rep,
+            NativeAbiTransitionOp::BigIntBox,
+            reason,
+            false,
+        );
+        return value;
+    }
     let from_native_rep = lowered.rep.name().to_string();
     let conversion_op = match &lowered.rep {
         NativeRep::I32 | NativeRep::I64 => NativeAbiTransitionOp::SignedIntToFloat,
@@ -399,13 +478,15 @@ pub(crate) fn materialize_js_value(
         NativeRep::I1 => NativeAbiTransitionOp::BoolToJsValue,
         NativeRep::F32 => NativeAbiTransitionOp::FloatExtend,
         NativeRep::F64 => NativeAbiTransitionOp::None,
+        NativeRep::StringRef => NativeAbiTransitionOp::PointerBox,
         NativeRep::BufferView(_)
         | NativeRep::PodRecord { .. }
         | NativeRep::PodRecordView { .. }
         | NativeRep::JsValueBits
         | NativeRep::JsValue
         | NativeRep::NativeHandle
-        | NativeRep::PromiseBoundary => NativeAbiTransitionOp::None,
+        | NativeRep::PromiseBoundary
+        | NativeRep::SmallBigInt => NativeAbiTransitionOp::None,
     };
     let lossy = transition_lossy(&lowered.rep, &conversion_op);
     let value = match &lowered.rep {
@@ -431,6 +512,10 @@ pub(crate) fn materialize_js_value(
         }
         NativeRep::BufferLen => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
         NativeRep::F32 => ctx.block().fpext(F32, &lowered.value, DOUBLE),
+        NativeRep::StringRef => {
+            ctx.block()
+                .call(DOUBLE, "js_nanbox_string", &[(I64, &lowered.value)])
+        }
         NativeRep::BufferView(_) => lowered.value.clone(),
         NativeRep::PodRecord { .. } => lowered.value.clone(),
         NativeRep::PodRecordView { .. } => lowered.value.clone(),
@@ -438,7 +523,8 @@ pub(crate) fn materialize_js_value(
         NativeRep::JsValue
         | NativeRep::F64
         | NativeRep::NativeHandle
-        | NativeRep::PromiseBoundary => lowered.value.clone(),
+        | NativeRep::PromiseBoundary
+        | NativeRep::SmallBigInt => lowered.value.clone(),
     };
     let materialized = LoweredValue {
         semantic: lowered.semantic,
@@ -470,6 +556,10 @@ pub(crate) fn materialize_js_value_without_record(
             let tagged = ctx.block().or(I64, &lowered.value, POINTER_TAG_I64);
             ctx.block().bitcast_i64_to_double(&tagged)
         }
+        NativeRep::StringRef => {
+            ctx.block()
+                .call(DOUBLE, "js_nanbox_string", &[(I64, &lowered.value)])
+        }
         NativeRep::I1 => {
             let bits = ctx.block().select(
                 I1,
@@ -495,5 +585,6 @@ pub(crate) fn materialize_js_value_without_record(
         NativeRep::BufferView(_)
         | NativeRep::PodRecord { .. }
         | NativeRep::PodRecordView { .. } => lowered.value.clone(),
+        NativeRep::SmallBigInt => box_small_bigint_i128_to_js_value(ctx, &lowered.value),
     }
 }

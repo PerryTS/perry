@@ -324,11 +324,22 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_throw_error_with_code", VOID, &[PTR, I64, PTR, I64, I32]);
     module.declare_function("js_map_set", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_map_set_string_number", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_map_set_string_key", I64, &[I64, I64, DOUBLE]);
+    module.declare_function("js_map_set_string_i32", I64, &[I64, I64, I32]);
+    module.declare_function("js_map_set_string_u32", I64, &[I64, I64, I32]);
+    module.declare_function("js_map_set_string_f32", I64, &[I64, I64, F32]);
+    module.declare_function("js_map_set_string_bool", I64, &[I64, I64, I32]);
+    module.declare_function("js_map_set_string_string", I64, &[I64, I64, I64]);
+    module.declare_function("js_map_set_number_key", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_map_get", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_map_get_string_key", DOUBLE, &[I64, I64]);
+    module.declare_function("js_map_get_number_key", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_map_has", I32, &[I64, DOUBLE]);
     module.declare_function("js_map_has_string_key", I32, &[I64, I64]);
+    module.declare_function("js_map_has_number_key", I32, &[I64, DOUBLE]);
     module.declare_function("js_map_delete", I32, &[I64, DOUBLE]);
+    module.declare_function("js_map_delete_string_key", I32, &[I64, I64]);
+    module.declare_function("js_map_delete_number_key", I32, &[I64, DOUBLE]);
     module.declare_function("js_object_keys", I64, &[I64]);
     module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
     module.declare_function("js_for_in_keys_value", I64, &[DOUBLE]);
@@ -525,10 +536,25 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_to_number", DOUBLE, &[DOUBLE]);
     module.declare_function("js_set_add", I64, &[I64, DOUBLE]);
     module.declare_function("js_set_add_string", I64, &[I64, I64]);
+    module.declare_function("js_set_add_number", I64, &[I64, DOUBLE]);
+    module.declare_function("js_set_add_i32", I64, &[I64, I32]);
+    module.declare_function("js_set_add_u32", I64, &[I64, I32]);
+    module.declare_function("js_set_add_f32", I64, &[I64, F32]);
+    module.declare_function("js_set_add_bool", I64, &[I64, I32]);
     module.declare_function("js_set_has", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_has_string", I32, &[I64, I64]);
+    module.declare_function("js_set_has_number", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_has_i32", I32, &[I64, I32]);
+    module.declare_function("js_set_has_u32", I32, &[I64, I32]);
+    module.declare_function("js_set_has_f32", I32, &[I64, F32]);
+    module.declare_function("js_set_has_bool", I32, &[I64, I32]);
     module.declare_function("js_set_delete", I32, &[I64, DOUBLE]);
     module.declare_function("js_set_delete_string", I32, &[I64, I64]);
+    module.declare_function("js_set_delete_number", I32, &[I64, DOUBLE]);
+    module.declare_function("js_set_delete_i32", I32, &[I64, I32]);
+    module.declare_function("js_set_delete_u32", I32, &[I64, I32]);
+    module.declare_function("js_set_delete_f32", I32, &[I64, F32]);
+    module.declare_function("js_set_delete_bool", I32, &[I64, I32]);
     module.declare_function("js_set_size", I32, &[I64]);
     // #2872: ES2024 Set composition methods.
     module.declare_function("js_set_union", I64, &[I64, DOUBLE]);
@@ -1083,6 +1109,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_addref", VOID, &[I64]);
     module.declare_function("js_bigint_from_string", I64, &[PTR, I32]);
     module.declare_function("js_bigint_from_f64", I64, &[DOUBLE]);
+    module.declare_function("js_bigint_from_i128_parts", I64, &[I64, I64]);
     module.declare_function("js_bigint_cmp", I32, &[I64, I64]);
     // Dynamic bigint arithmetic — lowered from `Expr::Binary` when
     // either operand is statically bigint-typed. These unbox, call

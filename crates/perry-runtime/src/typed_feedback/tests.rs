@@ -778,6 +778,67 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
 }
 
 #[test]
+fn typed_feedback_packed_i32_loop_guard_rejects_fractional_numeric_layout() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(70, TypedFeedbackSiteKind::ArrayElement, "packed_i32_loop");
+
+    let ints = [1.0, 2.0, 3.0];
+    let int_arr = crate::array::js_array_from_f64(ints.as_ptr(), ints.len() as u32);
+    let int_box = crate::value::js_nanbox_pointer(int_arr as i64);
+    assert_eq!(
+        js_typed_feedback_packed_i32_array_loop_guard(70, int_box),
+        1
+    );
+
+    let fractional = [1.0, 2.5, 3.0];
+    let fractional_arr =
+        crate::array::js_array_from_f64(fractional.as_ptr(), fractional.len() as u32);
+    let fractional_box = crate::value::js_nanbox_pointer(fractional_arr as i64);
+    assert_eq!(
+        crate::array::js_array_is_numeric_f64_layout(fractional_arr),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_packed_i32_array_loop_guard(70, fractional_box),
+        0
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 1);
+}
+
+#[test]
+fn typed_feedback_packed_u32_loop_guard_rejects_signed_fractional_and_overflow_layouts() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(71, TypedFeedbackSiteKind::ArrayElement, "packed_u32_loop");
+
+    let uints = [0.0, 4_294_967_295.0];
+    let uint_arr = crate::array::js_array_from_f64(uints.as_ptr(), uints.len() as u32);
+    let uint_box = crate::value::js_nanbox_pointer(uint_arr as i64);
+    assert_eq!(
+        js_typed_feedback_packed_u32_array_loop_guard(71, uint_box),
+        1
+    );
+
+    for values in [[-1.0, 2.0], [1.5, 2.0], [4_294_967_296.0, 2.0]] {
+        let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+        let arr_box = crate::value::js_nanbox_pointer(arr as i64);
+        assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
+        assert_eq!(
+            js_typed_feedback_packed_u32_array_loop_guard(71, arr_box),
+            0
+        );
+    }
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 3);
+}
+
+#[test]
 fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();
@@ -1015,6 +1076,27 @@ fn numeric_array_helpers_have_lto_keepalive_anchors() {
 }
 
 #[test]
+fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
+    let typed_feedback = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/typed_feedback.rs"
+    ));
+
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
+        "js_typed_feedback_packed_i32_array_loop_guard",
+    );
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
+        "js_typed_feedback_packed_u32_array_loop_guard",
+    );
+}
+
+#[test]
 fn representation_lowering_helpers_have_lto_keepalive_anchors() {
     let native_abi = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_abi.rs"));
     let native_module = include_str!(concat!(
@@ -1033,6 +1115,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
     let set = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/set.rs"));
     let boxes = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/box.rs"));
     let closure_alloc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/closure/alloc.rs"));
+    let promise = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/promise/mod.rs"));
 
     for (src, static_name, signature, target) in [
         (
@@ -1181,15 +1264,81 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             map,
+            "KEEP_JS_MAP_SET_STRING_KEY",
+            "static KEEP_JS_MAP_SET_STRING_KEY: extern \"C\" fn(",
+            "js_map_set_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_I32",
+            "static KEEP_JS_MAP_SET_STRING_I32: extern \"C\" fn(",
+            "js_map_set_string_i32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_U32",
+            "static KEEP_JS_MAP_SET_STRING_U32: extern \"C\" fn(",
+            "js_map_set_string_u32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_F32",
+            "static KEEP_JS_MAP_SET_STRING_F32: extern \"C\" fn(",
+            "js_map_set_string_f32",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_BOOL",
+            "static KEEP_JS_MAP_SET_STRING_BOOL: extern \"C\" fn(",
+            "js_map_set_string_bool",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_STRING_STRING",
+            "static KEEP_JS_MAP_SET_STRING_STRING: extern \"C\" fn(",
+            "js_map_set_string_string",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_SET_NUMBER_KEY",
+            "static KEEP_JS_MAP_SET_NUMBER_KEY: extern \"C\" fn(*mut MapHeader, f64, f64) -> *mut MapHeader",
+            "js_map_set_number_key",
+        ),
+        (
+            map,
             "KEEP_JS_MAP_HAS_STRING_KEY",
             "static KEEP_JS_MAP_HAS_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> i32",
             "js_map_has_string_key",
         ),
         (
             map,
+            "KEEP_JS_MAP_HAS_NUMBER_KEY",
+            "static KEEP_JS_MAP_HAS_NUMBER_KEY: extern \"C\" fn(*const MapHeader, f64) -> i32",
+            "js_map_has_number_key",
+        ),
+        (
+            map,
             "KEEP_JS_MAP_GET_STRING_KEY",
             "static KEEP_JS_MAP_GET_STRING_KEY: extern \"C\" fn(*const MapHeader, *const StringHeader) -> f64",
             "js_map_get_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_GET_NUMBER_KEY",
+            "static KEEP_JS_MAP_GET_NUMBER_KEY: extern \"C\" fn(*const MapHeader, f64) -> f64",
+            "js_map_get_number_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_DELETE_STRING_KEY",
+            "static KEEP_JS_MAP_DELETE_STRING_KEY: extern \"C\" fn(*mut MapHeader, *const StringHeader) -> i32",
+            "js_map_delete_string_key",
+        ),
+        (
+            map,
+            "KEEP_JS_MAP_DELETE_NUMBER_KEY",
+            "static KEEP_JS_MAP_DELETE_NUMBER_KEY: extern \"C\" fn(*mut MapHeader, f64) -> i32",
+            "js_map_delete_number_key",
         ),
         (
             set,
@@ -1199,15 +1348,105 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             set,
+            "KEEP_JS_SET_ADD_NUMBER",
+            "static KEEP_JS_SET_ADD_NUMBER: extern \"C\" fn(*mut SetHeader, f64) -> *mut SetHeader",
+            "js_set_add_number",
+        ),
+        (
+            set,
             "KEEP_JS_SET_HAS_STRING",
             "static KEEP_JS_SET_HAS_STRING: extern \"C\" fn(*const SetHeader, *const StringHeader) -> i32",
             "js_set_has_string",
         ),
         (
             set,
+            "KEEP_JS_SET_HAS_NUMBER",
+            "static KEEP_JS_SET_HAS_NUMBER: extern \"C\" fn(*const SetHeader, f64) -> i32",
+            "js_set_has_number",
+        ),
+        (
+            set,
             "KEEP_JS_SET_DELETE_STRING",
             "static KEEP_JS_SET_DELETE_STRING: extern \"C\" fn(*mut SetHeader, *const StringHeader) -> i32",
             "js_set_delete_string",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_NUMBER",
+            "static KEEP_JS_SET_DELETE_NUMBER: extern \"C\" fn(*mut SetHeader, f64) -> i32",
+            "js_set_delete_number",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_I32",
+            "static KEEP_JS_SET_ADD_I32: extern \"C\" fn(*mut SetHeader, i32) -> *mut SetHeader",
+            "js_set_add_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_I32",
+            "static KEEP_JS_SET_HAS_I32: extern \"C\" fn(*const SetHeader, i32) -> i32",
+            "js_set_has_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_I32",
+            "static KEEP_JS_SET_DELETE_I32: extern \"C\" fn(*mut SetHeader, i32) -> i32",
+            "js_set_delete_i32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_U32",
+            "static KEEP_JS_SET_ADD_U32: extern \"C\" fn(*mut SetHeader, u32) -> *mut SetHeader",
+            "js_set_add_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_U32",
+            "static KEEP_JS_SET_HAS_U32: extern \"C\" fn(*const SetHeader, u32) -> i32",
+            "js_set_has_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_U32",
+            "static KEEP_JS_SET_DELETE_U32: extern \"C\" fn(*mut SetHeader, u32) -> i32",
+            "js_set_delete_u32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_F32",
+            "static KEEP_JS_SET_ADD_F32: extern \"C\" fn(*mut SetHeader, f32) -> *mut SetHeader",
+            "js_set_add_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_F32",
+            "static KEEP_JS_SET_HAS_F32: extern \"C\" fn(*const SetHeader, f32) -> i32",
+            "js_set_has_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_F32",
+            "static KEEP_JS_SET_DELETE_F32: extern \"C\" fn(*mut SetHeader, f32) -> i32",
+            "js_set_delete_f32",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_ADD_BOOL",
+            "static KEEP_JS_SET_ADD_BOOL: extern \"C\" fn(*mut SetHeader, i32) -> *mut SetHeader",
+            "js_set_add_bool",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_HAS_BOOL",
+            "static KEEP_JS_SET_HAS_BOOL: extern \"C\" fn(*const SetHeader, i32) -> i32",
+            "js_set_has_bool",
+        ),
+        (
+            set,
+            "KEEP_JS_SET_DELETE_BOOL",
+            "static KEEP_JS_SET_DELETE_BOOL: extern \"C\" fn(*mut SetHeader, i32) -> i32",
+            "js_set_delete_bool",
         ),
         (
             boxes,
@@ -1244,6 +1483,30 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
             "KEEP_JS_BOOL_BOX_SET",
             "static KEEP_JS_BOOL_BOX_SET: extern \"C\" fn(*mut BoolBox, i32)",
             "js_bool_box_set",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_SET_I32",
+            "static KEEP_JS_ITER_RESULT_SET_I32: extern \"C\" fn(i32, i32) -> f64",
+            "js_iter_result_set_i32",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_SET_I1",
+            "static KEEP_JS_ITER_RESULT_SET_I1: extern \"C\" fn(i32, i32) -> f64",
+            "js_iter_result_set_i1",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_GET_VALUE_I32",
+            "static KEEP_JS_ITER_RESULT_GET_VALUE_I32: extern \"C\" fn() -> i32",
+            "js_iter_result_get_value_i32",
+        ),
+        (
+            promise,
+            "KEEP_JS_ITER_RESULT_GET_VALUE_I1",
+            "static KEEP_JS_ITER_RESULT_GET_VALUE_I1: extern \"C\" fn() -> i32",
+            "js_iter_result_get_value_i1",
         ),
         (
             trace,

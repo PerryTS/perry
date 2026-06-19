@@ -37,6 +37,13 @@ DYNAMIC_PROPERTY_HELPERS = (
 BUFFER_SLOW_PATH_HELPERS = (
     "js_buffer_get",
     "js_buffer_set",
+    # Buffer byte indexing currently lowers through the Uint8Array helper
+    # surface, so count those helpers for the Buffer-byte material gate too.
+    "js_uint8array_get",
+    "js_uint8array_set",
+)
+
+ARRAY_SLOW_PATH_HELPERS = (
     "js_typed_array_get",
     "js_typed_array_set",
     "js_uint8array_get",

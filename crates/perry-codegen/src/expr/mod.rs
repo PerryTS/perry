@@ -90,8 +90,9 @@ pub(crate) use helpers::{
     type_has_numeric_pointer_free_array_layout, unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
-    can_lower_expr_as_i32, is_known_finite, lower_expr_as_i32, lower_expr_native,
-    try_flat_const_2d_int, try_lower_flat_const_index_get,
+    can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, is_known_finite,
+    lower_expr_as_i32, lower_expr_native, lower_packed_u32_loop_index_get, try_flat_const_2d_int,
+    try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
 pub(crate) use nanbox_inline::{
@@ -858,9 +859,11 @@ pub(crate) struct FnCtx<'a> {
     pub typed_f64_methods: &'a std::collections::HashSet<(String, String)>,
     pub typed_i32_methods: &'a std::collections::HashSet<(String, String)>,
     pub typed_i1_methods: &'a std::collections::HashSet<(String, String)>,
+    pub typed_string_methods: &'a std::collections::HashSet<(String, String)>,
     pub typed_i1_method_param_reps:
         &'a std::collections::HashMap<(String, String), Vec<crate::codegen::TypedParamRep>>,
     pub typed_f64_closures: &'a std::collections::HashSet<u32>,
+    pub typed_i32_closures: &'a std::collections::HashSet<u32>,
     pub typed_i1_closures: &'a std::collections::HashSet<u32>,
     pub typed_i1_closure_param_reps:
         &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
@@ -1083,6 +1086,103 @@ pub(crate) struct BoundedIndexPair {
     pub scope_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackedNumericLoopKind {
+    F64,
+    I32,
+    U32,
+}
+
+impl PackedNumericLoopKind {
+    pub(crate) fn array_kind_label(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64",
+            Self::I32 => "packed_i32",
+            Self::U32 => "packed_u32",
+        }
+    }
+
+    pub(crate) fn loop_label(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64",
+            Self::I32 => "packed_i32",
+            Self::U32 => "packed_u32",
+        }
+    }
+
+    pub(crate) fn guard_expr_kind(self) -> &'static str {
+        match self {
+            Self::F64 => "PackedF64LoopGuard",
+            Self::I32 => "PackedI32LoopGuard",
+            Self::U32 => "PackedU32LoopGuard",
+        }
+    }
+
+    pub(crate) fn guard_consumer(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_guard",
+            Self::I32 => "packed_i32_loop_guard",
+            Self::U32 => "packed_u32_loop_guard",
+        }
+    }
+
+    pub(crate) fn fallback_consumer(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_fallback",
+            Self::I32 => "packed_i32_loop_fallback",
+            Self::U32 => "packed_u32_loop_fallback",
+        }
+    }
+
+    pub(crate) fn load_expr_kind(self) -> &'static str {
+        match self {
+            Self::F64 => "PackedF64LoopLoad",
+            Self::I32 => "PackedI32LoopLoad",
+            Self::U32 => "PackedU32LoopLoad",
+        }
+    }
+
+    pub(crate) fn load_consumer_f64(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_load",
+            Self::I32 => "packed_i32_loop_load_f64",
+            Self::U32 => "packed_u32_loop_load_f64",
+        }
+    }
+
+    pub(crate) fn store_expr_kind(self) -> &'static str {
+        match self {
+            Self::F64 => "PackedF64LoopStore",
+            Self::I32 => "PackedI32LoopStore",
+            Self::U32 => "PackedU32LoopStore",
+        }
+    }
+
+    pub(crate) fn store_consumer(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_store",
+            Self::I32 => "packed_i32_loop_store",
+            Self::U32 => "packed_u32_loop_store",
+        }
+    }
+
+    pub(crate) fn store_side_exit_consumer(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_store_side_exit",
+            Self::I32 => "packed_i32_loop_store_side_exit",
+            Self::U32 => "packed_u32_loop_store_side_exit",
+        }
+    }
+
+    pub(crate) fn store_guard_detail(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_store_guard",
+            Self::I32 => "packed_i32_loop_store_guard",
+            Self::U32 => "packed_u32_loop_store_guard",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PackedF64LoopFact {
     pub index_local_id: u32,
@@ -1090,6 +1190,7 @@ pub(crate) struct PackedF64LoopFact {
     pub scope_id: u32,
     pub guard_id: String,
     pub store_side_exit_label: String,
+    pub array_kind: PackedNumericLoopKind,
 }
 
 impl<'a> FnCtx<'a> {
@@ -1511,6 +1612,268 @@ mod this_super_call;
 mod unary;
 mod url_main;
 
+fn collection_fact(
+    receiver_kind: &str,
+    fact_suffix: &str,
+    state: &str,
+) -> crate::native_value::NativeFactUse {
+    crate::native_value::NativeFactUse {
+        fact_id: format!("{receiver_kind}.{fact_suffix}"),
+        kind: "type_fact".to_string(),
+        local_id: None,
+        state: state.to_string(),
+        detail: fact_suffix.to_string(),
+        reason: None,
+    }
+}
+
+pub(crate) fn record_collection_string_key_selected(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    key_handle: &str,
+    receiver_kind: &'static str,
+    helper: &'static str,
+) {
+    let lowered = LoweredValue::string_ref(key_handle);
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        expr_kind,
+        None,
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![collection_fact(
+            receiver_kind,
+            "string_key_helper",
+            "consumed",
+        )],
+        Vec::new(),
+        false,
+        false,
+        vec![
+            format!("selected_helper={helper}"),
+            "key_rep=string_ref".to_string(),
+            "boxed_key_avoided=true".to_string(),
+        ],
+    );
+}
+
+pub(crate) fn record_collection_string_key_value_selected(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    lowered_value: &LoweredValue,
+    receiver_kind: &'static str,
+    value_fact_suffix: &'static str,
+    helper: &'static str,
+) {
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        expr_kind,
+        None,
+        consumer,
+        lowered_value,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![
+            collection_fact(receiver_kind, "string_key_helper", "consumed"),
+            collection_fact(receiver_kind, value_fact_suffix, "consumed"),
+        ],
+        Vec::new(),
+        false,
+        false,
+        vec![
+            format!("selected_helper={helper}"),
+            "key_rep=string_ref".to_string(),
+            format!("value_rep={}", lowered_value.rep.name()),
+            "boxed_key_avoided=true".to_string(),
+            "boxed_value_avoided_until_map_slot=true".to_string(),
+        ],
+    );
+}
+
+pub(crate) fn record_collection_string_key_fallback(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    key_box: &str,
+    receiver_kind: &'static str,
+    helper: &'static str,
+    reason: &'static str,
+) {
+    let lowered = LoweredValue::js_value(key_box);
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        expr_kind,
+        None,
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        vec![collection_fact(
+            receiver_kind,
+            "string_key_helper",
+            "rejected",
+        )],
+        false,
+        false,
+        vec![
+            format!("generic_helper={helper}"),
+            format!("typed_collection_rejected={reason}"),
+            "key_rep=js_value".to_string(),
+        ],
+    );
+}
+
+pub(crate) fn record_collection_number_key_selected(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    key_raw: &str,
+    receiver_kind: &'static str,
+    fact_suffix: &'static str,
+    helper: &'static str,
+    key_label: &'static str,
+) {
+    let lowered = LoweredValue::f64(key_raw.to_string());
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        expr_kind,
+        None,
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![collection_fact(receiver_kind, fact_suffix, "consumed")],
+        Vec::new(),
+        false,
+        false,
+        vec![
+            format!("selected_helper={helper}"),
+            format!("{key_label}_rep=raw_f64"),
+            format!("{key_label}_guard=js_typed_f64_arg_guard"),
+            "generic_helper_avoided=true".to_string(),
+        ],
+    );
+}
+
+pub(crate) fn record_collection_number_key_fallback(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    key_box: &str,
+    receiver_kind: &'static str,
+    fact_suffix: &'static str,
+    helper: &'static str,
+    reason: &'static str,
+    key_label: &'static str,
+) {
+    let lowered = LoweredValue::js_value(key_box);
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        expr_kind,
+        None,
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        vec![collection_fact(receiver_kind, fact_suffix, "rejected")],
+        false,
+        false,
+        vec![
+            format!("generic_helper={helper}"),
+            format!("typed_collection_rejected={reason}"),
+            format!("{key_label}_rep=js_value"),
+        ],
+    );
+}
+
+pub(crate) fn record_collection_typed_value_selected(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    lowered_value: &LoweredValue,
+    receiver_kind: &'static str,
+    fact_suffix: &'static str,
+    helper: &'static str,
+    slot_boundary: &'static str,
+) {
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        expr_kind,
+        None,
+        consumer,
+        lowered_value,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec![collection_fact(receiver_kind, fact_suffix, "consumed")],
+        Vec::new(),
+        false,
+        false,
+        vec![
+            format!("selected_helper={helper}"),
+            format!("value_rep={}", lowered_value.rep.name()),
+            format!("boxed_value_avoided_until_{slot_boundary}=true"),
+        ],
+    );
+}
+
+pub(crate) fn record_collection_typed_value_fallback(
+    ctx: &mut FnCtx<'_>,
+    expr_kind: &'static str,
+    consumer: &'static str,
+    value_box: &str,
+    receiver_kind: &'static str,
+    fact_suffix: &'static str,
+    helper: &'static str,
+    reason: &'static str,
+) {
+    let lowered = LoweredValue::js_value(value_box);
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        expr_kind,
+        None,
+        consumer,
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Vec::new(),
+        vec![collection_fact(receiver_kind, fact_suffix, "rejected")],
+        false,
+        false,
+        vec![
+            format!("generic_helper={helper}"),
+            format!("typed_collection_rejected={reason}"),
+            "value_rep=js_value".to_string(),
+        ],
+    );
+}
+
 fn is_plain_f64_local(ctx: &FnCtx<'_>, id: u32) -> bool {
     !ctx.closure_captures.contains_key(&id)
         && !ctx.boxed_vars.contains(&id)
@@ -1750,6 +2113,9 @@ fn lower_numeric_operand_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             return Ok(Some(lowered));
         }
     }
+    if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, expr)? {
+        return Ok(Some(lowered));
+    }
     lower_expr_value(ctx, expr)
 }
 
@@ -1773,9 +2139,53 @@ fn native_number_to_f64(ctx: &mut FnCtx<'_>, lowered: &LoweredValue) -> Option<S
     }
 }
 
+fn small_bigint_literal_i128(raw: &str) -> Option<i128> {
+    let normalized = raw.replace('_', "");
+    let s = normalized.strip_suffix('n').unwrap_or(&normalized);
+    let (negative, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let (radix, digits) = if let Some(rest) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        (16, rest)
+    } else if let Some(rest) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
+        (8, rest)
+    } else if let Some(rest) = digits
+        .strip_prefix("0b")
+        .or_else(|| digits.strip_prefix("0B"))
+    {
+        (2, rest)
+    } else {
+        (10, digits)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let magnitude = i128::from_str_radix(digits, radix).ok()?;
+    if negative {
+        magnitude.checked_neg()
+    } else {
+        Some(magnitude)
+    }
+}
+
 fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
     if let Expr::Integer(value) = expr {
         return Ok(Some((*value as i32).to_string()));
+    }
+    if matches!(expr, Expr::IterResultGetValue) {
+        return Ok(Some(
+            lower_expr_native(ctx, expr, ExpectedNativeRep::I32)?.value,
+        ));
     }
     if let Expr::LocalGet(id) = expr {
         if let Some(slot) = ctx.i32_counter_slots.get(id).cloned() {
@@ -2002,6 +2412,45 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 false,
                 false,
                 Vec::new(),
+            );
+            Ok(Some(lowered))
+        }
+        Expr::BigInt(raw) => {
+            let Some(value) = small_bigint_literal_i128(raw) else {
+                let lowered = LoweredValue::js_value("0.0");
+                ctx.record_lowered_value_with_access_mode(
+                    "BigInt",
+                    None,
+                    "ordinary_expr_value.small_bigint_literal_rejected",
+                    &lowered,
+                    None,
+                    None,
+                    Some(BufferAccessMode::DynamicFallback),
+                    Some(MaterializationReason::RuntimeApi),
+                    false,
+                    false,
+                    vec![
+                        "small_bigint_rejected=literal_outside_i128_or_invalid".to_string(),
+                        "fallback=js_bigint_from_string".to_string(),
+                    ],
+                );
+                return Ok(None);
+            };
+            let lowered = LoweredValue::small_bigint(value.to_string());
+            ctx.record_lowered_value(
+                "BigInt",
+                None,
+                "ordinary_expr_value.small_bigint_literal_i128",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![
+                    "proof=bigint_literal_fits_i128".to_string(),
+                    "public_semantics=materialize_bigint_object_before_js_boundary".to_string(),
+                ],
             );
             Ok(Some(lowered))
         }
@@ -2257,6 +2706,24 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 false,
                 false,
                 Vec::new(),
+            );
+            Ok(Some(lowered))
+        }
+        Expr::BooleanCoerce(operand) if matches!(operand.as_ref(), Expr::IterResultGetValue) => {
+            let value_i32 = ctx.block().call(I32, "js_iter_result_get_value_i1", &[]);
+            let value = ctx.block().icmp_ne(I32, &value_i32, "0");
+            let lowered = LoweredValue::i1(value);
+            ctx.record_lowered_value(
+                "IterResultGetValue",
+                None,
+                "compiler_private_async_iter_result_get_i1",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec!["slot_kind=raw_i1_or_truthy_jsvalue".to_string()],
             );
             Ok(Some(lowered))
         }

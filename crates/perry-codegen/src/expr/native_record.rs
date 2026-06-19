@@ -49,6 +49,7 @@ fn native_fact_use(
         kind: kind.to_string(),
         local_id,
         state: state.to_string(),
+        detail: detail.to_string(),
         reason,
     }
 }
@@ -99,6 +100,13 @@ pub(super) fn native_fact_uses_for_record(
             None,
         )),
         NativeRep::JsValue => {}
+        NativeRep::StringRef => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "string_ref",
+            None,
+        )),
         NativeRep::I32 => consumed.push(native_fact_use(
             "representation",
             local_id,
@@ -188,6 +196,13 @@ pub(super) fn native_fact_uses_for_record(
             local_id,
             "consumed",
             "promise_boundary",
+            None,
+        )),
+        NativeRep::SmallBigInt => consumed.push(native_fact_use(
+            "representation",
+            local_id,
+            "consumed",
+            "small_bigint",
             None,
         )),
         NativeRep::BufferView(_) => consumed.push(native_fact_use(

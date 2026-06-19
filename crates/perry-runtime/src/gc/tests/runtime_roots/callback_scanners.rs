@@ -725,6 +725,51 @@ fn test_promise_iter_result_raw_f64_slot_is_not_scanned_as_root() {
 }
 
 #[test]
+fn test_promise_iter_result_raw_i32_slot_is_not_scanned_as_root() {
+    let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let stale_pointer_like = f64::from_bits(POINTER_TAG | (nursery_user as u64 & POINTER_MASK));
+    crate::promise::js_iter_result_set(stale_pointer_like, 0);
+    crate::promise::js_iter_result_set_i32(-17, 0);
+
+    let mut marked = Vec::new();
+    crate::promise::scan_iter_result_root(&mut |value| marked.push(value.to_bits()));
+
+    assert!(
+        marked.is_empty(),
+        "raw i32 iter-result slots must not scan stale pointer-shaped JSValue bits"
+    );
+    assert_eq!(
+        crate::promise::js_iter_result_get_value().to_bits(),
+        crate::value::JSValue::int32(-17).bits()
+    );
+    assert_eq!(crate::promise::js_iter_result_get_value_i32(), -17);
+    assert_eq!(crate::promise::js_iter_result_get_value_f64(), -17.0);
+    crate::promise::js_iter_result_set(0.0, 0);
+}
+
+#[test]
+fn test_promise_iter_result_raw_i1_slot_is_not_scanned_as_root() {
+    let nursery_user = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let stale_pointer_like = f64::from_bits(POINTER_TAG | (nursery_user as u64 & POINTER_MASK));
+    crate::promise::js_iter_result_set(stale_pointer_like, 0);
+    crate::promise::js_iter_result_set_i1(1, 0);
+
+    let mut marked = Vec::new();
+    crate::promise::scan_iter_result_root(&mut |value| marked.push(value.to_bits()));
+
+    assert!(
+        marked.is_empty(),
+        "raw i1 iter-result slots must not scan stale pointer-shaped JSValue bits"
+    );
+    assert_eq!(
+        crate::promise::js_iter_result_get_value().to_bits(),
+        crate::value::TAG_TRUE
+    );
+    assert_eq!(crate::promise::js_iter_result_get_value_i1(), 1);
+    crate::promise::js_iter_result_set(0.0, 0);
+}
+
+#[test]
 fn test_evacuation_verify_detects_stale_forwarded_root_slot() {
     let _guard = ShadowAndGlobalRootResetGuard;
     reset_shadow_stack();

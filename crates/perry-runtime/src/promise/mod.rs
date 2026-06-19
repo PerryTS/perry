@@ -270,8 +270,12 @@ pub(crate) fn mt_profile_register() {
 // objects so `for...of` and external consumers see the spec shape.
 thread_local! {
     static ITER_RESULT_VALUE: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    static ITER_RESULT_VALUE_I32: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+    static ITER_RESULT_VALUE_I1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ITER_RESULT_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ITER_RESULT_VALUE_IS_RAW_F64: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ITER_RESULT_VALUE_IS_RAW_I32: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ITER_RESULT_VALUE_IS_RAW_I1: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub static MT_ITER_RESULT_SET_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -285,6 +289,8 @@ pub extern "C" fn js_iter_result_set(value: f64, done: i32) -> f64 {
     ITER_RESULT_VALUE.with(|c| c.set(value));
     ITER_RESULT_DONE.with(|c| c.set(done != 0));
     ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
+    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
+    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -296,12 +302,48 @@ pub extern "C" fn js_iter_result_set_f64(value: f64, done: i32) -> f64 {
     ITER_RESULT_VALUE.with(|c| c.set(value));
     ITER_RESULT_DONE.with(|c| c.set(done != 0));
     ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(true));
+    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
+    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Write a raw signed-Int32 iter-result payload. The value half is not a
+/// JSValue root and must not be scanned by GC while the side flag is set.
+#[no_mangle]
+pub extern "C" fn js_iter_result_set_i32(value: i32, done: i32) -> f64 {
+    bump(&MT_ITER_RESULT_SET_COUNT);
+    ITER_RESULT_VALUE_I32.with(|c| c.set(value));
+    ITER_RESULT_DONE.with(|c| c.set(done != 0));
+    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
+    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(true));
+    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(false));
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Write a raw boolean iter-result payload. The value half is not a JSValue
+/// root and must not be scanned by GC while the side flag is set.
+#[no_mangle]
+pub extern "C" fn js_iter_result_set_i1(value: i32, done: i32) -> f64 {
+    bump(&MT_ITER_RESULT_SET_COUNT);
+    ITER_RESULT_VALUE_I1.with(|c| c.set(value != 0));
+    ITER_RESULT_DONE.with(|c| c.set(done != 0));
+    ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.set(false));
+    ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.set(false));
+    ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.set(true));
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// Read the value half of the iter-result scratch slot.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
+    if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
+        let value = ITER_RESULT_VALUE_I32.with(|c| c.get());
+        return f64::from_bits(crate::value::JSValue::int32(value).bits());
+    }
+    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
+        let value = ITER_RESULT_VALUE_I1.with(|c| c.get());
+        return f64::from_bits(crate::value::JSValue::bool(value).bits());
+    }
     ITER_RESULT_VALUE.with(|c| c.get())
 }
 
@@ -309,12 +351,53 @@ pub extern "C" fn js_iter_result_get_value() -> f64 {
 /// generic JSValue writes are coerced using ordinary JS number coercion.
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value_f64() -> f64 {
-    let value = ITER_RESULT_VALUE.with(|c| c.get());
     if ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
-        value
+        ITER_RESULT_VALUE.with(|c| c.get())
+    } else if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
+        ITER_RESULT_VALUE_I32.with(|c| c.get()) as f64
     } else {
-        crate::builtins::js_number_coerce(value)
+        crate::builtins::js_number_coerce(js_iter_result_get_value())
     }
+}
+
+/// Read the value half for signed-Int32 consumers. Raw-i32 writes return
+/// directly; generic JSValue and other raw primitive writes use JS ToInt32.
+#[no_mangle]
+pub extern "C" fn js_iter_result_get_value_i32() -> i32 {
+    if ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get()) {
+        return ITER_RESULT_VALUE_I32.with(|c| c.get());
+    }
+    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
+        return if ITER_RESULT_VALUE_I1.with(|c| c.get()) {
+            1
+        } else {
+            0
+        };
+    }
+    let number = if ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
+        ITER_RESULT_VALUE.with(|c| c.get())
+    } else {
+        crate::builtins::js_number_coerce(js_iter_result_get_value())
+    };
+    if !number.is_finite() {
+        0
+    } else {
+        (number as i64) as i32
+    }
+}
+
+/// Read the value half for boolean consumers. Raw-i1 writes return directly;
+/// generic JSValue and other raw primitive writes use ordinary JS truthiness.
+#[no_mangle]
+pub extern "C" fn js_iter_result_get_value_i1() -> i32 {
+    if ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get()) {
+        return if ITER_RESULT_VALUE_I1.with(|c| c.get()) {
+            1
+        } else {
+            0
+        };
+    }
+    crate::value::js_is_truthy(js_iter_result_get_value())
 }
 
 /// Read the done half as a NaN-boxed bool (TAG_TRUE / TAG_FALSE) so it
@@ -338,7 +421,10 @@ pub fn scan_iter_result_root(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_iter_result_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if !ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get()) {
+    let is_raw_primitive = ITER_RESULT_VALUE_IS_RAW_F64.with(|c| c.get())
+        || ITER_RESULT_VALUE_IS_RAW_I32.with(|c| c.get())
+        || ITER_RESULT_VALUE_IS_RAW_I1.with(|c| c.get());
+    if !is_raw_primitive {
         ITER_RESULT_VALUE.with(|c| {
             visitor.visit_cell_f64_slot(c);
         });
@@ -350,9 +436,17 @@ static KEEP_JS_ITER_RESULT_SET: extern "C" fn(f64, i32) -> f64 = js_iter_result_
 #[used]
 static KEEP_JS_ITER_RESULT_SET_F64: extern "C" fn(f64, i32) -> f64 = js_iter_result_set_f64;
 #[used]
+static KEEP_JS_ITER_RESULT_SET_I32: extern "C" fn(i32, i32) -> f64 = js_iter_result_set_i32;
+#[used]
+static KEEP_JS_ITER_RESULT_SET_I1: extern "C" fn(i32, i32) -> f64 = js_iter_result_set_i1;
+#[used]
 static KEEP_JS_ITER_RESULT_GET_VALUE: extern "C" fn() -> f64 = js_iter_result_get_value;
 #[used]
 static KEEP_JS_ITER_RESULT_GET_VALUE_F64: extern "C" fn() -> f64 = js_iter_result_get_value_f64;
+#[used]
+static KEEP_JS_ITER_RESULT_GET_VALUE_I32: extern "C" fn() -> i32 = js_iter_result_get_value_i32;
+#[used]
+static KEEP_JS_ITER_RESULT_GET_VALUE_I1: extern "C" fn() -> i32 = js_iter_result_get_value_i1;
 #[used]
 static KEEP_JS_ITER_RESULT_GET_DONE: extern "C" fn() -> f64 = js_iter_result_get_done;
 

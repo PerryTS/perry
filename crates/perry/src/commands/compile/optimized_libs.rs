@@ -815,7 +815,10 @@ pub(super) fn build_optimized_libs(
     // pulled only by them) — enabled only when the program uses a heap-snapshot
     // API or `process.report`. The env-driven GC/typed-feedback dev trace JSON
     // ride this feature and stay off in size-optimized binaries.
-    if ctx.uses_diagnostics {
+    let gc_trace_requested = std::env::var("PERRY_GC_TRACE")
+        .ok()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    if ctx.uses_diagnostics || gc_trace_requested {
         cross_features.push("perry-runtime/diagnostics".to_string());
     }
     // Per-Node-module gating: `node:dgram`'s implementation + dispatch arm are

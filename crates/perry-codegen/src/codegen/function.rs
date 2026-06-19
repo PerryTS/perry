@@ -37,10 +37,13 @@ pub(super) fn compile_typed_f64_function(
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
     let llvm_name = typed_f64_function_name(&generic_name);
+    let param_reps = typed_param_reps_for_params(&f.params)
+        .ok_or_else(|| anyhow!("typed-f64 function '{}' has unsupported parameter", f.name))?;
     let params: Vec<(LlvmType, String)> = f
         .params
         .iter()
-        .map(|p| (DOUBLE, format!("%arg{}", p.id)))
+        .zip(param_reps.iter())
+        .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id)))
         .collect();
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
     lf.linkage = "internal".to_string();
@@ -68,10 +71,13 @@ pub(super) fn compile_typed_i32_function(
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
     let llvm_name = typed_i32_function_name(&generic_name);
+    let param_reps = typed_param_reps_for_params(&f.params)
+        .ok_or_else(|| anyhow!("typed-i32 function '{}' has unsupported parameter", f.name))?;
     let params: Vec<(LlvmType, String)> = f
         .params
         .iter()
-        .map(|p| (I32, format!("%arg{}", p.id)))
+        .zip(param_reps.iter())
+        .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id)))
         .collect();
     let lf = llmod.define_function(&llvm_name, I32, params);
     lf.linkage = "internal".to_string();
@@ -134,10 +140,17 @@ pub(super) fn compile_typed_string_function(
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
     let llvm_name = typed_string_function_name(&generic_name);
+    let param_reps = typed_param_reps_for_params(&f.params).ok_or_else(|| {
+        anyhow!(
+            "typed-string function '{}' has unsupported parameter",
+            f.name
+        )
+    })?;
     let params: Vec<(LlvmType, String)> = f
         .params
         .iter()
-        .map(|p| (I64, format!("%arg{}", p.id)))
+        .zip(param_reps.iter())
+        .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id)))
         .collect();
     let lf = llmod.define_function(&llvm_name, I64, params);
     lf.linkage = "internal".to_string();
@@ -161,25 +174,29 @@ fn emit_typed_public_trampoline_fast_value(
 ) -> String {
     match kind {
         TypedFunctionTrampolineKind::F64 => {
-            let mut raw_args = Vec::with_capacity(arg_names.len());
-            for arg in arg_names {
-                raw_args.push(blk.call(
-                    DOUBLE,
-                    "js_typed_f64_arg_to_raw",
-                    &[(DOUBLE, arg.as_str())],
-                ));
-            }
-            let typed_args: Vec<(LlvmType, &str)> =
-                raw_args.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .collect();
+            let typed_args: Vec<(LlvmType, &str)> = raw_args
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str()))
+                .collect();
             blk.call(DOUBLE, typed_name, &typed_args)
         }
         TypedFunctionTrampolineKind::I32 => {
             let raw_args: Vec<String> = arg_names
                 .iter()
-                .map(|arg| blk.call(I32, "js_typed_i32_arg_to_raw", &[(DOUBLE, arg.as_str())]))
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
-            let typed_args: Vec<(LlvmType, &str)> =
-                raw_args.iter().map(|arg| (I32, arg.as_str())).collect();
+            let typed_args: Vec<(LlvmType, &str)> = raw_args
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str()))
+                .collect();
             let raw_i32 = blk.call(I32, typed_name, &typed_args);
             crate::expr::i32_to_nanbox(blk, &raw_i32)
         }
@@ -204,8 +221,11 @@ fn emit_typed_public_trampoline_fast_value(
                 .zip(arg_reps.iter())
                 .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
-            let typed_args: Vec<(LlvmType, &str)> =
-                raw_args.iter().map(|arg| (I64, arg.as_str())).collect();
+            let typed_args: Vec<(LlvmType, &str)> = raw_args
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str()))
+                .collect();
             let raw_string = blk.call(I64, typed_name, &typed_args);
             blk.call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)])
         }
@@ -226,11 +246,14 @@ fn emit_public_typed_function_trampoline(
         TypedFunctionTrampolineKind::StringRef => typed_string_function_name(public_name),
     };
     let arg_reps = match kind {
-        TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; f.params.len()],
-        TypedFunctionTrampolineKind::I32 => vec![TypedParamRep::I32; f.params.len()],
+        TypedFunctionTrampolineKind::F64 => typed_param_reps_for_params(&f.params)
+            .unwrap_or_else(|| vec![TypedParamRep::F64; f.params.len()]),
+        TypedFunctionTrampolineKind::I32 => typed_param_reps_for_params(&f.params)
+            .unwrap_or_else(|| vec![TypedParamRep::I32; f.params.len()]),
         TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(&f.params)
             .unwrap_or_else(|| vec![TypedParamRep::I1; f.params.len()]),
-        TypedFunctionTrampolineKind::StringRef => vec![TypedParamRep::StringRef; f.params.len()],
+        TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(&f.params)
+            .unwrap_or_else(|| vec![TypedParamRep::StringRef; f.params.len()]),
     };
     let params: Vec<(LlvmType, String)> = f
         .params
@@ -553,8 +576,10 @@ pub(super) fn compile_function(
         typed_f64_methods: &cross_module.typed_f64_methods,
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
+        typed_string_methods: &cross_module.typed_string_methods,
         typed_i1_method_param_reps: &cross_module.typed_i1_method_param_reps,
         typed_f64_closures: &cross_module.typed_f64_closures,
+        typed_i32_closures: &cross_module.typed_i32_closures,
         typed_i1_closures: &cross_module.typed_i1_closures,
         typed_i1_closure_param_reps: &cross_module.typed_i1_closure_param_reps,
         typed_string_closures: &cross_module.typed_string_closures,

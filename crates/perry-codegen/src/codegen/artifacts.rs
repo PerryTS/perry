@@ -19,13 +19,14 @@ use crate::types::{LlvmType, DOUBLE, I64, VOID};
 
 use super::closure::{
     compile_closure, compile_typed_f64_closure, compile_typed_i1_closure,
-    compile_typed_string_closure,
+    compile_typed_i32_closure, compile_typed_string_closure,
 };
 use super::entry::compile_module_entry;
 use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
 use super::method::{
     compile_method, compile_static_method, compile_typed_f64_method,
     compile_typed_f64_receiver_method, compile_typed_i1_method, compile_typed_i32_method,
+    compile_typed_string_method,
 };
 use super::opts::CrossModuleCtx;
 use super::spec_function_length;
@@ -163,6 +164,16 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             )
             .with_context(|| format!("lowering typed-i1 closure clone func_id={}", func_id))?;
         }
+        if cross_module.typed_i32_closures.contains(func_id) {
+            compile_typed_i32_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                module_prefix,
+                module_local_types,
+            )
+            .with_context(|| format!("lowering typed-i32 closure clone func_id={}", func_id))?;
+        }
         if cross_module.typed_string_closures.contains(func_id) {
             compile_typed_string_closure(
                 llmod,
@@ -218,6 +229,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 .contains(&(class.name.clone(), method.name.clone()))
             {
                 Some(TypedFunctionTrampolineKind::I1)
+            } else if cross_module
+                .typed_string_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                Some(TypedFunctionTrampolineKind::StringRef)
             } else {
                 None
             };
@@ -269,6 +285,19 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         class.name, method.name
                     )
                 })?;
+            }
+            if cross_module
+                .typed_string_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                compile_typed_string_method(llmod, class, method, method_names).with_context(
+                    || {
+                        format!(
+                            "lowering typed-string method clone '{}::{}'",
+                            class.name, method.name
+                        )
+                    },
+                )?;
             }
             compile_method(
                 llmod,

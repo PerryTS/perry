@@ -21,6 +21,7 @@ pub(crate) struct NativeFactUse {
     pub kind: String,
     pub local_id: Option<u32>,
     pub state: String,
+    pub detail: String,
     pub reason: Option<MaterializationReason>,
 }
 
@@ -45,6 +46,8 @@ pub(crate) enum NativeAbiTransitionOp {
     NativeHandleBox,
     PromiseBox,
     BoolToJsValue,
+    #[serde(rename = "bigint_box")]
+    BigIntBox,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -350,6 +353,9 @@ struct NativeRepSummary {
     unsafe_unchecked_unknown_bounds_accesses: usize,
     consumed_fact_count: usize,
     rejected_fact_count: usize,
+    consumed_fact_kind_counts: BTreeMap<String, usize>,
+    rejected_fact_kind_counts: BTreeMap<String, usize>,
+    typed_path_decision_counts: BTreeMap<String, usize>,
     raw_f64_layout_fact_counts: BTreeMap<String, usize>,
     js_value_bits_count: usize,
     write_barrier_elided_count: usize,
@@ -372,6 +378,9 @@ impl NativeRepSummary {
         let mut unsafe_unchecked_unknown_bounds_accesses = 0;
         let mut consumed_fact_count = 0;
         let mut rejected_fact_count = 0;
+        let mut consumed_fact_kind_counts = BTreeMap::new();
+        let mut rejected_fact_kind_counts = BTreeMap::new();
+        let mut typed_path_decision_counts = BTreeMap::new();
         let mut raw_f64_layout_fact_counts = BTreeMap::from([
             ("consumed".to_string(), 0),
             ("rejected".to_string(), 0),
@@ -430,6 +439,7 @@ impl NativeRepSummary {
                     NativeAbiTransitionOp::NativeHandleBox => "native_handle_box",
                     NativeAbiTransitionOp::PromiseBox => "promise_box",
                     NativeAbiTransitionOp::BoolToJsValue => "bool_to_js_value",
+                    NativeAbiTransitionOp::BigIntBox => "bigint_box",
                 };
                 *native_abi_transition_op_counts
                     .entry(op_name.to_string())
@@ -470,6 +480,52 @@ impl NativeRepSummary {
             }
             consumed_fact_count += record.consumed_facts.len();
             rejected_fact_count += record.rejected_facts.len();
+            for fact in &record.consumed_facts {
+                *consumed_fact_kind_counts
+                    .entry(fact.kind.clone())
+                    .or_insert(0) += 1;
+            }
+            for fact in &record.rejected_facts {
+                *rejected_fact_kind_counts
+                    .entry(fact.kind.clone())
+                    .or_insert(0) += 1;
+            }
+            if record
+                .notes
+                .iter()
+                .any(|note| note.contains("typed_clone="))
+                || record
+                    .consumed_facts
+                    .iter()
+                    .any(|fact| fact.kind.starts_with("typed_") || fact.kind == "type_fact")
+            {
+                *typed_path_decision_counts
+                    .entry("selected".to_string())
+                    .or_insert(0) += 1;
+            }
+            if record.notes.iter().any(|note| {
+                note.contains("generic_wrapper=")
+                    || note.contains("generic_method=")
+                    || note.contains("generic_closure=")
+            }) || record.fallback_reason.is_some()
+            {
+                *typed_path_decision_counts
+                    .entry("fallback".to_string())
+                    .or_insert(0) += 1;
+            }
+            if record
+                .notes
+                .iter()
+                .any(|note| note.contains("typed_clone_rejected="))
+                || record
+                    .rejected_facts
+                    .iter()
+                    .any(|fact| fact.kind.starts_with("typed_") || fact.kind == "type_fact")
+            {
+                *typed_path_decision_counts
+                    .entry("rejected".to_string())
+                    .or_insert(0) += 1;
+            }
             for fact in record
                 .consumed_facts
                 .iter()
@@ -494,6 +550,9 @@ impl NativeRepSummary {
             unsafe_unchecked_unknown_bounds_accesses,
             consumed_fact_count,
             rejected_fact_count,
+            consumed_fact_kind_counts,
+            rejected_fact_kind_counts,
+            typed_path_decision_counts,
             raw_f64_layout_fact_counts,
             js_value_bits_count,
             write_barrier_elided_count,
@@ -550,7 +609,7 @@ pub(crate) fn write_native_rep_artifact_if_enabled(
         pid, wall_nonce, counter
     ));
     let artifact = NativeRepArtifact {
-        schema_version: 14,
+        schema_version: 15,
         module,
         records,
         pod_layouts: collect_pod_layouts(records),

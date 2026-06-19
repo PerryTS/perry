@@ -10,7 +10,7 @@ use super::buffer::{AliasState, BoundsState, BufferAccessMode};
 use super::materialize::MaterializationReason;
 use super::pod::recompute_layout_from_fields;
 use super::rep::NativeRep;
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I128, I32, I64, I8, PTR};
 
 pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<()> {
     let mut errors = Vec::new();
@@ -238,6 +238,7 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 record.function, record.block_label, record.consumer
             ));
         }
+        validate_fact_uses(record, &mut errors);
         validate_raw_f64_layout_facts(record, &mut errors);
         validate_packed_f64_loop_record(record, &mut errors);
     }
@@ -252,6 +253,44 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
     Ok(())
 }
 
+fn validate_fact_uses(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    for (field, facts) in [
+        ("consumed_facts", record.consumed_facts.as_slice()),
+        ("rejected_facts", record.rejected_facts.as_slice()),
+    ] {
+        for fact in facts {
+            if fact.fact_id.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty fact_id",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if fact.kind.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty kind",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if fact.state.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty state",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if field == "rejected_facts"
+                && fact.reason.is_none()
+                && fact.detail.trim().is_empty()
+                && !matches!(fact.state.as_str(), "rejected" | "invalidated" | "missing")
+            {
+                errors.push(format!(
+                    "{}:{} {} rejected fact {} lacks reason/detail",
+                    record.function, record.block_label, record.consumer, fact.fact_id
+                ));
+            }
+        }
+    }
+}
+
 fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
     matches!(
         record.consumer.as_str(),
@@ -259,6 +298,8 @@ fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
             | "js_array_numeric_set_f64_unboxed"
             | "js_array_numeric_push_f64_unboxed"
             | "packed_f64_loop_load"
+            | "packed_i32_loop_load"
+            | "packed_u32_loop_load"
             | "packed_f64_loop_store"
             | "class_field_get.raw_f64_load"
             | "class_field_set.raw_f64_store"
@@ -331,6 +372,8 @@ fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
                 "js_typed_feedback_array_index_set_fallback_boxed"
             )
             | ("PackedF64LoopGuard", "packed_f64_loop_fallback")
+            | ("PackedI32LoopGuard", "packed_i32_loop_fallback")
+            | ("PackedU32LoopGuard", "packed_u32_loop_fallback")
             | ("ClassFieldGet", "js_object_get_field_by_name_f64")
             | ("ClassFieldSet", "js_object_set_field_by_name")
     )
@@ -399,7 +442,13 @@ fn record_has_note(record: &NativeRepRecord, note: &str) -> bool {
 fn validate_packed_f64_loop_record(record: &NativeRepRecord, errors: &mut Vec<String>) {
     if !matches!(
         record.consumer.as_str(),
-        "packed_f64_loop_guard" | "packed_f64_loop_load" | "packed_f64_loop_store"
+        "packed_f64_loop_guard"
+            | "packed_f64_loop_load"
+            | "packed_f64_loop_store"
+            | "packed_i32_loop_guard"
+            | "packed_i32_loop_load"
+            | "packed_u32_loop_guard"
+            | "packed_u32_loop_load"
     ) {
         return;
     }
@@ -624,7 +673,7 @@ fn validate_native_abi_type_record(
         "string" | "ptr" | "i64_str" => {
             matches!(
                 &record.native_rep,
-                NativeRep::NativeHandle | NativeRep::JsValue
+                NativeRep::StringRef | NativeRep::NativeHandle | NativeRep::JsValue
             )
         }
         "bool" => matches!(&record.native_rep, NativeRep::I1 | NativeRep::I32),
@@ -888,12 +937,14 @@ fn expected_llvm_type(rep: &NativeRep) -> Option<&'static str> {
         NativeRep::I1 => I1,
         NativeRep::F32 => F32,
         NativeRep::JsValueBits
+        | NativeRep::StringRef
         | NativeRep::I64
         | NativeRep::U64
         | NativeRep::USize
         | NativeRep::HandleId
         | NativeRep::NativeHandle
         | NativeRep::PromiseBoundary => I64,
+        NativeRep::SmallBigInt => I128,
         NativeRep::I32 | NativeRep::U32 => I32,
         NativeRep::BufferLen => I32,
         NativeRep::U8 => I8,
@@ -1072,6 +1123,7 @@ fn valid_native_abi_transition(
             }
             NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
             NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
+            NativeAbiTransitionOp::BigIntBox => from == "small_bigint" && !lossy,
         };
     }
     if to != NativeRep::JsValue.name() {
@@ -1094,10 +1146,13 @@ fn valid_native_abi_transition(
             ) && lossy == matches!(from, "u64" | "usize" | "handle_id")
         }
         NativeAbiTransitionOp::FloatExtend => from == "f32" && !lossy,
-        NativeAbiTransitionOp::PointerBox => from == "native_handle" && !lossy,
+        NativeAbiTransitionOp::PointerBox => {
+            matches!(from, "native_handle" | "string_ref") && !lossy
+        }
         NativeAbiTransitionOp::NativeHandleBox => from == "native_handle" && !lossy,
         NativeAbiTransitionOp::PromiseBox => from == "promise_boundary" && !lossy,
         NativeAbiTransitionOp::BoolToJsValue => from == "i1" && !lossy,
+        NativeAbiTransitionOp::BigIntBox => from == "small_bigint" && !lossy,
     }
 }
 
@@ -1161,8 +1216,64 @@ mod tests {
             kind: "raw_f64_layout".to_string(),
             local_id: None,
             state: state.to_string(),
+            detail: state.to_string(),
             reason,
         }
+    }
+
+    fn type_fact(
+        state: &str,
+        detail: &str,
+        reason: Option<MaterializationReason>,
+    ) -> NativeFactUse {
+        NativeFactUse {
+            fact_id: format!("test.type_fact.{state}.{detail}"),
+            kind: "type_fact".to_string(),
+            local_id: Some(1),
+            state: state.to_string(),
+            detail: detail.to_string(),
+            reason,
+        }
+    }
+
+    #[test]
+    fn verifier_accepts_structured_consumed_and_rejected_facts() {
+        let mut r = record();
+        r.consumed_facts
+            .push(type_fact("consumed", "packed_i32", None));
+        r.rejected_facts.push(type_fact(
+            "rejected",
+            "unknown_call_escape",
+            Some(MaterializationReason::UnknownCallEscape),
+        ));
+
+        assert!(verify_native_rep_records(&[r]).is_ok());
+    }
+
+    #[test]
+    fn verifier_rejects_malformed_fact_uses() {
+        let mut r = record();
+        r.consumed_facts.push(NativeFactUse {
+            fact_id: String::new(),
+            kind: "type_fact".to_string(),
+            local_id: Some(1),
+            state: "consumed".to_string(),
+            detail: "packed_i32".to_string(),
+            reason: None,
+        });
+        r.rejected_facts.push(NativeFactUse {
+            fact_id: "test.type_fact.rejected".to_string(),
+            kind: "type_fact".to_string(),
+            local_id: Some(1),
+            state: "guard_failed".to_string(),
+            detail: String::new(),
+            reason: None,
+        });
+
+        let err = verify_native_rep_records(&[r]).expect_err("malformed facts should fail");
+        let text = err.to_string();
+        assert!(text.contains("empty fact_id"));
+        assert!(text.contains("lacks reason/detail"));
     }
 
     fn packed_f64_loop_store_record() -> NativeRepRecord {

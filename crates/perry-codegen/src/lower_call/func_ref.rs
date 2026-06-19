@@ -53,6 +53,22 @@ fn typed_i32_signature_note(arg_count: usize) -> String {
     }
 }
 
+fn typed_signature_note(
+    ret: &str,
+    reps: &[crate::codegen::TypedParamRep],
+    closure_arg: bool,
+) -> String {
+    let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
+    let first = if closure_arg { "i64 closure" } else { first };
+    if reps.is_empty() {
+        format!("typed_signature={ret}({first})->{ret}")
+    } else if reps.len() == 1 && !closure_arg {
+        format!("typed_signature={ret}({first})->{ret}")
+    } else {
+        format!("typed_signature={ret}({first}, ...)->{ret}")
+    }
+}
+
 pub fn try_lower_func_ref_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -266,28 +282,45 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
-    let uses_typed_f64_clone = !resets_this
+    let typed_f64_call_param_reps = if !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_f64_functions.contains(fid)
         && declared_count == args.len()
-        && args
-            .iter()
-            .all(|arg| crate::type_analysis::is_numeric_expr(ctx, arg));
-    let uses_typed_i32_clone = !resets_this
+    {
+        ctx.typed_i1_function_param_reps
+            .get(fid)
+            .filter(|reps| typed_i1_param_reps_match_args(ctx, reps, args))
+            .cloned()
+    } else {
+        None
+    };
+    let typed_i32_call_param_reps = if !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_i32_functions.contains(fid)
         && declared_count == args.len()
-        && args.iter().all(|arg| is_i32_expr(ctx, arg));
-    let uses_typed_string_clone = !resets_this
+    {
+        ctx.typed_i1_function_param_reps
+            .get(fid)
+            .filter(|reps| typed_i1_param_reps_match_args(ctx, reps, args))
+            .cloned()
+    } else {
+        None
+    };
+    let typed_string_call_param_reps = if !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
         && ctx.typed_string_functions.contains(fid)
         && declared_count == args.len()
-        && args
-            .iter()
-            .all(|arg| crate::type_analysis::is_definitely_string_expr(ctx, arg));
+    {
+        ctx.typed_i1_function_param_reps
+            .get(fid)
+            .filter(|reps| typed_i1_param_reps_match_args(ctx, reps, args))
+            .cloned()
+    } else {
+        None
+    };
     let typed_i1_call_param_reps = if !resets_this
         && !has_rest
         && !ctx.func_synthetic_arguments.contains(fid)
@@ -300,15 +333,12 @@ pub fn try_lower_func_ref_call(
     } else {
         None
     };
-    let result = if uses_typed_f64_clone {
+    let result = if let Some(reps) = typed_f64_call_param_reps {
         let typed_name = crate::codegen::typed_f64_function_name(&fname);
         let generic_body_name = crate::codegen::generic_function_body_name(&fname);
         let mut guard: Option<String> = None;
-        for value in &lowered {
-            let raw = ctx
-                .block()
-                .call(I32, "js_typed_f64_arg_guard", &[(DOUBLE, value.as_str())]);
-            let ok = ctx.block().icmp_ne(I32, &raw, "0");
+        for (value, rep) in lowered.iter().zip(reps.iter()) {
+            let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
             guard = Some(match guard {
                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                 None => ok,
@@ -328,16 +358,17 @@ pub fn try_lower_func_ref_call(
 
         ctx.current_block = fast_idx;
         let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered.len());
-        for value in &lowered {
-            typed_args_storage.push(ctx.block().call(
-                DOUBLE,
-                "js_typed_f64_arg_to_raw",
-                &[(DOUBLE, value.as_str())],
+        for (value, rep) in lowered.iter().zip(reps.iter()) {
+            typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                ctx.block(),
+                *rep,
+                value,
             ));
         }
         let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
             .iter()
-            .map(|s| (DOUBLE, s.as_str()))
+            .zip(reps.iter())
+            .map(|(s, rep)| (rep.llvm_ty(), s.as_str()))
             .collect();
         let fast_value = ctx.block().call(DOUBLE, &typed_name, &typed_args);
         let after_fast = ctx.block().label.clone();
@@ -370,20 +401,18 @@ pub fn try_lower_func_ref_call(
             None,
             false,
             false,
-            vec![format!(
-                "typed_clone={typed_name}; generic_body={generic_body_name}"
-            )],
+            vec![
+                format!("typed_clone={typed_name}; generic_body={generic_body_name}"),
+                typed_signature_note("f64", &reps, false),
+            ],
         );
         result
-    } else if uses_typed_i32_clone {
+    } else if let Some(reps) = typed_i32_call_param_reps {
         let typed_name = crate::codegen::typed_i32_function_name(&fname);
         let generic_body_name = crate::codegen::generic_function_body_name(&fname);
         let mut guard: Option<String> = None;
-        for value in &lowered {
-            let raw = ctx
-                .block()
-                .call(I32, "js_typed_i32_arg_guard", &[(DOUBLE, value.as_str())]);
-            let ok = ctx.block().icmp_ne(I32, &raw, "0");
+        for (value, rep) in lowered.iter().zip(reps.iter()) {
+            let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
             guard = Some(match guard {
                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                 None => ok,
@@ -403,16 +432,17 @@ pub fn try_lower_func_ref_call(
 
         ctx.current_block = fast_idx;
         let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered.len());
-        for value in &lowered {
-            typed_args_storage.push(ctx.block().call(
-                I32,
-                "js_typed_i32_arg_to_raw",
-                &[(DOUBLE, value.as_str())],
+        for (value, rep) in lowered.iter().zip(reps.iter()) {
+            typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                ctx.block(),
+                *rep,
+                value,
             ));
         }
         let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
             .iter()
-            .map(|s| (I32, s.as_str()))
+            .zip(reps.iter())
+            .map(|(s, rep)| (rep.llvm_ty(), s.as_str()))
             .collect();
         let raw_i32 = ctx.block().call(I32, &typed_name, &typed_args);
         let fast_value = i32_to_nanbox(ctx.block(), &raw_i32);
@@ -448,22 +478,17 @@ pub fn try_lower_func_ref_call(
             false,
             vec![
                 format!("typed_clone={typed_name}; generic_body={generic_body_name}"),
-                typed_i32_signature_note(lowered.len()),
+                typed_signature_note("i32", &reps, false),
                 "boxed_result_at=direct_call_boundary".to_string(),
             ],
         );
         result
-    } else if uses_typed_string_clone {
+    } else if let Some(reps) = typed_string_call_param_reps {
         let typed_name = crate::codegen::typed_string_function_name(&fname);
         let generic_body_name = crate::codegen::generic_function_body_name(&fname);
         let mut guard: Option<String> = None;
-        for value in &lowered {
-            let raw = ctx.block().call(
-                I32,
-                "js_typed_string_arg_guard",
-                &[(DOUBLE, value.as_str())],
-            );
-            let ok = ctx.block().icmp_ne(I32, &raw, "0");
+        for (value, rep) in lowered.iter().zip(reps.iter()) {
+            let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
             guard = Some(match guard {
                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                 None => ok,
@@ -483,16 +508,17 @@ pub fn try_lower_func_ref_call(
 
         ctx.current_block = fast_idx;
         let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered.len());
-        for value in &lowered {
-            typed_args_storage.push(ctx.block().call(
-                I64,
-                "js_typed_string_arg_to_raw",
-                &[(DOUBLE, value.as_str())],
+        for (value, rep) in lowered.iter().zip(reps.iter()) {
+            typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                ctx.block(),
+                *rep,
+                value,
             ));
         }
         let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
             .iter()
-            .map(|s| (I64, s.as_str()))
+            .zip(reps.iter())
+            .map(|(s, rep)| (rep.llvm_ty(), s.as_str()))
             .collect();
         let raw_string = ctx.block().call(I64, &typed_name, &typed_args);
         let fast_value = ctx
