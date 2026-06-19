@@ -6,8 +6,8 @@
 //! own-property override (or `class X { method = fn; }`) is honored.
 
 use crate::expr::{
-    emit_typed_feedback_register_site, i32_bool_to_nanbox, FnCtx, TypedFeedbackContract,
-    TypedFeedbackKind,
+    emit_typed_feedback_register_site, i32_bool_to_nanbox, i32_to_nanbox, FnCtx,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
@@ -19,6 +19,14 @@ fn typed_i1_method_signature_note(reps: &[crate::codegen::TypedParamRep]) -> Str
         format!("typed_signature=i1({first})->i1")
     } else {
         format!("typed_signature=i1({first}, ...)->i1")
+    }
+}
+
+fn typed_i32_method_signature_note(arg_count: usize) -> String {
+    if arg_count <= 1 {
+        "typed_signature=i32(i32)->i32".to_string()
+    } else {
+        "typed_signature=i32(i32, ...)->i32".to_string()
     }
 }
 
@@ -152,6 +160,7 @@ pub(super) fn emit_guarded_direct_method_call(
     fallback_user_args: &[String],
     typed_direct_fn: Option<(&str, usize)>,
     typed_f64_receiver_direct_fn: Option<(&str, usize, &crate::codegen::TypedReceiverMethodInfo)>,
+    typed_i32_direct_fn: Option<(&str, usize)>,
     typed_i1_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     shape_only_guard: bool,
 ) -> Option<String> {
@@ -434,6 +443,95 @@ pub(super) fn emit_guarded_direct_method_call(
                     format!("generic_method={generic_body_fn}"),
                     format!("receiver_class={receiver_class_name}"),
                     format!("method={property}"),
+                ],
+            );
+            result
+        } else if let Some((typed_fn, typed_formal_count)) = typed_i32_direct_fn {
+            let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
+            let formal_args: Vec<&str> = direct_arg_slices
+                .iter()
+                .skip(1)
+                .take(typed_formal_count)
+                .map(|(_, value)| *value)
+                .collect();
+            let mut guard: Option<String> = None;
+            for value in &formal_args {
+                let raw = ctx
+                    .block()
+                    .call(I32, "js_typed_i32_arg_guard", &[(DOUBLE, *value)]);
+                let ok = ctx.block().icmp_ne(I32, &raw, "0");
+                guard = Some(match guard {
+                    Some(prev) => ctx.block().and(I1, &prev, &ok),
+                    None => ok,
+                });
+            }
+
+            let typed_idx = ctx.new_block("typed_i32_method.fast");
+            let generic_idx = ctx.new_block("typed_i32_method.generic");
+            let typed_merge_idx = ctx.new_block("typed_i32_method.merge");
+            let typed_label = ctx.block_label(typed_idx);
+            let generic_label = ctx.block_label(generic_idx);
+            let typed_merge_label = ctx.block_label(typed_merge_idx);
+            if let Some(guard) = guard {
+                ctx.block().cond_br(&guard, &typed_label, &generic_label);
+            } else {
+                ctx.block().br(&typed_label);
+            }
+
+            ctx.current_block = typed_idx;
+            let mut typed_args_storage: Vec<String> = Vec::with_capacity(formal_args.len());
+            for value in &formal_args {
+                typed_args_storage.push(ctx.block().call(
+                    I32,
+                    "js_typed_i32_arg_to_raw",
+                    &[(DOUBLE, *value)],
+                ));
+            }
+            let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
+                .iter()
+                .map(|value| (I32, value.as_str()))
+                .collect();
+            let raw_i32 = ctx.block().call(I32, typed_fn, &typed_args);
+            let typed_value = i32_to_nanbox(ctx.block(), &raw_i32);
+            let after_typed = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&typed_merge_label);
+            }
+
+            ctx.current_block = generic_idx;
+            let generic_value = ctx
+                .block()
+                .call(DOUBLE, &generic_body_fn, direct_arg_slices);
+            let after_generic = ctx.block().label.clone();
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&typed_merge_label);
+            }
+
+            ctx.current_block = typed_merge_idx;
+            let result = ctx.block().phi(
+                DOUBLE,
+                &[
+                    (typed_value.as_str(), after_typed.as_str()),
+                    (generic_value.as_str(), after_generic.as_str()),
+                ],
+            );
+            ctx.record_lowered_value(
+                "MethodCall",
+                None,
+                "typed_i32_method_direct_call",
+                &LoweredValue::js_value(result.clone()),
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![
+                    format!("typed_clone={typed_fn}"),
+                    format!("generic_method={generic_body_fn}"),
+                    format!("receiver_class={receiver_class_name}"),
+                    format!("method={property}"),
+                    typed_i32_method_signature_note(typed_formal_count),
+                    "boxed_result_at=direct_call_boundary".to_string(),
                 ],
             );
             result

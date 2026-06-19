@@ -2081,6 +2081,26 @@ pub fn try_lower_property_get_method_call(
                 } else {
                     None
                 };
+                let typed_i32_direct_name = if ctx.typed_i32_methods.contains(&typed_method_key)
+                    && ctx
+                        .methods
+                        .get(&typed_method_key)
+                        .is_some_and(|name| name == &fallback_fn)
+                    && args.len() == typed_formal_count
+                    && args.iter().all(|arg| {
+                        matches!(
+                            crate::type_analysis::static_type_of(ctx, arg),
+                            Some(perry_types::Type::Int32)
+                        ) || matches!(
+                            arg,
+                            Expr::Integer(n)
+                                if (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n)
+                        )
+                    }) {
+                    Some(crate::codegen::typed_i32_method_name(&fallback_fn))
+                } else {
+                    None
+                };
                 let typed_i1_direct_name = if ctx.typed_i1_methods.contains(&typed_method_key)
                     && ctx
                         .methods
@@ -2129,6 +2149,9 @@ pub fn try_lower_property_get_method_call(
                     (Some(name), Some(info)) => Some((name.as_str(), typed_formal_count, info)),
                     _ => None,
                 };
+                let typed_i32_direct = typed_i32_direct_name
+                    .as_ref()
+                    .map(|name| (name.as_str(), typed_formal_count));
                 let typed_i1_direct = typed_i1_direct_name.as_ref().and_then(|name| {
                     ctx.typed_i1_method_param_reps
                         .get(&typed_method_key)
@@ -2145,6 +2168,7 @@ pub fn try_lower_property_get_method_call(
                     &fallback_user_args,
                     typed_direct,
                     typed_receiver_direct,
+                    typed_i32_direct,
                     typed_i1_direct,
                     shape_only_guard,
                 ) {

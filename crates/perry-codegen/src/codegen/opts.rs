@@ -718,6 +718,10 @@ pub(crate) struct CrossModuleCtx {
     /// same-module call lowering may select these clones after receiver/method
     /// and numeric argument guards pass.
     pub typed_f64_methods: std::collections::HashSet<(String, String)>,
+    /// Own instance methods that have a generated internal typed-i32 clone.
+    /// Public method symbols remain JSValue trampolines; exact own-method
+    /// direct calls may select these clones after Int32 argument guards pass.
+    pub typed_i32_methods: std::collections::HashSet<(String, String)>,
     /// Own instance methods that have a generated internal typed-i1 clone.
     /// Runtime vtables still register only the generic method symbols; exact
     /// own-method direct calls may select these clones after receiver/method

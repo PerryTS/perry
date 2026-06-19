@@ -25,7 +25,7 @@ use super::entry::compile_module_entry;
 use super::helpers::{function_body_returns_generator_object, sanitize, scoped_fn_name};
 use super::method::{
     compile_method, compile_static_method, compile_typed_f64_method,
-    compile_typed_f64_receiver_method, compile_typed_i1_method,
+    compile_typed_f64_receiver_method, compile_typed_i1_method, compile_typed_i32_method,
 };
 use super::opts::CrossModuleCtx;
 use super::spec_function_length;
@@ -209,6 +209,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             {
                 Some(TypedFunctionTrampolineKind::F64)
             } else if cross_module
+                .typed_i32_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                Some(TypedFunctionTrampolineKind::I32)
+            } else if cross_module
                 .typed_i1_methods
                 .contains(&(class.name.clone(), method.name.clone()))
             {
@@ -240,6 +245,19 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                             class.name, method.name
                         )
                     })?;
+            }
+            if cross_module
+                .typed_i32_methods
+                .contains(&(class.name.clone(), method.name.clone()))
+            {
+                compile_typed_i32_method(llmod, class, method, method_names).with_context(
+                    || {
+                        format!(
+                            "lowering typed-i32 method clone '{}::{}'",
+                            class.name, method.name
+                        )
+                    },
+                )?;
             }
             if cross_module
                 .typed_i1_methods

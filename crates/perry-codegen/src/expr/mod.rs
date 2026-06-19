@@ -856,6 +856,7 @@ pub(crate) struct FnCtx<'a> {
     pub typed_i1_function_param_reps:
         &'a std::collections::HashMap<u32, Vec<crate::codegen::TypedParamRep>>,
     pub typed_f64_methods: &'a std::collections::HashSet<(String, String)>,
+    pub typed_i32_methods: &'a std::collections::HashSet<(String, String)>,
     pub typed_i1_methods: &'a std::collections::HashSet<(String, String)>,
     pub typed_i1_method_param_reps:
         &'a std::collections::HashMap<(String, String), Vec<crate::codegen::TypedParamRep>>,

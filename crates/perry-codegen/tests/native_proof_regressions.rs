@@ -4809,6 +4809,101 @@ fn typed_i1_method_clone_module(case: &str) -> Module {
     )
 }
 
+fn typed_i32_method_clone_module(case: &str) -> Module {
+    let mut bits = class(205, "Bits", Vec::new());
+    let mut params = vec![param(21, "a", Type::Int32), param(22, "b", Type::Int32)];
+    let mut return_type = Type::Int32;
+    let mut first_let_ty = Type::Int32;
+    let mut first_expr = Expr::Binary {
+        op: BinaryOp::BitXor,
+        left: Box::new(local(21)),
+        right: Box::new(local(22)),
+    };
+    let mut return_expr = Expr::Binary {
+        op: BinaryOp::BitOr,
+        left: Box::new(local(25)),
+        right: Box::new(int(7)),
+    };
+    match case {
+        "eligible" => {}
+        "number_param" => {
+            params[0].ty = Type::Number;
+        }
+        "number_return" => {
+            return_type = Type::Number;
+            first_let_ty = Type::Number;
+            first_expr = Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(21)),
+                right: Box::new(local(22)),
+            };
+            return_expr = local(25);
+        }
+        "unsafe_add" => {
+            first_expr = Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(21)),
+                right: Box::new(local(22)),
+            };
+        }
+        other => panic!("unknown typed-i32 method fixture: {other}"),
+    }
+    bits.methods.push(Function {
+        id: 230,
+        name: "mix_i32".to_string(),
+        type_params: Vec::new(),
+        params,
+        return_type,
+        body: vec![
+            Stmt::Let {
+                id: 25,
+                name: "mixed".to_string(),
+                ty: first_let_ty,
+                mutable: false,
+                init: Some(first_expr),
+            },
+            Stmt::Return(Some(return_expr)),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    let (arg2_ty, arg3_ty) = if case == "number_param" || case == "number_return" {
+        (Type::Number, Type::Int32)
+    } else {
+        (Type::Int32, Type::Int32)
+    };
+    module_with_classes_and_params(
+        &format!("typed_i32_method_{case}.ts"),
+        vec![bits],
+        vec![
+            param(1, "receiver", Type::Named("Bits".to_string())),
+            param(2, "x", arg2_ty),
+            param(3, "y", arg3_ty),
+        ],
+        if case == "number_return" {
+            Type::Number
+        } else {
+            Type::Int32
+        },
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "mix_i32".to_string(),
+            }),
+            args: vec![local(2), local(3)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
 fn typed_i1_numeric_predicate_method_module() -> Module {
     let mut meter = class(204, "Meter", Vec::new());
     meter.methods.push(Function {
@@ -6277,6 +6372,161 @@ fn typed_i32_return_function_rejects_annotation_only_or_unsafe_shapes() {
         assert!(
             !ir.contains("__typed_i32") && !ir.contains("__generic"),
             "{case} must stay on the ordinary JSValue ABI:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i32_method_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    const INT32_TAG_I64: &str = "9222809086901354496";
+    let public = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32";
+    let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__typed_i32";
+    let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__generic";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir =
+        defined_function_ir_section(&ir, "perry_fn_typed_i32_method_eligible_ts__probe");
+
+    assert!(
+        ir.contains(&format!(
+            "define internal i32 @{typed}(i32 %arg21, i32 %arg22)"
+        )),
+        "typed-i32 method clone should use raw i32 params and i32 return:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains(" xor i32 %arg21, %arg22")
+            && typed_ir.contains(" or i32 ")
+            && !typed_ir.contains(" fadd ")
+            && !typed_ir.contains(" sitofp "),
+        "typed-i32 method body should stay in native i32 SSA:\n{typed_ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{public}(double %this_arg, double %arg21, double %arg22)"
+        )) && ir.contains(&format!(
+            "define internal double @{generic_body}(double %this_arg, double %arg21, double %arg22)"
+        )),
+        "typed-i32 method should expose a public JSValue wrapper and keep an internal generic body:\n{ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
+            && wrapper_ir.contains(INT32_TAG_I64),
+        "public method wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call i32 @js_method_direct_shape_guard")
+            && caller_ir.contains("typed_i32_method.fast")
+            && caller_ir.contains("typed_i32_method.generic")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
+            && caller_ir.contains(INT32_TAG_I64),
+        "exact direct method call should guard receiver/method identity, then guard/unbox Int32 args and call the clone:\n{caller_ir}"
+    );
+    assert!(
+        caller_ir.contains(&format!("call double @{generic_body}(")),
+        "direct typed-i32 guard failure should target the internal generic method body:\n{caller_ir}"
+    );
+    assert!(
+        !caller_ir.contains(&format!("call double @{public}(")),
+        "direct typed-i32 guard failure must not recurse through the public wrapper:\n{caller_ir}"
+    );
+    assert!(
+        !ir.contains(&format!("ptrtoint (ptr @{typed}"))
+            && !ir.contains(&format!("ptrtoint ptr @{typed}"))
+            && !ir.contains(&format!("ptrtoint (ptr @{generic_body}"))
+            && !ir.contains(&format!("ptrtoint ptr @{generic_body}")),
+        "runtime vtable must register the public wrapper, not internal typed/generic bodies:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_i32_method_public_trampoline_dispatches_before_generic_body() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i32_method_clone_module("eligible"), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32";
+    let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__typed_i32";
+    let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__generic";
+    let wrapper_ir = function_ir_section(&ir, public);
+
+    let typed_call = wrapper_ir
+        .find(&format!("call i32 @{typed}("))
+        .unwrap_or_else(|| {
+            panic!("public method wrapper should call typed-i32 clone:\n{wrapper_ir}")
+        });
+    let fallback_call = wrapper_ir
+        .find(&format!("call double @{generic_body}("))
+        .unwrap_or_else(|| {
+            panic!("public method wrapper should call generic body fallback:\n{wrapper_ir}")
+        });
+    assert!(
+        typed_call < fallback_call,
+        "public method wrapper should dispatch to typed clone before generic fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw"),
+        "public method wrapper should guard and unbox Int32 JSValue args:\n{wrapper_ir}"
+    );
+    assert!(
+        !wrapper_ir.contains(&format!("call double @{public}(")),
+        "public method wrapper must not recursively call itself:\n{wrapper_ir}"
+    );
+}
+
+#[test]
+fn artifact_records_typed_i32_method_clone_selection() {
+    let artifact = compile_artifact_json_for_module(typed_i32_method_clone_module("eligible"));
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MethodCall"
+                && record["consumer"] == "typed_i32_method_direct_call"
+                && record["native_rep_name"] == "js_value"
+                && record["llvm_ty"] == "double"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(
+                                "typed_clone=perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__typed_i32",
+                            )
+                        })
+                    }) && notes.iter().any(|note| {
+                        note
+                            == "generic_method=perry_method_typed_i32_method_eligible_ts__Bits__mix_i32__generic"
+                    }) && notes.iter().any(|note| note == "receiver_class=Bits")
+                        && notes.iter().any(|note| note == "method=mix_i32")
+                        && notes
+                            .iter()
+                            .any(|note| note == "typed_signature=i32(i32, ...)->i32")
+                        && notes
+                            .iter()
+                            .any(|note| note == "boxed_result_at=direct_call_boundary")
+                })
+        }),
+        "expected typed-i32 method direct-call artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i32_method_clone_rejects_number_param_number_return_and_unsafe_add() {
+    for case in ["number_param", "number_return", "unsafe_add"] {
+        let ir = String::from_utf8(
+            compile_module(&typed_i32_method_clone_module(case), empty_opts()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !ir.contains("__typed_i32"),
+            "{case} method must stay off the typed-i32 method ABI:\n{ir}"
         );
     }
 }

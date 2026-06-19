@@ -315,6 +315,10 @@ pub(crate) fn typed_i1_method_name(generic_name: &str) -> String {
     format!("{generic_name}__typed_i1")
 }
 
+pub(crate) fn typed_i32_method_name(generic_name: &str) -> String {
+    format!("{generic_name}__typed_i32")
+}
+
 pub(crate) fn typed_f64_closure_name(generic_name: &str) -> String {
     format!("{generic_name}__typed_f64")
 }
@@ -432,6 +436,12 @@ pub(crate) fn typed_i1_method_rejection_reason(
     method: &Function,
 ) -> Option<TypedCloneRejectionReason> {
     typed_i1_function_rejection_reason_impl(method)
+}
+
+pub(crate) fn typed_i32_method_rejection_reason(
+    method: &Function,
+) -> Option<TypedCloneRejectionReason> {
+    typed_i32_function_rejection_reason_impl(method)
 }
 
 #[allow(dead_code)]
