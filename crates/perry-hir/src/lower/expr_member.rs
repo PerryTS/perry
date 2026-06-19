@@ -1146,6 +1146,30 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if let Some((module_name, class_name)) = native_instance {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let property_name = prop_ident.sym.to_string();
+                // #wall (follow-redirects): JS object-metadata / prototype-chain
+                // properties are never native instance methods/getters. Reading
+                // `inst.prototype` / `inst.__proto__` / `inst.constructor` on a
+                // value the HIR tagged as a native instance (e.g. `const lN =
+                // Readable.from(...)`) must NOT route to the 0-arg
+                // NativeMethodCall fallback below — that lowers to
+                // `js_native_call_method_nullsafe(inst, "prototype", 0 args)`,
+                // which *invokes* the resolved value → `TypeError: prototype is
+                // not a function`. Node returns the real metadata value (e.g.
+                // `undefined` for an instance's `.prototype`). Lower these as a
+                // plain PropertyGet so the runtime reads the property instead of
+                // calling it. (`constructor` for the bare-stream classes is also
+                // remapped to the module export above; this catches the general
+                // case for every other native-instance module/class.)
+                if matches!(
+                    property_name.as_str(),
+                    "prototype" | "__proto__" | "constructor"
+                ) {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                }
                 // Issue #562: stream subclass instances (e.g.
                 // `class W extends WritableStream`) carry the bare-stream
                 // module/class tag for inherited-method dispatch
