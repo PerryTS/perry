@@ -14,7 +14,9 @@ fn yaml_value_to_str(v: &serde_yaml::Value) -> String {
         serde_yaml::Value::Number(n) => n.to_string(),
         serde_yaml::Value::Bool(b) => b.to_string(),
         serde_yaml::Value::Null => String::new(),
-        _ => format!("{}", serde_yaml::to_string(v).unwrap_or_default())
+        _ => serde_yaml::to_string(v)
+            .unwrap_or_default()
+            .to_string()
             .trim()
             .to_owned(),
     }
@@ -754,7 +756,7 @@ impl ComposeSpec {
 
     /// Serialize to YAML.
     pub fn to_yaml(&self) -> Result<String, crate::error::ComposeError> {
-        serde_yaml::to_string(self).map_err(|e| crate::error::ComposeError::ParseError(e))
+        serde_yaml::to_string(self).map_err(crate::error::ComposeError::ParseError)
     }
 
     /// Merge another ComposeSpec into this one (last-writer-wins for all maps).

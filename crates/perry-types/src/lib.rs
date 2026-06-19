@@ -136,8 +136,104 @@ impl Type {
         )
     }
 
+    /// Check if this type is represented as a JS number in optimized paths.
+    pub fn is_number_like(&self) -> bool {
+        matches!(self, Type::Number | Type::Int32)
+    }
+
+    /// Check if this type is a string value, including a string literal.
+    pub fn is_string_like(&self) -> bool {
+        matches!(self, Type::String | Type::StringLiteral(_))
+    }
+
+    /// Check if this type is definitely not represented as a JS number.
+    ///
+    /// `Any`/`Unknown`/type variables return false because they might still be
+    /// numeric at runtime. A union only returns true when every variant is
+    /// definitely non-numeric.
+    pub fn is_definitely_non_number_like(&self) -> bool {
+        matches!(
+            self,
+            Type::Void
+                | Type::Null
+                | Type::Boolean
+                | Type::BigInt
+                | Type::String
+                | Type::StringLiteral(_)
+                | Type::Symbol
+                | Type::Array(_)
+                | Type::Tuple(_)
+                | Type::Object(_)
+                | Type::Function(_)
+                | Type::Promise(_)
+                | Type::Never
+                | Type::Named(_)
+                | Type::Generic { .. }
+        ) || matches!(self, Type::Union(variants) if variants.iter().all(Type::is_definitely_non_number_like))
+    }
+
+    /// Check if this type denotes a runtime reference-like value (object,
+    /// function, array, class instance, promise, etc.).
+    ///
+    /// This intentionally does not include `Any` or `Unknown`, because those
+    /// are not proof. It also does not include `Null`/`Void`: callers that want
+    /// "not a primitive fast-path value" should handle those explicitly.
+    pub fn is_reference_like(&self) -> bool {
+        matches!(
+            self,
+            Type::Array(_)
+                | Type::Tuple(_)
+                | Type::Object(_)
+                | Type::Function(_)
+                | Type::Promise(_)
+                | Type::Named(_)
+                | Type::Generic { .. }
+        ) || matches!(self, Type::Union(variants) if variants.iter().all(Type::is_reference_like))
+    }
+
     /// Check if this type could be undefined/null
     pub fn is_nullable(&self) -> bool {
         matches!(self, Type::Void | Type::Null | Type::Any | Type::Unknown)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Type;
+
+    #[test]
+    fn number_like_includes_int32_and_number_only() {
+        assert!(Type::Number.is_number_like());
+        assert!(Type::Int32.is_number_like());
+        assert!(!Type::BigInt.is_number_like());
+        assert!(!Type::String.is_number_like());
+    }
+
+    #[test]
+    fn string_like_includes_string_literals() {
+        assert!(Type::String.is_string_like());
+        assert!(Type::StringLiteral("x".to_string()).is_string_like());
+        assert!(!Type::Number.is_string_like());
+    }
+
+    #[test]
+    fn definitely_non_number_like_is_conservative_for_unknowns_and_unions() {
+        assert!(Type::String.is_definitely_non_number_like());
+        assert!(Type::Named("Date".to_string()).is_definitely_non_number_like());
+        assert!(!Type::Any.is_definitely_non_number_like());
+        assert!(!Type::Unknown.is_definitely_non_number_like());
+        assert!(!Type::Union(vec![Type::String, Type::Number]).is_definitely_non_number_like());
+        assert!(Type::Union(vec![Type::String, Type::Boolean]).is_definitely_non_number_like());
+    }
+
+    #[test]
+    fn reference_like_requires_runtime_reference_proof() {
+        assert!(Type::Array(Box::new(Type::Any)).is_reference_like());
+        assert!(Type::Named("URL".to_string()).is_reference_like());
+        assert!(!Type::Null.is_reference_like());
+        assert!(!Type::Any.is_reference_like());
+        assert!(
+            !Type::Union(vec![Type::Named("URL".to_string()), Type::Number]).is_reference_like()
+        );
     }
 }

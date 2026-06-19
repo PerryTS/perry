@@ -17,6 +17,9 @@ pub(crate) use builtins::{
 mod uses_this;
 pub(crate) use uses_this::{closure_uses_new_target, closure_uses_this, uses_this_stmt};
 
+mod value_types;
+pub use value_types::{infer_expr_type, infer_refinable_expr_type, HirTypeEnv, HirTypeFacts};
+
 /// Whether a function BODY reads the dynamic `this` binding — directly via
 /// `Expr::This`, or through a nested arrow that captures it. Plain
 /// (non-method) functions resolve `this` through the runtime's

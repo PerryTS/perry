@@ -2,8 +2,7 @@ use crate::config::ProjectConfig;
 use crate::error::{ComposeError, Result};
 use crate::types::ComposeSpec;
 use crate::yaml;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct ComposeProject {
     pub spec: ComposeSpec,
