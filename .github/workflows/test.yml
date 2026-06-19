@@ -348,7 +348,7 @@ jobs:
             # directly and fail with "Could not find libperry_runtime.a" if the
             # cached staticlib was invalidated. Build them explicitly.
             if printf '%s\n' "$scope" | grep -qE '^(perry|perry-stdlib)$'; then
-              cargo build -p perry-runtime -p perry-stdlib
+              cargo build -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
             fi
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
             # Large perry / perry-stdlib integration-test binaries: serialize
@@ -1223,7 +1223,7 @@ jobs:
           mysql -h 127.0.0.1 -P 3306 -u root -e "SELECT VERSION();"
 
       - name: Build perry compiler
-        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
 
       - name: Run drizzle-mysql fixture
         run: |
@@ -1268,7 +1268,7 @@ jobs:
           node-version: '22'
 
       - name: Build perry compiler
-        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
 
       - name: Run Ink link fixture
         run: |
@@ -1317,7 +1317,7 @@ jobs:
           node-version: '22'
 
       - name: Build perry compiler
-        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry
+        run: cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry
 
       - name: Run Effect fixture
         run: |
@@ -1538,7 +1538,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build compiler + UI backend + harness
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p ${{ matrix.ui_backend }} -p perry-doc-tests
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests
 
       - name: Pre-build Apple UI libs for cross-compile (macOS only)
         if: matrix.os == 'macos-14'
@@ -1606,7 +1606,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build release binaries
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
 
       - name: Report binary sizes
         run: |

@@ -877,11 +877,19 @@ compatibility_reports = "off"    # #849 compat reports off
 
 ```bash
 cargo build --release                                    # Build everything
+cargo build --profile perry-dev -p perry                 # Fast local dev build (#5422)
 cargo build --release -p perry-runtime -p perry-stdlib   # Rebuild runtime (after changes)
+cargo build --release -p perry-runtime-static -p perry-stdlib-static  # Emit libperry_*.a (#5422)
 cargo test --workspace --exclude perry-ui-ios            # Run tests
 cargo run --release -- compile file.ts -o out && ./out   # Compile and run
 cargo run --release -- compile file.ts --print-hir       # Debug HIR
 ```
+
+The static archives (`libperry_runtime.a` / `libperry_stdlib.a`) are emitted by
+the `perry-runtime-static` / `perry-stdlib-static` wrapper crates, so a plain
+`cargo build` no longer produces them as a side effect. A slimmer compiler CLI
+is available with `cargo build -p perry --no-default-features --features dev-cli`.
+See [docs/src/contributing/building.md](docs/src/contributing/building.md).
 
 ### Adding a new feature
 

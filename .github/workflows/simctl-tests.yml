@@ -49,7 +49,7 @@ jobs:
 
       - name: Build perry + iOS UI lib
         run: |
-          cargo build --release -p perry -p perry-runtime -p perry-stdlib
+          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
           cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim
 
       # Regression guard for #1311 — the geisterhand glue (perry-ui-ios's

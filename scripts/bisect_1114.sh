@@ -73,7 +73,7 @@ FIRST_BAD=""
 for sha in "${COMMITS[@]}"; do
   echo "==> checkout $sha"
   git checkout -q "$sha"
-  cargo build --release -p perry-runtime -p perry-stdlib -p perry --quiet 2>&1 \
+  cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry --quiet 2>&1 \
     | tail -3 || { echo "build failed at $sha — skipping"; continue; }
   echo "==> probing CPU at $sha"
   if timeout "$TIMEOUT" bash -c "$(declare -f probe_cpu verdict_at_head); verdict_at_head"; then

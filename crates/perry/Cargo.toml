@@ -18,12 +18,15 @@ perry-transform.workspace = true
 perry-codegen.workspace = true
 perry-runtime.workspace = true
 perry-diagnostics.workspace = true
-perry-codegen-js.workspace = true
-perry-codegen-swiftui.workspace = true
-perry-codegen-arkts.workspace = true
-perry-codegen-glance.workspace = true
-perry-codegen-wear-tiles.workspace = true
-perry-codegen-wasm.workspace = true
+# Codegen backends for non-native targets — optional so a slim dev CLI
+# (--no-default-features --features dev-cli) drops them. full-cli (default)
+# re-enables all via all-codegen-backends, keeping the shipped CLI unchanged.
+perry-codegen-js = { workspace = true, optional = true }
+perry-codegen-swiftui = { workspace = true, optional = true }
+perry-codegen-arkts = { workspace = true, optional = true }
+perry-codegen-glance = { workspace = true, optional = true }
+perry-codegen-wear-tiles = { workspace = true, optional = true }
+perry-codegen-wasm = { workspace = true, optional = true }
 perry-api-manifest = { workspace = true, features = ["serde"] }
 
 clap.workspace = true
@@ -37,7 +40,8 @@ console.workspace = true
 dialoguer.workspace = true
 toml.workspace = true
 walkdir.workspace = true
-notify.workspace = true
+# `perry dev` file-watch loop only (commands/dev.rs); optional under watch-cli.
+notify = { workspace = true, optional = true }
 reqwest.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
@@ -72,14 +76,74 @@ fslock = "0.2"
 # feature — listing them as direct deps just makes them callable from
 # the CLI module. ed25519-dalek 2.1 takes any CryptoRng; we use rand 0.9
 # for the keygen seed.
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core"], optional = true }
 sha2 = "0.11"
 hex = "0.4"
-rand = "0.9"
+rand = { version = "0.9", optional = true }
 # chrono is already a transitive dep through perry-stdlib; listing it
 # here makes the year accessor available to `perry native init`'s
 # LICENSE template substitution.
 chrono = "0.4"
+
+[features]
+# The default build is the full official CLI — every command and codegen
+# backend. The shipped binary is unchanged from before #5422.
+default = ["full-cli"]
+
+full-cli = [
+    "dev-cli",
+    "publish-cli",
+    "mobile-cli",
+    "updater-cli",
+    "native-cli",
+    "audit-cli",
+    "all-codegen-backends",
+]
+
+# Slim compiler-development CLI: compile / run / check / types / cache + the
+# `perry dev` watch loop. Build with:
+#   cargo build -p perry --no-default-features --features dev-cli
+dev-cli = ["compile-cli", "check-cli", "types-cli", "cache-cli", "watch-cli"]
+
+# Command groups. compile/check/types/cache pull no optional deps — their code
+# is always compiled — but exist so a build can name exactly the surface it
+# wants and so disabled commands drop out of `--help`.
+compile-cli = []
+check-cli = []
+types-cli = []
+cache-cli = []
+watch-cli = ["dep:notify"]
+
+# `perry publish` / `setup` / `audit` keep their modules compiled even when these
+# features are off (their config/audit helpers are used by core code paths); the
+# features gate the *commands* (so they leave `--help` in a slim build).
+publish-cli = []
+mobile-cli = []
+audit-cli = []
+# These commands are fully standalone, so the feature also drops their module
+# (and, for updater, its signing crates).
+updater-cli = ["dep:ed25519-dalek", "dep:rand"]
+native-cli = []
+
+# Codegen backends for non-native targets. Each enables one backend crate;
+# `all-codegen-backends` (in full-cli) turns them all on so the default build is
+# unchanged. A slim CLI without a backend rejects its `--target` with a clear
+# "built without the <feature> feature" error. `backend-js`/`backend-wasm` gate
+# the shared web/wasm path together.
+backend-js = ["dep:perry-codegen-js"]
+backend-swiftui = ["dep:perry-codegen-swiftui"]
+backend-arkts = ["dep:perry-codegen-arkts"]
+backend-glance = ["dep:perry-codegen-glance"]
+backend-wear-tiles = ["dep:perry-codegen-wear-tiles"]
+backend-wasm = ["dep:perry-codegen-wasm"]
+all-codegen-backends = [
+    "backend-js",
+    "backend-swiftui",
+    "backend-arkts",
+    "backend-glance",
+    "backend-wear-tiles",
+    "backend-wasm",
+]
 
 [dev-dependencies]
 tempfile = "3"

@@ -114,24 +114,29 @@ enum Commands {
     Explain(commands::explain::ExplainArgs),
 
     /// Build, sign, package and publish your app
+    #[cfg(feature = "publish-cli")]
     Publish(commands::publish::PublishArgs),
 
     /// Set up credentials for App Store or Google Play distribution
+    #[cfg(feature = "mobile-cli")]
     Setup(commands::setup::SetupArgs),
 
     /// Check for updates and self-update Perry
     Update(commands::update::UpdateArgs),
 
     /// Scan TypeScript source for security vulnerabilities
+    #[cfg(feature = "audit-cli")]
     Audit(commands::audit::AuditArgs),
 
     /// Submit compiled binary for runtime verification
+    #[cfg(feature = "audit-cli")]
     Verify(commands::verify::VerifyArgs),
 
     /// Compile and run a TypeScript file in one step
     Run(commands::run::RunArgs),
 
     /// Watch TypeScript source and auto-recompile on changes
+    #[cfg(feature = "watch-cli")]
     Dev(commands::dev::DevArgs),
 
     /// Internationalization tools (extract strings, manage locales)
@@ -141,6 +146,7 @@ enum Commands {
     Login(commands::login::LoginArgs),
 
     /// App Store management (release notes, metadata)
+    #[cfg(feature = "mobile-cli")]
     Appstore(commands::appstore::AppStoreArgs),
 
     /// Generate TypeScript type stubs for Perry built-in modules
@@ -154,6 +160,7 @@ enum Commands {
     /// `perry updater keygen` — generate Ed25519 keypair.
     /// `perry updater sign`   — sign a binary for a v2 manifest entry.
     /// `perry updater verify` — sanity-check a v2 signature locally.
+    #[cfg(feature = "updater-cli")]
     Updater(commands::updater::UpdaterArgs),
 
     /// Native-bindings package tooling (#466 Phase 3).
@@ -162,6 +169,7 @@ enum Commands {
     /// `perry native validate`     — diff the manifest vs. the
     ///                                 staticlib's exported symbols.
     /// `perry native list`         — list bundled well-known bindings.
+    #[cfg(feature = "native-cli")]
     Native(commands::native::NativeArgs),
 
     /// WidgetKit / Glance build glue (issue #676).
@@ -171,6 +179,7 @@ enum Commands {
     /// to `perry.toml` so the next `perry compile --target ios` builds
     /// the widget and embeds the produced `.appex` under
     /// `<output>.app/Frameworks/`.
+    #[cfg(feature = "mobile-cli")]
     Widget(commands::widget::WidgetArgs),
 
     /// Supply-chain lockfile for `perry.nativeLibrary` archives (#498).
@@ -398,6 +407,7 @@ fn main_inner() -> Result<()> {
     let command_name = match &command {
         Commands::Compile(_) => Some("compile"),
         Commands::Init(_) => Some("init"),
+        #[cfg(feature = "publish-cli")]
         Commands::Publish(_) => Some("publish"),
         Commands::Doctor(_) => Some("doctor"),
         Commands::Update(_) => Some("update"),
@@ -424,24 +434,33 @@ fn main_inner() -> Result<()> {
             r.map(|_| ())
         }
         Commands::Run(args) => commands::run::run(args, cli.format, use_color, cli.verbose),
+        #[cfg(feature = "watch-cli")]
         Commands::Dev(args) => commands::dev::run(args, cli.format, use_color, cli.verbose),
         Commands::Check(args) => commands::check::run(args, cli.format, use_color, cli.verbose),
         Commands::Init(args) => commands::init::run(args, cli.format, use_color),
         Commands::Install(args) => commands::install::run(args, cli.format, use_color),
         Commands::Doctor(args) => commands::doctor::run(args, cli.format, use_color),
         Commands::Explain(args) => commands::explain::run(args, cli.format, use_color),
+        #[cfg(feature = "publish-cli")]
         Commands::Publish(args) => commands::publish::run(args, cli.format, use_color, cli.verbose),
+        #[cfg(feature = "mobile-cli")]
         Commands::Setup(args) => commands::setup::run(args),
         Commands::Update(args) => commands::update::run(args, cli.format, use_color, cli.verbose),
+        #[cfg(feature = "audit-cli")]
         Commands::Audit(args) => commands::audit::run(args, cli.format, use_color),
+        #[cfg(feature = "audit-cli")]
         Commands::Verify(args) => commands::verify::run(args, cli.format, use_color),
         Commands::I18n(args) => commands::i18n::run(args, cli.format),
         Commands::Login(args) => commands::login::run(args, cli.format, use_color),
+        #[cfg(feature = "mobile-cli")]
         Commands::Appstore(args) => commands::appstore::run(args),
         Commands::Types(args) => commands::types::run(args, cli.format, use_color),
         Commands::Cache(args) => commands::cache::run(args, cli.format),
+        #[cfg(feature = "updater-cli")]
         Commands::Updater(args) => commands::updater::run(args),
+        #[cfg(feature = "native-cli")]
         Commands::Native(args) => commands::native::run(args, cli.format, use_color),
+        #[cfg(feature = "mobile-cli")]
         Commands::Widget(args) => commands::widget::run(args, cli.format, use_color),
         Commands::Lock(args) => commands::lock::run(args, cli.format, use_color),
     };
