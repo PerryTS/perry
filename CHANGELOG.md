@@ -1,3 +1,32 @@
+## v0.5.1190 — fix(sharp): `toBuffer()` resolves a real Buffer instead of a base64 string
+
+`sharp().toBuffer()` now resolves its Promise with a real Node `Buffer` (binary
+bytes) instead of a base64-encoded **string**. The previous behavior silently
+corrupted output for the common `img.toBuffer().then(b => res.end(b))` /
+`fs.writeFile(p, await img.toBuffer())` pattern — callers got base64 text where
+they expected raw image bytes.
+
+- `crates/perry-ext-sharp/src/lib.rs`: `js_sharp_to_buffer` encodes the image in the
+  `spawn_blocking` worker (pure-Rust, off the main thread) and resolves via
+  `JsPromise::resolve_with(|| JsValue::from_object_ptr(alloc_buffer(&bytes)))`. The
+  Buffer is allocated on the **main thread** inside the deferred `resolve_with`
+  closure — allocating it in the blocking-pool worker would dangle once that thread
+  idles (the runtime arena is thread-local, #1824). Dropped the now-unused `base64`
+  dependency. Verified against the existing `perry-ext-sharp` unit suite (6/6).
+
+Follow-ups uncovered while validating this (NOT in scope here — each needs its own
+change): real-world sharp chaining (`sharp(input).resize(w,h).jpeg().toBuffer()`) does
+not yet work end-to-end — a native handle returned by a fluent transform is not
+re-registered as a `sharp` instance, so the second method in any chain falls to
+dynamic dispatch (`(number).toBuffer is not a function`). This is a pre-existing
+type-propagation gap in `register_native_instance` (perry-hir
+`destructuring/var_decl.rs`), which only tags an allowlist of RHS shapes and has no
+general "fluent native method returns a same-module instance" rule. Also pending:
+`.metadata()`/`.toFile()` resolve a JSON **string** rather than an object;
+`sharp(buffer)` Buffer-input factory + `.extract()` (the implemented-but-unreachable
+`from_buffer`/`crop` paths); and de-duplicating the inactive `perry-stdlib/src/sharp.rs`
+copy.
+
 ## v0.5.1189 — feat: synchronous computed `require(expr)` resolves compiled package modules — Tier 2 of #5389
 
 Builds on the Tier 1 ambient `require` (v0.5.1183). A **computed** `require(expr)`

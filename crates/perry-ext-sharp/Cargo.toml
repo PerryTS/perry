@@ -11,7 +11,6 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 image = "0.25"
-base64 = "0.22"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

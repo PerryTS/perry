@@ -4,11 +4,10 @@
 //! async exports (`toFile` / `toBuffer` / `metadata`) bridged
 //! through `spawn_blocking` + `JsPromise`.
 
-use base64::Engine;
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
 use perry_ffi::{
-    alloc_string, get_handle, read_bytes, read_string, register_handle, spawn_blocking, Handle,
-    JsPromise, JsString, Promise, StringHeader,
+    alloc_buffer, alloc_string, get_handle, read_bytes, read_string, register_handle,
+    spawn_blocking, Handle, JsPromise, JsString, JsValue, Promise, StringHeader,
 };
 use std::io::Cursor;
 
@@ -288,8 +287,19 @@ pub extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
             match sharp.image.write_to(&mut buffer, sharp.format) {
                 Ok(_) => {
                     let bytes = buffer.into_inner();
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    promise.resolve_string(&encoded);
+                    // Resolve with a REAL Node `Buffer` of the encoded image
+                    // bytes. The Buffer must be allocated on the MAIN thread —
+                    // the runtime arena is thread-local, so allocating it here
+                    // on the blocking-pool thread would dangle once this thread
+                    // idles (#1824). `resolve_with` defers construction to the
+                    // resolution pump on the main thread. Previously this
+                    // base64-encoded the bytes into a string, which silently
+                    // corrupted binary output for the common
+                    // `.toBuffer().then(b => res.end(b))` pattern.
+                    promise.resolve_with(move || {
+                        let buf = alloc_buffer(&bytes);
+                        JsValue::from_object_ptr(buf)
+                    });
                 }
                 Err(e) => promise.reject_string(&format!("Failed to encode image: {}", e)),
             }
