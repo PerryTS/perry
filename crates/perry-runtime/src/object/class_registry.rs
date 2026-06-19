@@ -2388,6 +2388,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let decoder = crate::text::js_text_decoder_new(label, fatal, ignore_bom);
                 return crate::value::js_nanbox_pointer(decoder);
             }
+            // `new $ArrayBuffer(n)` / `new $DataView(buf, off?, len?)` where the
+            // constructor was obtained as a VALUE (e.g. the bundle reads
+            // `IN(globalThis, "DataView")` into a variable) rather than the
+            // syntactic `new DataView(...)` that lower_call/builtin.rs handles.
+            // Without these arms the dynamic-construct path falls through to
+            // "not a function". Mirror the static lowering exactly.
+            "ArrayBuffer" | "SharedArrayBuffer" => {
+                let size = args.first().copied().unwrap_or(0.0);
+                let buf = if name == "SharedArrayBuffer" {
+                    crate::buffer::js_shared_array_buffer_new_value(size)
+                } else {
+                    crate::buffer::js_array_buffer_new_value(size)
+                };
+                return crate::value::js_nanbox_pointer(buf as i64);
+            }
+            "DataView" => {
+                let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let value = args.first().copied().unwrap_or(undef);
+                let offset = args.get(1).copied().unwrap_or(undef);
+                let length = args.get(2).copied().unwrap_or(undef);
+                return crate::buffer::js_data_view_new(value, offset, length);
+            }
             _ => {}
         }
     }
