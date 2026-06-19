@@ -27,3 +27,8 @@ pub(crate) use pod::{
 };
 pub(crate) use rep::{ExpectedNativeRep, LoweredValue, NativeRep, SemanticKind};
 pub(crate) use verify::verify_native_rep_records;
+// Re-exported for the `verify` test module, which constructs `NativeRep::BufferView`
+// records via the `crate::native_value::BufferViewRep` path. Non-test code reaches the
+// type through `super::buffer::BufferViewRep` directly, so gate this to the test build.
+#[cfg(test)]
+pub(crate) use buffer::BufferViewRep;
