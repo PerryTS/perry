@@ -219,6 +219,7 @@ mod tests {
             computed_members: Vec::new(),
             decorators: Vec::new(),
             is_exported: true,
+            is_nested: false,
             aliases: Vec::new(),
         };
         let project_root = PathBuf::from("/repo");
