@@ -48,6 +48,8 @@ pub(crate) use substitute::{
     substitute_this_in_stmts,
 };
 pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexical_super};
+#[cfg(test)]
+pub(crate) use super_detect::MAX_INLINE_EXPR_RECURSION_DEPTH;
 
 use perry_hir::{Class, Expr, Function, Module, Stmt};
 use perry_types::{FuncId, LocalId, Type};
