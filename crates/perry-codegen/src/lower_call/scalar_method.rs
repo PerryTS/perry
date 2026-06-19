@@ -683,6 +683,10 @@ fn emit_materialized_scalar_receiver_direct_field_store(
             "js_array_numeric_value_to_raw_f64",
             &[(DOUBLE, value)],
         );
+        // GC_STORE_AUDIT(POINTER_FREE): raw-f64 class-field store — the field's
+        // declared type is a raw-f64 candidate and `raw` is a canonicalized
+        // numeric f64 (`js_array_numeric_value_to_raw_f64`). A number is never a
+        // GC pointer, so the field slot carries no heap edge and needs no barrier.
         ctx.block().store(DOUBLE, &raw, &field_ptr);
         LoweredValue::f64(raw)
     } else {

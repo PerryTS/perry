@@ -431,6 +431,11 @@ fn lower_packed_numeric_loop_index_set(
         let with_header = blk.add(I64, &byte_offset, "8");
         let element_addr = blk.add(I64, &arr_handle, &with_header);
         let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(POINTER_FREE): packed numeric-array element store —
+        // `slot_value` is a raw numeric f64 (canonicalized via
+        // `js_array_numeric_value_to_raw_f64` for F64, or `sitofp` of an i32 for
+        // I32) written into a numeric-layout array element. A number is never a
+        // GC pointer, so the slot carries no heap edge and needs no barrier.
         blk.store(DOUBLE, &slot_value, &element_ptr);
         blk.br(&merge_label);
     }
