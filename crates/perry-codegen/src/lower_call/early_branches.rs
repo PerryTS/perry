@@ -59,7 +59,7 @@ pub fn try_lower_native_chain_method_call(
     // native module exposes"). Scoped narrowly — falls back to the
     // existing call lowering if the lookup misses.
     if let Expr::PropertyGet { object, property } = callee {
-        if let Expr::NativeMethodCall { module, .. } = object.as_ref() {
+        if let Some(module) = native_receiver_module(object.as_ref()) {
             if super::native_module_lookup(module, true, property, None).is_some() {
                 return Ok(Some(super::lower_native_method_call(
                     ctx,
@@ -73,6 +73,68 @@ pub fn try_lower_native_chain_method_call(
         }
     }
     Ok(None)
+}
+
+/// Resolve the native module a (possibly chained) receiver expression
+/// evaluates to, for native-method chain dispatch (#1113 + fluent chains).
+/// Returns the module name borrowed from `expr`.
+///
+/// - A `NativeMethodCall { module }` is directly that module's value (the
+///   call-site `native_module_lookup` then decides whether the outer
+///   `property` is a real method of it).
+/// - A nested `Call { PropertyGet { object, property } }` is itself a chained
+///   method call: it evaluates to `object`'s module iff that module's
+///   `property` returns another instance of the same module (a fluent
+///   transform). This recursion is what lets
+///   `sharp(input).resize(w,h).jpeg().toBuffer()` keep dispatching natively
+///   past the first link instead of falling to the generic
+///   "(number) is not a function" runtime error. cheerio doesn't need it —
+///   its chains are already rewritten to nested `NativeMethodCall`s by the
+///   HIR `fix_local_native_instances` pass, so its receiver is matched by the
+///   `NativeMethodCall` arm directly.
+fn native_receiver_module(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::NativeMethodCall { module, .. } => Some(module.as_str()),
+        Expr::Call { callee, .. } => {
+            if let Expr::PropertyGet { object, property } = callee.as_ref() {
+                let module = native_receiver_module(object.as_ref())?;
+                if native_method_returns_self_instance(module, property) {
+                    return Some(module);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// `(module, method)` pairs whose return value is another instance of the
+/// SAME native module — fluent/builder methods that can be chained. Used by
+/// [`native_receiver_module`] to thread a module identity through a chained
+/// call. Terminals are intentionally excluded so a value of a different type
+/// can't masquerade as a same-module instance (sharp `toBuffer`/`toFile`/
+/// `metadata` → Promise, `width`/`height` → number).
+fn native_method_returns_self_instance(module: &str, method: &str) -> bool {
+    match module {
+        // sharp image transforms, plus the factory call itself
+        // (`sharp(input)` lowers to method "default"/"sharp"). Each returns
+        // the Sharp instance for further chaining.
+        "sharp" => matches!(
+            method,
+            "default"
+                | "sharp"
+                | "resize"
+                | "rotate"
+                | "flip"
+                | "flop"
+                | "grayscale"
+                | "blur"
+                | "jpeg"
+                | "png"
+                | "webp"
+        ),
+        _ => false,
+    }
 }
 
 pub fn try_lower_index_get_call(

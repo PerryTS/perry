@@ -1,3 +1,38 @@
+## v0.5.1191 — fix(native): chained fluent method calls keep their module identity (sharp pipelines)
+
+Real-world sharp usage chains: `sharp(input).resize(w, h).jpeg().toBuffer()`. Before
+this, only the *first* method dispatched natively — the handle returned by a fluent
+transform lost its `sharp` identity, so the second link fell to dynamic dispatch and
+threw `(number).toBuffer is not a function`. Now the full chain works at any depth, in
+sync and async functions, awaited or not.
+
+Root cause: a native method whose receiver is itself a chained native call. The codegen
+chain-dispatch helper `try_lower_native_chain_method_call`
+(`crates/perry-codegen/src/lower_call/early_branches.rs`, #1113) only recognized a
+receiver that was *directly* a `NativeMethodCall` node. For `a().b().c()`, the receiver
+of `.c()` is a plain `Call { PropertyGet { <b() call>, "c" } }`, not a `NativeMethodCall`,
+so the module wasn't resolved.
+
+Fix: resolve the receiver's module **recursively**. New `native_receiver_module(expr)`
+walks the receiver — a `NativeMethodCall { module }` yields its module directly; a nested
+`Call { PropertyGet { object, property } }` yields `object`'s module iff `(module,
+property)` is a *fluent* method (returns another instance of the same module, per
+`native_method_returns_self_instance`). Each chain link then re-lowers through the same
+native dispatch path, so the fix composes to arbitrary depth and is independent of
+async/await lowering (it operates on the final lowered HIR, unlike the HIR-pass approach,
+which can't see chains buried under `await` after async→generator lowering).
+
+Scope: codegen-only, single file. The fluent allowlist currently covers sharp's
+transforms (`resize`/`rotate`/`flip`/`flop`/`grayscale`/`blur`/`jpeg`/`png`/`webp` + the
+`sharp(...)` factory); terminals (`toBuffer`/`toFile`/`metadata` → Promise,
+`width`/`height` → number) are excluded so they can't masquerade as instances. cheerio is
+unaffected — its chains are already rewritten to nested `NativeMethodCall`s by the HIR
+`fix_local_native_instances` pass, so codegen sees an `NativeMethodCall` receiver directly
+(the recursion's `Call` arm never fires for it). Validated: sync/async × awaited/non-
+awaited × depths up to 4 all produce correct results (incl. JPEG magic `255 216` through
+`resize().jpeg().toBuffer()`); cheerio output unchanged; `perry-codegen` suite green
+(20/20).
+
 ## v0.5.1190 — fix(sharp): `toBuffer()` resolves a real Buffer instead of a base64 string
 
 `sharp().toBuffer()` now resolves its Promise with a real Node `Buffer` (binary
