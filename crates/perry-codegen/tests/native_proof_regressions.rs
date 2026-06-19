@@ -12018,8 +12018,28 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_arguments() {
         "any arg must keep generic method dispatch:\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @js_object_alloc"),
-        "any arg fallback must materialize the scalar receiver before dispatch:\n{ir}"
+        ir.contains("call i64 @js_object_alloc_class_inline_keys"),
+        "any arg fallback must materialize the scalar receiver with stable class keys before dispatch:\n{ir}"
+    );
+    assert!(
+        ir.contains("call void @js_gc_init_typed_shape_layout"),
+        "any arg fallback materialization must install typed shape pointer/raw-f64 bitmap evidence:\n{ir}"
+    );
+    let fallback_block = {
+        let start = ir
+            .find("call i64 @js_object_alloc_class_inline_keys")
+            .unwrap_or_else(|| panic!("missing scalar receiver materialization call:\n{ir}"));
+        let end = ir[start..]
+            .find("call double @js_native_call_method_by_id")
+            .map(|offset| start + offset)
+            .unwrap_or_else(|| {
+                panic!("missing scalar method by-id dispatch after fallback:\n{ir}")
+            });
+        &ir[start..end]
+    };
+    assert!(
+        !fallback_block.contains("call void @js_object_set_field_by_name"),
+        "stable scalar receiver materialization should restore known fields with direct slots, not named dynamic stores:\n{fallback_block}"
     );
     assert!(
         !ir.contains("scalar_method_arg_guard.fast"),
@@ -12032,6 +12052,30 @@ fn scalar_method_boolean_predicate_rejects_unproven_numeric_arguments() {
         "any arg must not record a scalar method summary inline:\n{artifact:#}"
     );
     let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().filter(|record| {
+            record["expr_kind"] == "ScalarReceiverMaterializeField"
+                && record["consumer"] == "scalar_receiver_materialize.direct_field_store"
+                && record["local_id"] == 20
+                && record["access_mode"] == "checked_native"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_note(record, "receiver_materialization=direct_slot")
+                && record_has_note(record, "field_layout=fixed_slot_array")
+                && record_has_note(record, "raw_f64_field=1")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
+        }).count() == 2,
+        "fallback materialization should restore both scalar numeric fields through direct fixed slots:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().filter(|record| {
+            record["expr_kind"] == "WriteBarrierElided"
+                && record["consumer"] == "write_barrier.elided_scalar_receiver_materialize_raw_f64"
+                && record["local_id"] == 20
+                && record_has_note(record, "reason=scalar_receiver_raw_f64_field_pointer_free")
+                && record_has_note(record, "pointer_bitmap=non_pointer")
+        }).count() == 2,
+        "fallback materialization should record raw-f64 pointer-free barrier elision for both fields:\n{artifact:#}"
+    );
     assert!(
         records.iter().any(|record| {
             record["expr_kind"] == "ScalarMethodCall"

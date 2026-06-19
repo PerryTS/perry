@@ -6,11 +6,14 @@ use std::collections::HashMap;
 use perry_hir::{BinaryOp, Expr, UnaryOp};
 use perry_types::Type;
 
-use crate::expr::{i32_to_nanbox, lower_expr, lower_expr_as_i32, nanbox_pointer_inline, FnCtx};
+use crate::expr::{
+    emit_jsvalue_slot_store_on_block, i32_to_nanbox, lower_expr, lower_expr_as_i32,
+    nanbox_pointer_inline, FnCtx,
+};
 use crate::native_value::{
     BufferAccessMode, LoweredValue, MaterializationReason, NativeFactUse, NativeRep, SemanticKind,
 };
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarMethodArgKind {
@@ -497,28 +500,220 @@ fn materialize_scalar_receiver(
         .max(field_slots.len() as u32);
     let class_id_str = class_id.to_string();
     let field_count_str = field_count.to_string();
-    let obj_handle = ctx.block().call(
-        I64,
-        "js_object_alloc",
-        &[(I32, &class_id_str), (I32, &field_count_str)],
-    );
+    let parent_class_id = ctx
+        .classes
+        .get(class_name)
+        .and_then(|class| class.extends_name.as_deref())
+        .and_then(|parent| ctx.class_ids.get(parent).copied())
+        .unwrap_or(0);
+    let parent_class_id_str = parent_class_id.to_string();
+    let (obj_handle, has_stable_keys) =
+        if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
+            let keys_slot = if let Some(slot) = ctx.class_keys_slots.get(class_name).cloned() {
+                slot
+            } else {
+                let slot = ctx.func.entry_init_load_global(&keys_global_name, I64);
+                ctx.class_keys_slots
+                    .insert(class_name.to_string(), slot.clone());
+                slot
+            };
+            let keys_ptr = ctx.block().load(I64, &keys_slot);
+            ctx.pending_declares.push((
+                "js_object_alloc_class_inline_keys".to_string(),
+                I64,
+                vec![I32, I32, I32, I64],
+            ));
+            let obj_handle = ctx.block().call(
+                I64,
+                "js_object_alloc_class_inline_keys",
+                &[
+                    (I32, &class_id_str),
+                    (I32, &parent_class_id_str),
+                    (I32, &field_count_str),
+                    (I64, &keys_ptr),
+                ],
+            );
+            emit_materialized_scalar_receiver_typed_shape_init(ctx, class_name, &obj_handle);
+            (obj_handle, true)
+        } else {
+            (
+                ctx.block().call(
+                    I64,
+                    "js_object_alloc",
+                    &[(I32, &class_id_str), (I32, &field_count_str)],
+                ),
+                false,
+            )
+        };
 
     for (field, slot) in field_slots {
         let value = ctx.block().load(DOUBLE, &slot);
-        let key_idx = ctx.strings.intern(&field);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-        let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-        let key_raw = ctx
-            .block()
-            .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-        ctx.block().call_void(
-            "js_object_set_field_by_name",
-            &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &value)],
-        );
+        if let (true, Some(field_index)) = (
+            has_stable_keys,
+            crate::type_analysis::class_field_global_index(ctx, class_name, &field),
+        ) {
+            emit_materialized_scalar_receiver_direct_field_store(
+                ctx,
+                receiver_id,
+                class_name,
+                &field,
+                field_index,
+                &obj_handle,
+                &value,
+            );
+        } else {
+            let key_idx = ctx.strings.intern(&field);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+            let key_raw = ctx
+                .block()
+                .and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+            ctx.block().call_void(
+                "js_object_set_field_by_name",
+                &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &value)],
+            );
+        }
     }
 
     Ok(nanbox_pointer_inline(ctx.block(), &obj_handle))
+}
+
+fn emit_materialized_scalar_receiver_typed_shape_init(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    obj_handle: &str,
+) {
+    let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() else {
+        return;
+    };
+    let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
+    let slot_count_str = typed_layout.slot_count.to_string();
+    let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
+    let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
+    let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        format!(
+            "@{}",
+            crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
+        )
+    };
+    let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        format!(
+            "@{}",
+            crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
+        )
+    };
+    ctx.block().call_void(
+        "js_gc_init_typed_shape_layout",
+        &[
+            (I64, obj_handle),
+            (I32, &slot_count_str),
+            (PTR, &raw_mask_ref),
+            (I32, &raw_mask_word_count_str),
+            (PTR, &pointer_mask_ref),
+            (I32, &pointer_mask_word_count_str),
+        ],
+    );
+}
+
+fn emit_materialized_scalar_receiver_direct_field_store(
+    ctx: &mut FnCtx<'_>,
+    receiver_id: u32,
+    class_name: &str,
+    field: &str,
+    field_index: u32,
+    obj_handle: &str,
+    value: &str,
+) {
+    let field_idx_str = field_index.to_string();
+    let field_ptr = {
+        let blk = ctx.block();
+        let obj_ptr = blk.inttoptr(I64, obj_handle);
+        let fields_base = blk.gep(I8, &obj_ptr, &[(I64, "24")]);
+        blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)])
+    };
+    let is_raw_f64 = crate::type_analysis::class_field_declared_type(ctx, class_name, field)
+        .as_ref()
+        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
+    let stored = if is_raw_f64 {
+        let raw = ctx.block().call(
+            DOUBLE,
+            "js_array_numeric_value_to_raw_f64",
+            &[(DOUBLE, value)],
+        );
+        ctx.block().store(DOUBLE, &raw, &field_ptr);
+        LoweredValue::f64(raw)
+    } else {
+        let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
+        emit_jsvalue_slot_store_on_block(
+            ctx.block(),
+            &field_ptr,
+            value,
+            obj_handle,
+            &field_idx_str,
+            true,
+            obj_handle,
+            &field_addr,
+            true,
+        );
+        LoweredValue {
+            semantic: SemanticKind::JsValue,
+            rep: NativeRep::JsValue,
+            llvm_ty: DOUBLE,
+            value: value.to_string(),
+        }
+    };
+    let mut notes = scalar_method_notes(class_name, "<materialize>");
+    notes.push(format!("field={field}"));
+    notes.push(format!("field_index={field_idx_str}"));
+    notes.push("receiver_materialization=direct_slot".to_string());
+    notes.push("field_layout=fixed_slot_array".to_string());
+    notes.push(format!("raw_f64_field={}", is_raw_f64 as u8));
+    if is_raw_f64 {
+        notes.push("pointer_bitmap=non_pointer".to_string());
+        notes.push("write_barrier=elided_raw_f64".to_string());
+    } else {
+        notes.push("write_barrier=emitted_conservative".to_string());
+    }
+    ctx.record_lowered_value_with_access_mode(
+        "ScalarReceiverMaterializeField",
+        Some(receiver_id),
+        "scalar_receiver_materialize.direct_field_store",
+        &stored,
+        None,
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        Some(MaterializationReason::RuntimeApi),
+        false,
+        false,
+        notes,
+    );
+    if is_raw_f64 {
+        let mut barrier_notes = scalar_method_notes(class_name, "<materialize>");
+        barrier_notes.push("reason=scalar_receiver_raw_f64_field_pointer_free".to_string());
+        barrier_notes.push(format!("field={field}"));
+        barrier_notes.push(format!("field_index={field_idx_str}"));
+        barrier_notes.push("receiver_materialization=direct_slot".to_string());
+        barrier_notes.push("field_layout=raw_f64_slot_array".to_string());
+        barrier_notes.push("pointer_bitmap=non_pointer".to_string());
+        ctx.record_lowered_value_with_access_mode(
+            "WriteBarrierElided",
+            Some(receiver_id),
+            "write_barrier.elided_scalar_receiver_materialize_raw_f64",
+            &stored,
+            None,
+            None,
+            None,
+            Some(MaterializationReason::RuntimeApi),
+            false,
+            false,
+            barrier_notes,
+        );
+    }
 }
 
 fn lower_materialized_receiver_dispatch(
