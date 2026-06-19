@@ -4692,6 +4692,10 @@ fn set_string_add_has_delete_use_string_specialization() {
         "Set<string>.delete should lower through the string helper:\n{probe_ir}"
     );
     assert!(
+        probe_ir.contains("call i64 @js_get_string_pointer_unified"),
+        "Set<string> selected path should lower proven values to raw StringRef handles before helper calls:\n{probe_ir}"
+    );
+    assert!(
         !probe_ir.contains("call i64 @js_set_add("),
         "specialized set.add path should not call the generic helper:\n{probe_ir}"
     );
@@ -5406,6 +5410,42 @@ fn artifact_records_set_string_key_helper_selection_and_rejection() {
                     && record_has_note(record, "boxed_key_avoided=true")
             }),
             "expected {consumer} string-key helper selection record:\n{artifact:#}"
+        );
+    }
+    for (expr_kind, consumer, helper) in [
+        (
+            "SetAdd",
+            "collection_typed_value.set_add_string",
+            "js_set_add_string",
+        ),
+        (
+            "SetHas",
+            "collection_typed_value.set_has_string",
+            "js_set_has_string",
+        ),
+        (
+            "SetDelete",
+            "collection_typed_value.set_delete_string",
+            "js_set_delete_string",
+        ),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["expr_kind"] == expr_kind
+                    && record["consumer"] == consumer
+                    && record["native_rep_name"] == "string_ref"
+                    && record["llvm_ty"] == "i64"
+                    && record_has_type_fact(
+                        record,
+                        "consumed_facts",
+                        "set.string_value_helper",
+                        "consumed",
+                    )
+                    && record_has_note(record, &format!("selected_helper={helper}"))
+                    && record_has_note(record, "value_rep=string_ref")
+                    && record_has_note(record, "boxed_value_avoided_until_set_slot=true")
+            }),
+            "expected {consumer} string-value helper selection record:\n{artifact:#}"
         );
     }
 

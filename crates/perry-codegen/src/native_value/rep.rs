@@ -129,6 +129,7 @@ pub(crate) enum ExpectedNativeRep {
     I1,
     F64,
     F32,
+    StringRef,
     BufferLen,
     HandleId,
     // #854: expected-rep variants matched by is_rep but not yet constructed by
@@ -280,6 +281,7 @@ impl LoweredValue {
                 | (ExpectedNativeRep::I1, NativeRep::I1)
                 | (ExpectedNativeRep::F64, NativeRep::F64)
                 | (ExpectedNativeRep::F32, NativeRep::F32)
+                | (ExpectedNativeRep::StringRef, NativeRep::StringRef)
                 | (ExpectedNativeRep::BufferLen, NativeRep::BufferLen)
                 | (ExpectedNativeRep::HandleId, NativeRep::HandleId)
                 | (ExpectedNativeRep::NativeHandle, NativeRep::NativeHandle)

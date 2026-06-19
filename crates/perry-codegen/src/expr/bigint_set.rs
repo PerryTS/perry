@@ -734,33 +734,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 guarded_set_number_add(ctx, &set_handle, &v)
             } else {
-                let v = lower_expr(ctx, value)?;
                 let set_box = lower_expr(ctx, &set_expr)?;
                 let set_handle = {
                     let blk = ctx.block();
                     unbox_to_i64(blk, &set_box)
                 };
                 if use_string_set {
-                    let (value_handle, new_handle) = {
+                    let value_ref = lower_expr_native(
+                        ctx,
+                        value,
+                        crate::native_value::ExpectedNativeRep::StringRef,
+                    )?;
+                    let new_handle = {
                         let blk = ctx.block();
-                        let value_handle = unbox_str_handle(blk, &v);
                         let new_handle = blk.call(
                             I64,
                             "js_set_add_string",
-                            &[(I64, &set_handle), (I64, &value_handle)],
+                            &[(I64, &set_handle), (I64, &value_ref.value)],
                         );
-                        (value_handle, new_handle)
+                        new_handle
                     };
                     record_collection_string_key_selected(
                         ctx,
                         "SetAdd",
                         "collection_string_key.set_add",
-                        &value_handle,
+                        &value_ref.value,
                         "set",
                         "js_set_add_string",
                     );
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetAdd",
+                        "collection_typed_value.set_add_string",
+                        &value_ref,
+                        "set",
+                        "string_value_helper",
+                        "js_set_add_string",
+                        "set_slot",
+                    );
                     new_handle
                 } else {
+                    let v = lower_expr(ctx, value)?;
                     let new_handle = {
                         let blk = ctx.block();
                         blk.call(I64, "js_set_add", &[(I64, &set_handle), (DOUBLE, &v)])
@@ -978,28 +992,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let v_box = lower_expr(ctx, value)?;
                 guarded_set_number_has(ctx, &s_handle, &v_box)
             } else {
-                let v_box = lower_expr(ctx, value)?;
                 if use_string_set {
-                    let (value_handle, i32_v) = {
+                    let value_ref = lower_expr_native(
+                        ctx,
+                        value,
+                        crate::native_value::ExpectedNativeRep::StringRef,
+                    )?;
+                    let i32_v = {
                         let blk = ctx.block();
-                        let value_handle = unbox_str_handle(blk, &v_box);
                         let i32_v = blk.call(
                             I32,
                             "js_set_has_string",
-                            &[(I64, &s_handle), (I64, &value_handle)],
+                            &[(I64, &s_handle), (I64, &value_ref.value)],
                         );
-                        (value_handle, i32_v)
+                        i32_v
                     };
                     record_collection_string_key_selected(
                         ctx,
                         "SetHas",
                         "collection_string_key.set_has",
-                        &value_handle,
+                        &value_ref.value,
                         "set",
                         "js_set_has_string",
                     );
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetHas",
+                        "collection_typed_value.set_has_string",
+                        &value_ref,
+                        "set",
+                        "string_value_helper",
+                        "js_set_has_string",
+                        "set_slot",
+                    );
                     i32_v
                 } else {
+                    let v_box = lower_expr(ctx, value)?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(I32, "js_set_has", &[(I64, &s_handle), (DOUBLE, &v_box)])
@@ -1199,28 +1227,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let v_box = lower_expr(ctx, value)?;
                 guarded_set_number_delete(ctx, &s_handle, &v_box)
             } else {
-                let v_box = lower_expr(ctx, value)?;
                 if use_string_set {
-                    let (value_handle, i32_v) = {
+                    let value_ref = lower_expr_native(
+                        ctx,
+                        value,
+                        crate::native_value::ExpectedNativeRep::StringRef,
+                    )?;
+                    let i32_v = {
                         let blk = ctx.block();
-                        let value_handle = unbox_str_handle(blk, &v_box);
                         let i32_v = blk.call(
                             I32,
                             "js_set_delete_string",
-                            &[(I64, &s_handle), (I64, &value_handle)],
+                            &[(I64, &s_handle), (I64, &value_ref.value)],
                         );
-                        (value_handle, i32_v)
+                        i32_v
                     };
                     record_collection_string_key_selected(
                         ctx,
                         "SetDelete",
                         "collection_string_key.set_delete",
-                        &value_handle,
+                        &value_ref.value,
                         "set",
                         "js_set_delete_string",
                     );
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetDelete",
+                        "collection_typed_value.set_delete_string",
+                        &value_ref,
+                        "set",
+                        "string_value_helper",
+                        "js_set_delete_string",
+                        "set_slot",
+                    );
                     i32_v
                 } else {
+                    let v_box = lower_expr(ctx, value)?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(I32, "js_set_delete", &[(I64, &s_handle), (DOUBLE, &v_box)])

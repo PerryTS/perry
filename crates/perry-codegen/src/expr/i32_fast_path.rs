@@ -1,18 +1,20 @@
 //! i32-native expression fast path + flat-const 2D-table lowering
 //! (extracted from `expr.rs`, issue #1098). Pure move — no logic changes.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use perry_hir::{BinaryOp, Expr};
 
 use super::{
-    array_kind_fact, lower_expr, raw_f64_layout_fact, unbox_to_i64, FlatConstInfo, FnCtx,
-    PackedNumericLoopKind,
+    array_kind_fact, lower_expr, raw_f64_layout_fact, unbox_str_handle, unbox_to_i64,
+    FlatConstInfo, FnCtx, PackedNumericLoopKind,
 };
 use crate::native_value::{
     materialize_js_value_bits, BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue,
     MaterializationReason, NativeRep,
 };
-use crate::type_analysis::{expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr};
+use crate::type_analysis::{
+    expr_may_return_boxed_value_from_raw_f64_fallback, is_definitely_string_expr, is_numeric_expr,
+};
 use crate::types::{DOUBLE, F32, I32, I64};
 
 /// Returns true if `e` is guaranteed to produce a finite double value
@@ -472,6 +474,7 @@ pub(crate) fn lower_expr_native(
         ExpectedNativeRep::I1 => lower_expr_native_i1(ctx, e),
         ExpectedNativeRep::F64 => lower_expr_native_f64(ctx, e),
         ExpectedNativeRep::F32 => lower_expr_native_f32(ctx, e),
+        ExpectedNativeRep::StringRef => lower_expr_native_string_ref(ctx, e),
         ExpectedNativeRep::BufferLen => lower_expr_native_buffer_len(ctx, e),
         ExpectedNativeRep::HandleId => lower_expr_native_handle_id(ctx, e),
         ExpectedNativeRep::NativeHandle => lower_expr_native_handle(ctx, e),
@@ -517,6 +520,10 @@ fn f32_lowered(value: String) -> LoweredValue {
     LoweredValue::f32(value)
 }
 
+fn string_ref_lowered(value: String) -> LoweredValue {
+    LoweredValue::string_ref(value)
+}
+
 fn buffer_len_lowered(value: String) -> LoweredValue {
     LoweredValue::buffer_len(value)
 }
@@ -545,6 +552,15 @@ fn native_expr_kind(e: &Expr) -> &'static str {
         Expr::IndexGet { .. } => "IndexGet",
         _ => "Expr",
     }
+}
+
+fn lower_expr_native_string_ref(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
+    if !is_definitely_string_expr(ctx, e) {
+        bail!("cannot lower expression as native StringRef without a string proof");
+    }
+    let boxed = lower_expr(ctx, e)?;
+    let raw = unbox_str_handle(ctx.block(), &boxed);
+    Ok(string_ref_lowered(raw))
 }
 
 fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
