@@ -7618,6 +7618,38 @@ fn typed_f64_mixed_clone_test_module() -> Module {
     module
 }
 
+fn typed_f64_i32_local_clone_test_module() -> Module {
+    let mut module = typed_f64_clone_test_module(false);
+    module.name = "typed_f64_i32_local_function_abi.ts".to_string();
+    module.functions[0].params = vec![param(1, "a", Type::Number), param(2, "b", Type::Int32)];
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 5,
+            name: "mask".to_string(),
+            ty: Type::Int32,
+            mutable: false,
+            init: Some(Expr::Binary {
+                op: BinaryOp::BitOr,
+                left: Box::new(local(2)),
+                right: Box::new(int(1)),
+            }),
+        },
+        Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(local(1)),
+            right: Box::new(local(5)),
+        })),
+    ];
+    module.functions[1].params = vec![param(3, "x", Type::Number), param(4, "y", Type::Int32)];
+    module.functions[1].body = vec![Stmt::Return(Some(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![local(3), local(4)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }))];
+    module
+}
+
 fn typed_i1_clone_test_module() -> Module {
     typed_i1_clone_test_module_named("typed_i1_function_abi.ts")
 }
@@ -8143,6 +8175,63 @@ fn typed_f64_method_clone_module() -> Module {
             param(1, "receiver", Type::Named("Calc".to_string())),
             param(2, "x", Type::Number),
             param(3, "y", Type::Number),
+        ],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(1)),
+                property: "mix".to_string(),
+            }),
+            args: vec![local(2), local(3)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    )
+}
+
+fn typed_f64_i32_local_method_clone_module() -> Module {
+    let mut calc = class(203, "Calc", Vec::new());
+    calc.methods.push(Function {
+        id: 204,
+        name: "mix".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(21, "a", Type::Number), param(22, "b", Type::Int32)],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: 25,
+                name: "mask".to_string(),
+                ty: Type::Int32,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left: Box::new(local(22)),
+                    right: Box::new(int(1)),
+                }),
+            },
+            Stmt::Return(Some(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(local(21)),
+                right: Box::new(local(25)),
+            })),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+
+    module_with_classes_and_params(
+        "typed_f64_i32_local_method_abi.ts",
+        vec![calc],
+        vec![
+            param(1, "receiver", Type::Named("Calc".to_string())),
+            param(2, "x", Type::Number),
+            param(3, "y", Type::Int32),
         ],
         Type::Number,
         vec![Stmt::Return(Some(Expr::Call {
@@ -10062,6 +10151,73 @@ fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
 }
 
 #[test]
+fn typed_f64_function_clone_keeps_i32_locals_raw_until_f64_use() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_i32_local_clone_test_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_fn_typed_f64_i32_local_function_abi_ts__add";
+    let typed = "perry_fn_typed_f64_i32_local_function_abi_ts__add__typed_f64";
+    let generic_body = "perry_fn_typed_f64_i32_local_function_abi_ts__add__generic";
+    let caller = "perry_fn_typed_f64_i32_local_function_abi_ts__caller";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{typed}(double %arg1, i32 %arg2)"
+        )),
+        "typed f64 clone should accept the raw i32 parameter:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains(" or i32 %arg2, 1")
+            && typed_ir.contains("sitofp i32 ")
+            && typed_ir.contains(" fadd double")
+            && !typed_ir.contains("js_typed_i32_arg_to_raw")
+            && !typed_ir.contains("js_nanbox"),
+        "typed f64 clone should keep the Int32 local raw until it flows into f64 arithmetic:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && wrapper_ir.contains(&format!("call double @{typed}(double "))
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public wrapper should guard/unbox the Int32 ABI arg and keep the generic fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("typed_f64_call.fast")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && caller_ir.contains(&format!("call double @{typed}(double "))
+            && caller_ir.contains(&format!("call double @{generic_body}("))
+            && !caller_ir.contains(&format!("call double @{public}(")),
+        "same-module direct call should target the mixed raw clone with generic-body fallback:\n{caller_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_f64_i32_local_clone_test_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_f64_func_ref_call"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("typed_clone={typed}"))
+                                && text.contains(&format!("generic_body={generic_body}"))
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=f64(f64, ...)->f64")
+                })
+        }),
+        "expected typed-f64 direct-call artifact for raw i32 local clone:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn typed_f64_function_clone_rejects_any_and_unsafe_mixed_parameter_signatures() {
     for case in ["any", "mixed"] {
         let ir = String::from_utf8(
@@ -10816,6 +10972,52 @@ fn typed_i32_method_clone_rejects_number_param_number_return_and_unsafe_add() {
             "{case} method must stay off the typed-i32 method ABI:\n{ir}"
         );
     }
+}
+
+#[test]
+fn typed_f64_method_clone_keeps_i32_locals_raw_until_f64_use() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_i32_local_method_clone_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix";
+    let typed = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix__typed_f64";
+    let generic_body = "perry_method_typed_f64_i32_local_method_abi_ts__Calc__mix__generic";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir =
+        defined_function_ir_section(&ir, "perry_fn_typed_f64_i32_local_method_abi_ts__probe");
+
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{typed}(double %arg21, i32 %arg22)"
+        )),
+        "typed f64 method clone should accept the raw i32 parameter:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains(" or i32 %arg22, 1")
+            && typed_ir.contains("sitofp i32 ")
+            && typed_ir.contains(" fadd double")
+            && !typed_ir.contains("js_typed_i32_arg_to_raw")
+            && !typed_ir.contains("js_nanbox"),
+        "typed f64 method clone should keep the Int32 local raw until f64 arithmetic:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && wrapper_ir.contains(&format!("call double @{typed}(double "))
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public method wrapper should guard/unbox the Int32 ABI arg and keep fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("typed_f64_method.fast")
+            && caller_ir.contains("typed_f64_method.generic")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && caller_ir.contains(&format!("call double @{typed}(double "))
+            && caller_ir.contains(&format!("call double @{generic_body}(")),
+        "exact direct method call should use the raw clone with generic-body fallback:\n{caller_ir}"
+    );
 }
 
 #[test]

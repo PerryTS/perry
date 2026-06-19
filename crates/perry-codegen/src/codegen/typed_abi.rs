@@ -1068,6 +1068,15 @@ fn typed_f64_body_rejection_reason(
             } if is_f64_type(ty) && expr_is_typed_f64_safe(expr, &locals) => {
                 locals.insert(*id, TypedParamRep::F64);
             }
+            Stmt::Let {
+                id,
+                ty: Type::Int32,
+                mutable: false,
+                init: Some(expr),
+                ..
+            } if expr_is_typed_i32_safe(expr, &locals) => {
+                locals.insert(*id, TypedParamRep::I32);
+            }
             _ => return Some(TypedCloneRejectionReason::BodyNotStraightLineTyped),
         }
     }
@@ -1481,6 +1490,17 @@ pub(crate) fn lower_typed_f64_body_with_seed_locals_and_reps(
                 locals.insert(*id, value);
                 reps.insert(*id, TypedParamRep::F64);
             }
+            Stmt::Let {
+                id,
+                ty: Type::Int32,
+                mutable: false,
+                init: Some(expr),
+                ..
+            } => {
+                let value = lower_typed_i32_expr_with_env(blk, expr, &locals)?;
+                locals.insert(*id, value);
+                reps.insert(*id, TypedParamRep::I32);
+            }
             _ => anyhow::bail!("typed-f64 clone cannot lower non-straight-line statement"),
         }
     }
@@ -1812,6 +1832,34 @@ mod tests {
                 TypedParamRep::I1
             ])
         );
+    }
+
+    #[test]
+    fn f64_clone_accepts_raw_i32_locals_before_numeric_return() {
+        let f = function(
+            Type::Number,
+            vec![param(10, "n", Type::Number), param(11, "i", Type::Int32)],
+            vec![
+                Stmt::Let {
+                    id: 12,
+                    name: "mask".to_string(),
+                    ty: Type::Int32,
+                    mutable: false,
+                    init: Some(Expr::Binary {
+                        op: BinaryOp::BitOr,
+                        left: Box::new(Expr::LocalGet(11)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                },
+                Stmt::Return(Some(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::LocalGet(12)),
+                })),
+            ],
+        );
+
+        assert_eq!(typed_f64_function_rejection_reason(&f), None);
     }
 
     #[test]
