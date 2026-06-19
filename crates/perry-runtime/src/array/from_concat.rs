@@ -97,6 +97,22 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
             return arr;
         }
     }
+    // A raw ArrayBuffer / SharedArrayBuffer is NOT array-like: it has no
+    // `length` property and no [[Symbol.iterator]], so `Array.from(arrayBuffer)`
+    // takes the array-like branch with length 0 and yields an empty array,
+    // rather than materializing its bytes (test262
+    // Array/from/items-is-arraybuffer). Node Buffers and typed arrays ARE
+    // array-like / iterable and still materialize their elements via
+    // js_array_clone below — only the backing ArrayBuffer is registered here,
+    // and Array.from receives the typed-array/Buffer pointer, not the backing
+    // buffer. (Spread `[...arrayBuffer]` goes through js_array_clone_for_spread,
+    // not this path, so its separate semantics are unaffected.)
+    if ptr_bits != 0
+        && (crate::buffer::is_array_buffer(ptr_bits)
+            || crate::buffer::is_shared_array_buffer(ptr_bits))
+    {
+        return js_array_alloc(0);
+    }
     js_array_clone(ptr_bits as *const ArrayHeader)
 }
 
@@ -307,7 +323,7 @@ fn is_constructor_value(value: f64) -> bool {
 /// `CreateDataProperty` hands to `[[DefineOwnProperty]]`.
 unsafe fn data_property_descriptor(value: f64) -> f64 {
     let desc = crate::object::js_object_alloc(0, 4);
-    let mut set = |name: &[u8], v: f64| {
+    let set = |name: &[u8], v: f64| {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(desc, key, v);
     };
@@ -711,14 +727,11 @@ fn append_spread_array(result: *mut ArrayHeader, src: *const ArrayHeader) -> *mu
         // gate the spec reads on the per-element hole check.
         for i in 0..len as usize {
             let v = *elems.add(i);
-            if v.to_bits() == crate::value::TAG_HOLE {
-                if crate::array::array_spec_has_index(materialized, i as u32) {
-                    out = js_array_push_f64(
-                        out,
-                        crate::array::array_spec_get(materialized, i as u32),
-                    );
-                    continue;
-                }
+            if v.to_bits() == crate::value::TAG_HOLE
+                && crate::array::array_spec_has_index(materialized, i as u32)
+            {
+                out = js_array_push_f64(out, crate::array::array_spec_get(materialized, i as u32));
+                continue;
             }
             out = js_array_push_f64(out, v);
         }

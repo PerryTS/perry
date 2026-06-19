@@ -1,7 +1,4 @@
 use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use std::collections::HashSet;
-
-use super::*;
 
 pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
     if f.is_async || f.is_generator || f.params.len() != 3 {
@@ -209,10 +206,8 @@ fn returns_i32_identity_expr(expr: &Expr, param_id: u32) -> bool {
 pub fn returns_int_stmts(ss: &[Stmt]) -> bool {
     for s in ss {
         match s {
-            Stmt::Return(Some(e)) => {
-                if !returns_int_expr(e) {
-                    return false;
-                }
+            Stmt::Return(Some(e)) if !returns_int_expr(e) => {
+                return false;
             }
             Stmt::If {
                 then_branch,

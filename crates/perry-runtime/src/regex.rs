@@ -60,7 +60,7 @@ pub use match_all::{
 /// the regex engine (which produces these iterators) is compiled out.
 pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
 #[cfg(feature = "regex-engine")]
-use replace_expand::{expand_js_replacement, replace_regex_fn_fancy};
+use replace_expand::expand_js_replacement;
 #[cfg(feature = "regex-engine")]
 pub use replace_expand::{
     js_string_replace_all_regex_fn, js_string_replace_all_regex_named, js_string_replace_regex_fn,
@@ -1014,18 +1014,13 @@ fn expand_js_replacement_fancy(
                     }
                 }
             }
-            b'<' => {
-                if has_named_groups {
-                    if let Some(rel) = repl[i + 2..].find('>') {
-                        let name = &repl[i + 2..i + 2 + rel];
-                        if let Some(m) = caps.name(name) {
-                            out.push_str(m.as_str());
-                        }
-                        i += 2 + rel + 1;
-                    } else {
-                        out.push('$');
-                        i += 1;
+            b'<' if has_named_groups => {
+                if let Some(rel) = repl[i + 2..].find('>') {
+                    let name = &repl[i + 2..i + 2 + rel];
+                    if let Some(m) = caps.name(name) {
+                        out.push_str(m.as_str());
                     }
+                    i += 2 + rel + 1;
                 } else {
                     out.push('$');
                     i += 1;
@@ -1664,7 +1659,7 @@ pub fn scan_last_exec_groups_root(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_last_exec_groups_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     LAST_EXEC_GROUPS.with(|g| {
-        visitor.visit_raw_mut_ptr_slot(&mut *g.borrow_mut());
+        visitor.visit_raw_mut_ptr_slot(&mut g.borrow_mut());
     });
 }
 
@@ -2070,5 +2065,49 @@ mod tests {
         let flags = make_string("");
         let re = js_regexp_new(make_string(pat), flags);
         assert!(!re.is_null(), "ID_Start-shaped pattern failed to construct");
+    }
+
+    /// `@colors/colors` (a winston dep) builds the escape regex
+    /// `escapeStringRegexp = s => s.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')`
+    /// and then `new RegExp(escapeStringRegexp(ansiStyles[k].close), 'g')` where
+    /// `close` is e.g. `"\x1b[0m"`. Node escapes the literal `[` to `\[`, giving
+    /// the valid pattern `\x1b\[0m`. Perry must do the same: the char-class
+    /// `[|\\{}()[\]^$+*?.]` contains a *literal* `[` (legal in a JS class but not
+    /// in the Rust `regex` crate) and an escaped `\]`. If the class compiles
+    /// empty or the `[` isn't a member, `escapeStringRegexp` returns its input
+    /// unchanged, the bare `[0m` reaches `new RegExp`, and you get
+    /// `SyntaxError: Invalid regular expression: /[0m/`. This pins the whole
+    /// build + match + `$&`-expand path against that regression.
+    #[test]
+    fn colors_escape_string_regexp_char_class() {
+        let pat = r"[|\\{}()[\]^$+*?.]";
+        // Source is preserved verbatim (no empty `(?:)`).
+        let re = js_regexp_new(make_string(pat), make_string("g"));
+        assert!(
+            !re.is_null(),
+            "@colors char-class pattern failed to construct"
+        );
+        let src = js_regexp_get_source(re);
+        assert_eq!(string_as_str(src), pat, "source must round-trip the class");
+
+        // The literal `[` is a member of the class.
+        assert!(
+            js_regexp_test(re, make_string("[")) != 0,
+            "`[` must match the class"
+        );
+
+        // `escapeStringRegexp("\x1b[0m")` → `"\x1b\\[0m"` (only `[` is escaped;
+        // ESC and the digits/`m` are not operators). `$&` → the matched char.
+        let out = js_string_replace_regex_named(make_string("\u{1b}[0m"), re, make_string(r"\$&"));
+        assert_eq!(
+            string_as_str(out),
+            "\u{1b}\\[0m",
+            "the `[` must be escaped so `new RegExp(out)` is valid"
+        );
+
+        // And the escaped output is itself a constructible pattern (what
+        // @colors then feeds to `new RegExp(..., 'g')`).
+        let re2 = js_regexp_new(out, make_string("g"));
+        assert!(!re2.is_null(), "escaped output `\\x1b\\[0m` must construct");
     }
 }

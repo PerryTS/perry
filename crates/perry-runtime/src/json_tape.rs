@@ -546,7 +546,7 @@ impl<'a, 'scope> TapeSource<'a, 'scope> {
     }
 
     #[inline]
-    unsafe fn bytes_from_offset<'b>(&'b self, offset: usize) -> &'b [u8] {
+    unsafe fn bytes_from_offset(&self, offset: usize) -> &[u8] {
         match self {
             TapeSource::Borrowed { bytes, .. } => {
                 if offset <= bytes.len() {

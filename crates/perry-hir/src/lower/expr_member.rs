@@ -1090,10 +1090,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 } else {
                                     None
                                 }
-                            } else if let Some(func_id) = ctx.lookup_func(&fn_name) {
-                                Some(Expr::FuncRef(func_id))
                             } else {
-                                None
+                                ctx.lookup_func(&fn_name).map(Expr::FuncRef)
                             };
                             if let Some(func_expr) = func_expr {
                                 return Ok(Expr::GetFunctionPrototypeMethod {
@@ -1148,6 +1146,30 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if let Some((module_name, class_name)) = native_instance {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let property_name = prop_ident.sym.to_string();
+                // #wall (follow-redirects): JS object-metadata / prototype-chain
+                // properties are never native instance methods/getters. Reading
+                // `inst.prototype` / `inst.__proto__` / `inst.constructor` on a
+                // value the HIR tagged as a native instance (e.g. `const lN =
+                // Readable.from(...)`) must NOT route to the 0-arg
+                // NativeMethodCall fallback below — that lowers to
+                // `js_native_call_method_nullsafe(inst, "prototype", 0 args)`,
+                // which *invokes* the resolved value → `TypeError: prototype is
+                // not a function`. Node returns the real metadata value (e.g.
+                // `undefined` for an instance's `.prototype`). Lower these as a
+                // plain PropertyGet so the runtime reads the property instead of
+                // calling it. (`constructor` for the bare-stream classes is also
+                // remapped to the module export above; this catches the general
+                // case for every other native-instance module/class.)
+                if matches!(
+                    property_name.as_str(),
+                    "prototype" | "__proto__" | "constructor"
+                ) {
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                }
                 // Issue #562: stream subclass instances (e.g.
                 // `class W extends WritableStream`) carry the bare-stream
                 // module/class tag for inherited-method dispatch
@@ -1273,6 +1295,30 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // zero-arg native getter. The call form still lowers
                     // through NativeMethodCall; bare reads stay as PropertyGet
                     // so runtime lookup can return a bound callable.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if class_name == "AsyncLocalStorage"
+                    && matches!(
+                        property_name.as_str(),
+                        "run" | "getStore" | "enterWith" | "exit" | "disable"
+                    )
+                {
+                    // `als.getStore` / `als.run` etc. are method-VALUE reads,
+                    // not zero-arg native calls. A bare read (`const { getStore
+                    // } = als`, `const gs = als.getStore`, `typeof als.getStore`
+                    // — Next.js' cacheComponents / patch-fetch async-storage
+                    // setup) must return the callable BOUND METHOD, not invoke
+                    // `getStore()` with no args (which returns the store →
+                    // undefined → `TypeError: getStore is not a function` at
+                    // server startup, before `✓ Ready`). Keep PropertyGet so the
+                    // runtime handle-property dispatch
+                    // (`dispatch_async_local_storage_property`) binds the method;
+                    // the call form `als.getStore()` still dispatches via the
+                    // runtime handle method dispatch. Mirrors the EventEmitter /
+                    // Console / net.Socket method-value-read arms above.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -2316,6 +2362,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if !obj_is_named_import
             && perry_api_manifest::module_has_any_entries(module)
             && perry_api_manifest::module_has_symbol(module, prop).is_none()
+            // #wall4: a method that is unmistakably a `String.prototype` member
+            // (`endsWith`, `startsWith`, `slice`, …) called on an identifier that
+            // *happens* to share a node-core module name (`url`, `path`) means the
+            // receiver is a runtime string value, NOT the module — don't gate it
+            // as an unimplemented module API; fall through to a normal PropertyGet
+            // so it dispatches dynamically on the real receiver. Next.js's
+            // app-page-turbo bundle calls `url.endsWith(...)` on a URL *string*
+            // bound to a local named `url`, which otherwise threw
+            // "url.endsWith is not implemented in Perry (ahead-of-time)".
+            && !super::array_fold::is_known_string_prototype_method(prop)
         {
             // #3896: a bare *value read* of an absent member on a Node
             // builtin module namespace/default object is an ordinary

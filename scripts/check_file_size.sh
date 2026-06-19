@@ -304,6 +304,31 @@ crates/perry-ext-http-server/src/http2_server.rs
 # on/once iterator machinery into the existing `events/` submodule is tracked
 # under #1435 with the other module-size cleanups.
 crates/perry-stdlib/src/events.rs
+# Representation-aware type-lowering work (#5291). These crossed the 2000-line
+# gate as the raw-numeric fallback hardening + native-ABI hot-loop runtime gates
+# expanded the type-analysis surface and its native-region proof tests. Splitting
+# the per-concern analysis/verify helpers into sibling modules is tracked under
+# #1435 with the other codegen file-size cleanups.
+crates/perry-codegen/src/type_analysis.rs
+crates/perry-codegen/src/native_value/verify.rs
+crates/perry-codegen/tests/native_proof_regressions.rs
+# auto-optimize libs driver. Crossed the 2000-line gate after the
+# fresh-archive-reuse work (#4928) added the build-stamp + freshness probe
+# (`auto_optimized_archives_are_fresh` / `auto_optimized_build_stamp` /
+# `auto_optimized_cache_key`) and their regression tests next to the existing
+# `build_optimized_libs` driver + well-known resolution. Splitting the
+# freshness/well-known helpers into a sibling module is tracked under #1435.
+crates/perry/src/commands/compile/optimized_libs.rs
+# Next.js app-router bring-up (PR #5438 / umbrella #793): these three crossed
+# the gate from the wall-fix additions (HIR destructuring var-decl handling,
+# `new <member>()`/anon-class lowering, and the stdlib FFI decl table) layered
+# on top of main's recent growth — each was at/just under 2000 on main
+# (2000/1991/1968) and is now a few-to-~90 LOC over. Topical split (by
+# destructuring-pattern family / new-callee shape / FFI namespace) is a
+# reasonable follow-up, deferred to keep the wall-fix PR focused.
+crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs
+crates/perry-hir/src/destructuring/var_decl.rs
+crates/perry-hir/src/lower/expr_new.rs
 EOF
 )
 

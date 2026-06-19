@@ -113,7 +113,7 @@ pub extern "C" fn js_array_splice(
         }
 
         // Calculate new length
-        let new_len = (len as u32 - actual_delete + items_count) as u32;
+        let new_len = len as u32 - actual_delete + items_count;
 
         // Grow array if needed
         let arr = if new_len > (*arr).capacity {

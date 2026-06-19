@@ -516,13 +516,21 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_axios_response_data_parsed", DOUBLE, &[I64]);
 
     // ========== sharp / image ==========
+    module.declare_function("js_sharp_auto_orient", I64, &[I64]);
+    module.declare_function("js_sharp_avif", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_blur", I64, &[I64, DOUBLE]);
+    module.declare_function("js_sharp_composite", I64, &[I64, DOUBLE]);
+    module.declare_function("js_sharp_extend", I64, &[I64, DOUBLE]);
+    module.declare_function("js_sharp_extract", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_flip", I64, &[I64]);
     module.declare_function("js_sharp_flop", I64, &[I64]);
     module.declare_function("js_sharp_from_buffer", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_from_file", I64, &[I64]);
+    module.declare_function("js_sharp_from_input", I64, &[I64]);
     module.declare_function("js_sharp_grayscale", I64, &[I64]);
     module.declare_function("js_sharp_metadata", I64, &[I64]);
+    module.declare_function("js_sharp_sharpen", I64, &[I64]);
+    module.declare_function("js_sharp_trim", I64, &[I64]);
     module.declare_function("js_sharp_negate", I64, &[I64]);
     module.declare_function("js_sharp_quality", I64, &[I64, DOUBLE]);
     module.declare_function("js_sharp_resize", I64, &[I64, DOUBLE, DOUBLE]);
@@ -1909,6 +1917,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_module_dynamic_import_apply_hooks", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_native_call_method",
+        DOUBLE,
+        &[DOUBLE, I64, I64, I64, I64],
+    );
+    module.declare_function(
+        "js_native_call_method_nullsafe",
         DOUBLE,
         &[DOUBLE, I64, I64, I64, I64],
     );

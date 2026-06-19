@@ -74,7 +74,7 @@ fn limbs_from_integer_f64(value: f64) -> [u64; BIGINT_LIMBS] {
 #[inline(always)]
 fn fits_in_i64(limbs: &[u64; BIGINT_LIMBS]) -> Option<i64> {
     let lo = limbs[0];
-    let hi_bit = (lo >> 63) as u64;
+    let hi_bit = lo >> 63;
     let expected_fill = if hi_bit == 0 { 0u64 } else { u64::MAX };
     for &l in &limbs[1..] {
         if l != expected_fill {

@@ -87,7 +87,8 @@ This is intentionally not "default-deny on greenfield" — that would
 break every existing build that calls `fetch(...)`. Migration path:
 
 1. Run the build once without the allowlist.
-2. Inspect `.perry-cache/audit.json` (the [behavioral SBOM
+2. Inspect `audit.json` in the cache dir (default
+   `node_modules/.cache/perry/audit.json`) (the [behavioral SBOM
    (`#495`)](perry-audit-sbom.md)) and see what egress the binary
    currently performs.
 3. Populate `allowedHosts` with the surface you actually use.

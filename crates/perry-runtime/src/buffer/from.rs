@@ -468,7 +468,7 @@ pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut 
 #[inline]
 fn uint8array_length_or_throw(val: f64) -> u32 {
     let integer = if val.is_nan() { 0.0 } else { val.trunc() };
-    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+    if !(0.0..=9_007_199_254_740_991.0).contains(&integer) {
         // Node reports the ORIGINAL argument, not the truncated integer
         // (`new Uint8Array(-1.5)` → "Invalid typed array length: -1.5"), with
         // integral values shown without a decimal point (#3146).

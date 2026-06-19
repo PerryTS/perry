@@ -1,5 +1,5 @@
 // FFI: widget sizing/layout/overlay/insets, button color, embed HWND,
-// plugin stubs, QR code, scroll-refresh stubs, stack distribution.
+// QR code, scroll-refresh stubs, stack distribution.
 use crate::{app, widgets};
 
 /// Add a child widget at a specific index.
@@ -110,16 +110,6 @@ pub extern "C" fn perry_ui_embed_nsview(hwnd_ptr: i64) -> i64 {
 /// Request location permission (stub — not available on Windows desktop).
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(_callback: f64) {}
-
-/// Load a plugin (stub — not yet implemented on Windows).
-#[no_mangle]
-pub extern "C" fn perry_plugin_load(_path_ptr: i64) -> i64 {
-    0
-}
-
-/// Unload a plugin (stub — not yet implemented on Windows).
-#[no_mangle]
-pub extern "C" fn perry_plugin_unload(_handle: i64) {}
 
 // NOTE: backOff, js_crypto_random_bytes_buffer, js_fetch_*, js_ws_handle_to_i64,
 // and js_fetch_stream_status are provided by perry-stdlib. When linking the IDE

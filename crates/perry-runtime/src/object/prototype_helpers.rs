@@ -13,7 +13,7 @@ pub(crate) fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<
         return None;
     }
     let raw_addr = (bits & crate::value::POINTER_MASK) as usize;
-    if raw_addr < (crate::gc::GC_HEADER_SIZE as usize) + 0x1000 {
+    if raw_addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
     }
     let gc = unsafe { gc_header_for(raw_addr as *const ObjectHeader) };

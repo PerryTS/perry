@@ -108,6 +108,105 @@ pub(crate) fn write_barriers_enabled() -> bool {
     })
 }
 
+thread_local! {
+    static FULL_OUTLINE_IC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Lever B (#5334) full-outline gate for class-field IC diamonds. Set ONCE per
+/// module at the top of `compile_module` (see [`decide_full_outline_ic`]), read
+/// at each class-field-set lowering. Thread-local — NOT a process-global
+/// `OnceLock` — because codegen runs one module per `compile_module` call and a
+/// process-global would wrongly pin the first module's decision for the rest of
+/// a multi-module build (and across tests). Codegen within a module is
+/// sequential, so a thread-local is safe and avoids threading a flag through all
+/// six `FnCtx` construction sites.
+pub(crate) fn full_outline_ic_enabled() -> bool {
+    FULL_OUTLINE_IC.with(|c| c.get())
+}
+
+pub(crate) fn set_full_outline_ic(enabled: bool) {
+    FULL_OUTLINE_IC.with(|c| c.set(enabled));
+}
+
+/// Total number of LLVM functions a module will emit — top-level functions
+/// plus every class callable (constructor, instance/static methods, computed
+/// members, accessor get/set bodies). Used as the lever-B size proxy: class
+/// methods and closures
+/// do NOT live in `hir.functions`, so a class-heavy minified bundle (the exact
+/// pathology lever B targets) can have a small `functions.len()` yet emit tens
+/// of thousands of LLVM functions. Counting class callables keeps the gate from
+/// silently under-counting and never firing on those modules.
+pub(crate) fn module_callable_count(hir: &perry_hir::Module) -> usize {
+    let class_callables: usize = hir
+        .classes
+        .iter()
+        .map(|c| {
+            usize::from(c.constructor.is_some())
+                + c.methods.len()
+                + c.static_methods.len()
+                + c.computed_members.len()
+                + c.getters.len()
+                + c.setters.len()
+        })
+        .sum();
+    hir.functions.len() + class_callables
+}
+
+/// Decide whether a module is large enough to warrant full-outlining its
+/// class-field IC diamonds (#5334 lever B). Oversized modules are forced to
+/// `clang -O0` (#4880), where the inline diamond's ~15-line-per-site expansion
+/// is never optimized away; collapsing each site to one
+/// `call @js_class_field_set_ic(...)` keeps the IR small enough for clang to
+/// compile at all. Gated on the module's total callable count (see
+/// [`module_callable_count`]) — the defining trait of the pathological
+/// minified-bundle case (tens of thousands of callables in one module);
+/// ordinary per-file modules stay on the inline diamond and keep the hot fast
+/// store.
+///
+/// `PERRY_FULL_OUTLINE_IC=1`/`on`/`true` forces ON, `=0`/`off`/`false` forces
+/// OFF; otherwise auto: `callable_count >= PERRY_FULL_OUTLINE_IC_MIN_FUNCS`
+/// (default 4000).
+pub(crate) fn decide_full_outline_ic(callable_count: usize) -> bool {
+    match std::env::var("PERRY_FULL_OUTLINE_IC").as_deref() {
+        Ok("1") | Ok("on") | Ok("true") => return true,
+        Ok("0") | Ok("off") | Ok("false") => return false,
+        _ => {}
+    }
+    let threshold = std::env::var("PERRY_FULL_OUTLINE_IC_MIN_FUNCS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(4000);
+    callable_count >= threshold
+}
+
+/// Decide how many codegen units to split a module's object compilation into
+/// (#5391). A single huge translation unit makes `clang -c` OOM (~15GB on the
+/// 13MB bundle); splitting bounds peak compiler memory to roughly whole/N.
+///
+/// `PERRY_CODEGEN_UNITS=N` forces exactly N units (1 disables splitting).
+/// Otherwise auto: 1 unit until the module's callable count crosses a floor,
+/// then `ceil(callables / target_per_unit)`, capped — so ordinary per-file
+/// modules stay on the single-unit path (default 1, zero behavior change).
+/// `PERRY_CODEGEN_UNIT_SIZE` overrides the target callables-per-unit.
+pub(crate) fn decide_codegen_units(callable_count: usize) -> usize {
+    if let Ok(v) = std::env::var("PERRY_CODEGEN_UNITS") {
+        if let Ok(n) = v.parse::<usize>() {
+            return n.max(1);
+        }
+    }
+    const MIN_CALLABLES_TO_SPLIT: usize = 8000;
+    const MAX_UNITS: usize = 48;
+    let target = std::env::var("PERRY_CODEGEN_UNIT_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(6000);
+    if callable_count < MIN_CALLABLES_TO_SPLIT {
+        return 1;
+    }
+    callable_count.div_ceil(target).clamp(1, MAX_UNITS)
+}
+
 pub(super) fn scoped_fn_name(module_prefix: &str, hir_name: &str) -> String {
     // Use the INJECTIVE sanitizer (same as scoped_static_method_name): plain
     // `sanitize` maps every non-`[A-Za-z0-9_]` char to `_`, so distinct minified
@@ -612,6 +711,12 @@ pub(super) fn init_static_fields_early(
     // static-field & friends. Initialized and computed-key fields are emitted
     // inline at their source position elsewhere and are skipped here.
     for c in &hir.classes {
+        // Next.js wall 54: a nested class (declared inside a function) has its
+        // static-field initializers run when the enclosing function evaluates
+        // the class, NOT at module init — skip them here.
+        if c.is_nested {
+            continue;
+        }
         let Some(&class_id) = ctx.class_ids.get(&c.name) else {
             continue;
         };
@@ -700,6 +805,13 @@ pub(super) fn init_static_fields_late(
         refs.iter().any(|id| !module_local_scope.contains(id))
     };
     for c in &hir.classes {
+        // Next.js wall 54: a nested class's static-field initializers must run
+        // when the enclosing function evaluates the class, not at module init.
+        // Running a side-effectful one eagerly (e.g. `static #a = new Self()`)
+        // both mistimes it and can crash before user code.
+        if c.is_nested {
+            continue;
+        }
         for sf in &c.static_fields {
             // Computed-key static fields go through the class-static-symbol
             // side table. Refs #420 — drizzle's `static [entityKind] =

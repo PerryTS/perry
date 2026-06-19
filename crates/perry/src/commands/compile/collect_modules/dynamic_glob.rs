@@ -1,8 +1,6 @@
 //! Dynamic-`import()` glob expansion (#1674 sub-part B). Split out of
 //! `collect_modules.rs` to keep that file under the file-size gate.
 
-use super::*;
-
 /// #1674 sub-part B: expand a dynamic-`import()` glob pattern
 /// (`<prefix>*<suffix>`, where `prefix` is a relative, directory-anchored
 /// path) into concrete relative specifiers by reading the importing module's

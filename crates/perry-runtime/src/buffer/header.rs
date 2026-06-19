@@ -436,8 +436,8 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
         (9 | 11 | 16 | 18 | 26, 2) => DERIVE_KEY | DERIVE_BITS,
         (13, 2) => DECRYPT | UNWRAP_KEY,
         (13, 3) => ENCRYPT | WRAP_KEY,
-        (30 | 31 | 32, 2) => DECAPSULATE_BITS | DECAPSULATE_KEY,
-        (30 | 31 | 32, 3) => ENCAPSULATE_BITS | ENCAPSULATE_KEY,
+        (30..=32, 2) => DECAPSULATE_BITS | DECAPSULATE_KEY,
+        (30..=32, 3) => ENCAPSULATE_BITS | ENCAPSULATE_KEY,
         _ => 0,
     }
 }

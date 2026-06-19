@@ -236,6 +236,10 @@ fn visit_expr(expr: &Expr, ctx: &mut WalkCtx) {
 
 fn check_url(ctx: &mut WalkCtx, kind: &'static str, url: &Expr) {
     match url {
+        // NOTE: do not collapse this into a match-guard (`Expr::String(s) if ...`).
+        // An allowlisted literal must be accepted here, not fall through to the
+        // dynamic-host arm below. clippy's collapsible_if/match-guard rewrite
+        // changes the semantics; keep the explicit nested `if`.
         Expr::String(s) => {
             if !url_matches_allowlist(s, ctx.allowed_hosts) {
                 ctx.violations.push(EgressViolation {
@@ -260,6 +264,10 @@ fn check_url(ctx: &mut WalkCtx, kind: &'static str, url: &Expr) {
 
 fn check_host(ctx: &mut WalkCtx, kind: &'static str, host: &Expr) {
     match host {
+        // NOTE: do not collapse this into a match-guard (`Expr::String(s) if ...`).
+        // An allowlisted literal must be accepted here, not fall through to the
+        // dynamic-host arm below. clippy's collapsible_if/match-guard rewrite
+        // changes the semantics; keep the explicit nested `if`.
         Expr::String(s) => {
             if !host_matches_allowlist(s, ctx.allowed_hosts) {
                 ctx.violations.push(EgressViolation {

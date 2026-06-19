@@ -360,7 +360,6 @@ mod parse_float_tests {
 /// `valueOf` / `Symbol.toPrimitive` and propagate their throws (and the
 /// `Symbol`→TypeError) at the spec-mandated point instead of being silently
 /// swallowed by a downstream `is_nan()` shortcut.
-#[no_mangle]
 pub extern "C" fn js_to_integer_or_infinity(value: f64) -> f64 {
     let n = js_number_coerce(value);
     if n.is_nan() {

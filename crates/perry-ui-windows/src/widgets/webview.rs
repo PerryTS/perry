@@ -36,15 +36,13 @@ use webview2_com::Microsoft::Web::WebView2::Win32::*;
 #[cfg(target_os = "windows")]
 use webview2_com::*;
 #[cfg(target_os = "windows")]
-use windows::core::{Interface, PCWSTR, PWSTR};
+use windows::core::{Interface, BOOL, PCWSTR, PWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Com::CoTaskMemFree;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-#[cfg(target_os = "windows")]
-use windows::Win32::System::WinRT::EventRegistrationToken;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -218,9 +216,9 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
                 0,
                 if width > 0.0 { width as i32 } else { 600 },
                 if height > 0.0 { height as i32 } else { 400 },
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
         }
@@ -341,7 +339,11 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
             } else if let Some(env) = environment {
                 env_done_clone.set(Some(Ok(env)));
             } else {
-                env_done_clone.set(Some(Err(windows::core::Error::from_win32())));
+                env_done_clone.set(Some(Err(windows::core::Error::from(
+                    windows::core::HRESULT::from_win32(unsafe {
+                        windows::Win32::Foundation::GetLastError().0
+                    }),
+                ))));
             }
             env_ready_clone.set(true);
             Ok(())
@@ -381,7 +383,11 @@ fn init_webview2_sync(handle: i64, user_data_dir: &PathBuf) -> windows::core::Re
             } else if let Some(c) = controller {
                 ctrl_done_clone.set(Some(Ok(c)));
             } else {
-                ctrl_done_clone.set(Some(Err(windows::core::Error::from_win32())));
+                ctrl_done_clone.set(Some(Err(windows::core::Error::from(
+                    windows::core::HRESULT::from_win32(unsafe {
+                        windows::Win32::Foundation::GetLastError().0
+                    }),
+                ))));
             }
             ctrl_ready_clone.set(true);
             Ok(())
@@ -557,7 +563,7 @@ fn install_navigation_handlers(handle: i64, webview: &ICoreWebView2) {
         Ok(())
     }));
 
-    let mut token = EventRegistrationToken::default();
+    let mut token: i64 = 0;
     unsafe {
         let _ = webview.add_NavigationStarting(&nav_starting, &mut token);
         let _ = webview.add_NavigationCompleted(&nav_completed, &mut token);

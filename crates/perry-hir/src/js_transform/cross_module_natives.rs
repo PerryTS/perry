@@ -1,8 +1,6 @@
 use crate::ir::{Expr, Module, ModuleKind, Stmt};
-use perry_types::LocalId;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
-use super::*;
 /// Information about a native instance exported from another module
 #[derive(Debug, Clone)]
 pub struct ExportedNativeInstance {

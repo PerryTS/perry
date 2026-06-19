@@ -10,8 +10,11 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-image = "0.25"
-base64 = "0.22"
+# `avif` enables the pure-Rust ravif encoder (AVIF output). We deliberately do
+# NOT enable `avif-native` (C dav1d decoder), so AVIF is encode-only.
+image = { version = "0.25", features = ["avif"] }
+fast_image_resize = "5"
+kamadak-exif = "0.6"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

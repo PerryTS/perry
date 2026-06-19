@@ -235,6 +235,64 @@ fn anonymous_class_has_static_name_member(class: &ast::Class) -> bool {
     })
 }
 
+/// True when an `Expr` is cheap to evaluate more than once with no observable
+/// side effects — safe to duplicate into an optional-call guard condition.
+/// Conservative: only the obvious read-only leaf/access shapes qualify.
+fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
+    match expr {
+        Expr::LocalGet(_)
+        | Expr::GlobalGet(_)
+        | Expr::This
+        | Expr::Undefined
+        | Expr::Null
+        | Expr::Number(_)
+        | Expr::String(_)
+        | Expr::Bool(_) => true,
+        // `a.b` / `a[const]` chains over repeatable receivers stay repeatable
+        // (property reads are not side-effecting in this codebase's model).
+        Expr::PropertyGet { object, .. } => opt_call_receiver_repeatable(object),
+        Expr::IndexGet { object, index } => {
+            opt_call_receiver_repeatable(object) && opt_call_receiver_repeatable(index)
+        }
+        _ => false,
+    }
+}
+
+/// Build the condition under which `obj.method?.(args)` short-circuits to
+/// `undefined`: the resolved function value is nullish. The naive check
+/// `obj.method == null` is WRONG when `obj` is a primitive string, because
+/// `PropertyGet{string, method}` reads back `undefined` even though the
+/// builtin (`split`/`replace`/…) is perfectly callable through the call path
+/// — so the guard wrongly short-circuited (`mime`'s
+/// `type?.split?.(';')[0]` returned `undefined`). Per spec, a string DOES have
+/// the method, so we must NOT short-circuit. When the receiver is repeatable
+/// we widen the guard to `func_value == null && typeof receiver !== "string"`:
+/// for a real string the typeof clause is false (never short-circuit → the
+/// call dispatches the builtin), while a user object missing the method still
+/// short-circuits (#830 preserved). Non-repeatable receivers keep the plain
+/// function-value check to avoid double-evaluating side effects.
+fn opt_call_func_nullish_guard(receiver: &Expr, func_value: Expr) -> Expr {
+    let func_nullish = Expr::Compare {
+        op: CompareOp::LooseEq,
+        left: Box::new(func_value),
+        right: Box::new(Expr::Null),
+    };
+    if opt_call_receiver_repeatable(receiver) {
+        let not_string = Expr::Compare {
+            op: CompareOp::Ne,
+            left: Box::new(Expr::TypeOf(Box::new(receiver.clone()))),
+            right: Box::new(Expr::String("string".to_string())),
+        };
+        Expr::Logical {
+            op: LogicalOp::And,
+            left: Box::new(func_nullish),
+            right: Box::new(not_string),
+        }
+    } else {
+        func_nullish
+    }
+}
+
 pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
@@ -497,7 +555,7 @@ pub(crate) mod relower_trace {
         SPANS.with(|m| {
             *m.borrow_mut().entry((lo, hi)).or_insert(0) += 1;
         });
-        if n % 5_000_000 == 0 {
+        if n.is_multiple_of(5_000_000) {
             dump(&format!("periodic@{n}"));
         }
     }
@@ -565,6 +623,23 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                 ctx.with_env_stack = saved_with_envs;
                 return Ok(wrap_with_gets(&name, fallback?, with_envs));
             }
+            // A class declared in the current function body lexically shadows a
+            // same-named binding from an OUTER scope. Resolution normally checks
+            // `lookup_local` (which finds outer-scope locals) before the class,
+            // so without this a nested `class a` whose name also exists as an
+            // outer local resolved to that outer local. In the Next.js app-page
+            // bundle a webpack chunk's `a` (`a=()=>{}`, undefined at module-init
+            // time) is captured into a module factory that declares
+            // `class a extends Error` (p-timeout's TimeoutError); the export
+            // `e.exports.TimeoutError=a` then read the outer `undefined` instead
+            // of the class, so `new r.TimeoutError` threw "undefined is not a
+            // constructor". Gate on there being NO current-scope local of that
+            // name (a sibling param/var/let still wins).
+            if ctx.forward_class_names.contains(&name)
+                && ctx.lookup_local_in_current_scope(&name).is_none()
+            {
+                return Ok(Expr::ClassRef(ctx.resolve_class_name(&name)));
+            }
             if let Some(id) = ctx.lookup_local(&name) {
                 // A with-fallback implicit global may still be the HOLE
                 // sentinel (the with-env took the write) — reading it then
@@ -607,14 +682,14 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                 })
             } else if ctx.lookup_class(&name).is_some() {
                 // Class used as a first-class value (e.g., { Point: Point })
-                Ok(Expr::ClassRef(name))
+                Ok(Expr::ClassRef(ctx.resolve_class_name(&name)))
             } else if ctx.forward_class_names.contains(&name) {
                 // Forward reference to a sibling class declared LATER in the
                 // same function body (vendored zod: ZodType.optional() →
                 // ZodOptional.create(...)). JS resolves this at call time;
                 // emit a ClassRef by name — codegen resolves it from the
                 // class registry, which has every pending class by then.
-                Ok(Expr::ClassRef(name))
+                Ok(Expr::ClassRef(ctx.resolve_class_name(&name)))
             } else if name == "undefined" {
                 // Global undefined identifier
                 Ok(Expr::Undefined)
@@ -662,6 +737,30 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                 Ok(Expr::PropertyGet {
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name,
+                })
+            } else if name == "require" && ctx.is_external_module {
+                // Tier 1 of #5389 (fixes #5373): compiled external /
+                // compilePackages modules carry no ambient CJS `require`
+                // binding, so a bare or computed `require(expr)` would fall
+                // through to the `js_global_get_or_throw_unresolved` arm below
+                // and throw `ReferenceError: require is not defined`. Bind a
+                // bare unshadowed `require` to a real createRequire-backed
+                // closure instead — builtins (`node:os`, …) resolve by string;
+                // package/file specifiers throw the descriptive
+                // ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE. Reaching this arm means
+                // `require` is unshadowed (a local/func/imported/native binding
+                // would have matched an earlier arm). Gated to external modules:
+                // in first-party source the bare-require compile error (#668)
+                // is deliberate and must not regress into a runtime path.
+                Ok(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_module_ambient_require".to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
                 })
             } else {
                 // GlobalGet(0) is a sentinel: codegen routes by name from the
@@ -832,28 +931,23 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                             None
                         }
                     }
-                    ast::Expr::Member(member) => {
-                        let native_module = if let ast::Expr::Ident(obj_ident) = member.obj.as_ref()
-                        {
-                            let obj_name = obj_ident.sym.as_ref();
-                            // `Temporal.<X>` constructors dispatch via brand arms,
-                            // not a class chain, so route them through the runtime
-                            // dynamic path (`js_instanceof_dynamic` →
-                            // `temporal_ctor_kind`) by lowering the constructor to
-                            // its closure value here.
-                            obj_name == "Temporal"
-                                || ctx.lookup_builtin_module_alias(obj_name).is_some()
-                                || matches!(ctx.lookup_native_module(obj_name), Some((_, None)))
-                        } else {
-                            false
-                        };
-                        if native_module {
-                            match lower_expr(ctx, &bin.right) {
-                                Ok(e) => Some(Box::new(e)),
-                                Err(_) => None,
-                            }
-                        } else {
-                            None
+                    ast::Expr::Member(_member) => {
+                        // Lower the member RHS to its value and route through
+                        // `js_instanceof_dynamic`. The pre-fix code only did this
+                        // for native modules (`Temporal.X`, builtin aliases) and
+                        // otherwise left codegen with the static `ty = "obj.prop"`
+                        // string, which it can't resolve to a class id for a
+                        // user-module member (`x instanceof sv.SemVer` where `sv`
+                        // is a default/namespace import) → class_id 0 → instanceof
+                        // always false (semver's `new SemVer(semVerObj)` clone path
+                        // hit this: `version instanceof SemVer` was false, so the
+                        // ctor mis-parsed the object as a string). `sv.SemVer`
+                        // lowers to the same class-ref value `const C = sv.SemVer`
+                        // produces, which the dynamic path resolves correctly; for
+                        // native modules it still derives the brand/synthetic id.
+                        match lower_expr(ctx, &bin.right) {
+                            Ok(e) => Some(Box::new(e)),
+                            Err(_) => None,
                         }
                     }
                     // Any other right-hand side (a primitive literal like
@@ -1115,6 +1209,17 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                                 return Ok(Expr::String("function".to_string()));
                             }
                         }
+                    }
+                    // #5373: in compiled external / compilePackages modules a
+                    // bare `require` is bound to a createRequire-backed closure
+                    // (see the ident-read arm), so `typeof require` is
+                    // "function" — matching Node CJS and enabling the common
+                    // `typeof require === 'function'` capability guard. Without
+                    // this, the generic non-throwing fold below reports
+                    // "undefined". Gated to external modules to mirror the
+                    // ident binding exactly.
+                    if n == "require" && ctx.is_external_module && ctx.lookup_local(n).is_none() {
+                        return Ok(Expr::String("function".to_string()));
                     }
                     if ctx.lookup_local(n).is_none()
                         && ctx.lookup_func(n).is_none()
@@ -1872,6 +1977,11 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     // "X is not a function" (issue #4699: zod `safeParse`'s
                     // `iss.inst?._zod.def?.error?.(iss)` error-map probe).
                     let mut callee_from_chain = false;
+                    // Receiver of an `obj.method?.(args)` callee, captured so the
+                    // function-value nullish guard can avoid false-short-circuiting
+                    // on string builtins (`type?.split?.(...)`) — see
+                    // `opt_call_func_nullish_guard`. `None` for non-member callees.
+                    let mut opt_call_member_receiver: Option<Expr> = None;
                     let (check_expr, callee_expr) = {
                         let mut lower_member_flat =
                             |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
@@ -1909,7 +2019,8 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                             // (prop), call the function (prop) — codegen still sees
                             // a PropertyGet callee so `this` binds to obj.
                             ast::Expr::Member(m) => {
-                                let (_obj, prop) = lower_member_flat(m)?;
+                                let (obj, prop) = lower_member_flat(m)?;
+                                opt_call_member_receiver = Some(obj);
                                 (prop.clone(), prop)
                             }
                             ast::Expr::OptChain(inner) => match &*inner.base {
@@ -1939,7 +2050,9 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                                 //    callee + dispatches the builtin normally.
                                 ast::OptChainBase::Member(m) => {
                                     callee_from_chain = opt_chain.optional;
-                                    lower_member_flat(m)?
+                                    let (obj, prop) = lower_member_flat(m)?;
+                                    opt_call_member_receiver = Some(obj.clone());
+                                    (obj, prop)
                                 }
                                 _ => {
                                     let ce = lower_expr(ctx, callee)?;
@@ -1985,12 +2098,19 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                         // before calling — otherwise an `undefined` property is
                         // invoked and throws "X is not a function" (#4699).
                         let else_expr: Box<Expr> = if callee_from_chain {
-                            Box::new(Expr::Conditional {
-                                condition: Box::new(Expr::Compare {
+                            // String-builtin-safe nullish guard: a real string
+                            // receiver never short-circuits even though
+                            // `string.method` reads as undefined.
+                            let guard_cond = match &opt_call_member_receiver {
+                                Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee),
+                                None => Expr::Compare {
                                     op: CompareOp::LooseEq,
                                     left: Box::new(fixed_callee),
                                     right: Box::new(Expr::Null),
-                                }),
+                                },
+                            };
+                            Box::new(Expr::Conditional {
+                                condition: Box::new(guard_cond),
                                 then_expr: Box::new(Expr::Undefined),
                                 else_expr: Box::new(outer_call),
                             })
@@ -2050,15 +2170,24 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     // before the call — otherwise an `undefined` property is
                     // invoked and throws "X is not a function" (#4699).
                     let else_expr: Box<Expr> = match func_value_for_guard {
-                        Some(func_value) => Box::new(Expr::Conditional {
-                            condition: Box::new(Expr::Compare {
-                                op: CompareOp::LooseEq,
-                                left: Box::new(func_value),
-                                right: Box::new(Expr::Null),
-                            }),
-                            then_expr: Box::new(Expr::Undefined),
-                            else_expr: Box::new(call_expr),
-                        }),
+                        Some(func_value) => {
+                            // String-builtin-safe: do not short-circuit when the
+                            // receiver is a primitive string whose builtin method
+                            // reads back as `undefined` (`type?.split?.(...)`).
+                            let guard_cond = match &opt_call_member_receiver {
+                                Some(recv) => opt_call_func_nullish_guard(recv, func_value),
+                                None => Expr::Compare {
+                                    op: CompareOp::LooseEq,
+                                    left: Box::new(func_value),
+                                    right: Box::new(Expr::Null),
+                                },
+                            };
+                            Box::new(Expr::Conditional {
+                                condition: Box::new(guard_cond),
+                                then_expr: Box::new(Expr::Undefined),
+                                else_expr: Box::new(call_expr),
+                            })
+                        }
                         None => Box::new(call_expr),
                     };
 
@@ -2069,12 +2198,27 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     // undefined to fall through and produce
                     // `[object Object]` (or worse) when the receiver
                     // is `Map.get(missing)` etc.
-                    Ok(Expr::Conditional {
-                        condition: Box::new(Expr::Compare {
+                    //
+                    // For the simple `obj.method?.(args)` shape (`callee_from_chain`
+                    // is false and we captured a member receiver), `check_expr` is
+                    // the FUNCTION VALUE `obj.method`. Reading `string.method` as a
+                    // property yields `undefined` for builtins even though they're
+                    // callable, so use the string-builtin-safe guard to avoid a
+                    // false short-circuit (`"a/b".split?.(...)`). Otherwise
+                    // (`check_expr` is a receiver, or callee is not a member) the
+                    // plain nullish check is correct.
+                    let condition = if !callee_from_chain && opt_call_member_receiver.is_some() {
+                        let recv = opt_call_member_receiver.unwrap();
+                        opt_call_func_nullish_guard(&recv, check_expr)
+                    } else {
+                        Expr::Compare {
                             op: CompareOp::LooseEq,
                             left: Box::new(check_expr),
                             right: Box::new(Expr::Null),
-                        }),
+                        }
+                    };
+                    Ok(Expr::Conditional {
+                        condition: Box::new(condition),
                         then_expr: Box::new(Expr::Undefined),
                         else_expr,
                     })
@@ -2225,6 +2369,40 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
         // back up.
         ast::Expr::Class(class_expr) => {
             let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
+            // A NAMED class EXPRESSION used as a VALUE whose name collides
+            // with an existing module-scope class — a TOP-LEVEL `class X`
+            // declaration OR an imported class binding — must NOT reuse that
+            // class's name / ClassId. Per JS spec a class-expression's name
+            // binds only inside its own body, so the two are distinct
+            // classes. Reusing the id silently overwrote the real class with
+            // the (often nearly empty) nested expression. minimatch's
+            // `defaults()` returns
+            //   `Object.assign(m, { Minimatch: class Minimatch extends
+            //      orig.Minimatch {…}, AST: class AST extends orig.AST {…} })`
+            // — `Minimatch` collides with the top-level `export class
+            // Minimatch` (caught via `module_class_decl_names`), and `AST`
+            // collides with the IMPORTED `import { AST } from './ast.js'`
+            // (caught via `lookup_class`, since named class imports are
+            // registered too). Both nested expressions hijacked the real
+            // class id: `new Minimatch(pattern)` built a body-less instance,
+            // and `AST.fromGlob(...)` inside `Minimatch.parse` dispatched to
+            // the wrong (empty) class. Rename the colliding expression to a
+            // fresh unique name so it gets its own ClassId; the value
+            // position (object property / `new` site) holds the resulting
+            // ClassRef directly, so the original name is not needed at module
+            // scope. The `current_class` guard avoids renaming the rare
+            // self-referential `class C { … new C() … }` expression form.
+            let ident_name = match ident_name {
+                Some(n)
+                    if (ctx.module_class_decl_names.contains(&n)
+                        || ctx.lookup_class(&n).is_some()
+                        || ctx.lookup_imported_func(&n).is_some())
+                        && ctx.current_class.as_deref() != Some(n.as_str()) =>
+                {
+                    Some(format!("{}__class_expr_{}", n, ctx.fresh_class()))
+                }
+                other => other,
+            };
             let synthetic_name = ident_name.unwrap_or_else(|| {
                 if !anonymous_class_has_static_name_member(&class_expr.class) {
                     if let Some(name) = ctx.assignment_inferred_name.as_ref() {

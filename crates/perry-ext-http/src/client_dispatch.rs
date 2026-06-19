@@ -144,7 +144,7 @@ pub(crate) fn dispatch_request(
                             Ok(Some(bytes)) => {
                                 push_event(PendingHttpEvent::ResponseChunk {
                                     request_handle,
-                                    chunk: bytes.to_vec(),
+                                    chunk: bytes,
                                 });
                             }
                             Ok(None) => {

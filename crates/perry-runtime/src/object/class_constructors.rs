@@ -262,6 +262,50 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         Some(p) if p != 0 => p,
         _ => return undef,
     };
+    // Static-context super call (`super.m()` inside a `static` method): the
+    // receiver is the class constructor (a ClassRef), so resolve the PARENT's
+    // STATIC method (not an instance/prototype method) and invoke it with
+    // `this` bound to the current class. Refs class/super/in-static-methods.
+    if super::class_ref_id(this_value).is_some() {
+        if let Some((func_ptr, param_count, has_rest)) =
+            super::class_registry::lookup_static_method_in_chain(parent_cid, name)
+        {
+            let prev_this = crate::object::js_implicit_this_set(this_value);
+            crate::object::static_this_arm_if_unarmed(this_value);
+            let result = if has_rest {
+                // Mirror `js_class_static_method_call`'s rest bundling: fixed
+                // positional args, then the remaining args as an array.
+                let fixed = (param_count as usize).saturating_sub(1);
+                let arr = crate::array::js_array_alloc(args_len.saturating_sub(fixed) as u32);
+                let mut i = fixed;
+                while i < args_len {
+                    crate::array::js_array_push_f64(arr, *args_ptr.add(i));
+                    i += 1;
+                }
+                let rest_box = crate::value::js_nanbox_pointer(arr as i64);
+                let mut buf: Vec<f64> = Vec::with_capacity(param_count as usize);
+                for j in 0..fixed {
+                    buf.push(if j < args_len {
+                        *args_ptr.add(j)
+                    } else {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    });
+                }
+                buf.push(rest_box);
+                super::class_registry::call_static_method(
+                    func_ptr,
+                    buf.as_ptr(),
+                    buf.len(),
+                    param_count,
+                )
+            } else {
+                super::class_registry::call_static_method(func_ptr, args_ptr, args_len, param_count)
+            };
+            crate::object::static_this_disarm();
+            crate::object::js_implicit_this_set(prev_this);
+            return result;
+        }
+    }
     // `lookup_class_method_in_chain` resolves under the registry read lock and
     // DROPS it before returning — the invoked method body may take the registry
     // write lock (a lazy `require()` registering a module class), so we must not
@@ -479,11 +523,42 @@ pub(crate) unsafe fn replay_class_object_constructor(
     let user_params = (total_params as usize).saturating_sub(effective_caps);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-    for i in 0..user_params {
-        if !args_ptr.is_null() && i < args_len {
-            final_args.push(*args_ptr.add(i));
-        } else {
-            final_args.push(undef);
+    // #wall3: a `constructor(...args)` (rest param) called via the dynamic
+    // member-new path (`new ns.Sub(opts)` → js_new_function_construct →
+    // is_class_object_value → here) must BUNDLE the trailing call args into a JS
+    // array for the rest slot. call_vtable_method's own `has_rest` can't do it
+    // because the rest param is NOT last here — the positional `__perry_cap_*`
+    // capture params follow it — so we pack the rest array ourselves at the rest
+    // index, then append caps. Without this the rest binds to the first arg as a
+    // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
+    // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
+    let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+        .map(|ri| ri as usize)
+        .filter(|ri| *ri < user_params);
+    if let Some(ri) = rest_idx {
+        for i in 0..ri {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
+        }
+        let mut rest_arr = crate::array::js_array_alloc(0);
+        if !args_ptr.is_null() {
+            let mut i = ri;
+            while i < args_len {
+                rest_arr = crate::array::js_array_push_f64(rest_arr, *args_ptr.add(i));
+                i += 1;
+            }
+        }
+        final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
+    } else {
+        for i in 0..user_params {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
         }
     }
     for j in 0..n_caps {
@@ -527,11 +602,43 @@ pub(crate) unsafe fn replay_registered_class_constructor(
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-    for i in 0..user_params {
-        if !args_ptr.is_null() && i < args_len {
-            final_args.push(*args_ptr.add(i));
-        } else {
-            final_args.push(undef);
+    // #wall3: a `constructor(...args)` reached via the dynamic class-REF member-new
+    // path (`new ns.Sub(opts)` where ns.Sub resolves to an INT32 ClassRef at
+    // runtime → js_new_function_construct → constructor_class_ref_id →
+    // construct_registered_class_ref → here) must BUNDLE trailing call args into a
+    // JS array for the rest slot. The rest is NOT the last ctor param (positional
+    // `__perry_cap_*` capture params follow it), so call_vtable_method's own
+    // `has_rest` can't pack it — we pack the rest array ourselves at the rest
+    // index, then append caps. Without this the rest binds to the first arg as a
+    // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
+    // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
+    let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+        .map(|ri| ri as usize)
+        .filter(|ri| *ri < user_params);
+    if let Some(ri) = rest_idx {
+        for i in 0..ri {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
+        }
+        let mut rest_arr = crate::array::js_array_alloc(0);
+        if !args_ptr.is_null() {
+            let mut i = ri;
+            while i < args_len {
+                rest_arr = crate::array::js_array_push_f64(rest_arr, *args_ptr.add(i));
+                i += 1;
+            }
+        }
+        final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
+    } else {
+        for i in 0..user_params {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
         }
     }
     for bits in &caps {

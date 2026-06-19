@@ -21,7 +21,10 @@ use crate::analysis::{
     closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_stmt, uses_this_stmt,
 };
 use crate::ir::{EnumValue, Expr, Function, Param, Stmt};
-use crate::lower_decl::{append_synthetic_arguments_param, body_uses_arguments, lower_block_stmt};
+use crate::lower_decl::{
+    append_synthetic_arguments_param, body_uses_arguments, lower_block_stmt,
+    lower_fn_body_block_stmt,
+};
 use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, is_destructuring_pattern,
     is_rest_param,
@@ -158,6 +161,15 @@ fn lower_method_prop(
     let method_key = match &method.key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
         ast::PropName::Str(s) => MethodKeyKind::Static(s.value.as_str().unwrap_or("").to_string()),
+        // A numeric-keyed method shorthand (`{ 900(e,t,r){} }`) — its key is the
+        // stringified number per spec (`{900(){}}` has own key "900"). Without
+        // this arm it fell through to `_ => Ok(None)` and the method was DROPPED
+        // entirely (invisible to `obj[900]` and `Object.keys`), so a webpack
+        // bundle's numeric-keyed module-factory table (`{900(e,t,r){…}}`,
+        // `t[900].call(…)`) lost its factories — Next.js's
+        // `app-page-turbo.runtime.prod.js` entry `a(900)`. Mirrors the KeyValue
+        // and closed-shape numeric-key handling (`number_to_js_key`).
+        ast::PropName::Num(n) => MethodKeyKind::Static(super::number_to_js_key(n.value)),
         ast::PropName::Computed(computed) => match lower_expr(ctx, computed.expr.as_ref()) {
             Ok(e) => MethodKeyKind::Computed(e),
             Err(_) => return Ok(None),
@@ -229,6 +241,7 @@ fn lower_method_prop(
         }
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+        ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,
@@ -294,7 +307,7 @@ fn lower_method_prop(
     }
 
     let mut body = if let Some(ref block) = method.function.body {
-        lower_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block)?
     } else {
         Vec::new()
     };
@@ -475,6 +488,7 @@ fn lower_accessor_prop(
             let param_type = extract_param_type_with_ctx(pat, Some(ctx));
             let param_default = get_param_default(ctx, pat)?;
             let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+            ctx.shadow_native_instance_if_present(&param_name);
             params.push(Param {
                 id: param_id,
                 name: param_name,
@@ -488,7 +502,7 @@ fn lower_accessor_prop(
     }
 
     let body = if let Some(block) = body {
-        lower_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block)?
     } else {
         Vec::new()
     };

@@ -115,7 +115,7 @@ unsafe fn registered_buffer_index_own_property_present(
     let idx = super::has_own_helpers::str_from_string_header(key_str)
         .and_then(super::canonical_array_index)?;
     let buf = raw_buffer_addr as *const crate::buffer::BufferHeader;
-    Some(idx < (*buf).length as u32)
+    Some(idx < (*buf).length)
 }
 
 /// `ToPropertyDescriptor` field presence: `HasProperty(descriptor, name)` —
@@ -801,6 +801,12 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                                 .is_some_and(|props| props.contains_key(key))
                         }) || super::class_registry::lookup_static_method_in_chain(class_id, key)
                             .is_some()
+                            // A static accessor (`static get x()`) is an own
+                            // property of the constructor — own-only, mirroring
+                            // getOwnPropertyDescriptor (class/definition/
+                            // {getters,setters}-prop-desc `staticX`).
+                            || super::class_registry::class_own_static_accessor_ptrs(class_id, key)
+                                .is_some()
                     }
                 })
                 .unwrap_or(false);
@@ -934,10 +940,28 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         }
 
         if own_key_present(obj, key_str) {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
+            return f64::from_bits(TAG_TRUE);
         }
+
+        // A class-declaration prototype object: instance accessors (`get x()`)
+        // and methods live in the class vtable, not the object's keys_array, yet
+        // they ARE own properties of `C.prototype` — `getOwnPropertyDescriptor`
+        // already reflects them, so `hasOwnProperty` must agree (test262
+        // class/definition/{getters,setters}-prop-desc, which assert via
+        // `verifyProperty` → `hasOwnProperty`).
+        if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
+            if let Some(key) = super::has_own_helpers::str_from_string_header(key_str) {
+                if !super::class_registry::class_is_key_deleted(cid, key)
+                    && (key == "constructor"
+                        || super::class_registry::class_own_accessor_ptrs(cid, key).is_some()
+                        || super::native_module::class_has_own_method(cid, key))
+                {
+                    return f64::from_bits(TAG_TRUE);
+                }
+            }
+        }
+
+        f64::from_bits(TAG_FALSE)
     }
 }
 
@@ -1330,6 +1354,54 @@ pub extern "C" fn js_object_define_property(
         //   4. Present `get`/`set` must be callable.
         let target_is_class_ref = super::class_ref_id(obj_value).is_some();
         if !target_is_class_ref && !value_is_object_like(obj_value) {
+            // A native HANDLE target (a small pointer-tagged id — e.g. an http
+            // ServerResponse, Headers, a timer) is not a heap object, so Perry
+            // can't attach an arbitrary own property to it the way V8 can. Node
+            // framework code nonetheless calls `Object.defineProperty(handle, …)`:
+            // Next.js `patchSetHeaderWithCookieSupport` marks `res` with a Symbol
+            // (`Object.defineProperty(res, PATCHED_SET_HEADER, { value: true })`).
+            // Throwing here aborts the whole request (HTTP 500). Instead treat the
+            // define as a best-effort success: for a string key with a data
+            // descriptor, route the value through the handle property-set so
+            // `res[key]` round-trips; symbol keys / accessor descriptors degrade
+            // to a no-op (the framework's patch is idempotent, so re-running is
+            // harmless). Matches how `js_object_set_field_by_name` already tolerates
+            // small-handle receivers.
+            let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
+            let handle_id = if jv.is_pointer() {
+                let p = jv.as_pointer::<u8>() as usize;
+                if p >= 1 && p < 0x10000 {
+                    Some(p)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(hid) = handle_id {
+                // Best-effort: store a string-keyed data-descriptor value on the
+                // handle via the same dispatch `obj.key = value` uses.
+                let ks = crate::value::js_get_string_pointer_unified(key_value)
+                    as *const crate::StringHeader;
+                if !ks.is_null() {
+                    if let Some(dispatch) = super::class_handles::handle_property_set_dispatch() {
+                        let dval = if desc_has_field(descriptor_value, b"value") {
+                            Some(f64::from_bits(
+                                desc_read_field(descriptor_value, b"value").bits(),
+                            ))
+                        } else {
+                            None
+                        };
+                        if let Some(v) = dval {
+                            let name_ptr =
+                                (ks as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                            let name_len = (*ks).byte_len as usize;
+                            dispatch(hid as i64, name_ptr, name_len, v);
+                        }
+                    }
+                }
+                return obj_value;
+            }
             throw_object_type_error(b"Object.defineProperty called on non-object");
         }
         // A descriptor must be an Object; a Symbol is pointer-tagged but not an
@@ -2736,117 +2808,147 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                         );
                     }
                 }
+                // A native-module namespace object (`require("path")` etc.,
+                // class_id NATIVE_MODULE_CLASS_ID, the `__module__`-tagged
+                // object) is an ordinary object whose [[Prototype]] is
+                // %Object.prototype% — NOT itself. The `return obj_value` self-
+                // prototype fallback below makes turbopack's `interopEsm`
+                // proto-chain walk (`for(cur=raw; !LEAF.includes(cur);
+                // cur=getProto(cur))`) never terminate — getProto keeps
+                // returning the same object, so it creates export getters
+                // forever (the Next.js standalone startup runaway: unbounded
+                // memory growth, no `✓ Ready`). Return Object.prototype so the
+                // walk reaches a LEAF_PROTOTYPE and stops.
+                if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+                    let proto = crate::object::builtin_prototype_value("Object");
+                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                        return proto;
+                    }
+                    return f64::from_bits(TAG_NULL);
+                }
             }
             return obj_value;
         }
     }
-    if top16 == 0 {
-        if bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
-            if let Some(proto) = typed_array_instance_prototype(bits as usize) {
-                return proto;
+    if top16 == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+        if let Some(proto) = typed_array_instance_prototype(bits as usize) {
+            return proto;
+        }
+        if let Some(proto) = buffer_backed_prototype(bits as usize) {
+            return proto;
+        }
+        if let Some(proto) = buffer_backed_uint8array_prototype(bits as usize) {
+            return proto;
+        }
+        if let Some(proto) = collection_prototype(bits as usize) {
+            return proto;
+        }
+        // #2820: explicit setPrototypeOf side-table takes precedence.
+        if let Some(proto_bits) = super::prototype_chain::object_static_prototype(bits as usize) {
+            return f64::from_bits(proto_bits);
+        }
+        unsafe {
+            let obj = bits as *const ObjectHeader;
+            let gc = gc_header_for(obj);
+            if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                return f64::from_bits(TAG_NULL);
             }
-            if let Some(proto) = buffer_backed_prototype(bits as usize) {
-                return proto;
+            if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+                let p = crate::object::typed_array_intrinsic_proto_ptr();
+                if !p.is_null() {
+                    return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
+                }
             }
-            if let Some(proto) = buffer_backed_uint8array_prototype(bits as usize) {
-                return proto;
-            }
-            if let Some(proto) = collection_prototype(bits as usize) {
-                return proto;
-            }
-            // #2820: explicit setPrototypeOf side-table takes precedence.
-            if let Some(proto_bits) = super::prototype_chain::object_static_prototype(bits as usize)
-            {
-                return f64::from_bits(proto_bits);
-            }
-            unsafe {
-                let obj = bits as *const ObjectHeader;
-                let gc = gc_header_for(obj);
-                if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-                    return f64::from_bits(TAG_NULL);
-                }
-                if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
-                    let p = crate::object::typed_array_intrinsic_proto_ptr();
-                    if !p.is_null() {
-                        return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
-                    }
-                }
-                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
-                    let err = bits as *const crate::error::ErrorHeader;
-                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
-                        return proto;
-                    }
-                }
-                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
-                    if let Some(proto) = super::array_get_prototype_of_addr(bits as usize) {
-                        return proto;
-                    }
-                }
-                // #489 / #2145: function/constructor receiver — see the
-                // 0x7FFD branch above. Return the recorded static
-                // prototype if any, else null to break the chain-walk
-                // self-cycle.
-                if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
-                    if let Some(proto_bits) =
-                        crate::closure::closure_static_prototype(bits as usize)
-                    {
-                        return f64::from_bits(proto_bits);
-                    }
-                    // #3664: generator/async-generator [[Prototype]] resolution.
-                    if let Some(proto) = crate::object::generator_function_proto_of(bits as usize) {
-                        return proto;
-                    }
-                    return function_prototype_or_null();
-                }
-                if let Some(proto) = constructor_dynamic_prototype(obj) {
+            if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                let err = bits as *const crate::error::ErrorHeader;
+                if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
                     return proto;
                 }
-                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
-                    && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if let Some(proto) = super::array_get_prototype_of_addr(bits as usize) {
+                    return proto;
+                }
+            }
+            // #489 / #2145: function/constructor receiver — see the
+            // 0x7FFD branch above. Return the recorded static
+            // prototype if any, else null to break the chain-walk
+            // self-cycle.
+            if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                if let Some(proto_bits) = crate::closure::closure_static_prototype(bits as usize) {
+                    return f64::from_bits(proto_bits);
+                }
+                // #3664: generator/async-generator [[Prototype]] resolution.
+                if let Some(proto) = crate::object::generator_function_proto_of(bits as usize) {
+                    return proto;
+                }
+                return function_prototype_or_null();
+            }
+            if let Some(proto) = constructor_dynamic_prototype(obj) {
+                return proto;
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+            {
+                if let Some(proto_bits) =
+                    super::prototype_chain::default_object_prototype_for_owner(bits as usize)
                 {
-                    if let Some(proto_bits) =
-                        super::prototype_chain::default_object_prototype_for_owner(bits as usize)
-                    {
-                        return f64::from_bits(proto_bits);
+                    return f64::from_bits(proto_bits);
+                }
+                return f64::from_bits(TAG_NULL);
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
+                    return proto;
+                }
+                if let Some(proto) =
+                    super::class_registry::class_decl_prototype_value_for_instance_class(
+                        (*obj).class_id,
+                    )
+                {
+                    return proto;
+                }
+                // #3986: `Object.create(proto)` and `new F()` (a plain
+                // function ctor, whose instances carry a synthetic
+                // function-prototype class id) record the actual
+                // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
+                // keyed by that synthetic class id. Return the exact stored
+                // pointer so `Object.getPrototypeOf(o) === proto` holds by
+                // identity (test262 built-ins/Object/create/15.2.3.5-*,
+                // S9.9 ToObject identity). Declared ES classes use the
+                // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
+                // above, so this does not perturb the
+                // `getPrototypeOf(instance) === instance` model their
+                // `.constructor` resolution relies on. Without this the
+                // synthetic-class instance fell through to the
+                // `return obj_value` self-prototype fallback below.
+                let synth_proto = super::class_registry::class_prototype_object((*obj).class_id);
+                if !synth_proto.is_null() {
+                    return f64::from_bits(
+                        crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
+                    );
+                }
+                // A native-module namespace object (`require("path")` etc.,
+                // class_id NATIVE_MODULE_CLASS_ID, the `__module__`-tagged
+                // object) is an ordinary object whose [[Prototype]] is
+                // %Object.prototype% — NOT itself. The `return obj_value` self-
+                // prototype fallback below makes turbopack's `interopEsm`
+                // proto-chain walk (`for(cur=raw; !LEAF.includes(cur);
+                // cur=getProto(cur))`) never terminate — getProto keeps
+                // returning the same object, so it creates export getters
+                // forever (the Next.js standalone startup runaway: unbounded
+                // memory growth, no `✓ Ready`). Return Object.prototype so the
+                // walk reaches a LEAF_PROTOTYPE and stops.
+                if (*obj).class_id == super::native_module::NATIVE_MODULE_CLASS_ID {
+                    let proto = crate::object::builtin_prototype_value("Object");
+                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                        return proto;
                     }
                     return f64::from_bits(TAG_NULL);
                 }
-                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
-                    if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
-                        return proto;
-                    }
-                    if let Some(proto) =
-                        super::class_registry::class_decl_prototype_value_for_instance_class(
-                            (*obj).class_id,
-                        )
-                    {
-                        return proto;
-                    }
-                    // #3986: `Object.create(proto)` and `new F()` (a plain
-                    // function ctor, whose instances carry a synthetic
-                    // function-prototype class id) record the actual
-                    // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
-                    // keyed by that synthetic class id. Return the exact stored
-                    // pointer so `Object.getPrototypeOf(o) === proto` holds by
-                    // identity (test262 built-ins/Object/create/15.2.3.5-*,
-                    // S9.9 ToObject identity). Declared ES classes use the
-                    // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
-                    // above, so this does not perturb the
-                    // `getPrototypeOf(instance) === instance` model their
-                    // `.constructor` resolution relies on. Without this the
-                    // synthetic-class instance fell through to the
-                    // `return obj_value` self-prototype fallback below.
-                    let synth_proto =
-                        super::class_registry::class_prototype_object((*obj).class_id);
-                    if !synth_proto.is_null() {
-                        return f64::from_bits(
-                            crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
-                        );
-                    }
-                }
             }
-            return obj_value;
         }
+        return obj_value;
     }
     f64::from_bits(TAG_NULL)
 }
@@ -3025,6 +3127,23 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             "Object prototype may only be an Object or null: ",
             &rendered,
         );
+    }
+
+    // OrdinarySetPrototypeOf: a non-extensible target rejects a *changing*
+    // prototype. `Object.setPrototypeOf` surfaces that rejection as a
+    // TypeError; `Reflect.setPrototypeOf` returns `false` without throwing
+    // (handled in js_reflect_set_prototype_of, which never reaches here for the
+    // reject case). A no-op set to the SAME prototype still succeeds. Primitive
+    // targets are extensible-irrelevant — `obj_value_no_extend` is false for
+    // non-objects, so they fall through to the no-op return below. (test262
+    // Reflect/preventExtensions/prevent-extensions:
+    // `Object.setPrototypeOf(o, Array.prototype)` after preventExtensions.)
+    if crate::object::obj_value_no_extend(obj_value) {
+        let current = js_object_get_prototype_of(obj_value);
+        if current.to_bits() != proto_bits {
+            throw_object_type_error(b"#<Object> is not extensible");
+        }
+        return obj_value;
     }
 
     // #2820: setting the prototype of a primitive target is a spec no-op that

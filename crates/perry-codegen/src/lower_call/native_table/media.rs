@@ -4,13 +4,16 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
     // ========== sharp ==========
     // Factory: sharp(path) → js_sharp_from_file. Instance methods take
     // Handle (i64), compatible with the has_receiver:true dispatch path.
+    // `sharp(input)` accepts a file-path string OR a Buffer/Uint8Array of
+    // encoded image bytes. Pass the raw NaN-boxed value (NA_JSV) so
+    // `js_sharp_from_input` can branch on the Buffer registry probe.
     NativeModSig {
         module: "sharp",
         has_receiver: false,
         method: "default",
         class_filter: None,
-        runtime: "js_sharp_from_file",
-        args: &[NA_STR],
+        runtime: "js_sharp_from_input",
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -18,8 +21,8 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "sharp",
         class_filter: None,
-        runtime: "js_sharp_from_file",
-        args: &[NA_STR],
+        runtime: "js_sharp_from_input",
+        args: &[NA_JSV],
         ret: NR_PTR,
     },
     NativeModSig {
@@ -79,6 +82,65 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "sharp",
         has_receiver: true,
+        method: "sharpen",
+        class_filter: None,
+        runtime: "js_sharp_sharpen",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // `.extract({ left, top, width, height })` — the options object is passed
+    // as a NaN-boxed value (NA_F64 slot); `js_sharp_extract` reads its fields.
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "extract",
+        class_filter: None,
+        runtime: "js_sharp_extract",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "autoOrient",
+        class_filter: None,
+        runtime: "js_sharp_auto_orient",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // `.extend({ top, bottom, left, right, background })` — options object.
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "extend",
+        class_filter: None,
+        runtime: "js_sharp_extend",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "trim",
+        class_filter: None,
+        runtime: "js_sharp_trim",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // `.composite([{ input, top, left }, …])` — array of layer objects, passed
+    // as a NaN-boxed pointer (NA_F64 slot); `js_sharp_composite` walks it.
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "composite",
+        class_filter: None,
+        runtime: "js_sharp_composite",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
         method: "jpeg",
         class_filter: None,
         runtime: "js_sharp_jpeg",
@@ -100,6 +162,15 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
         method: "webp",
         class_filter: None,
         runtime: "js_sharp_webp",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "avif",
+        class_filter: None,
+        runtime: "js_sharp_avif",
         args: &[NA_F64],
         ret: NR_PTR,
     },

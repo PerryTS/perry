@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -187,7 +187,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &current_class_name,
                 crate::lower_call::FieldInitMode::SelfOnly,
             )?;
-            return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         // parent is `current_class.extends_name` (Perry uses the string
         // form for cross-module/late-resolved cases) or
@@ -875,12 +875,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 for la in &lowered_args {
                     ctor_args.push((DOUBLE, la.as_str()));
                 }
-                ctx.pending_declares.push((
-                    ctor.symbol.clone(),
-                    crate::types::VOID,
-                    ctor_param_types,
-                ));
-                ctx.block().call_void(&ctor.symbol, &ctor_args);
+                // `super(...)` to an imported parent: the parent ctor's return
+                // override does not replace the derived `this`, so discard the
+                // return. Declared DOUBLE to match the symbol's real signature
+                // (the source standalone ctor returns DOUBLE — see codegen/mod.rs).
+                ctx.pending_declares
+                    .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
+                let _ = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
             }
 
             // After the parent body has run (which may have set `this.config`

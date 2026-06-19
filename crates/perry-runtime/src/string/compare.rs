@@ -162,10 +162,10 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
 /// materialize the key string into a usable form regardless of which
 /// representation it currently has.
 #[inline]
-pub(crate) unsafe fn js_string_key_bytes<'a>(
+pub(crate) unsafe fn js_string_key_bytes(
     stored: crate::JSValue,
-    stored_buf: &'a mut [u8; crate::value::SHORT_STRING_MAX_LEN],
-) -> Option<&'a [u8]> {
+    stored_buf: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+) -> Option<&[u8]> {
     if stored.is_string() {
         let stored_ptr = stored.as_string_ptr();
         if stored_ptr.is_null() {

@@ -603,7 +603,7 @@ fn walk_paths_for_glob(dir: &Path, follow_symlinks: bool, out: &mut Vec<GlobCand
         return;
     };
     let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by(|a, b| a.path().cmp(&b.path()));
+    entries.sort_by_key(|a| a.path());
     for entry in entries {
         let path = entry.path();
         let Ok(ft) = entry.file_type() else {

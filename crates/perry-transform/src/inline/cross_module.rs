@@ -1,6 +1,5 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
+use perry_hir::walker::walk_expr_children;
+use perry_hir::{Class, Expr, Module, Stmt};
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -396,15 +395,13 @@ pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bo
             | Expr::ClassStaticSymbolSet { class_name, .. }
             | Expr::RegisterClassParentDynamic { class_name, .. }
             | Expr::RegisterClassStaticSymbol { class_name, .. }
-            | Expr::StaticMethodCall { class_name, .. } => {
-                if set.contains(class_name) {
-                    return true;
-                }
+            | Expr::StaticMethodCall { class_name, .. }
+                if set.contains(class_name) =>
+            {
+                return true;
             }
-            Expr::ClassExprFresh { template, .. } => {
-                if set.contains(template) {
-                    return true;
-                }
+            Expr::ClassExprFresh { template, .. } if set.contains(template) => {
+                return true;
             }
             _ => {}
         }

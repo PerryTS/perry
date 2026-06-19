@@ -318,7 +318,7 @@ pub(crate) fn collect_readdir_recursive_dirents(
     paths.sort();
     let mut dirs = Vec::new();
     for path in &paths {
-        let Ok(meta) = fs::symlink_metadata(&path) else {
+        let Ok(meta) = fs::symlink_metadata(path) else {
             continue;
         };
         let ft = meta.file_type();

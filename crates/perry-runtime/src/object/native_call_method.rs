@@ -1349,9 +1349,7 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     if (*closure).func_ptr != super::global_this::global_this_builtin_noop_thunk as *const u8 {
         return None;
     }
-    if super::native_module::builtin_closure_length(closure as usize).is_none() {
-        return None;
-    }
+    super::native_module::builtin_closure_length(closure as usize)?;
     let name_val = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
     let name_jsv = JSValue::from_bits(name_val.to_bits());
     if !name_jsv.is_any_string() {
@@ -1459,6 +1457,34 @@ pub(crate) unsafe fn try_dispatch_instance_method_value(
         has_synthetic_arguments,
         has_rest,
     ))
+}
+
+/// #wall4: null-safe variant used ONLY by the unknown-native-method fallback in
+/// codegen (`lower_call/native/mod.rs`). The HIR can mis-classify a receiver's
+/// class so an `obj.method()` reaches that fallback; dispatching via
+/// `js_native_call_method` is correct for a REAL receiver (fixes the Next.js
+/// `e.indexOf` mis-typed-as-FormData case where `e` is a real array). But a
+/// genuinely undefined/null receiver must NOT hard-throw "Cannot read
+/// properties of undefined" — the prior `0.0` sentinel let such call sites limp,
+/// and Next's `app-page-turbo.runtime.prod.js` TOP-LEVEL has a nullish-receiver
+/// `.indexOf` that, if it throws, aborts the entire module load (then the
+/// `_not-found` page can't be required → HTTP 500). Returns the SAME `0.0`
+/// sentinel as the old fallback for a nullish receiver (preserving the exact
+/// pre-fix non-crashing behavior — `undefined` instead broke downstream code
+/// that expected a number); otherwise dispatches identically.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_nullsafe(
+    object: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let v = crate::value::JSValue::from_bits(object.to_bits());
+    if v.is_undefined() || v.is_null() {
+        return 0.0;
+    }
+    js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
 #[no_mangle]
@@ -4491,7 +4517,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     .and_then(super::canonical_array_index)
                     .is_some_and(|idx| {
                         let buf = raw as *const crate::buffer::BufferHeader;
-                        idx < (*buf).length as u32
+                        idx < (*buf).length
                     });
                 return f64::from_bits(JSValue::bool(enumerable).bits());
             }
@@ -4571,7 +4597,7 @@ pub unsafe extern "C" fn js_native_call_method(
             if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
-            let enumerable = get_property_attrs(obj_ptr as usize, &key_name)
+            let enumerable = get_property_attrs(obj_ptr as usize, key_name)
                 .map(|attrs| attrs.enumerable())
                 .unwrap_or(true);
             return f64::from_bits(JSValue::bool(enumerable).bits());
@@ -4680,7 +4706,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 } else {
                     std::ptr::null()
                 };
-                let rest_len = if args_len > 1 { args_len - 1 } else { 0 };
+                let rest_len = args_len.saturating_sub(1);
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
                 // Static bound-method value (`C.m.call(x)`): arm the one-shot
                 // static-`this` override so the method body sees `x` instead
@@ -4757,15 +4783,24 @@ pub unsafe extern "C" fn js_native_call_method(
                 // synthetic `arguments` array local) — top 16 bits zero.
                 let args_arr_bits = args_arr_val.to_bits();
                 let arr_raw: usize = if args_arr_jsval.is_pointer() {
-                    (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+                    // A Symbol is POINTER_TAG'd but is a primitive, not an
+                    // Object — Type(argArray) is not Object, so reject it
+                    // below rather than treating its payload as an array
+                    // pointer (test262 apply/argarray-not-object `Symbol()`).
+                    if crate::symbol::js_is_symbol(args_arr_val) != 0 {
+                        0
+                    } else {
+                        (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+                    }
                 } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
                     args_arr_bits as usize
                 } else {
                     0
                 };
                 // Spec CreateListFromArrayLike: a non-nullish, non-object
-                // argArray (`fn.apply(null, true)` / `NaN` / `'1,2,3'`) is a
-                // TypeError. null/undefined mean "no arguments".
+                // argArray (`fn.apply(null, true)` / `NaN` / `'1,2,3'` /
+                // `Symbol()`) is a TypeError. null/undefined mean "no
+                // arguments".
                 if arr_raw == 0 && !args_arr_jsval.is_undefined() && !args_arr_jsval.is_null() {
                     throw_type_error_message(b"CreateListFromArrayLike called on non-object");
                 }

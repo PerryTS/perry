@@ -71,9 +71,9 @@ pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
                 0,
                 100,
                 34,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -148,7 +148,7 @@ pub fn set_bordered(handle: i64, bordered: bool) {
                 if !bordered {
                     BTN_HWND_TO_HANDLE.with(|m| m.borrow_mut().insert(hwnd.0 as isize, handle));
                 }
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }
@@ -239,7 +239,12 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
             let font =
                 crate::widgets::text::create_font_with_family_pub(20, 400, "Segoe UI Symbol");
             unsafe {
-                SendMessageW(hwnd, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
+                SendMessageW(
+                    hwnd,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0 as usize)),
+                    Some(LPARAM(1)),
+                );
             }
         }
     }
@@ -268,7 +273,7 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, _a: f64) {
                 let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
                 let new_style = (style & !0x0F) | BS_OWNERDRAW as u32;
                 SetWindowLongW(hwnd, GWL_STYLE, new_style as i32);
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }
@@ -312,11 +317,11 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
                     8,
                 );
                 windows::Win32::Graphics::Gdi::FillRgn(hdc, rgn, brush);
-                let _ = windows::Win32::Graphics::Gdi::DeleteObject(rgn);
+                let _ = windows::Win32::Graphics::Gdi::DeleteObject(rgn.into());
             } else {
                 FillRect(hdc, &rect, brush);
             }
-            let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush);
+            let _ = windows::Win32::Graphics::Gdi::DeleteObject(brush.into());
         }
 
         // Draw centered text
@@ -324,10 +329,10 @@ pub fn handle_draw_item(lparam: LPARAM) -> bool {
         SetBkMode(hdc, TRANSPARENT);
 
         let hfont = windows::Win32::Graphics::Gdi::HFONT(
-            SendMessageW(dis.hwndItem, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as *mut _,
+            SendMessageW(dis.hwndItem, WM_GETFONT, Some(WPARAM(0)), Some(LPARAM(0))).0 as *mut _,
         );
         let old_font = if !hfont.is_invalid() {
-            SelectObject(hdc, hfont)
+            SelectObject(hdc, hfont.into())
         } else {
             HGDIOBJ::default()
         };

@@ -178,6 +178,35 @@ pub extern "C" fn js_object_delete_field(
                 // below so hasOwnProperty / Object.keys stop seeing it.
             }
         }
+        // A class-declaration prototype object: instance accessors (`get x()`)
+        // live ONLY in the class vtable, so the scan below would "succeed
+        // vacuously" while the accessor stayed visible to hasOwnProperty /
+        // getOwnPropertyDescriptor. Record the key as deleted so those
+        // reflective paths agree it is gone (test262 verifyProperty's
+        // `configurable` check: `delete obj[name]` then assert the key absent —
+        // class/definition/{getters,setters}-prop-desc).
+        //
+        // Instance METHODS are different: `install_class_decl_prototype_method_fields`
+        // plants each one as a REAL keys_array data field on the prototype
+        // object (writable:true, enumerable:false, configurable:true). Marking
+        // the vtable key deleted is necessary but NOT sufficient — we must also
+        // fall through to the keys scan to drop that real field, or
+        // hasOwnProperty keeps finding the method via `own_key_present` and
+        // verifyProperty fails "m descriptor should be configurable" (#5441,
+        // ~760 generated language/{statements,expressions}/class tests).
+        if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                if name != "constructor"
+                    && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
+                        || super::native_module::class_has_own_method(cid, name))
+                {
+                    super::class_registry::class_mark_key_deleted(cid, name);
+                    // Accessors have no keys_array entry, so the scan below is a
+                    // vacuous success for them; methods DO, so fall through to
+                    // remove it. Either way, don't early-return.
+                }
+            }
+        }
         let keys = (*obj).keys_array;
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously

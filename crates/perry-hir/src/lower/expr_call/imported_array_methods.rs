@@ -2,17 +2,13 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::LoweringContext;
 
 pub(super) fn try_imported_array_methods(
     ctx: &mut LoweringContext,
@@ -78,8 +74,8 @@ pub(super) fn try_imported_array_methods(
                                     }
                                     // Fall through.
                                 }
-                                "map" => {
-                                    if !args.is_empty() {
+                                "map"
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayMap {
@@ -87,9 +83,8 @@ pub(super) fn try_imported_array_methods(
                                             callback: Box::new(cb),
                                         }));
                                     }
-                                }
-                                "filter" => {
-                                    if !args.is_empty() {
+                                "filter"
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayFilter {
@@ -97,9 +92,8 @@ pub(super) fn try_imported_array_methods(
                                             callback: Box::new(cb),
                                         }));
                                     }
-                                }
-                                "forEach" => {
-                                    if !args.is_empty() {
+                                "forEach"
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayForEach {
@@ -107,9 +101,8 @@ pub(super) fn try_imported_array_methods(
                                             callback: Box::new(cb),
                                         }));
                                     }
-                                }
-                                "find" => {
-                                    if !args.is_empty() {
+                                "find"
+                                    if !args.is_empty() => {
                                         let cb = args.into_iter().next().unwrap();
                                         let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                         return Ok(Ok(Expr::ArrayFind {
@@ -117,18 +110,35 @@ pub(super) fn try_imported_array_methods(
                                             callback: Box::new(cb),
                                         }));
                                     }
-                                }
-                                "sort" => {
-                                    if !args.is_empty() {
+                                "sort"
+                                    // Like `join` above: only fold when the
+                                    // imported binding is statically Array-typed.
+                                    // semver re-exports `sort = (list) =>
+                                    // list.sort(cmp)` and the driver calls
+                                    // `semver.sort(list)`; `semver` is an imported
+                                    // module-exports object (return_type Any), so
+                                    // folding to `Expr::ArraySort { array: semver,
+                                    // comparator: list }` mis-routed the single
+                                    // `list` arg into the comparator slot →
+                                    // "comparison function must be either a
+                                    // function or undefined". Fall through to the
+                                    // generic call path, which invokes the imported
+                                    // `sort` function correctly.
+                                    if !args.is_empty()
+                                        && matches!(
+                                            extern_ref,
+                                            Expr::ExternFuncRef { ref return_type, .. }
+                                                if matches!(return_type, Type::Array(_))
+                                        )
+                                    => {
                                         return Ok(Ok(Expr::ArraySort {
                                             array: Box::new(extern_ref),
                                             comparator: Box::new(args.into_iter().next().unwrap()),
                                         }));
                                     }
-                                }
-                                "indexOf" => {
+                                "indexOf"
                                     // #2804: carry the optional fromIndex (2nd arg).
-                                    if !args.is_empty() {
+                                    if !args.is_empty() => {
                                         let mut it = args.into_iter();
                                         let value = it.next().unwrap();
                                         let from_index = it.next().map(Box::new);
@@ -138,9 +148,8 @@ pub(super) fn try_imported_array_methods(
                                             from_index,
                                         }));
                                     }
-                                }
-                                "includes" => {
-                                    if !args.is_empty() {
+                                "includes"
+                                    if !args.is_empty() => {
                                         let mut it = args.into_iter();
                                         let value = it.next().unwrap();
                                         let from_index = it.next().map(Box::new);
@@ -150,9 +159,8 @@ pub(super) fn try_imported_array_methods(
                                             from_index,
                                         }));
                                     }
-                                }
-                                "slice" => {
-                                    if !args.is_empty() {
+                                "slice"
+                                    if !args.is_empty() => {
                                         let mut args_iter = args.into_iter();
                                         let start = args_iter.next().unwrap();
                                         let end = args_iter.next();
@@ -162,9 +170,8 @@ pub(super) fn try_imported_array_methods(
                                             end: end.map(Box::new),
                                         }));
                                     }
-                                }
-                                "reduce" => {
-                                    if !args.is_empty() {
+                                "reduce"
+                                    if !args.is_empty() => {
                                         let mut args_iter = args.into_iter();
                                         let callback = args_iter.next().unwrap();
                                         let initial = args_iter.next().map(Box::new);
@@ -174,17 +181,15 @@ pub(super) fn try_imported_array_methods(
                                             initial,
                                         }));
                                     }
-                                }
-                                "flat" => {
+                                "flat"
                                     // depth-aware calls fall through.
-                                    if args.is_empty() {
+                                    if args.is_empty() => {
                                         return Ok(Ok(Expr::ArrayFlat {
                                             array: Box::new(extern_ref),
                                         }));
                                     }
-                                }
-                                "reduceRight" => {
-                                    if !args.is_empty() {
+                                "reduceRight"
+                                    if !args.is_empty() => {
                                         let mut args_iter = args.into_iter();
                                         let callback = args_iter.next().unwrap();
                                         let initial = args_iter.next().map(Box::new);
@@ -194,7 +199,6 @@ pub(super) fn try_imported_array_methods(
                                             initial,
                                         }));
                                     }
-                                }
                                 "toReversed" => {
                                     return Ok(Ok(Expr::ArrayToReversed {
                                         array: Box::new(extern_ref),
@@ -225,8 +229,8 @@ pub(super) fn try_imported_array_methods(
                                         items,
                                     }));
                                 }
-                                "with" => {
-                                    if args.len() >= 2 {
+                                "with"
+                                    if args.len() >= 2 => {
                                         let mut args_iter = args.into_iter();
                                         let index = args_iter.next().unwrap();
                                         let value = args_iter.next().unwrap();
@@ -236,7 +240,6 @@ pub(super) fn try_imported_array_methods(
                                             value: Box::new(value),
                                         }));
                                     }
-                                }
                                 "entries" => {
                                     return Ok(Ok(Expr::ArrayEntries(Box::new(extern_ref))));
                                 }

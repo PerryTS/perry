@@ -139,7 +139,7 @@ pub(in crate::commands::compile) fn write_link_cache_manifest(
 }
 
 pub(super) fn prepare_link_cache_status(
-    cache_root: &Path,
+    cache_dir: &Path,
     target: Option<&str>,
     cmd: &Command,
     obj_paths: &[PathBuf],
@@ -150,7 +150,7 @@ pub(super) fn prepare_link_cache_status(
         return LinkCacheStatus::linked(None);
     }
     let Some(state) = compute_link_cache_state(
-        cache_root,
+        cache_dir,
         target,
         cmd,
         obj_paths,
@@ -181,7 +181,7 @@ pub(super) fn prepare_link_cache_status(
 }
 
 fn compute_link_cache_state(
-    cache_root: &Path,
+    cache_dir: &Path,
     target: Option<&str>,
     cmd: &Command,
     obj_paths: &[PathBuf],
@@ -235,8 +235,7 @@ fn compute_link_cache_state(
         "{:016x}.json",
         super::super::object_cache::djb2_hash(output_identity.as_bytes())
     );
-    let manifest_path = cache_root
-        .join(".perry-cache")
+    let manifest_path = cache_dir
         .join("link")
         .join(target.unwrap_or("native"))
         .join(manifest_name);

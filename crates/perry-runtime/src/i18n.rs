@@ -68,7 +68,7 @@ pub extern "C" fn perry_i18n_init(
             log += &format!("[i18n] matched locale index: {} ({})\n", idx, locales[idx]);
             LOCALE_INDEX.store(idx as i32, Ordering::Relaxed);
         } else {
-            log += &"[i18n] no match found, using default (index 0)\n".to_string();
+            log += "[i18n] no match found, using default (index 0)\n";
         }
     } else {
         log += "[i18n] no system locale detected, using default (index 0)\n";

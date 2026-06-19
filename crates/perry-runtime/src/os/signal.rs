@@ -356,7 +356,7 @@ pub(crate) fn take_pending_process_signals() -> Vec<&'static str> {
             if count == 0 || slot.listeners.load(Ordering::Acquire) == 0 {
                 continue;
             }
-            signals.extend(std::iter::repeat(slot.name).take(count));
+            signals.extend(std::iter::repeat_n(slot.name, count));
         }
         signals
     }

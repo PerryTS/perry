@@ -15,7 +15,6 @@
 //! surface introduced for `fs` in #2035 and called out by the issue as the
 //! shared home for this work.
 
-use super::*;
 use crate::value::JSValue;
 
 /// Node's `buffer.constants.MAX_LENGTH` (2^53 - 1 on 64-bit platforms): the
@@ -81,7 +80,7 @@ pub extern "C" fn js_buffer_validate_size(value: f64) -> i32 {
     } else {
         jv.as_number()
     };
-    if !(n >= 0.0 && n <= MAX_LENGTH) {
+    if !(0.0..=MAX_LENGTH).contains(&n) {
         let msg = format!(
             "The value of \"size\" is out of range. It must be >= 0 && <= 9007199254740991. Received {}",
             format_received_number(n)

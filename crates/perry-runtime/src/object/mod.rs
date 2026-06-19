@@ -750,6 +750,27 @@ pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs>
     PROPERTY_DESCRIPTORS.with(|m| m.borrow().get(&(obj, key.to_string())).copied())
 }
 
+/// Whether this specific object has ever had a property descriptor installed on
+/// it (`OBJ_FLAG_HAS_DESCRIPTORS`, set by [`note_descriptor_target`] for every
+/// `PROPERTY_DESCRIPTORS` insertion on a `GC_TYPE_OBJECT`). The flag lives in
+/// the GcHeader and travels with the object across evacuation.
+///
+/// `PROPERTY_DESCRIPTORS` is keyed by raw address, so once a freed object's slot
+/// is reused by a fresh object, a stale `(addr, key)` descriptor entry would be
+/// read back for the new object — falsely reporting e.g. a `writable: false`
+/// `Fragment` on a brand-new `{}` and throwing "Cannot assign to read only
+/// property". A fresh allocation's `_reserved` is zeroed, so gating descriptor
+/// lookups on this per-object flag avoids the stale-address-reuse false
+/// positive (Next.js app-page-turbo runtime's webpack `exports.Fragment = …`).
+pub(crate) fn object_has_descriptors(obj: usize) -> bool {
+    unsafe {
+        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj) {
+            return header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0;
+        }
+    }
+    false
+}
+
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
     note_descriptor_target(obj);
@@ -779,7 +800,8 @@ pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
         let mut keys = m
             .borrow()
             .keys()
-            .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
+            .filter(|&(owner, _key)| *owner == obj)
+            .map(|(_owner, key)| key.clone())
             .collect::<Vec<_>>();
         keys.sort();
         keys
@@ -797,10 +819,6 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
     if !ACCESSORS_IN_USE.with(|c| c.get()) {
         return None;
     }
-    let obj = unsafe { extract_obj_ptr(value) };
-    if obj.is_null() {
-        return None;
-    }
     let key_str = crate::builtins::js_string_coerce(key);
     if key_str.is_null() {
         return None;
@@ -813,14 +831,42 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
             Err(_) => return None,
         }
     };
-    let acc = get_accessor_descriptor(obj as usize, &name)?;
-    if acc.get != 0 {
-        Some(acc.get)
-    } else {
-        // Accessor exists but has no getter → reading yields undefined; signal
-        // that via 0 so the caller returns undefined rather than a field read.
-        Some(0)
+    // Spec [[Get]] walks the prototype chain: `Reflect.get(target, key,
+    // receiver)` must locate an accessor *getter* installed anywhere on
+    // `target`'s chain (an inherited `get x() {…}`), so the caller can rebind
+    // its `this` to the receiver before invoking it. An own *data* property at
+    // some level shadows inherited accessors, so stop the walk there and let
+    // the caller fall back to an ordinary (receiver-aware) field read. (test262
+    // Reflect/get/return-value-from-receiver: inherited-getter-via-receiver.)
+    let mut current = value;
+    // Bounded to guard against a cyclic prototype side-table; real chains are
+    // a handful of links deep.
+    for _ in 0..10_000 {
+        let obj = unsafe { extract_obj_ptr(current) };
+        if obj.is_null() {
+            return None;
+        }
+        if let Some(acc) = get_accessor_descriptor(obj as usize, &name) {
+            return if acc.get != 0 {
+                Some(acc.get)
+            } else {
+                // Accessor exists but has no getter → reading yields undefined;
+                // signal that via 0 so the caller returns undefined rather than
+                // a field read.
+                Some(0)
+            };
+        }
+        // An own (data) property at this level shadows any inherited accessor.
+        if obj_value_has_own_key(current, key) {
+            return None;
+        }
+        let proto = crate::object::js_object_get_prototype_of(current);
+        if unsafe { extract_obj_ptr(proto) }.is_null() {
+            return None;
+        }
+        current = proto;
     }
+    None
 }
 
 /// `JSON.stringify` helper: if the own key `key_f64` on `obj` is an accessor

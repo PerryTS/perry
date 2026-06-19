@@ -34,7 +34,6 @@ pub use i64_emit::emit_i64_function;
 
 // Internal-to-crate re-exports — explicit names because globs don't
 // transitively expose through `pub(crate) use crate::collectors::*`.
-pub(crate) use clamp_detect::{i64s_expr, i64s_stmts, returns_int_expr, returns_int_stmts};
 pub(crate) use class_accessors::{is_class_getter, is_class_setter};
 pub(crate) use closures::{collect_closures_in_expr, collect_closures_in_stmts};
 pub(crate) use escape_arrays::{
@@ -70,17 +69,13 @@ pub(crate) use integer_locals::{
     is_int32_producing_expr,
 };
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
-pub(crate) use mutation::{expr_has_mutation, has_any_mutation, is_local_get_chain};
+pub(crate) use mutation::has_any_mutation;
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };
 pub(crate) use scalar_methods::simple_scalar_method_summary;
 pub(crate) use shadow_slots::{
-    collect_declared_shadow_locals_in_stmt, collect_declared_shadow_slots_in_stmts,
-    collect_shadow_slot_clear_points,
+    collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
-pub(crate) use this_as_value::{
-    class_chain_extends_builtin_error, class_uses_this_as_value, expr_uses_this_as_value,
-    stmts_use_this_as_value,
-};
+pub(crate) use this_as_value::{class_chain_extends_builtin_error, class_uses_this_as_value};

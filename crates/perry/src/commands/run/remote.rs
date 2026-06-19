@@ -456,7 +456,7 @@ pub async fn remote_build_and_launch(
         }
     } else if target == "android" {
         let serial = device_udid.ok_or_else(|| anyhow!("No Android device serial — use perry run android with a connected device or emulator"))?;
-        install_and_launch_android(&dest, &bundle_id, &serial, format)
+        install_and_launch_android(&dest, &bundle_id, serial, format)
     } else {
         // Native binary
         launch_native(&dest, program_args, format)

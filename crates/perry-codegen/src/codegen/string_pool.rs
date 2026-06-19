@@ -2,11 +2,96 @@
 
 use std::collections::HashMap;
 
+use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
 use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
+
+/// Emits a long sequence of INDEPENDENT init operations (string allocation,
+/// closure/class/function registration) into a series of small chunk functions
+/// instead of one giant function, then exposes the chunk names so the entry
+/// `__perry_init_strings_*` can call them in order (#5391 function splitting).
+///
+/// A large bundle interns ~190K strings and registers tens of thousands of
+/// closures/classes; emitting all of it into ONE function produced a single
+/// ~32MB / ~400K-instruction basic block, and `clang -O0` (forced for oversized
+/// modules, #4880) is catastrophically superlinear on a single huge block
+/// (~36 min). Every op here is independent — each writes to its own global or a
+/// runtime registry; no SSA value flows between ops — so splitting at op
+/// boundaries is safe and order-preserving (chunks run in sequence, ops in order
+/// within a chunk).
+struct InitChunker<'a> {
+    llmod: &'a mut LlModule,
+    base_name: String,
+    ops_per_chunk: usize,
+    ops_in_current: usize,
+    cur_idx: usize,
+    chunk_names: Vec<String>,
+}
+
+impl<'a> InitChunker<'a> {
+    fn new(llmod: &'a mut LlModule, base_name: String, ops_per_chunk: usize) -> Self {
+        Self {
+            llmod,
+            base_name,
+            ops_per_chunk: ops_per_chunk.max(1),
+            // Force a fresh chunk on the first op.
+            ops_in_current: usize::MAX,
+            cur_idx: 0,
+            chunk_names: Vec::new(),
+        }
+    }
+
+    /// Start a fresh chunk function if the current one is full. Call ONCE at the
+    /// top of each loop iteration (one independent init op), before
+    /// [`current_block`]. Closes the previous chunk with `ret void`.
+    fn roll_if_full(&mut self) {
+        if self.ops_in_current >= self.ops_per_chunk {
+            if !self.chunk_names.is_empty() {
+                self.llmod
+                    .function_mut(self.cur_idx)
+                    .unwrap()
+                    .block_mut(0)
+                    .unwrap()
+                    .ret_void();
+            }
+            let name = format!("{}_chunk{}", self.base_name, self.chunk_names.len());
+            self.llmod
+                .define_function(&name, VOID, vec![])
+                .create_block("entry");
+            self.cur_idx = self.llmod.function_count() - 1;
+            self.chunk_names.push(name);
+            self.ops_in_current = 0;
+        }
+    }
+
+    /// The current chunk's entry block, for emitting one op's instructions.
+    /// Counts as one op (a logical init step may emit several instructions onto
+    /// it). Always preceded by [`roll_if_full`].
+    fn current_block(&mut self) -> &mut LlBlock {
+        self.ops_in_current += 1;
+        self.llmod
+            .function_mut(self.cur_idx)
+            .unwrap()
+            .block_mut(0)
+            .unwrap()
+    }
+
+    /// Close the final chunk and return all chunk function names, in order.
+    fn finish(self) -> Vec<String> {
+        if !self.chunk_names.is_empty() {
+            self.llmod
+                .function_mut(self.cur_idx)
+                .unwrap()
+                .block_mut(0)
+                .unwrap()
+                .ret_void();
+        }
+        self.chunk_names
+    }
+}
 
 /// Emit the string pool into the module: byte-array constants, handle
 /// globals, and the `__perry_init_strings_<prefix>` function that
@@ -22,6 +107,13 @@ pub(super) fn emit_string_pool(
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
+    // Wall 51: per-class standalone-constructor arity, accounting for the
+    // synthesized `super(...args)` forwarding ctor a no-own-ctor class with
+    // heritage inherits (its arity comes from the nearest ancestor ctor, which
+    // may be cross-module). Keyed by canonical class name. Overrides the naive
+    // `class.constructor.params.len()` (which is 0 for a no-own-ctor class) so
+    // the registered `total_params` matches the emitted ctor's real signature.
+    ctor_arity_overrides: &HashMap<String, u32>,
     closure_rest_params: &HashMap<u32, usize>,
     // Declared ABI arity for non-rest closures, used for runtime padding.
     closure_arities: &HashMap<u32, u32>,
@@ -170,7 +262,7 @@ pub(super) fn emit_string_pool(
                 named.push((cid, class_name.clone()));
             }
         }
-        named.sort_by(|a, b| a.0.cmp(&b.0));
+        named.sort_by_key(|a| a.0);
         named.dedup_by_key(|(cid, _)| *cid);
         for (cid, name) in named {
             let (const_name, byte_len) = llmod.add_string_constant(&name);
@@ -217,22 +309,40 @@ pub(super) fn emit_string_pool(
         }
     }
 
-    let init_name = format!("__perry_init_strings_{}", module_prefix);
-    let init_fn = llmod.define_function(&init_name, VOID, vec![]);
-    let _ = init_fn.create_block("entry");
-    let blk = init_fn.block_mut(0).unwrap();
+    // #5391 function splitting: a large bundle interns ~190K strings AND
+    // registers tens of thousands of closures/classes/functions; emitting all of
+    // that into ONE `__perry_init_strings` function produced a single ~32MB /
+    // ~400K-instruction basic block that `clang -O0` (forced for oversized
+    // modules, #4880) is catastrophically superlinear on (~36 min). Every init
+    // op below is independent (each writes its own global or a runtime registry;
+    // no SSA value flows between ops), so emit ALL of them — string allocation
+    // and every registration loop — through `chunker`, which spills them into a
+    // sequence of small `*_chunkN` functions. The entry function then just calls
+    // the chunks in order. Combined with codegen-unit splitting, the chunks
+    // bin-pack evenly across units instead of one unit carrying the monolith.
+    let ops_per_chunk: usize = std::env::var("PERRY_STRING_INIT_CHUNK_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(4000);
+    let mut chunker = InitChunker::new(
+        llmod,
+        format!("__perry_init_strings_{}", module_prefix),
+        ops_per_chunk,
+    );
 
     for entry in strings.iter() {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let bytes_ref = format!("@{}", entry.bytes_global);
         let handle_ref = format!("@{}", entry.handle_global);
         let len_str = entry.byte_len.to_string();
-
-        let init_fn = if entry.is_wtf8 {
+        let from_bytes_fn = if entry.is_wtf8 {
             "js_string_from_wtf8_bytes"
         } else {
             "js_string_from_bytes"
         };
-        let handle = blk.call(I64, init_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
+        let handle = blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
         let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
         crate::expr::emit_root_nanbox_store_on_block(blk, &nanboxed, &handle_ref);
         let addr_i64 = blk.ptrtoint(&handle_ref, I64);
@@ -246,6 +356,8 @@ pub(super) fn emit_string_pool(
     // what `js_closure_alloc_singleton` stamps into ClosureHeader.
     // See #1202.
     for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let wrapper_ref = format!("@{}", wrapper_sym);
         let name_ref = format!("@{}", name_const);
         let len_str = name_len.to_string();
@@ -259,6 +371,8 @@ pub(super) fn emit_string_pool(
     // wrapper/closure address `js_closure_alloc_singleton` stamps into the
     // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
     for (wrapper_sym, source_const, source_len) in &user_fn_source_constants {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let wrapper_ref = format!("@{}", wrapper_sym);
         let source_ref = format!("@{}", source_const);
         let len_str = source_len.to_string();
@@ -276,6 +390,8 @@ pub(super) fn emit_string_pool(
     for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         // Resolve class id from the global name. The global name is
         // `perry_class_keys_<modprefix>__<class>` so we strip the
         // prefix to recover the sanitized class name and look up
@@ -355,6 +471,8 @@ pub(super) fn emit_string_pool(
     }
     parent_pairs.sort_unstable();
     for (cid, parent_cid) in parent_pairs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         blk.call_void(
             "js_register_class_parent",
             &[(I32, &cid.to_string()), (I32, &parent_cid.to_string())],
@@ -392,6 +510,15 @@ pub(super) fn emit_string_pool(
     // the heap-class-object arm of `js_new_function_construct`, so it's
     // behavior-neutral for top-level class declarations (INT32 ref `new`).
     let mut ctor_triples: Vec<(u32, String, u32)> = Vec::new();
+    // #wall3: class ctors with a rest param (`constructor(...args)`) need their
+    // standalone `_constructor` func_ptr registered in CLOSURE_REST_REGISTRY so
+    // a member-new (`new ns.Sub(opts)` → js_new_function_construct →
+    // js_native_call_value) BUNDLES trailing args into the rest array. Without
+    // this the rest param binds to the first arg as a scalar (a=opts, not
+    // [opts]) and `super(...args)` spreads a bare object → 0x400000000 mis-box →
+    // crash (Next.js `new c.AppPageRouteModule({...})`). Mirrors the
+    // closure-rest registration but keyed by the `_constructor` symbol.
+    let mut ctor_rest_regs: Vec<(String, usize)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (class_table now contains both the
         // canonical name and self-binding aliases like `_X` from
@@ -491,21 +618,39 @@ pub(super) fn emit_string_pool(
         // Class-expression templates with no own/synthesized constructor (no
         // captures) have arity 0 — the standalone ctor then just runs the
         // literal field initializers.
-        let ctor_params = class
+        // Wall 51: prefer the synthesized-ctor arity override (which walks the
+        // ancestor chain for a no-own-ctor class with heritage, incl.
+        // cross-module parents) so the registered `total_params` matches the
+        // standalone ctor function actually emitted in `artifacts.rs`. Falls
+        // back to the own-ctor param count for classes not in the map.
+        let ctor_params = ctor_arity_overrides
+            .get(class_name)
+            .copied()
+            .unwrap_or_else(|| {
+                class
+                    .constructor
+                    .as_ref()
+                    .map(|c| c.params.len() as u32)
+                    .unwrap_or(0)
+            });
+        let ctor_symbol = format!("{}__{}_constructor", module_prefix, class_name);
+        // #wall3: record the rest-param position (in USER params) so the runtime
+        // bundles trailing args at the dynamic member-new dispatch path.
+        if let Some(rest_idx) = class
             .constructor
             .as_ref()
-            .map(|c| c.params.len() as u32)
-            .unwrap_or(0);
-        ctor_triples.push((
-            cid,
-            format!("{}__{}_constructor", module_prefix, class_name),
-            ctor_params,
-        ));
+            .and_then(|c| c.params.iter().position(|p| p.is_rest))
+        {
+            ctor_rest_regs.push((ctor_symbol.clone(), rest_idx));
+        }
+        ctor_triples.push((cid, ctor_symbol, ctor_params));
     }
     method_triples.sort_unstable();
     for (cid, method_name, llvm_name, param_count, has_synth_args, has_rest, spec_length) in
         method_triples
     {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         // The pre-intern pass before `emit_string_pool` ensured every
         // method name has a string pool entry; look it up here without
         // mutating the pool.
@@ -553,6 +698,8 @@ pub(super) fn emit_string_pool(
     // runtime via the class_id parent-chain walk.
     static_method_triples.sort_unstable();
     for (cid, method_name, llvm_name, param_count, has_rest, spec_length) in static_method_triples {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let entry = match strings.iter().find(|e| e.value == method_name) {
             Some(e) => e,
             None => continue,
@@ -592,6 +739,8 @@ pub(super) fn emit_string_pool(
     // and keeps the constructor alive past dead-code elimination.
     ctor_triples.sort_unstable();
     for (cid, ctor_symbol, ctor_params) in ctor_triples {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", ctor_symbol);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         blk.call_void(
@@ -601,6 +750,20 @@ pub(super) fn emit_string_pool(
                 (I64, &func_i64),
                 (I64, &ctor_params.to_string()),
             ],
+        );
+    }
+    // #wall3: register rest-bearing class ctors' func_ptrs in the closure-rest
+    // side table so the dynamic member-new dispatch (js_native_call_value via
+    // js_new_function_construct) bundles trailing args into the rest array,
+    // matching the static `new` path. See `ctor_rest_regs` above.
+    ctor_rest_regs.sort_unstable();
+    for (ctor_symbol, rest_idx) in ctor_rest_regs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        let func_ref = format!("@{}", ctor_symbol);
+        blk.call_void(
+            "js_register_closure_rest",
+            &[(PTR, &func_ref), (I32, &rest_idx.to_string())],
         );
     }
 
@@ -644,6 +807,8 @@ pub(super) fn emit_string_pool(
         all_class_ids.sort_unstable();
         all_class_ids.dedup();
         for cid in all_class_ids {
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
             blk.call_void(
                 "js_register_class_id",
                 &[(crate::types::I32, &cid.to_string())],
@@ -652,6 +817,8 @@ pub(super) fn emit_string_pool(
         anon_shape_ids.sort_unstable();
         anon_shape_ids.dedup();
         for cid in anon_shape_ids {
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
             blk.call_void(
                 "js_register_anon_shape_class_id",
                 &[(crate::types::I32, &cid.to_string())],
@@ -666,6 +833,8 @@ pub(super) fn emit_string_pool(
     // as `metatype.name`. Strings were pre-allocated above before `init_fn`
     // borrowed `llmod`. (#1021 NestJS.)
     for (cid, const_name, byte_len) in &named_class_name_constants {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let const_ref = format!("@{}", const_name);
         blk.call_void(
             "js_register_class_name",
@@ -740,6 +909,8 @@ pub(super) fn emit_string_pool(
     }
     getter_pairs.sort_unstable();
     for (cid, prop_name, llvm_name, is_static) in getter_pairs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let entry = match strings.iter().find(|e| e.value == prop_name) {
             Some(e) => e,
             None => continue,
@@ -815,6 +986,8 @@ pub(super) fn emit_string_pool(
     }
     setter_pairs.sort_unstable();
     for (cid, prop_name, llvm_name, is_static) in setter_pairs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let entry = match strings.iter().find(|e| e.value == prop_name) {
             Some(e) => e,
             None => continue,
@@ -856,6 +1029,8 @@ pub(super) fn emit_string_pool(
         .collect();
     sorted_rest.sort_unstable();
     for (fid, fixed_arity) in sorted_rest {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
         let func_ref = format!("@{}", closure_sym);
         // Refs #915 (gap 1 from #899): closures whose rest param is the
@@ -886,6 +1061,8 @@ pub(super) fn emit_string_pool(
         .collect();
     sorted_arities.sort_unstable();
     for (fid, arity) in sorted_arities {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
         let func_ref = format!("@{}", closure_sym);
         blk.call_void(
@@ -904,6 +1081,8 @@ pub(super) fn emit_string_pool(
         .collect();
     sorted_lengths.sort_unstable();
     for (fid, length) in sorted_lengths {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
         let func_ref = format!("@{}", closure_sym);
         blk.call_void(
@@ -915,6 +1094,8 @@ pub(super) fn emit_string_pool(
     let mut sorted_arrows: Vec<u32> = closure_arrow_functions.iter().copied().collect();
     sorted_arrows.sort_unstable();
     for fid in sorted_arrows {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
         let func_ref = format!("@{}", closure_sym);
         blk.call_void("js_register_closure_arrow_function", &[(PTR, &func_ref)]);
@@ -929,6 +1110,8 @@ pub(super) fn emit_string_pool(
     let rest_wrapper_names: std::collections::HashSet<String> =
         sorted_wrappers.iter().map(|(s, _)| s.clone()).collect();
     for (wrap_sym, fixed_arity) in sorted_wrappers {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", wrap_sym);
         // Refs #915 (gap 1 from #899): wrappers whose underlying function
         // declared a synthesized `arguments` rest param need the
@@ -956,6 +1139,8 @@ pub(super) fn emit_string_pool(
         .collect();
     sorted_wrapper_arities.sort();
     for (wrap_sym, arity) in sorted_wrapper_arities {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void(
             "js_register_closure_arity",
@@ -969,6 +1154,8 @@ pub(super) fn emit_string_pool(
     let mut sorted_wrapper_lengths: Vec<(String, u32)> = user_fn_wrapper_length.to_vec();
     sorted_wrapper_lengths.sort();
     for (wrap_sym, length) in sorted_wrapper_lengths {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void(
             "js_register_closure_length",
@@ -979,6 +1166,8 @@ pub(super) fn emit_string_pool(
     let mut sorted_async_wrappers: Vec<String> = user_fn_wrapper_async.iter().cloned().collect();
     sorted_async_wrappers.sort();
     for wrap_sym in sorted_async_wrappers {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
     }
@@ -987,6 +1176,8 @@ pub(super) fn emit_string_pool(
         user_fn_wrapper_generator.iter().cloned().collect();
     sorted_generator_wrappers.sort();
     for wrap_sym in sorted_generator_wrappers {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void(
             "js_register_closure_generator_function",
@@ -1002,6 +1193,8 @@ pub(super) fn emit_string_pool(
         user_fn_wrapper_async_generator.iter().cloned().collect();
     sorted_async_generator_wrappers.sort();
     for wrap_sym in sorted_async_generator_wrappers {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void(
             "js_register_closure_async_generator_function",
@@ -1012,9 +1205,19 @@ pub(super) fn emit_string_pool(
     let mut sorted_strict_wrappers: Vec<String> = user_fn_wrapper_strict.iter().cloned().collect();
     sorted_strict_wrappers.sort();
     for wrap_sym in sorted_strict_wrappers {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
         let func_ref = format!("@{}", wrap_sym);
         blk.call_void("js_register_closure_strict_function", &[(PTR, &func_ref)]);
     }
 
+    let chunk_names = chunker.finish();
+    let init_name = format!("__perry_init_strings_{}", module_prefix);
+    let init_fn = llmod.define_function(&init_name, VOID, vec![]);
+    let _ = init_fn.create_block("entry");
+    let blk = init_fn.block_mut(0).unwrap();
+    for cname in &chunk_names {
+        blk.call_void(cname, &[]);
+    }
     blk.ret_void();
 }

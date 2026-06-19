@@ -2,12 +2,11 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
 /// Is `expr` a reference to a node:stream class constructor — bare
 /// (`Readable`) or namespaced (`stream.Readable`)? Used by
@@ -240,10 +239,7 @@ fn chain_roots_at_iterator_from(expr: &ast::Expr) -> bool {
     }
 }
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{lower_expr, LoweringContext};
 
 pub(super) fn try_array_only_methods(
     ctx: &mut LoweringContext,
@@ -303,6 +299,20 @@ pub(super) fn try_array_only_methods(
                         if ctx.namespace_import_locals.contains(&n) {
                             return Ok(Err(args));
                         }
+                        // A default/CJS-module import binding used as a method
+                        // receiver (`import semver from "semver"; semver.sort(x)`)
+                        // is a module-exports object, never a local array. It
+                        // lowers to an `ExternFuncRef` receiver, so the array-
+                        // method fold would mis-route `semver.sort(list)` into
+                        // `Expr::ArraySort { array: semver, comparator: list }`
+                        // (the single `list` arg landing in the comparator slot →
+                        // "comparison function must be either a function or
+                        // undefined"). Treat imported bindings like namespaces and
+                        // bail to the namespace/object method dispatch.
+                        if ctx.lookup_local(&n).is_none() && ctx.lookup_imported_func(&n).is_some()
+                        {
+                            return Ok(Err(args));
+                        }
                         let ty = ctx.lookup_local_type(&n);
                         let class_typed = ty
                             .as_ref()
@@ -327,6 +337,18 @@ pub(super) fn try_array_only_methods(
                                 | "reduce"
                                 | "reduceRight"
                                 | "join"
+                                // wall 49: mutating array methods are also common
+                                // user-class methods (Stack.push, Queue.shift,
+                                // Next.js DefaultRouteMatcherManager.push). On an
+                                // unknown (`Any`) receiver, folding to the array
+                                // op corrupts a class instance (its ObjectHeader is
+                                // read as an ArrayHeader). Bail to dynamic dispatch;
+                                // real arrays are `Type::Array`, handled by the
+                                // class_typed=false + typed fast paths elsewhere.
+                                | "push"
+                                | "pop"
+                                | "shift"
+                                | "unshift"
                         );
                         class_typed || (unknown_recv && is_overlapping)
                     }
@@ -398,18 +420,21 @@ pub(super) fn try_array_only_methods(
                             // `crates/perry-codegen/src/lower_call.rs:1313`, which
                             // routes `.forEach` / `.get` / `.has` / `.keys` /
                             // `.values` / `.entries` through the Headers FFI.
+                            // #5432: `res.headers.<m>()` where `res` came from a
+                            // member-call `app.fetch(req)` (Hono / WinterCG). It
+                            // is not a `register_native_instance` binding (that
+                            // would hijack every method on `res`), so consult the
+                            // narrow `fetch_call_response_locals` set too.
                             let is_fetch_headers = prop_ident.sym.as_ref() == "headers"
-                                && matches!(
+                                && (matches!(
                                     ctx.lookup_native_instance(obj_ident.sym.as_ref()),
                                     Some(("fetch", _))
                                         | Some(("Request", _))
                                         | Some(("Headers", _))
-                                );
-                            if is_fetch_headers {
-                                true
-                            } else {
-                                false
-                            }
+                                ) || ctx
+                                    .fetch_call_response_locals
+                                    .contains(obj_ident.sym.as_ref()));
+                            is_fetch_headers
                         } else {
                             false
                         }
@@ -722,7 +747,14 @@ pub(super) fn try_array_only_methods(
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayValues(Box::new(array_expr))));
                     }
-                    "sort" if !args.is_empty() => {
+                    // `!recv_is_class` gate: semver re-exports
+                    // `sort = (list) => list.sort(cmp)` and the driver calls
+                    // `semver.sort(list)`. Without the guard the namespace/class
+                    // receiver was folded to `Expr::ArraySort`, mis-routing the
+                    // single `list` argument into the comparator slot ("comparison
+                    // function must be either a function or undefined"). Mirrors
+                    // the sibling `map`/`filter`/`reduce` arms.
+                    "sort" if !args.is_empty() && !recv_is_class => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArraySort {
                             array: Box::new(array_expr),
@@ -877,29 +909,32 @@ pub(super) fn try_array_only_methods(
                             // Fall through to string/generic dispatch.
                         } else {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            let is_known_string_prop = matches!(&array_expr,
-                                Expr::PropertyGet { property, .. }
-                                if matches!(
-                                    property.as_str(),
-                                    "stack" | "message" | "name" | "sourceSQL" | "expandedSQL"
-                                )
-                            );
-                            if !is_known_string_prop
-                                && matches!(
-                                    &array_expr,
-                                    Expr::ArrayMap { .. }
-                                        | Expr::ArrayFilter { .. }
-                                        | Expr::ArraySort { .. }
-                                        | Expr::ArraySlice { .. }
-                                        | Expr::Array(_)
-                                        | Expr::ArrayFrom(_)
-                                        | Expr::ArrayFromArrayLikeHoley(_)
-                                        | Expr::StringSplit(_, _)
-                                        | Expr::ObjectKeys(_)
-                                        | Expr::ObjectValues(_)
-                                        | Expr::PropertyGet { .. }
-                                )
-                            {
+                            // #5195: a `PropertyGet` receiver
+                            // (`arr[i].id.indexOf(...)`, `p.id.indexOf(...)`) is
+                            // NOT necessarily an array — the property is very often
+                            // a string. Folding it to `ArrayIndexOf` (an
+                            // element-equality search) silently returned the wrong
+                            // result for string-typed properties; the old hardcoded
+                            // `stack|message|name|…` allowlist only patched a
+                            // handful of property names. Only fold receivers that
+                            // are *provably* array-producing; every other receiver
+                            // (all property accesses included) falls through to the
+                            // generic method dispatch, which checks the runtime
+                            // value type and routes string- vs. array-`indexOf`
+                            // correctly — exactly as the `slice` arm above does.
+                            if matches!(
+                                &array_expr,
+                                Expr::ArrayMap { .. }
+                                    | Expr::ArrayFilter { .. }
+                                    | Expr::ArraySort { .. }
+                                    | Expr::ArraySlice { .. }
+                                    | Expr::Array(_)
+                                    | Expr::ArrayFrom(_)
+                                    | Expr::ArrayFromArrayLikeHoley(_)
+                                    | Expr::StringSplit(_, _)
+                                    | Expr::ObjectKeys(_)
+                                    | Expr::ObjectValues(_)
+                            ) {
                                 let mut it = args.into_iter();
                                 let value_expr = it.next().unwrap();
                                 let from_index = it.next().map(Box::new);
@@ -916,30 +951,26 @@ pub(super) fn try_array_only_methods(
                             // Fall through to string/generic dispatch.
                         } else {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            // Don't treat known string-valued properties as arrays.
-                            let is_known_string_prop = matches!(&array_expr,
-                                Expr::PropertyGet { property, .. }
-                                if matches!(
-                                    property.as_str(),
-                                    "stack" | "message" | "name" | "sourceSQL" | "expandedSQL"
-                                )
-                            );
-                            if !is_known_string_prop
-                                && matches!(
-                                    &array_expr,
-                                    Expr::ArrayMap { .. }
-                                        | Expr::ArrayFilter { .. }
-                                        | Expr::ArraySort { .. }
-                                        | Expr::ArraySlice { .. }
-                                        | Expr::Array(_)
-                                        | Expr::ArrayFrom(_)
-                                        | Expr::ArrayFromArrayLikeHoley(_)
-                                        | Expr::StringSplit(_, _)
-                                        | Expr::ObjectKeys(_)
-                                        | Expr::ObjectValues(_)
-                                        | Expr::PropertyGet { .. }
-                                )
-                            {
+                            // #5195: see the `indexOf` arm above — a `PropertyGet`
+                            // receiver is not necessarily an array (the property is
+                            // often a string), so folding it to `ArrayIncludes`
+                            // silently returned `false` on string properties. Only
+                            // fold provably array-producing receivers; property
+                            // accesses fall through to the runtime-type-checked
+                            // generic dispatch.
+                            if matches!(
+                                &array_expr,
+                                Expr::ArrayMap { .. }
+                                    | Expr::ArrayFilter { .. }
+                                    | Expr::ArraySort { .. }
+                                    | Expr::ArraySlice { .. }
+                                    | Expr::Array(_)
+                                    | Expr::ArrayFrom(_)
+                                    | Expr::ArrayFromArrayLikeHoley(_)
+                                    | Expr::StringSplit(_, _)
+                                    | Expr::ObjectKeys(_)
+                                    | Expr::ObjectValues(_)
+                            ) {
                                 let mut it = args.into_iter();
                                 let value_expr = it.next().unwrap();
                                 let from_index = it.next().map(Box::new);
@@ -1073,7 +1104,15 @@ pub(super) fn try_array_only_methods(
                             ast::Expr::New(_) => true, // new ClassName().push()
                             _ => false,
                         };
-                        if !is_user_class_receiver {
+                        // wall 49: `recv_is_class` is true for an unknown/`Any`
+                        // receiver (e.g. `const m = new mod.Class(); m.push(x)`,
+                        // where the cross-module dynamic `new` leaves `m` typed
+                        // `Any`). Folding to a native array push corrupts the
+                        // class instance — its ObjectHeader is reinterpreted as an
+                        // ArrayHeader and the user `push` method never runs. Bail
+                        // to dynamic dispatch, which resolves the class method
+                        // first and falls back to the array op for real arrays.
+                        if !is_user_class_receiver && !recv_is_class {
                             let array_expr = lower_expr(ctx, &member.obj)?;
                             let any_spread = call.args.iter().any(|a| a.spread.is_some());
                             if !any_spread {
@@ -1113,7 +1152,7 @@ pub(super) fn try_array_only_methods(
                             // final length, which is exactly what the last
                             // element of the `Sequence` yields. (#4508)
                             let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
-                            for (ast_arg, arg) in call.args.iter().zip(args.into_iter()) {
+                            for (ast_arg, arg) in call.args.iter().zip(args) {
                                 let method = if ast_arg.spread.is_some() {
                                     "push_spread"
                                 } else {

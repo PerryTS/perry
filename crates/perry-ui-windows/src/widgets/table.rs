@@ -188,9 +188,9 @@ pub fn create(row_count: f64, col_count: f64, render_closure: f64) -> i64 {
                 0,
                 400,
                 300,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -199,8 +199,10 @@ pub fn create(row_count: f64, col_count: f64, render_closure: f64) -> i64 {
             SendMessageW(
                 hwnd,
                 LVM_SETEXTENDEDLISTVIEWSTYLE,
-                WPARAM(0),
-                LPARAM((LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_HEADERDRAGDROP) as isize),
+                Some(WPARAM(0)),
+                Some(LPARAM(
+                    (LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_HEADERDRAGDROP) as isize,
+                )),
             );
 
             // Insert the columns. Default header is "Col N".
@@ -222,8 +224,8 @@ pub fn create(row_count: f64, col_count: f64, render_closure: f64) -> i64 {
                 SendMessageW(
                     hwnd,
                     LVM_INSERTCOLUMNW,
-                    WPARAM(i as usize),
-                    LPARAM(&mut lvc as *mut _ as isize),
+                    Some(WPARAM(i as usize)),
+                    Some(LPARAM(&mut lvc as *mut _ as isize)),
                 );
             }
 
@@ -231,8 +233,8 @@ pub fn create(row_count: f64, col_count: f64, render_closure: f64) -> i64 {
             SendMessageW(
                 hwnd,
                 LVM_SETITEMCOUNT,
-                WPARAM(row_count as usize),
-                LPARAM(0),
+                Some(WPARAM(row_count as usize)),
+                Some(LPARAM(0)),
             );
 
             let table_handle = register_widget(hwnd, WidgetKind::TreeView, control_id);
@@ -306,8 +308,8 @@ pub fn set_column_header(handle: i64, col: i64, title_ptr: *const u8) {
                 SendMessageW(
                     hwnd,
                     LVM_SETCOLUMNW,
-                    WPARAM(col as usize),
-                    LPARAM(&mut lvc as *mut _ as isize),
+                    Some(WPARAM(col as usize)),
+                    Some(LPARAM(&mut lvc as *mut _ as isize)),
                 );
             }
         }
@@ -327,8 +329,8 @@ pub fn set_column_width(handle: i64, col: i64, width: f64) {
                 SendMessageW(
                     hwnd,
                     LVM_SETCOLUMNWIDTH,
-                    WPARAM(col as usize),
-                    LPARAM(width as isize),
+                    Some(WPARAM(col as usize)),
+                    Some(LPARAM(width as isize)),
                 );
             }
         }
@@ -351,8 +353,13 @@ pub fn update_row_count(handle: i64, count: i64) {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                SendMessageW(hwnd, LVM_SETITEMCOUNT, WPARAM(count as usize), LPARAM(0));
-                let _ = InvalidateRect(hwnd, None, true);
+                SendMessageW(
+                    hwnd,
+                    LVM_SETITEMCOUNT,
+                    Some(WPARAM(count as usize)),
+                    Some(LPARAM(0)),
+                );
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }
@@ -380,8 +387,8 @@ pub fn get_selected_row(handle: i64) -> i64 {
                 let res = SendMessageW(
                     hwnd,
                     LVM_GETNEXTITEM,
-                    WPARAM(usize::MAX),
-                    LPARAM(LVNI_SELECTED as isize),
+                    Some(WPARAM(usize::MAX)),
+                    Some(LPARAM(LVNI_SELECTED as isize)),
                 );
                 return res.0 as i64;
             }
@@ -431,7 +438,8 @@ pub fn get_selected_rows_count(handle: i64) -> i64 {
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let res = SendMessageW(hwnd, LVM_GETSELECTEDCOUNT, WPARAM(0), LPARAM(0));
+                let res =
+                    SendMessageW(hwnd, LVM_GETSELECTEDCOUNT, Some(WPARAM(0)), Some(LPARAM(0)));
                 return res.0 as i64;
             }
         }
@@ -454,8 +462,8 @@ pub fn get_selected_row_at(handle: i64, n: i64) -> i64 {
                     let res = SendMessageW(
                         hwnd,
                         LVM_GETNEXTITEM,
-                        WPARAM(cur as usize),
-                        LPARAM(LVNI_SELECTED as isize),
+                        Some(WPARAM(cur as usize)),
+                        Some(LPARAM(LVNI_SELECTED as isize)),
                     );
                     cur = res.0 as i64;
                     if cur < 0 {
@@ -666,7 +674,7 @@ pub fn handle_columnclick(handle: i64, lparam: LPARAM) {
     });
     if let Some(hwnd) = super::get_hwnd(handle) {
         unsafe {
-            let _ = InvalidateRect(hwnd, None, true);
+            let _ = InvalidateRect(Some(hwnd), None, true);
         }
     }
 }

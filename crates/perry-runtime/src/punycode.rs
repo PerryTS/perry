@@ -473,7 +473,7 @@ pub extern "C" fn js_punycode_ucs2_encode(value: f64) -> f64 {
     if arr.is_null() {
         throw_type_error("Spread syntax requires ...iterable[Symbol.iterator] to be a function");
     }
-    let len = crate::array::js_array_length(arr) as u32;
+    let len = crate::array::js_array_length(arr);
     let mut out = Vec::new();
     let mut has_surrogate = false;
     for i in 0..len {

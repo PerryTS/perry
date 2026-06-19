@@ -348,13 +348,9 @@ fn int32_producing_deps(
     };
     match e {
         Expr::Integer(_) => true,
-        Expr::Update { id, .. } => {
-            if candidates.contains(id) {
-                deps.insert(*id);
-                true
-            } else {
-                false
-            }
+        Expr::Update { id, .. } if candidates.contains(id) => {
+            deps.insert(*id);
+            true
         }
         Expr::Binary { op, right, .. }
             if matches!(op, BinaryOp::BitOr | BinaryOp::UShr)
@@ -390,13 +386,9 @@ fn int32_producing_deps(
                 | BinaryOp::Shr
                 | BinaryOp::UShr
         ),
-        Expr::LocalGet(id) => {
-            if candidates.contains(id) {
-                deps.insert(*id);
-                true
-            } else {
-                false
-            }
+        Expr::LocalGet(id) if candidates.contains(id) => {
+            deps.insert(*id);
+            true
         }
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true,
@@ -436,7 +428,7 @@ pub fn collect_extra_integer_let_ids(
                 id,
                 init: Some(init),
                 ..
-            } => {
+            }
                 // Same `>>> 0` exclusion as the syntactic seed in
                 // `collect_integer_let_ids`: u32 values can't round-trip
                 // through an i32 slot.
@@ -449,10 +441,9 @@ pub fn collect_extra_integer_let_ids(
                         flat_row_alias_ids,
                         clamp_fn_ids,
                     )
-                {
+                => {
                     out.insert(*id);
                 }
-            }
             Stmt::If {
                 then_branch,
                 else_branch,

@@ -1177,6 +1177,26 @@ consumed_fact_kind = "representation"
 consumed_fact_state = "consumed"
 
 [[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_scalar_ctor_field_store_raw_f64"
+source_function = "rawNumericObjectFieldsChecksum"
+expr_kind = "ScalarThisFieldSet"
+consumer = "scalar_object_field_store.raw_f64"
+native_rep_name = "f64"
+access_mode = "none"
+consumed_fact_kind = "representation"
+consumed_fact_state = "consumed"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
+name = "raw_scalar_field_load_raw_f64"
+source_function = "rawNumericObjectFieldsChecksum"
+expr_kind = "ScalarObjectFieldGet"
+consumer = "scalar_object_field_load.raw_f64"
+native_rep_name = "f64"
+access_mode = "none"
+consumed_fact_kind = "representation"
+consumed_fact_state = "consumed"
+
+[[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
 name = "raw_class_field_get_fast_f64"
 source_function = "rawNumericObjectFieldsChecksum"
 expr_kind = "ClassFieldGet"

@@ -1430,7 +1430,7 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
             }
         }
     }
-    let item_count = if args_len > 2 { args_len - 2 } else { 0 } as i64;
+    let item_count = args_len.saturating_sub(2) as i64;
     if item_count < delete_count {
         // Shift the tail down to close the gap.
         let mut k = actual_start;

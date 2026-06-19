@@ -50,6 +50,7 @@ fn empty_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
+        nextjs_path_init_modules: Vec::new(),
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
@@ -250,6 +251,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         decorators: Vec::new(),
         is_exported: false,
         aliases: Vec::new(),
+        is_nested: false,
     }
 }
 
@@ -7164,9 +7166,23 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
             "boxed local storage should not use old f64 helper edge {old_helper}:\n{ir}"
         );
     }
+    // Payloads crossing the box-bits ABI must be i64 JSValueBits, never a raw
+    // `double`. A value coming from the `lower_expr` double ABI is bitcast to
+    // bits before it reaches the helper; a value already in i64 form — a raw
+    // pointer/handle, or a constant that lowering folds straight to bits (e.g.
+    // the `undefined` slot default `0x7FFC000000000001`) — needs no bitcast.
+    // Either way, no `double`-typed operand may reach a bits helper. (The
+    // explicit `bitcast double ... to i64` this previously required is elided
+    // when the source is already bits — main's constant/pointer lowering now
+    // emits the slot default directly as i64, so we assert the invariant
+    // instead of one particular instruction sequence.)
+    let box_bits_payloads_are_i64 = ir
+        .lines()
+        .filter(|line| line.contains("@js_box_set_bits(") || line.contains("@js_box_alloc_bits("))
+        .all(|line| !line.contains("double"));
     assert!(
-        ir.contains("bitcast double ") && ir.contains(" to i64"),
-        "ordinary lowered JSValue doubles should bitcast to bits at box helper boundaries:\n{ir}"
+        box_bits_payloads_are_i64,
+        "box-bits ABI payloads must be i64 JSValueBits, never a raw double:\n{ir}"
     );
     assert!(
         ir.contains("bitcast i64 ") && ir.contains(" to double"),

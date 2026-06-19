@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp, WithSetFallback};
 #[allow(unused_imports)]

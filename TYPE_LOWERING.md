@@ -494,7 +494,9 @@ instantiations can produce specialized function/class definitions with mangled
 names (for example, `identity$number`). That is not the same thing as a typed
 native call ABI. The specialized definitions still compile through Perry's
 generic JSValue/`double` function, method, and closure call signatures unless a
-separate region-local lowering proof applies inside the body. [3](#0-2)
+separate region-local lowering proof applies inside the body. The
+`MonomorphizationContext` uses work queues to recursively specialize
+dependencies. [3](#0-2)
 
 ---
 

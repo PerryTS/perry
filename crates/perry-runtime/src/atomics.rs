@@ -257,7 +257,7 @@ fn atomics_to_index(index: f64, length: i32) -> i32 {
     }
     let num = crate::builtins::js_number_coerce(index);
     let integer = if num.is_nan() { 0.0 } else { num.trunc() };
-    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+    if !(0.0..=9_007_199_254_740_991.0).contains(&integer) {
         throw_range_error(b"Invalid atomic access index");
     }
     if integer >= length as f64 {

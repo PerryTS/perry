@@ -33,9 +33,7 @@ pub(crate) fn parse_env(content: &str) -> Vec<(String, String)> {
         let (key_start, key_end) = trim_spaces(&chars, line_start, eq_idx);
         let mut key: String = chars[key_start..key_end].iter().collect();
         if let Some(rest) = key.strip_prefix("export ") {
-            key = rest
-                .trim_start_matches(|c| c == ' ' || c == '\t')
-                .to_string();
+            key = rest.trim_start_matches([' ', '\t']).to_string();
         }
         if key.is_empty() {
             pos = next_line_start(&chars, line_end);
@@ -127,7 +125,7 @@ fn find_closing_quote(chars: &[char], from: usize, quote: char) -> Option<usize>
 fn parse_unquoted_value(v: &str) -> String {
     let v = v.trim_matches(|c| c == ' ' || c == '\t' || c == '\n');
     strip_inline_comment(v)
-        .trim_end_matches(|c| c == ' ' || c == '\t' || c == '\n')
+        .trim_end_matches([' ', '\t', '\n'])
         .to_string()
 }
 

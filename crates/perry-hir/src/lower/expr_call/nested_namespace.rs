@@ -689,10 +689,8 @@ pub(super) fn try_path_subnamespace(
             if let ast::MemberProp::Ident(sub_prop) = &inner_member.prop {
                 let sub = sub_prop.sym.as_ref();
                 let root_name = root_ident.sym.as_ref();
-                if is_path_root(ctx, root_name) {
-                    if sub == "posix" || sub == "win32" {
-                        return dispatch_path_subnamespace(sub, method, args);
-                    }
+                if is_path_root(ctx, root_name) && (sub == "posix" || sub == "win32") {
+                    return dispatch_path_subnamespace(sub, method, args);
                 }
                 if let Some((module_name, _)) = ctx.lookup_native_module(root_name) {
                     if let Some(root_sub) = path_submodule_name(

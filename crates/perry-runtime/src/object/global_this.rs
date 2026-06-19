@@ -164,16 +164,6 @@ fn global_this_fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::
     crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
 }
 
-fn global_this_body_string_ptr(value: f64) -> *const crate::StringHeader {
-    if matches!(
-        value.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return std::ptr::null();
-    }
-    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
-}
-
 fn global_this_headers_handle_from_value(value: f64) -> f64 {
     if matches!(
         value.to_bits(),
@@ -237,7 +227,19 @@ pub(crate) extern "C" fn global_this_response_thunk(
     body: f64,
     init: f64,
 ) -> f64 {
-    let body_ptr = global_this_body_string_ptr(body);
+    // Route the body through the registered body-init helper (stdlib
+    // `js_response_body_init_ptr`) so a binary body — Buffer / Uint8Array /
+    // ArrayBuffer — copies its raw bytes instead of being stringified to a
+    // zero-filled payload (#5435). String bodies fall back to the ordinary
+    // coercion. Mirrors the Request thunk's body handling above.
+    let body_ptr = if matches!(
+        body.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        std::ptr::null()
+    } else {
+        super::global_fetch::call_global_body_init_ptr(body)
+    };
     let status = global_this_fetch_option(init, b"status");
     let status = if status.to_bits() == crate::value::TAG_UNDEFINED {
         0.0
@@ -5558,7 +5560,7 @@ pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) 
     } else {
         bits_num.trunc()
     };
-    if bits_int < 0.0 || bits_int > 9_007_199_254_740_991.0 {
+    if !(0.0..=9_007_199_254_740_991.0).contains(&bits_int) {
         crate::fs::validate::throw_range_error_with_code(
             "The number of bits is invalid (must be a non-negative integer)",
         );
@@ -6387,6 +6389,57 @@ fn install_builtin_constructor_statics(name: &str, ctor: *mut crate::closure::Cl
                 true,
             );
             install_constructor_static(ctor, "hasOwn", object_hasown_thunk as *const u8, 2, false);
+            // `Object` is a function, so reading a non-static member resolves up
+            // its prototype chain (Function.prototype → Object.prototype). In
+            // particular `Object.hasOwnProperty` IS `Object.prototype.hasOwnProperty`
+            // — a callable. immer's `O.hasOwnProperty.call(proto, "constructor")`
+            // (with `const O = Object`) relied on this; without the inherited
+            // methods installed on the reified ctor value the read returned
+            // `undefined` and `.call` threw "Function.prototype.call on a value
+            // that is not a function". Install the Object.prototype methods that
+            // are reachable on the constructor by inheritance.
+            install_constructor_static(
+                ctor,
+                "hasOwnProperty",
+                object_prototype_has_own_property_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "isPrototypeOf",
+                object_prototype_is_prototype_of_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "propertyIsEnumerable",
+                object_prototype_property_is_enumerable_thunk as *const u8,
+                1,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "toString",
+                object_prototype_to_string_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "toLocaleString",
+                object_prototype_to_locale_string_thunk as *const u8,
+                0,
+                false,
+            );
+            install_constructor_static(
+                ctor,
+                "valueOf",
+                object_prototype_value_of_thunk as *const u8,
+                0,
+                false,
+            );
         }
         "Array" => {
             install_constructor_static(
@@ -6647,6 +6700,28 @@ pub(super) fn install_proto_method(
         super::PropertyAttrs::new(false, false, true),
     );
     value
+}
+
+/// Install `alias_name` on `proto_obj` as the SAME function object as an
+/// already-installed method (`value` is that method's installed property
+/// value). Annex B legacy aliases — `trimLeft`→`trimStart`,
+/// `trimRight`→`trimEnd`, `toGMTString`→`toUTCString` — are required to be the
+/// very same function object (`String.prototype.trimLeft === trimStart`, and
+/// `.name` reports the canonical method's name), with the standard
+/// `{ writable: true, enumerable: false, configurable: true }` method
+/// descriptor. See test262 `annexB/built-ins/{String,Date}` (#5346).
+pub(super) fn install_proto_method_alias(
+    proto_obj: *mut ObjectHeader,
+    alias_name: &str,
+    value: f64,
+) {
+    let key = crate::string::js_string_from_bytes(alias_name.as_ptr(), alias_name.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, value);
+    super::set_builtin_property_attrs(
+        proto_obj as usize,
+        alias_name.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 pub(super) fn install_proto_method_rest(

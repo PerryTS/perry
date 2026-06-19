@@ -1,7 +1,4 @@
 use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use std::collections::HashSet;
-
-use super::*;
 
 /// Emit an i64-specialized function directly as LLVM IR text.
 pub fn emit_i64_function(llmod: &mut crate::module::LlModule, f: &Function, i64_name: &str) {

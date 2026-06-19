@@ -344,7 +344,7 @@ pub(crate) fn throw_range_error(message: &[u8]) -> ! {
 #[inline]
 fn typed_array_length_or_throw(val: f64) -> u32 {
     let integer = if val.is_nan() { 0.0 } else { val.trunc() };
-    if integer < 0.0 || integer > 9_007_199_254_740_991.0 {
+    if !(0.0..=9_007_199_254_740_991.0).contains(&integer) {
         // Node reports the ORIGINAL argument, not the truncated integer
         // (`new Int32Array(-1.5)` → "Invalid typed array length: -1.5"), with
         // integral values shown without a decimal point (#3146).
@@ -1019,7 +1019,7 @@ pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
     }
     let arr = crate::array::js_array_from_value(val);
     let len = crate::array::js_array_length(arr);
-    (0..len as u32)
+    (0..len)
         .map(|i| crate::array::js_array_get_f64(arr, i))
         .collect()
 }

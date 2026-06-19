@@ -117,9 +117,35 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
     );
+    // #5334 lever A: class-field-SET guard-MISS fallback, outlined. The cold arm
+    // of the default diamond collapses from two calls (record_fallback +
+    // set_field_by_name) to this one. Args: (site_id, obj_bits, key_raw, value).
+    module.declare_function(
+        "js_class_field_set_fallback",
+        VOID,
+        &[I64, I64, I64, DOUBLE],
+    );
+    // #5334 lever B: class-field-SET inline cache, FULLY outlined. For oversized
+    // modules the whole diamond (guard + fast store + fallback) collapses to one
+    // call. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // field_index, value, require_raw_f64). Same signature as the set guard.
+    module.declare_function(
+        "js_class_field_set_ic",
+        VOID,
+        &[I64, DOUBLE, I32, I64, I64, I32, DOUBLE, I32],
+    );
     module.declare_function(
         "js_typed_feedback_class_field_get_guard",
         I32,
+        &[I64, DOUBLE, I32, I64, I64, I32, I32],
+    );
+    // #5391 path 2: class-field-GET inline cache, FULLY outlined. For oversized
+    // modules the whole get diamond collapses to one call returning the field
+    // value. Args: (site_id, recv, expected_class_id, expected_keys, key,
+    // field_index, require_raw_f64). Same signature as the get guard (+ f64 ret).
+    module.declare_function(
+        "js_class_field_get_ic",
+        DOUBLE,
         &[I64, DOUBLE, I32, I64, I64, I32, I32],
     );
     module.declare_function(
@@ -243,6 +269,14 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_object_rest", I64, &[I64, I64]);
     // RequireObjectCoercible for object destructuring (throws on null/undefined).
     module.declare_function("js_require_object_coercible", DOUBLE, &[DOUBLE]);
+    // Next.js wall 53: runtime `require(absolutePath.json)` disk fallback.
+    module.declare_function("js_require_json_disk", DOUBLE, &[DOUBLE]);
+    // Next.js wall 54: runtime `require(absolutePath.js)` -> AOT-compiled module.
+    module.declare_function("js_register_path_module", VOID, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
+    // Next.js wall 54 (part 2): register a Deferred module's `__init` address by
+    // path so a runtime `require(absolutePath)` can trigger its lazy init.
+    module.declare_function("js_register_path_init", VOID, &[PTR, I64, I64]);
     // Array alloc variant that pre-sets length to N (for exclude_keys array filling).
     module.declare_function("js_array_alloc_with_length", I64, &[I32]);
     // Unchecked array set (plain array, no buffer/Set/Map dispatch).

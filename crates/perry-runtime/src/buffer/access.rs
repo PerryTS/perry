@@ -306,7 +306,7 @@ pub extern "C" fn js_buffer_set_from_value(
         let offset = offset as usize;
         if offset
             .checked_add(source_len)
-            .map_or(true, |end| end > target_len)
+            .is_none_or(|end| end > target_len)
         {
             super::numeric::throw_out_of_range();
         }

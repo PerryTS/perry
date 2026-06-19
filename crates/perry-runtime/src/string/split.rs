@@ -25,7 +25,7 @@ pub(crate) fn spec_regex_split(regex: &regex::Regex, s: &str, limit: i32) -> Vec
     let mut out: Vec<Option<String>> = Vec::new();
     let unbounded = limit < 0;
     // Returns true once the limit is reached (caller must stop).
-    let mut push = |out: &mut Vec<Option<String>>, v: Option<String>| -> bool {
+    let push = |out: &mut Vec<Option<String>>, v: Option<String>| -> bool {
         out.push(v);
         !unbounded && out.len() as i32 >= limit
     };

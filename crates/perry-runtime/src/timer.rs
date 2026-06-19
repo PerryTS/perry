@@ -672,9 +672,9 @@ fn mock_timers_advance_to(target_ms: f64) {
             for (idx, timer) in state.callbacks.iter().enumerate() {
                 if timer.due_ms <= target_ms {
                     let candidate = (timer.due_ms, timer.id, false, idx);
-                    if best.map_or(true, |current| {
-                        (candidate.0, candidate.1) < (current.0, current.1)
-                    }) {
+                    if best
+                        .is_none_or(|current| (candidate.0, candidate.1) < (current.0, current.1))
+                    {
                         best = Some(candidate);
                     }
                 }
@@ -682,9 +682,9 @@ fn mock_timers_advance_to(target_ms: f64) {
             for (idx, timer) in state.intervals.iter().enumerate() {
                 if timer.next_ms <= target_ms {
                     let candidate = (timer.next_ms, timer.id, true, idx);
-                    if best.map_or(true, |current| {
-                        (candidate.0, candidate.1) < (current.0, current.1)
-                    }) {
+                    if best
+                        .is_none_or(|current| (candidate.0, candidate.1) < (current.0, current.1))
+                    {
                         best = Some(candidate);
                     }
                 }

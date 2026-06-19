@@ -47,6 +47,10 @@ const IGNORED_DIRS: &[&str] = &[
     "dist",
     "build",
     ".perry-dev",
+    // The default cache dir is now `node_modules/.cache/perry`, already
+    // covered by the `node_modules` entry above. Kept so a legacy
+    // `.perry-cache/` dir (or a `--cache-dir .perry-cache` override) still
+    // never triggers a rebuild.
     ".perry-cache",
 ];
 
@@ -298,6 +302,10 @@ fn build_once(
         no_auto_optimize: false,
         debug_symbols: false,
         no_cache: false,
+        // `perry dev` has no `--cache-dir` flag of its own; the resolver
+        // still honors `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` /
+        // package.json `perry.cacheDir`.
+        cache_dir: None,
         fast_math: false,
         fp_contract: None,
         verify_native_regions: false,

@@ -214,7 +214,7 @@ unsafe extern "system" fn image_wnd_proc(
             // Background WinHTTP fetch finished — bytes are in
             // HWND_URL_BYTES; trigger a repaint so the next WM_PAINT
             // cycle picks them up.
-            let _ = InvalidateRect(hwnd, None, true);
+            let _ = InvalidateRect(Some(hwnd), None, true);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -282,9 +282,9 @@ pub fn create_file(path_ptr: *const u8) -> i64 {
                 0,
                 100,
                 100,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -327,9 +327,9 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
                 0,
                 32,
                 32,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -350,8 +350,8 @@ pub fn create_symbol(name_ptr: *const u8) -> i64 {
                 SendMessageW(
                     hwnd,
                     STM_SETIMAGE,
-                    WPARAM(IMAGE_ICON.0 as usize),
-                    LPARAM(hicon.0 as isize),
+                    Some(WPARAM(IMAGE_ICON.0 as usize)),
+                    Some(LPARAM(hicon.0 as isize)),
                 );
             }
 
@@ -390,9 +390,9 @@ pub fn create_url(url_ptr: *const u8, alt_ptr: *const u8) -> i64 {
                 0,
                 100,
                 100,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();
@@ -428,7 +428,7 @@ pub fn set_url(handle: i64, url_ptr: *const u8) {
             }
         }
         unsafe {
-            let _ = InvalidateRect(hwnd, None, true);
+            let _ = InvalidateRect(Some(hwnd), None, true);
         }
         if !url.is_empty() {
             fetch_url_async(hwnd, url);
@@ -468,7 +468,7 @@ fn fetch_url_async(hwnd: HWND, url: String) {
         };
         url_bytes_set(target.0 .0 as isize, bytes);
         unsafe {
-            let _ = PostMessageW(target.0, WM_USER_IMAGE_LOADED, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(target.0), WM_USER_IMAGE_LOADED, WPARAM(0), LPARAM(0));
         }
     });
 
@@ -650,7 +650,7 @@ pub fn reload_bitmap_scaled(handle: i64, _w: i32, _h: i32) {
     // The paint handler reads the current client rect and draws at that size.
     if let Some(hwnd) = super::get_hwnd(handle) {
         unsafe {
-            let _ = InvalidateRect(hwnd, None, false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
         }
     }
 }
@@ -678,7 +678,7 @@ pub fn set_size(handle: i64, width: f64, height: f64) {
                     scaled_h,
                     SWP_NOMOVE | SWP_NOZORDER,
                 );
-                let _ = InvalidateRect(hwnd, None, false);
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
         }
     }
@@ -709,7 +709,7 @@ pub fn set_tint(handle: i64, r: f64, g: f64, b: f64, a: f64) {
         // Force repaint (custom-draw could use the tint if implemented)
         if let Some(hwnd) = super::get_hwnd(handle) {
             unsafe {
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
         }
     }

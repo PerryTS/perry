@@ -1,15 +1,11 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
-use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
-};
-use crate::lower_patterns::*;
-use crate::lower_types::*;
+use crate::lower::LoweringContext;
 
 use super::*;
 
@@ -79,6 +75,30 @@ pub(crate) fn pre_register_forward_captured_lets(
                             ctx.var_hoisted_ids.insert(id);
                             forward_boxed_ids.push(id);
                             ctx.lexical_forward_decls.insert(span_lo, id);
+                        }
+                    }
+                }
+            } else {
+                // `var` bindings are already predefined + boxed by
+                // `predefine_var_bindings_in_function_body`, but their box is
+                // NOT in the prealloc set. A closure created EARLIER in the body
+                // that references a `var` declared LATER (`r.d(t,{x:()=>n.x});
+                // var n=r("…")` — the webpack ESM re-export shape in Next.js'
+                // react-server.node.js) must capture the *live* box, not a
+                // TAG_UNDEFINED snapshot. Add forward-captured `var` ids to the
+                // prealloc set so codegen allocates the box at function entry.
+                for decl in &var_decl.decls {
+                    let mut binding_idents: Vec<(String, u32)> = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut binding_idents);
+                    for (name, _span_lo) in binding_idents {
+                        if !seen_closure_refs.contains(&name) {
+                            continue;
+                        }
+                        if let Some(id) = ctx.lookup_local(&name) {
+                            if !forward_boxed_ids.contains(&id) {
+                                ctx.var_hoisted_ids.insert(id);
+                                forward_boxed_ids.push(id);
+                            }
                         }
                     }
                 }
@@ -248,10 +268,8 @@ fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<St
 fn cic_expr(e: &ast::Expr, in_cl: bool, out: &mut std::collections::HashSet<String>) {
     use ast::Expr::*;
     match e {
-        Ident(i) => {
-            if in_cl {
-                out.insert(i.sym.to_string());
-            }
+        Ident(i) if in_cl => {
+            out.insert(i.sym.to_string());
         }
         Arrow(a) => {
             for p in &a.params {
@@ -416,10 +434,8 @@ fn cic_assign_target(
 ) {
     if let ast::AssignTarget::Simple(s) = t {
         match s {
-            ast::SimpleAssignTarget::Ident(i) => {
-                if in_cl {
-                    out.insert(i.id.sym.to_string());
-                }
+            ast::SimpleAssignTarget::Ident(i) if in_cl => {
+                out.insert(i.id.sym.to_string());
             }
             ast::SimpleAssignTarget::Member(m) => {
                 cic_expr(&m.obj, in_cl, out);
@@ -632,9 +648,26 @@ fn annexb_nested_stmt(
         ast::Stmt::DoWhile(do_while) => {
             annexb_nested_stmt(&do_while.body, forbidden, all_out, var_out)
         }
-        ast::Stmt::For(for_stmt) => annexb_nested_stmt(&for_stmt.body, forbidden, all_out, var_out),
-        ast::Stmt::ForIn(for_in) => annexb_nested_stmt(&for_in.body, forbidden, all_out, var_out),
-        ast::Stmt::ForOf(for_of) => annexb_nested_stmt(&for_of.body, forbidden, all_out, var_out),
+        // A `for`/`for-in`/`for-of` lexical head (`for (let f; ...)`,
+        // `for (let f in/of ...)`) introduces a binding whose scope encloses
+        // the loop body; an equivalent `var f` in the body is an early error
+        // (14.7.4.1 / 14.7.5.1), so the AnnexB legacy `var` for a same-named
+        // block function in the body must be skipped.
+        ast::Stmt::For(for_stmt) => {
+            let names = match &for_stmt.init {
+                Some(ast::VarDeclOrExpr::VarDecl(vd)) => var_decl_lexical_names(vd),
+                _ => Vec::new(),
+            };
+            annexb_nested_loop_body(&for_stmt.body, names, forbidden, all_out, var_out);
+        }
+        ast::Stmt::ForIn(for_in) => {
+            let names = for_head_lexical_names(&for_in.left);
+            annexb_nested_loop_body(&for_in.body, names, forbidden, all_out, var_out);
+        }
+        ast::Stmt::ForOf(for_of) => {
+            let names = for_head_lexical_names(&for_of.left);
+            annexb_nested_loop_body(&for_of.body, names, forbidden, all_out, var_out);
+        }
         ast::Stmt::Labeled(labeled) => {
             annexb_nested_stmt(&labeled.body, forbidden, all_out, var_out)
         }
@@ -654,7 +687,25 @@ fn annexb_nested_stmt(
         ast::Stmt::Try(try_stmt) => {
             annexb_nested_block(&try_stmt.block.stmts, forbidden, all_out, var_out);
             if let Some(handler) = &try_stmt.handler {
-                annexb_nested_block(&handler.body.stmts, forbidden, all_out, var_out);
+                // B.3.5: a `var` whose name is also a bound name of a
+                // *destructuring* CatchParameter is an early error, so the
+                // equivalent AnnexB legacy `var` for a same-named block
+                // function in the handler body must be skipped. The B.3.5
+                // exception only exempts a simple `catch (e)` BindingIdentifier
+                // (where the var IS allowed), so only pattern catch params
+                // (`catch ({ f })` / `catch ([f])`) contribute to `forbidden`.
+                let mut handler_forbidden;
+                let inner = match &handler.param {
+                    Some(param) if !matches!(param, ast::Pat::Ident(_)) => {
+                        handler_forbidden = forbidden.clone();
+                        let mut names = Vec::new();
+                        collect_var_binding_names_from_pat(param, &mut names);
+                        handler_forbidden.extend(names);
+                        &handler_forbidden
+                    }
+                    _ => forbidden,
+                };
+                annexb_nested_block(&handler.body.stmts, inner, all_out, var_out);
             }
             if let Some(finalizer) = &try_stmt.finalizer {
                 annexb_nested_block(&finalizer.stmts, forbidden, all_out, var_out);
@@ -664,6 +715,48 @@ fn annexb_nested_stmt(
             annexb_nested_stmt(&with_stmt.body, forbidden, all_out, var_out)
         }
         _ => {}
+    }
+}
+
+/// Lexical (`let`/`const`) binding names introduced by a `VarDecl`. A `var`
+/// declaration introduces no lexical names and yields an empty list.
+fn var_decl_lexical_names(vd: &ast::VarDecl) -> Vec<String> {
+    if vd.kind == ast::VarDeclKind::Var {
+        return Vec::new();
+    }
+    let mut names = Vec::new();
+    for decl in &vd.decls {
+        collect_var_binding_names_from_pat(&decl.name, &mut names);
+    }
+    names
+}
+
+/// Lexical binding names of a `for-in` / `for-of` head (`for (let f in …)`).
+/// A `var` head or a bare assignment-target pattern introduces no lexical
+/// binding here and yields an empty list.
+fn for_head_lexical_names(head: &ast::ForHead) -> Vec<String> {
+    match head {
+        ast::ForHead::VarDecl(vd) => var_decl_lexical_names(vd),
+        _ => Vec::new(),
+    }
+}
+
+/// Descend into a loop body, adding the loop head's lexical binding names to
+/// the forbidden set so a same-named block function in the body skips its
+/// AnnexB legacy `var` (the equivalent `var` would be an early error).
+fn annexb_nested_loop_body(
+    body: &ast::Stmt,
+    lexical_names: Vec<String>,
+    forbidden: &std::collections::HashSet<String>,
+    all_out: &mut Vec<String>,
+    var_out: &mut Vec<String>,
+) {
+    if lexical_names.is_empty() {
+        annexb_nested_stmt(body, forbidden, all_out, var_out);
+    } else {
+        let mut inner = forbidden.clone();
+        inner.extend(lexical_names);
+        annexb_nested_stmt(body, &inner, all_out, var_out);
     }
 }
 
@@ -829,7 +922,11 @@ pub fn lower_fn_body_block_stmt(
                 continue;
             }
             let name = fn_decl.ident.sym.to_string();
-            let local_id = if let Some(existing) = ctx.lookup_local(&name) {
+            // Reuse only a CURRENT-scope binding (a sibling `var`/`function`
+            // hoisted into this same body). A same-named local from an OUTER
+            // scope must be shadowed with a fresh local, else this declaration
+            // would write into the outer binding's box at runtime.
+            let local_id = if let Some(existing) = ctx.lookup_local_in_current_scope(&name) {
                 existing
             } else {
                 ctx.define_local(name.clone(), Type::Any)
@@ -846,8 +943,13 @@ pub fn lower_fn_body_block_stmt(
     // module function). Scoped: the previous set is restored on exit so
     // names don't leak across function bodies.
     let saved_forward_class_names = ctx.forward_class_names.clone();
+    let saved_class_renames = ctx.class_renames.clone();
     for stmt in &block.stmts {
         if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            // Disambiguate a distinct same-named class declared in this body so
+            // its references don't bind to a colliding `class X` elsewhere in
+            // the bundled module (see `class_renames`).
+            ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
             ctx.forward_class_names
                 .insert(class_decl.ident.sym.to_string());
         }
@@ -890,12 +992,14 @@ pub fn lower_fn_body_block_stmt(
         Err(err) => {
             ctx.current_strict = parent_strict;
             ctx.forward_class_names = saved_forward_class_names;
+            ctx.class_renames = saved_class_renames;
             ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
             ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
             return Err(err);
         }
     };
     ctx.forward_class_names = saved_forward_class_names;
+    ctx.class_renames = saved_class_renames;
 
     // Re-register capture snapshots for classes declared in this body at
     // its END. The decl-site `RegisterClassCaptures` runs before later

@@ -82,7 +82,9 @@ pub(crate) struct EscapeFacts {
     pub non_escaping_news: HashMap<u32, String>,
     pub non_escaping_new_used_fields: HashMap<u32, HashSet<String>>,
     pub non_escaping_arrays: HashMap<u32, u32>,
+    pub non_escaping_array_used_indices: HashMap<u32, HashSet<u32>>,
     pub non_escaping_object_literals: HashMap<u32, Vec<String>>,
+    pub non_escaping_object_literal_used_fields: HashMap<u32, HashSet<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -202,8 +204,16 @@ impl TypeFacts {
         &self.escape.non_escaping_arrays
     }
 
+    pub(crate) fn non_escaping_array_used_indices(&self) -> &HashMap<u32, HashSet<u32>> {
+        &self.escape.non_escaping_array_used_indices
+    }
+
     pub(crate) fn non_escaping_object_literals(&self) -> &HashMap<u32, Vec<String>> {
         &self.escape.non_escaping_object_literals
+    }
+
+    pub(crate) fn non_escaping_object_literal_used_fields(&self) -> &HashMap<u32, HashSet<String>> {
+        &self.escape.non_escaping_object_literal_used_fields
     }
 
     pub(crate) fn materialization_hazard_locals(&self) -> &HashSet<u32> {
@@ -296,11 +306,18 @@ pub(crate) fn collect_type_facts(
         super::escape_news::collect_non_escaping_new_used_fields(stmts, &non_escaping_news);
     let non_escaping_arrays =
         super::escape_arrays::collect_non_escaping_arrays(stmts, boxed_vars, module_globals);
+    let non_escaping_array_used_indices =
+        super::escape_arrays::collect_non_escaping_array_used_indices(stmts, &non_escaping_arrays);
     let non_escaping_object_literals = super::escape_objects::collect_non_escaping_object_literals(
         stmts,
         boxed_vars,
         module_globals,
     );
+    let non_escaping_object_literal_used_fields =
+        super::escape_objects::collect_non_escaping_object_literal_used_fields(
+            stmts,
+            &non_escaping_object_literals,
+        );
     let scalar_replaceable_object_locals = non_escaping_news
         .keys()
         .chain(non_escaping_object_literals.keys())
@@ -327,7 +344,9 @@ pub(crate) fn collect_type_facts(
             non_escaping_news,
             non_escaping_new_used_fields,
             non_escaping_arrays,
+            non_escaping_array_used_indices,
             non_escaping_object_literals,
+            non_escaping_object_literal_used_fields,
         },
         purity: PurityFacts {
             pure_helper_function_ids: clamp_fn_ids.clone(),
@@ -394,11 +413,25 @@ pub(crate) fn collect_hir_facts(
 
 fn collect_known_noalias_buffer_locals(stmts: &[Stmt]) -> HashSet<u32> {
     let mut out = HashSet::new();
-    collect_owned_buffer_lets(stmts, &mut out);
+    let mut known_length_locals = HashSet::new();
+    collect_owned_buffer_lets(stmts, &mut out, &mut known_length_locals);
     out
 }
 
-fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
+fn collect_owned_buffer_lets_child_scope(
+    stmts: &[Stmt],
+    out: &mut HashSet<u32>,
+    known_length_locals: &HashSet<u32>,
+) {
+    let mut child_length_locals = known_length_locals.clone();
+    collect_owned_buffer_lets(stmts, out, &mut child_length_locals);
+}
+
+fn collect_owned_buffer_lets(
+    stmts: &[Stmt],
+    out: &mut HashSet<u32>,
+    known_length_locals: &mut HashSet<u32>,
+) {
     for stmt in stmts {
         match stmt {
             Stmt::Let {
@@ -407,8 +440,13 @@ fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
                 init: Some(init),
                 ..
             } => {
-                if !*mutable && is_owned_u8_buffer_alloc(init) {
+                if !*mutable && is_owned_u8_buffer_alloc(init, known_length_locals) {
                     out.insert(*id);
+                }
+                if !*mutable && is_fresh_uint8array_length_expr(init, known_length_locals) {
+                    known_length_locals.insert(*id);
+                } else {
+                    known_length_locals.remove(id);
                 }
             }
             Stmt::If {
@@ -416,39 +454,48 @@ fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
                 else_branch,
                 ..
             } => {
-                collect_owned_buffer_lets(then_branch, out);
+                collect_owned_buffer_lets_child_scope(then_branch, out, known_length_locals);
                 if let Some(else_branch) = else_branch {
-                    collect_owned_buffer_lets(else_branch, out);
+                    collect_owned_buffer_lets_child_scope(else_branch, out, known_length_locals);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_owned_buffer_lets(body, out);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
             }
             Stmt::For { init, body, .. } => {
+                let mut loop_length_locals = known_length_locals.clone();
                 if let Some(init) = init {
-                    collect_owned_buffer_lets(std::slice::from_ref(init.as_ref()), out);
+                    collect_owned_buffer_lets(
+                        std::slice::from_ref(init.as_ref()),
+                        out,
+                        &mut loop_length_locals,
+                    );
                 }
-                collect_owned_buffer_lets(body, out);
+                collect_owned_buffer_lets(body, out, &mut loop_length_locals);
             }
             Stmt::Labeled { body, .. } => {
-                collect_owned_buffer_lets(std::slice::from_ref(body.as_ref()), out);
+                collect_owned_buffer_lets_child_scope(
+                    std::slice::from_ref(body.as_ref()),
+                    out,
+                    known_length_locals,
+                );
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                collect_owned_buffer_lets(body, out);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
                 if let Some(catch) = catch {
-                    collect_owned_buffer_lets(&catch.body, out);
+                    collect_owned_buffer_lets_child_scope(&catch.body, out, known_length_locals);
                 }
                 if let Some(finally) = finally {
-                    collect_owned_buffer_lets(finally, out);
+                    collect_owned_buffer_lets_child_scope(finally, out, known_length_locals);
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    collect_owned_buffer_lets(&case.body, out);
+                    collect_owned_buffer_lets_child_scope(&case.body, out, known_length_locals);
                 }
             }
             Stmt::Let { init: None, .. }
@@ -464,15 +511,17 @@ fn collect_owned_buffer_lets(stmts: &[Stmt], out: &mut HashSet<u32>) {
     }
 }
 
-fn is_owned_u8_buffer_alloc(expr: &Expr) -> bool {
+fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
     match expr {
         Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) => true,
         Expr::Uint8ArrayNew(None) => true,
-        Expr::Uint8ArrayNew(Some(size)) => is_fresh_uint8array_length_literal(size),
+        Expr::Uint8ArrayNew(Some(size)) => {
+            is_fresh_uint8array_length_expr(size, known_length_locals)
+        }
         Expr::TypedArrayNew { arg: None, .. } => true,
         Expr::TypedArrayNew {
             arg: Some(size), ..
-        } => is_fresh_uint8array_length_literal(size),
+        } => is_fresh_uint8array_length_expr(size, known_length_locals),
         Expr::NativeMethodCall {
             module,
             method,
@@ -481,6 +530,13 @@ fn is_owned_u8_buffer_alloc(expr: &Expr) -> bool {
         } if module == "buffer" && method == "copyBytesFrom" => true,
         Expr::NativeArenaView { .. } => true,
         _ => false,
+    }
+}
+
+fn is_fresh_uint8array_length_expr(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
+    match expr {
+        Expr::LocalGet(id) => known_length_locals.contains(id),
+        _ => is_fresh_uint8array_length_literal(expr),
     }
 }
 
@@ -1285,6 +1341,16 @@ mod tests {
         }
     }
 
+    fn const_number_let(id: u32, init: Expr) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("v{}", id),
+            ty: Type::Number,
+            mutable: false,
+            init: Some(init),
+        }
+    }
+
     fn known_ids(stmts: Vec<Stmt>) -> HashSet<u32> {
         collect_known_noalias_buffer_locals(&stmts)
     }
@@ -1376,6 +1442,20 @@ mod tests {
     }
 
     #[test]
+    fn uint8array_const_local_lengths_are_known_noalias_sources() {
+        let ids = known_ids(vec![
+            const_number_let(10, Expr::Integer(8)),
+            const_let(1, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(10))))),
+            const_number_let(11, Expr::Number(16.0)),
+            const_number_let(12, Expr::LocalGet(11)),
+            const_let(2, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(12))))),
+        ]);
+
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+    }
+
+    #[test]
     fn uint8array_non_literal_or_alias_possible_sources_are_not_noalias() {
         let ids = known_ids(vec![
             const_let(1, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(99))))),
@@ -1386,6 +1466,8 @@ mod tests {
                 5,
                 Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(i32::MAX as f64)))),
             ),
+            mutable_number_let(6, Expr::Integer(8)),
+            const_let(7, Expr::Uint8ArrayNew(Some(Box::new(Expr::LocalGet(6))))),
         ]);
 
         assert!(ids.is_empty(), "unexpected noalias ids: {ids:?}");

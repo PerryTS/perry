@@ -191,7 +191,6 @@ fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
 /// address `2` / `1` (real heap arrays are always ≥ 0x1000). Throw there instead
 /// of silently materializing an empty iterator. (test262
 /// Array.prototype.{entries,keys,values}/{return-abrupt-from-this,this-val-non-obj-coercible}.)
-#[cold]
 unsafe fn throw_non_coercible_this(method: &str) -> ! {
     let _ = method;
     let msg = "Cannot convert undefined or null to object";

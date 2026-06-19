@@ -101,11 +101,11 @@ fn slugify_to_string(input: &str, replacement: char, strict: bool) -> String {
                 result.push(replacement);
                 last_was_separator = true;
             }
-        } else if c.is_whitespace() || c == '_' || c == '-' || c == '/' || c == '\\' {
-            if !last_was_separator {
-                result.push(replacement);
-                last_was_separator = true;
-            }
+        } else if (c.is_whitespace() || c == '_' || c == '-' || c == '/' || c == '\\')
+            && !last_was_separator
+        {
+            result.push(replacement);
+            last_was_separator = true;
         }
         // Otherwise the char is stripped silently.
     }

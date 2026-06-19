@@ -1351,7 +1351,10 @@ fn lower_for_after_init(
             // Issue #168 follow-up: `i < n` / `i <= n` with a runtime-guarded
             // local bound. Branch on the one-time finite-integral-i32 flag
             // hoisted above: the fast loop uses `icmp`, and the slow loop keeps
-            // full JS comparison semantics.
+            // full JS comparison semantics. The branch is loop-invariant, so
+            // LLVM's LoopUnswitch peels it into two loops at -O2+; even
+            // unswitched, the hot path executes pure integer compares with no
+            // per-iteration `sitofp` / call.
             if let Some(ctr_i32_slot) = ctx.i32_counter_slots.get(&dyn_bound.counter_id).cloned() {
                 let fast_idx = ctx.new_block(&format!("{label_prefix}.cond.fast"));
                 let slow_idx = ctx.new_block(&format!("{label_prefix}.cond.slow"));

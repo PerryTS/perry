@@ -438,7 +438,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let new_bits = blk.bitcast_double_to_i64(&new_box);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                 }
-                return Ok(emit_array_handle_length(ctx, &new_handle));
+                // #5459: `array_id` is in `boxed_vars` but has no box location in
+                // THIS context — it's a module-level global accessed directly from
+                // a nested function (the load path read `@global`, not a box-get).
+                // Returning here would skip the realloc write-back entirely, so the
+                // relocated array header is never stored to the registered GC-root
+                // global slot: the old head is freed on the next GC and the global
+                // dangles (use-after-free / corrupted length). Fall through to the
+                // module-global store-back below instead of returning.
             }
             if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
                 let closure_ptr = ctx
@@ -504,7 +511,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let new_bits = blk.bitcast_double_to_i64(&new_box);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
                 }
-                return Ok(emit_array_handle_length(ctx, &new_handle));
+                // #5459: in `boxed_vars` but no box location here — a module-level
+                // global accessed directly from a nested function. Fall through to
+                // the module-global store-back so the relocated head reaches the
+                // GC-root slot (see the matching note in `Expr::ArrayPush`).
             }
             if let Some(&capture_idx) = ctx.closure_captures.get(array_id) {
                 let closure_ptr = ctx.current_closure_ptr.clone().ok_or_else(|| {

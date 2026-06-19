@@ -106,7 +106,7 @@ pub(crate) fn create_project_tarball_with_excludes(
 /// (e.g. the GoogleSignIn SDK declared via `perry.toml [google_auth]
 /// framework_dir`) contains the static archive binary (extension-less, often
 /// >1 MB) and would otherwise be dropped, leaving the worker to link the
-/// no-SDK stub.
+/// > no-SDK stub.
 pub(crate) fn create_project_tarball(
     project_dir: &Path,
     extra_excludes: &[String],

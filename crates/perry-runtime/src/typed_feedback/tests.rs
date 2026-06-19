@@ -1510,14 +1510,14 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             trace,
-            "static K29",
-            "static K29: unsafe extern \"C\" fn(u64, f64, i64, *const f64, usize) -> f64",
+            "static K30",
+            "static K30: unsafe extern \"C\" fn(u64, f64, i64, *const f64, usize) -> f64",
             "js_typed_feedback_native_call_method_by_id",
         ),
         (
             trace,
-            "static K30",
-            "static K30: unsafe extern \"C\" fn(u64, f64, i64, i64) -> f64",
+            "static K31",
+            "static K31: unsafe extern \"C\" fn(u64, f64, i64, i64) -> f64",
             "js_typed_feedback_native_call_method_apply_by_id",
         ),
     ] {

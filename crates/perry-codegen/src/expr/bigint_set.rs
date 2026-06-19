@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -855,28 +855,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             };
             let blk = ctx.block();
-            let new_box = nanbox_pointer_inline(blk, &new_handle);
-            // Write back to the storage so subsequent reads see the
-            // possibly-realloc'd pointer.
-            if let Some(&capture_idx) = ctx.closure_captures.get(set_id) {
-                let closure_ptr = ctx
-                    .current_closure_ptr
-                    .clone()
-                    .ok_or_else(|| anyhow!("SetAdd captured but no current_closure_ptr"))?;
-                let idx_str = capture_idx.to_string();
-                let new_bits = ctx.block().bitcast_double_to_i64(&new_box);
-                ctx.block().call_void(
-                    "js_closure_set_capture_bits",
-                    &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
-                );
-            } else if let Some(slot) = ctx.locals.get(set_id).cloned() {
-                ctx.block().store(DOUBLE, &new_box, &slot);
-            } else if let Some(global_name) = ctx.module_globals.get(set_id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                // GC_STORE_AUDIT(ROOT): module global Set slot is a registered mutable GC root.
-                emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-            }
-            Ok(new_box)
+            // `js_set_add*` mutate the set in place and ALWAYS return the same
+            // `SetHeader` pointer they were given — `ensure_capacity` reallocs
+            // only the internal elements buffer, never the header. So there is
+            // no "realloc'd pointer" to write back: the previous writeback to
+            // `set_id`'s storage was vestigial (copied from the array-push
+            // pattern) and actively WRONG for a boxed/mutable closure capture —
+            // it overwrote the capture SLOT (which holds a box pointer) with the
+            // Set value, so the next read dereferenced the Set-as-box and saw
+            // `undefined` (Next.js turbopack runtime: `loadedChunks.add(p)`
+            // silently cleared the module-level `loadedChunks` Set captured by
+            // the chunk-loader closure, SIGSEGV on the next `.add`). GC moves of
+            // the header are handled by root rewriting of the variable slot, not
+            // here. (origin/main bugfix; preserved over the scalar fast-path
+            // restructure that produces `new_handle` above.)
+            Ok(nanbox_pointer_inline(blk, &new_handle))
         }
 
         // -------- set.has(value) -> boolean --------

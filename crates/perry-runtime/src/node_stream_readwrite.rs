@@ -1533,8 +1533,8 @@ fn has_symbol_async_iterator(value: f64) -> bool {
 
 pub(super) fn readable_from_options(opts: f64) -> f64 {
     let merged = crate::object::js_object_alloc(0, 2);
-    let object_mode = !get_hidden_value(opts, hidden_key(b"objectMode"))
-        .is_some_and(|v| v.to_bits() == TAG_FALSE);
+    let object_mode =
+        get_hidden_value(opts, hidden_key(b"objectMode")).is_none_or(|v| v.to_bits() != TAG_FALSE);
     set_hidden_value(
         box_pointer(merged as *const u8),
         hidden_key(b"objectMode"),

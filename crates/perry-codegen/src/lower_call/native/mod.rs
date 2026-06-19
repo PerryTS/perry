@@ -147,6 +147,44 @@ pub(crate) fn lower_native_method_call(
                     &[(DOUBLE, &iter), (DOUBLE, &done)],
                 ));
             }
+            // Next.js wall 53: runtime `require(absolutePath.json)` fallback.
+            "requireJsonDisk" => {
+                let specifier = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_require_json_disk",
+                    &[(DOUBLE, &specifier)],
+                ));
+            }
+            // Next.js wall 54: register an AOT-compiled module by absolute path.
+            "registerPathModule" => {
+                let path = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                let exports = args.get(1).map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                ctx.block().call_void(
+                    "js_register_path_module",
+                    &[(DOUBLE, &path), (DOUBLE, &exports)],
+                );
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
+            // Next.js wall 54: resolve runtime `require(absolutePath.js)`.
+            "requirePathModule" => {
+                let path = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_require_path_module", &[(DOUBLE, &path)]));
+            }
             _ => {}
         }
     }
@@ -2378,15 +2416,55 @@ pub(crate) fn lower_native_method_call(
         return lower_native_module_dispatch(ctx, sig, Some(&handle), args);
     }
 
-    // Unknown native method: lower the receiver and args for side
-    // effects (so closures inside them get auto-collected and any
-    // string literals get interned), then return a sentinel. This
-    // unblocks compilation of programs that touch native modules
-    // we haven't wired up yet — they'll produce garbage at runtime
-    // but won't fail at codegen time.
-    let _ = lower_expr(ctx, recv)?;
-    for a in args {
-        let _ = lower_expr(ctx, a)?;
+    // Unknown native method: route to the runtime method dispatcher on the
+    // ACTUAL receiver value instead of returning a 0.0 sentinel. The HIR can
+    // mis-classify a receiver's class — a webpack closure-captured array `e`
+    // gets registered as `FormData` (stale/aliased native-instance type), so
+    // `e.indexOf(s)` lowers as `NativeMethodCall{FormData, "indexOf"}`. None of
+    // the FormData arms match `indexOf`, and the old `0.0` sentinel made
+    // `!~e.indexOf(s)` always 0 → the Next.js `__webpack_require__.t` interop
+    // loop ran 0 iterations → empty React namespace → `cacheSignal is not a
+    // function`. `js_native_call_method` dispatches on the runtime type, so a
+    // real array receiver runs `Array.prototype.indexOf`, a real FormData runs
+    // its method, etc. (Same shape as the `new Console(...)` instance path
+    // above.) Falls back gracefully for genuinely-unimplemented modules too:
+    // the dispatcher returns `undefined` rather than a misleading numeric 0.
+    let recv_box = lower_expr(ctx, recv)?;
+    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    for arg in args {
+        lowered_args.push(lower_expr(ctx, arg)?);
     }
-    Ok(double_literal(0.0))
+    let (args_ptr, args_len) = if lowered_args.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let n = lowered_args.len();
+        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+        {
+            let blk = ctx.block();
+            for (i, value) in lowered_args.iter().enumerate() {
+                let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                blk.store(DOUBLE, value, &slot);
+            }
+        }
+        (buf, n.to_string())
+    };
+    let method_idx = ctx.strings.intern(method);
+    let entry = ctx.strings.entry(method_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let name_len = entry.byte_len.to_string();
+    // #wall4: null-safe — dispatch real receivers (fixes the mis-typed array
+    // `e.indexOf`), but a genuinely nullish receiver returns the 0.0 sentinel
+    // instead of hard-throwing (so app-page-turbo's top-level nullish-receiver
+    // `.indexOf` doesn't abort the whole external module load → 500).
+    Ok(ctx.block().call(
+        DOUBLE,
+        "js_native_call_method_nullsafe",
+        &[
+            (DOUBLE, &recv_box),
+            (PTR, &bytes_global),
+            (I64, &name_len),
+            (PTR, &args_ptr),
+            (I64, &args_len),
+        ],
+    ))
 }

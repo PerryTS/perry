@@ -69,9 +69,9 @@ pub fn create() -> i64 {
                 0,
                 100,
                 100,
-                super::get_parking_hwnd(),
+                Some(super::get_parking_hwnd()),
                 None,
-                HINSTANCE::from(hinstance),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             )
             .unwrap();

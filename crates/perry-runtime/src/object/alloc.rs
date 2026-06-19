@@ -969,7 +969,7 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // pointer fields, so a valid object pointer is always 8-byte aligned.
     // If a non-object target reaches here after nullish validation, skip
     // mutation rather than dereferencing an invalid pointer.
-    if tgt_raw < 0x10000 || tgt_raw % 8 != 0 {
+    if tgt_raw < 0x10000 || !tgt_raw.is_multiple_of(8) {
         return target_f64;
     }
 
@@ -1004,7 +1004,10 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // Same alignment guard as the target above — `src` is dereferenced at
     // `(*src).keys_array` just below; an unaligned non-object source must
     // be skipped, not dereferenced.
-    if src_raw < 0x10000 || src_raw % 8 != 0 || crate::symbol::is_registered_symbol(src_raw) {
+    if src_raw < 0x10000
+        || !src_raw.is_multiple_of(8)
+        || crate::symbol::is_registered_symbol(src_raw)
+    {
         return target_f64;
     }
 

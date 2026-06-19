@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -40,11 +40,12 @@ use super::{
     emit_layout_note_slot_on_block, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     emit_string_literal_global, emit_typed_feedback_register_site, emit_v8_export_call,
     emit_v8_member_method_call, emit_write_barrier, emit_write_barrier_slot_on_block,
-    expr_is_known_non_pointer_shadow_value, extract_array_of_object_shape, i32_bool_to_nanbox,
-    import_origin_suffix, is_global_this_builtin_function_name, is_global_this_builtin_name,
-    is_known_finite, lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32,
-    lower_expr_native, lower_index_set_fast, lower_js_args_array, lower_object_literal,
-    lower_stream_super_init, lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
+    expr_is_known_non_pointer_shadow_value, expr_produces_non_pointer_bits_by_construction,
+    extract_array_of_object_shape, i32_bool_to_nanbox, import_origin_suffix,
+    is_global_this_builtin_function_name, is_global_this_builtin_name, is_known_finite,
+    lower_array_literal, lower_channel_reduction, lower_expr, lower_expr_as_i32, lower_expr_native,
+    lower_index_set_fast, lower_js_args_array, lower_object_literal, lower_stream_super_init,
+    lower_url_string_getter, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
     try_flat_const_2d_int, try_lower_flat_const_index_get, try_lower_pod_field_set,
     try_match_channel_reduction, try_static_class_name, unbox_str_handle, unbox_to_i64,
@@ -410,6 +411,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
+                        // #5334 lever B: oversized modules full-outline the entire
+                        // class-field-SET IC diamond (guard + fast store +
+                        // fallback) to a single `js_class_field_set_ic(...)` call.
+                        // This trades a call frame on the (cold, startup-
+                        // dominated) field-set path for a large per-site IR
+                        // reduction, so clang -O0 — which oversized modules are
+                        // forced to (#4880) — can actually compile the module.
+                        // Only the call's own operands are materialized (the key
+                        // handle + expected-keys), not the inline-store scaffolding.
+                        if crate::codegen::full_outline_ic_enabled() {
+                            let (key_raw, expected_keys) = {
+                                let blk = ctx.block();
+                                let key_box = blk.load(DOUBLE, &key_handle_global);
+                                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                let expected_keys =
+                                    blk.load(I64, &format!("@{}", keys_global_name));
+                                (key_raw, expected_keys)
+                            };
+                            ctx.block().call_void(
+                                "js_class_field_set_ic",
+                                &[
+                                    (I64, &site_id),
+                                    (DOUBLE, &recv_box),
+                                    (I32, &expected_class_id_str),
+                                    (I64, &expected_keys),
+                                    (I64, &key_raw),
+                                    (I32, &field_idx_str),
+                                    (DOUBLE, &val_double),
+                                    (I32, requires_raw_f64_str),
+                                ],
+                            );
+                            return Ok(val_double);
+                        }
                         // #5093: build the guard operands once, up front, so both
                         // the inline shape pre-check and the guard-call fallback
                         // can reference them.
@@ -470,6 +505,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .cond_br(&guard_pass, &fast_label, &fallback_label);
 
                         ctx.current_block = fast_idx;
+                        // #5334 lever D: a value that is a non-pointer by
+                        // construction (number / bool / undefined / null /
+                        // comparison / arithmetic) creates no parent→child heap
+                        // reference, so the generational write barrier is a
+                        // semantic no-op and can be skipped. Computed before the
+                        // block builder is borrowed below. The LAYOUT NOTE is
+                        // kept regardless: it records the slot's pointer-ness for
+                        // minor-scan skipping, and a non-pointer write into a
+                        // slot that previously held a pointer is a real
+                        // transition the GC must observe. Same soundness standard
+                        // as the array-store barrier elision.
+                        let field_set_barrier_needed =
+                            !expr_produces_non_pointer_bits_by_construction(ctx, value);
                         let raw_stored_value = {
                             let blk = ctx.block();
                             let obj_ptr = blk.inttoptr(I64, &obj_handle);
@@ -487,6 +535,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 blk.store(DOUBLE, &numeric_value, &field_ptr);
                                 Some(numeric_value)
                             } else {
+                                // #5334 lever D: skip the barrier when the value
+                                // is a non-pointer by construction.
                                 let field_addr = blk.ptrtoint(&field_ptr, I64);
                                 emit_jsvalue_slot_store_on_block(
                                     blk,
@@ -497,7 +547,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     true,
                                     &obj_bits,
                                     &field_addr,
-                                    true,
+                                    field_set_barrier_needed,
                                 );
                                 None
                             };
@@ -570,18 +620,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
 
                         ctx.current_block = fallback_idx;
-                        {
-                            let blk = ctx.block();
-                            blk.call_void(
-                                "js_typed_feedback_record_fallback_call",
-                                &[(I64, &site_id)],
-                            );
-                            blk.call_void(
-                                "js_object_set_field_by_name",
-                                &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
-                            );
-                            blk.br(&merge_label);
-                        }
+                        let blk = ctx.block();
+                        // #5334 lever A: the guard already ran and FAILED in the
+                        // entry block, so this cold arm is a pure guard-miss
+                        // fallback. Outline the two operations it used to emit
+                        // inline (record_fallback + by-name set) into ONE
+                        // `js_class_field_set_fallback` call. Semantics are
+                        // byte-identical; only the emitted IR shrinks (cold path
+                        // → zero hot-loop cost). `obj_bits` keeps the full
+                        // NaN-box tag; `key_raw` is POINTER_MASK-stripped — the
+                        // same operands the two calls received.
+                        blk.call_void(
+                            "js_class_field_set_fallback",
+                            &[
+                                (I64, &site_id),
+                                (I64, &obj_bits),
+                                (I64, &key_raw),
+                                (DOUBLE, &val_double),
+                            ],
+                        );
+                        blk.br(&merge_label);
                         if requires_raw_f64 {
                             let fallback = LoweredValue {
                                 semantic: SemanticKind::JsValue,

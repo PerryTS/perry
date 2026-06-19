@@ -740,10 +740,8 @@ pub(super) fn resolve_exports_candidates(
     const CONDITIONS: &[&str] = &["perry", "node", "import", "module", "default", "require"];
     fn collect(value: &serde_json::Value, subpath: &str, out: &mut Vec<String>) {
         match value {
-            serde_json::Value::String(s) => {
-                if !out.contains(s) {
-                    out.push(s.clone());
-                }
+            serde_json::Value::String(s) if !out.contains(s) => {
+                out.push(s.clone());
             }
             // Node "exports" fallback arrays (e.g. y18n's
             // `[{ "import": "./index.mjs", "require": "./build/index.cjs" }, "./build/index.cjs"]`).

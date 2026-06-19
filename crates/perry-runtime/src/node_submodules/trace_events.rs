@@ -28,7 +28,7 @@ struct TraceState {
 
 thread_local! {
     static TRACE_STATES: RefCell<HashMap<i64, TraceState>> = RefCell::new(HashMap::new());
-    static TRACE_ENABLED_COUNTS: RefCell<BTreeMap<String, usize>> = RefCell::new(BTreeMap::new());
+    static TRACE_ENABLED_COUNTS: RefCell<BTreeMap<String, usize>> = const { RefCell::new(BTreeMap::new()) };
     static TRACE_PROTOTYPE: RefCell<Option<*mut ObjectHeader>> = const { RefCell::new(None) };
     static NEXT_TRACE_ID: RefCell<i64> = const { RefCell::new(1) };
 }

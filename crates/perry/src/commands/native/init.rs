@@ -73,13 +73,11 @@ pub fn run(args: InitArgs, format: OutputFormat, _use_color: bool) -> Result<()>
     let rust_crate_name = format!("perry-ext-{}", crate_name);
     let target = PathBuf::from(&dir_name);
 
-    if target.exists() {
-        if !args.force {
-            return Err(anyhow!(
-                "directory `{}` already exists; pass --force to overwrite",
-                target.display()
-            ));
-        }
+    if target.exists() && !args.force {
+        return Err(anyhow!(
+            "directory `{}` already exists; pass --force to overwrite",
+            target.display()
+        ));
     }
 
     let npm_name = args.npm_name.unwrap_or_else(|| name.to_string());

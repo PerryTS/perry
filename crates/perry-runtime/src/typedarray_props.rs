@@ -542,9 +542,7 @@ pub(crate) unsafe fn typed_array_get_property_value_by_name(
     owner: usize,
     name: &str,
 ) -> Option<f64> {
-    if typed_array_owner_kind(owner).is_none() {
-        return None;
-    }
+    typed_array_owner_kind(owner)?;
     match typed_array_string_key_kind(name, typed_array_owner_length(owner)) {
         TypedArrayStringKeyKind::InBoundsIndex(index) => Some(typed_array_owner_get(owner, index)),
         TypedArrayStringKeyKind::IntegerIndex => Some(f64::from_bits(crate::value::TAG_UNDEFINED)),

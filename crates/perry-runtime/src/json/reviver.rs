@@ -473,10 +473,7 @@ fn primitive_matches_source(value_bits: u64, source_value: &JsonSourcePrimitive)
     }
 }
 
-fn primitive_source_for_value<'a>(
-    source: Option<&'a JsonSourceNode>,
-    value_bits: u64,
-) -> Option<&'a [u8]> {
+fn primitive_source_for_value(source: Option<&JsonSourceNode>, value_bits: u64) -> Option<&[u8]> {
     match source {
         Some(JsonSourceNode::Primitive { source, value })
             if primitive_matches_source(value_bits, value) =>
@@ -565,11 +562,11 @@ fn array_child_source(
     }
 }
 
-unsafe fn object_child_source<'a>(
-    source: Option<&'a JsonSourceNode>,
+unsafe fn object_child_source(
+    source: Option<&JsonSourceNode>,
     parent_bits: u64,
     key: *const StringHeader,
-) -> Option<&'a JsonSourceNode> {
+) -> Option<&JsonSourceNode> {
     match source {
         Some(JsonSourceNode::Object {
             fields,
@@ -646,7 +643,7 @@ unsafe fn internalize_array(
         let key_handle = iteration_scope.root_string_ptr(key);
         let key_value = nanbox_string_f64(key_handle.get_raw_const_ptr::<StringHeader>());
         let key_value_handle = iteration_scope.root_nanbox_f64(key_value);
-        let child_source = array_child_source(source, value_handle.get_nanbox_u64(), i as usize);
+        let child_source = array_child_source(source, value_handle.get_nanbox_u64(), i);
         let child = internalize_json_property(
             JSValue::from_bits(value_handle.get_nanbox_u64()),
             key_value_handle.get_nanbox_f64(),

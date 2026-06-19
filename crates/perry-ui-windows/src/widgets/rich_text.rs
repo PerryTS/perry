@@ -139,9 +139,9 @@ pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
                 0,
                 width.max(40.0) as i32,
                 height.max(40.0) as i32,
-                super::get_parking_hwnd(),
-                HMENU(control_id as *mut _),
-                HINSTANCE::from(hinstance),
+                Some(super::get_parking_hwnd()),
+                Some(HMENU(control_id as *mut _)),
+                Some(HINSTANCE::from(hinstance)),
                 None,
             );
             let Ok(hwnd) = hwnd else {
@@ -297,8 +297,8 @@ fn toggle_effect(handle: i64, mask: u32, effect: u32) {
         SendMessageW(
             hwnd,
             0x043A,
-            WPARAM(SCF_SELECTION as usize),
-            LPARAM(&mut probe as *mut _ as isize),
+            Some(WPARAM(SCF_SELECTION as usize)),
+            Some(LPARAM(&mut probe as *mut _ as isize)),
         );
         let already_on = probe.dw_effects & effect != 0;
         let mut cf = CharFormat2W::default();
@@ -308,8 +308,8 @@ fn toggle_effect(handle: i64, mask: u32, effect: u32) {
         SendMessageW(
             hwnd,
             EM_SETCHARFORMAT,
-            WPARAM(SCF_SELECTION as usize),
-            LPARAM(&cf as *const _ as isize),
+            Some(WPARAM(SCF_SELECTION as usize)),
+            Some(LPARAM(&cf as *const _ as isize)),
         );
     }
 }

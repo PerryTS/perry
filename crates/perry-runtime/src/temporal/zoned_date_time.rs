@@ -182,7 +182,7 @@ pub fn get(z: &ZonedDateTime, name: &str) -> Option<f64> {
             Err(_) => return Some(undefined()),
         },
         "calendarId" => string(z.calendar().identifier()),
-        "hoursInDay" => ok_or_throw(z.hours_in_day()) as f64,
+        "hoursInDay" => ok_or_throw(z.hours_in_day()),
         _ => return None,
     })
 }

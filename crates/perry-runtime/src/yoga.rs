@@ -373,13 +373,12 @@ pub extern "C" fn js_yoga_set_number(id: f64, prop: f64, value: f64, unit: f64) 
                 P_FLEX_BASIS => s.flex_basis = dim(v, unit),
                 P_FLEX_GROW => s.flex_grow = v,
                 P_FLEX_SHRINK => s.flex_shrink = v,
-                P_FLEX => {
+                P_FLEX
                     // yoga setFlex(v): grow=v, shrink=v, basis=0 when v>0.
-                    if v >= 0.0 {
+                    if v >= 0.0 => {
                         s.flex_grow = v;
                         s.flex_shrink = v;
                     }
-                }
                 P_ASPECT_RATIO => s.aspect_ratio = if v.is_finite() { Some(v) } else { None },
                 _ => {}
             }

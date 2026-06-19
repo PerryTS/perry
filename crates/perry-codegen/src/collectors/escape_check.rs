@@ -24,10 +24,8 @@ pub fn find_new_candidates(
                 id,
                 init: Some(Expr::New { class_name, .. }),
                 ..
-            } => {
-                if !boxed_vars.contains(id) && !module_globals.contains_key(id) {
-                    candidates.insert(*id, class_name.clone());
-                }
+            } if !boxed_vars.contains(id) && !module_globals.contains_key(id) => {
+                candidates.insert(*id, class_name.clone());
             }
             Stmt::If {
                 then_branch,

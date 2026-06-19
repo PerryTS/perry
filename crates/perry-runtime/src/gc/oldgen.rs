@@ -570,10 +570,7 @@ impl MallocSweepCycleState {
         snapshot_header: *mut GcHeader,
     ) -> Option<*mut GcHeader> {
         let snapshot_key = snapshot_header as usize;
-        let expected_idx = match self.positions.get(&snapshot_key).copied() {
-            Some(idx) => idx,
-            None => return None,
-        };
+        let expected_idx = self.positions.get(&snapshot_key).copied()?;
         let Some((current_header, current_idx)) =
             malloc_sweep_revalidate_header(snapshot_header, expected_idx)
         else {

@@ -1217,10 +1217,10 @@ pub unsafe extern "C" fn js_response_new(
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
-    let body_opt = string_from_header(body_ptr);
+    // Lossless raw-byte read so binary bodies survive byte-for-byte (#5435).
+    let body_opt = dispatch::body_bytes_from_header(body_ptr);
     let body_present = body_opt.is_some();
-    let body_str = body_opt.unwrap_or_default();
-    let body = body_str.into_bytes();
+    let body = body_opt.unwrap_or_default();
     // NaN / 0.0 are the codegen "no status field" sentinels. Node defaults
     // missing status to 200; any explicit value is truncated toward zero
     // then range-checked against 200..=599 (199.9 → RangeError, 599.9 →

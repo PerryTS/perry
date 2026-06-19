@@ -132,7 +132,7 @@ pub extern "C" fn js_array_concat(
         // the per-element loop for that, since growing dest invalidates
         // the src_elements pointer.
         let dest_resolved = clean_arr_ptr_mut(dest);
-        if !dest_resolved.is_null() && dest_resolved as *const _ != src {
+        if !dest_resolved.is_null() && !std::ptr::eq(dest_resolved, src) {
             let dest_len = (*dest_resolved).length;
             let new_len = dest_len + src_len;
             let result = if new_len > (*dest_resolved).capacity {

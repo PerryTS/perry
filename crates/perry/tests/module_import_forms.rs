@@ -523,7 +523,7 @@ console.log("inline-platform", require("node:os").platform() === process.platfor
 }
 
 #[test]
-fn create_require_package_specifier_reports_unsupported_interop() {
+fn create_require_package_specifier_resolves_to_compiled_namespace() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     write_mini_require_target(root);
@@ -536,13 +536,8 @@ import { createRequire } from "node:module";
 import { version } from "mini-require-target";
 
 const require = createRequire(import.meta.url);
-try {
-  console.log("esm-version", version);
-  console.log(require("mini-require-target").version);
-} catch (err) {
-  console.log("require-error-code", err.code);
-  console.log("require-error-message", err.message);
-}
+console.log("esm-version", version);
+console.log("require-version", require("mini-require-target").version);
 "#,
     )
     .expect("write entry");
@@ -572,19 +567,8 @@ try {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
-    let stdout = String::from_utf8_lossy(&run.stdout);
-    assert!(
-        stdout.contains("require-error-code ERR_PERRY_UNSUPPORTED_CREATE_REQUIRE"),
-        "missing error code\nstdout:\n{}\nstderr:\n{}",
-        stdout,
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert!(
-        stdout.contains(
-            "Perry createRequire() currently supports built-in modules only; package/file require('mini-require-target') is not supported under perry compile"
-        ),
-        "missing unsupported createRequire diagnostic\nstdout:\n{}\nstderr:\n{}",
-        stdout,
-        String::from_utf8_lossy(&run.stderr)
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "esm-version require-target-1\nrequire-version require-target-1\n"
     );
 }

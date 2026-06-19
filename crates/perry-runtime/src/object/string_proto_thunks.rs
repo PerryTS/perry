@@ -122,6 +122,19 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
             0,
         );
     }
+    // Annex B: `trimLeft`/`trimRight` are the SAME function objects as
+    // `trimStart`/`trimEnd` — `String.prototype.trimLeft === trimStart` and
+    // `String.prototype.trimLeft.name === "trimStart"` — so alias the already-
+    // installed property value rather than installing a second thunk (whose
+    // closure would carry the name `trimLeft` and re-dispatch correctly but
+    // fail the reference-equality and `.name` checks). The generic thunk reads
+    // its own name off the closure, so the aliased call still trims the right
+    // side. test262 `annexB/built-ins/String/.../trim{Left,Right}` (#5346).
+    for (alias, canonical) in [("trimLeft", "trimStart"), ("trimRight", "trimEnd")] {
+        let key = crate::string::js_string_from_bytes(canonical.as_ptr(), canonical.len() as u32);
+        let value = super::js_object_get_field_by_name_f64(proto_obj, key);
+        super::global_this::install_proto_method_alias(proto_obj, alias, value);
+    }
 }
 
 /// Generic `String.prototype` method thunk. Performs `RequireObjectCoercible(

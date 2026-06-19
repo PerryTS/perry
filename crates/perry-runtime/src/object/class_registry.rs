@@ -1065,7 +1065,7 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     if ptr.is_null() {
         return None;
     }
-    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<crate::closure::ClosureHeader>()) {
         return None;
     }
     if !is_valid_obj_ptr(ptr as *const u8) {
@@ -1383,7 +1383,7 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
             .as_mut()
             .unwrap()
             .entry(class_id)
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(name.clone(), value_bits);
     }
     invalidate_class_prototype_fast_guards();
@@ -1963,6 +1963,23 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
             }
         }
+        // `new <bound async_hooks.AsyncLocalStorage>()` / `<...AsyncResource>()`.
+        // Next.js stores the native ctor on `globalThis.AsyncLocalStorage` and
+        // later does `new maybeGlobalAsyncLocalStorage()` (a dynamic callee), so
+        // the static `new AsyncLocalStorage()` codegen arm never fires. Without
+        // this the instance was a class_id=0 empty object whose `.getStore` read
+        // back `undefined` -> "getStore is not a function" at server startup.
+        // Route to the stdlib handle constructor via the registered dispatcher.
+        if module == "async_hooks"
+            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource")
+        {
+            let ptr = crate::value::JS_NATIVE_ASYNC_HOOKS_CONSTRUCT
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeEventsConstructFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
+            }
+        }
         if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
             let ptr =
                 crate::value::JS_NATIVE_ZLIB_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
@@ -2387,6 +2404,28 @@ pub unsafe extern "C" fn js_new_function_construct(
                 let ignore_bom = text_decoder_bool_option(options, "ignoreBOM");
                 let decoder = crate::text::js_text_decoder_new(label, fatal, ignore_bom);
                 return crate::value::js_nanbox_pointer(decoder);
+            }
+            // `new $ArrayBuffer(n)` / `new $DataView(buf, off?, len?)` where the
+            // constructor was obtained as a VALUE (e.g. the bundle reads
+            // `IN(globalThis, "DataView")` into a variable) rather than the
+            // syntactic `new DataView(...)` that lower_call/builtin.rs handles.
+            // Without these arms the dynamic-construct path falls through to
+            // "not a function". Mirror the static lowering exactly.
+            "ArrayBuffer" | "SharedArrayBuffer" => {
+                let size = args.first().copied().unwrap_or(0.0);
+                let buf = if name == "SharedArrayBuffer" {
+                    crate::buffer::js_shared_array_buffer_new_value(size)
+                } else {
+                    crate::buffer::js_array_buffer_new_value(size)
+                };
+                return crate::value::js_nanbox_pointer(buf as i64);
+            }
+            "DataView" => {
+                let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let value = args.first().copied().unwrap_or(undef);
+                let offset = args.get(1).copied().unwrap_or(undef);
+                let length = args.get(2).copied().unwrap_or(undef);
+                return crate::buffer::js_data_view_new(value, offset, length);
             }
             _ => {}
         }
@@ -2938,7 +2977,7 @@ fn is_callable_function_value(value: f64) -> bool {
     if ptr.is_null() {
         return false;
     }
-    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<crate::closure::ClosureHeader>()) {
         return false;
     }
     if !is_valid_obj_ptr(ptr as *const u8) {
@@ -2954,7 +2993,7 @@ fn is_arrow_function_value(value: f64) -> bool {
         return false;
     }
     let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
-    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<crate::closure::ClosureHeader>()) {
         return false;
     }
     if ptr.is_null() || !is_valid_obj_ptr(ptr as *const u8) {
@@ -3815,8 +3854,15 @@ extern "C" fn class_accessor_setter_thunk(
 /// Wrap a raw class accessor func_ptr as a callable function VALUE for
 /// descriptor reflection (`Object.getOwnPropertyDescriptor(C.prototype,
 /// "x").get`). Built-in-shaped: `.length` 0/1, no `.prototype`, native
-/// `toString` form.
-pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> f64 {
+/// `toString` form. `prop_name` is the accessor's property key — the spec
+/// `.name` of a `get`/`set` accessor is the key prefixed with `"get "`/`"set "`
+/// (Function Definitions: SetFunctionName with the "get"/"set" prefix), e.g.
+/// `Object.getOwnPropertyDescriptor(C.prototype, "x").get.name === "get x"`.
+pub(crate) fn class_accessor_function_value(
+    raw_ptr: usize,
+    is_setter: bool,
+    prop_name: &str,
+) -> f64 {
     if raw_ptr == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -3835,6 +3881,22 @@ pub(crate) fn class_accessor_function_value(raw_ptr: usize, is_setter: bool) -> 
         if is_setter { 1 } else { 0 },
     );
     super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    // Spec `.name` = "get <key>" / "set <key>" with attributes
+    // { writable: false, enumerable: false, configurable: true } (mirrors the
+    // `Function.prototype.bind` name path). Without this the reflected accessor
+    // value's `.name` defaulted to "" — refs class/.../fn-name-accessor-{get,set}.
+    let prefix = if is_setter { "set " } else { "get " };
+    let fn_name = format!("{prefix}{prop_name}");
+    let name_ptr = crate::string::js_string_from_bytes(fn_name.as_ptr(), fn_name.len() as u32);
+    let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
+    unsafe {
+        crate::closure::closure_set_dynamic_prop(closure as usize, "name", name_value);
+    }
+    crate::object::set_builtin_property_attrs(
+        closure as usize,
+        "name".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
     crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
     crate::value::js_nanbox_pointer(closure as i64)
 }
@@ -5582,16 +5644,16 @@ unsafe fn try_native_static_method_in_proto_chain(
             }
         }
         let proto_obj = class_prototype_object(cid);
-        if !proto_obj.is_null() && (*proto_obj).class_id == NATIVE_MODULE_CLASS_ID {
-            if read_native_module_name(proto_obj as *const ObjectHeader).as_deref()
+        if !proto_obj.is_null()
+            && (*proto_obj).class_id == NATIVE_MODULE_CLASS_ID
+            && read_native_module_name(proto_obj as *const ObjectHeader).as_deref()
                 == Some("buffer.Buffer")
-            {
-                let result = crate::object::native_module::call_native_module_dispatch_hook(
-                    proto_obj, name, args_ptr, args_len,
-                );
-                if !JSValue::from_bits(result.to_bits()).is_undefined() {
-                    return Some(result);
-                }
+        {
+            let result = crate::object::native_module::call_native_module_dispatch_hook(
+                proto_obj, name, args_ptr, args_len,
+            );
+            if !JSValue::from_bits(result.to_bits()).is_undefined() {
+                return Some(result);
             }
         }
         cid = get_parent_class_id(cid).unwrap_or(0);

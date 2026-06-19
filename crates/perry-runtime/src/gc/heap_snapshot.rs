@@ -292,7 +292,7 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
     let node_count = recs.len() + 1;
     let mut edges: Vec<Vec<Edge>> = vec![Vec::new(); node_count];
     for (i, rec) in recs.iter().enumerate() {
-        let from = (i + 1) as usize;
+        let from = i + 1;
         let mut ordinal: u32 = 0;
         let (fields_base, fields_len) = if rec.obj_type == GC_TYPE_OBJECT {
             let obj = rec.user as *const crate::object::ObjectHeader;
