@@ -89,12 +89,19 @@ struct EnvFingerprint {
 }
 
 impl BuildCacheProbe {
-    pub(super) fn new(args: &CompileArgs, project_root: &Path, cache_root: &Path) -> Self {
+    /// `cache_root` is the config root (where package.json lives) used to
+    /// pick up config-file inputs; `cache_dir` is the already-resolved
+    /// Perry cache directory the build manifest is written under.
+    pub(super) fn new(
+        args: &CompileArgs,
+        project_root: &Path,
+        cache_root: &Path,
+        cache_dir: &Path,
+    ) -> Self {
         let output_path = default_output_path(args);
         let output_identity = absolute_identity(&output_path);
         let manifest_name = format!("{}.json", short_hash(output_identity.as_bytes()));
-        let manifest_path = cache_root
-            .join(".perry-cache")
+        let manifest_path = cache_dir
             .join("build")
             .join(args.target.as_deref().unwrap_or("native"))
             .join(manifest_name);

@@ -257,7 +257,7 @@ pub(crate) unsafe fn handle_response_head_event(
 /// # Safety
 ///
 /// Same listener-liveness contract as [`fire_request_event_listeners`].
-pub(crate) unsafe fn handle_response_chunk_event(request_handle: Handle, chunk: Vec<u8>) {
+pub(crate) unsafe fn handle_response_chunk_event(request_handle: Handle, chunk: Bytes) {
     let (incoming, done) = get_handle_mut::<ClientRequestHandle>(request_handle)
         .map(|r| (r.incoming_handle, r.completed))
         .unwrap_or((0, true));

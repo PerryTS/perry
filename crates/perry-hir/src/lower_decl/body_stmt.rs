@@ -1334,6 +1334,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 && !is_iterable_typed_array
                 && !proven_array;
             if for_of_stmt.is_await && needs_runtime_iterator {
+                // `lower_runtime_for_await_iterator_body` opens and closes its
+                // own block scope, so the one pushed above (`for_scope_mark`)
+                // must be popped before this early return — otherwise it leaks
+                // an unbalanced `inside_block_scope` increment that survives the
+                // enclosing function boundary and corrupts the #1758
+                // pre-registration reuse gate for later module-level vars
+                // (see lower/stmt_loops.rs for the full rationale).
+                ctx.pop_block_scope(for_scope_mark);
                 return lower_runtime_for_await_iterator_body(ctx, for_of_stmt, arr_expr);
             }
             // Lazy iterator protocol for generic iterables (see stmt_loops.rs).

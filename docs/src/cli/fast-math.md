@@ -139,7 +139,8 @@ flag.
 
 ## Object-cache interaction
 
-Perry's per-module `.o` cache (in `.perry-cache/objects/`) keys on the
+Perry's per-module `.o` cache (in `node_modules/.cache/perry/objects/`,
+or wherever `--cache-dir` points) keys on the
 `fast_math` and `fp_contract` settings alongside source hash and other
 compile options. Toggling either invalidates affected cache entries —
 `perry --fast-math` or `perry --fp-contract=on` right after `perry`

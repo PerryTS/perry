@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tier-3 fixture (#1671): static imports from hono/jsx and hono/jsx/streaming must compile + link natively. hono/jsx/streaming transitively pulls in hono/jsx/hooks, whose `setTimeout(() => …)` 1-arg call previously fell through codegen's extern-func table to a bare `@setTimeout` and failed to link (`Undefined symbols: _setTimeout`). Imports only (no JSX syntax) so `node --experimental-strip-types` can run it for the expected.txt sanity check.",
   "dependencies": {
-    "hono": "^4.6.0"
+    "hono": "^4.12.25"
   },
   "perry": {
     "compilePackages": ["hono"],

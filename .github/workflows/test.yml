@@ -19,6 +19,13 @@ on:
       - '*.md'
       - '!CLAUDE.md'
       - '!CHANGELOG.md'
+  schedule:
+    # Nightly full-workspace cargo-test safety net (04:00 UTC). The per-PR
+    # cargo-test gate only exercises crates affected by the diff
+    # (scripts/ci_test_scope.py); a cross-crate regression that slips a scoped
+    # PR is caught here within a day. `schedule` is not `pull_request`, so the
+    # cargo-test job runs the full workspace.
+    - cron: '0 4 * * *'
   # Manual escape hatch for the opt-in jobs. Maintainers (write access)
   # can dispatch the workflow against any ref with `run_extended_tests=true`
   # to run parity / compile-smoke / package smokes / doc-tests on demand
@@ -288,6 +295,8 @@ jobs:
           # test builds accumulated in target/debug.
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
+          # For `gh pr view` (PR changed-file list → affected-crate scope).
+          GH_TOKEN: ${{ github.token }}
         run: |
           (
             while sleep 60; do
@@ -297,6 +306,26 @@ jobs:
           cargo_test_heartbeat_pid=$!
           trap 'kill "$cargo_test_heartbeat_pid" 2>/dev/null || true' EXIT
 
+          # Test scope: a per-PR run only exercises the crates the diff can
+          # affect (changed crates + their reverse-dependency closure, plus a
+          # `perry` edge for runtime-linked stdlib/ext archives) instead of the
+          # whole workspace (~90 min). Release tags, the nightly cron, and
+          # workflow_dispatch run the FULL workspace as the safety net. See
+          # scripts/ci_test_scope.py for the rules.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
+              --json files --jq '.files[].path')"
+            echo "Changed files in PR:"; printf '%s\n' "$changed_files"
+            scope="$(printf '%s\n' "$changed_files" | python3 scripts/ci_test_scope.py)"
+          else
+            scope="$(python3 scripts/ci_test_scope.py --full </dev/null)"
+          fi
+          echo "Packages in test scope:"; printf '%s\n' "$scope"
+          if [ -z "$scope" ]; then
+            echo "No crates affected by this diff — nothing to test."
+            exit 0
+          fi
+
           # #1444: perry-runtime's tests share process-global state — the
           # per-thread arena/GC, the timer queues, and the `NOTIFIED` flag are
           # process singletons. Running them across the default test-harness
@@ -304,47 +333,77 @@ jobs:
           # scheduling perturb another's wait budget (the event_pump timing
           # flakes) and races the GC/threading tests into intermittent SIGSEGV.
           # Run perry-runtime single-threaded so the tests can't interfere.
-          RUST_TEST_THREADS=1 cargo test -p perry-runtime
-          find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
-          # The remaining workspace includes large `perry` / `perry-stdlib`
-          # test binaries. Keep Cargo build jobs serialized so the runner
-          # does not link several of those large test binaries at once, then
-          # run packages one at a time and prune linked test executables so
-          # target/debug/deps does not exhaust the runner disk mid-job.
-          export CARGO_BUILD_JOBS=1
-          workspace_packages="$(
-            cargo metadata --no-deps --format-version 1 | python3 -c '
-          import json
-          import sys
 
-          excluded = {
-              "perry-runtime",
-              "perry-ui-macos",
-              "perry-ui-ios",
-              "perry-ui-visionos",
-              "perry-ui-tvos",
-              "perry-ui-watchos",
-              "perry-ui-gtk4",
-              "perry-ui-android",
-              "perry-ui-windows",
-              "perry-ui-windows-winui",
-              "perry-doc-fixture-my-bindings",
-          }
-          metadata = json.load(sys.stdin)
-          workspace_members = set(metadata["workspace_members"])
-          for package in metadata["packages"]:
-              if package["id"] in workspace_members and package["name"] not in excluded:
-                  print(package["name"])
-          '
-          )"
-
-          for package in $workspace_packages; do
-            echo "::group::cargo test -p $package"
-            cargo test -p "$package"
-            echo "::endgroup::"
-            cargo clean -p "$package" || true
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            # ---- FULL run: release tags / nightly cron / workflow_dispatch ----
+            # Every target, including the slow auto-optimize integration tests.
+            if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
+              RUST_TEST_THREADS=1 cargo test -p perry-runtime
+            fi
+            # `cargo test` only builds lib/bin/test targets — NOT the `staticlib`
+            # crate-type — so libperry_runtime.a / libperry_stdlib.a are never
+            # produced by the steps above; they only exist if restored from the
+            # cache. Integration tests that compile with PERRY_NO_AUTO_OPTIMIZE=1
+            # (e.g. functional_batch2_regressions) link the prebuilt archive
+            # directly and fail with "Could not find libperry_runtime.a" if the
+            # cached staticlib was invalidated. Build them explicitly.
+            if printf '%s\n' "$scope" | grep -qE '^(perry|perry-stdlib)$'; then
+              cargo build -p perry-runtime -p perry-stdlib
+            fi
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
-          done
+            # Large perry / perry-stdlib integration-test binaries: serialize
+            # builds and prune linked executables between packages so the runner
+            # disk doesn't exhaust mid-job.
+            export CARGO_BUILD_JOBS=1
+            for package in $(printf '%s\n' "$scope" | grep -vx 'perry-runtime'); do
+              echo "::group::cargo test -p $package"
+              cargo test -p "$package"
+              echo "::endgroup::"
+              cargo clean -p "$package" || true
+              find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+            done
+          else
+            # ---- FAST per-PR run (<10 min target) ----
+            # Unit / lib / bin tests for the affected crates only. The slow
+            # auto-optimize *integration* tests (tests/*.rs — each shells out to
+            # `perry compile`, ~4–6 min apiece, ~30 of them) are NOT run per-PR;
+            # they run in the nightly full job, on release tags, and on demand
+            # via the `run-extended-tests` label. No staticlib dependency to
+            # build (no integration tests).
+            #
+            # Run each crate in its OWN `cargo test` invocation — NOT one
+            # multi-package invocation. Building several crates together unifies
+            # perry-runtime's cargo features, which turns on optional impls (e.g.
+            # `fetch`) whose extern symbols (`js_fetch_with_options`) live in a
+            # separate crate the other test binaries don't link → `undefined
+            # reference` at link. Per-package builds keep each crate's
+            # perry-runtime feature set isolated. CARGO_BUILD_JOBS=1 also bounds
+            # the heavy per-binary runtime link so the runner doesn't OOM.
+            # `--with-tests` drops crates whose `src/` has no unit tests (their
+            # lib test binary would link the runtime for zero tests).
+            export CARGO_BUILD_JOBS=1
+            # perry-runtime first, single-threaded (process-global state); it is
+            # a lib-only crate, so filter to --lib.
+            if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
+              RUST_TEST_THREADS=1 cargo test --lib -p perry-runtime
+            fi
+            rest="$(printf '%s\n' "$scope" | grep -vx 'perry-runtime' \
+              | python3 scripts/ci_test_scope.py --with-tests || true)"
+            echo "Crates with unit tests in scope:"; printf '%s\n' "$rest"
+            for package in $rest; do
+              # `cargo test --lib` errors on a bin-only crate (perry), so pick
+              # the target filter per package: --lib --bins when it has a lib
+              # (lenient if it has no bins), else --bins.
+              if printf '%s\n' "$package" | python3 scripts/ci_test_scope.py --has-lib; then
+                target_filter="--lib --bins"
+              else
+                target_filter="--bins"
+              fi
+              echo "::group::cargo test $target_filter -p $package"
+              cargo test $target_filter -p "$package"
+              echo "::endgroup::"
+            done
+          fi
 
   # ---------------------------------------------------------------------------
   # GC write-barrier stress (optional / non-blocking)

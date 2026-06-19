@@ -1400,6 +1400,19 @@ pub(crate) fn lower_stmt_for_of(
         && !is_iterable_typed_array
         && !proven_array;
     if for_of_stmt.is_await && needs_runtime_iterator {
+        // `lower_runtime_for_await_iterator` pushes and pops its own block
+        // scope, so the one opened above (`for_scope_mark`) must be closed
+        // here before delegating — otherwise this early return leaks an
+        // unbalanced `inside_block_scope` increment. That leak persists
+        // across the enclosing function boundary (enter/exit_scope do not
+        // save/restore `inside_block_scope`), so a later module-level
+        // `var X = <expr>` sees `inside_block_scope != 0` and the #1758
+        // pre-registration reuse gate (var_decl.rs) silently allocates a
+        // fresh LocalId instead of reusing the pre-scanned one. A sibling
+        // closure that forward-referenced `X` then binds the orphaned
+        // pre-registration slot (never written) and calling it throws
+        // `value is not a function` (claude-code bundle e8/K8).
+        ctx.pop_block_scope(for_scope_mark);
         return lower_runtime_for_await_iterator(ctx, module, for_of_stmt, arr_expr);
     }
     // #for-of lazy iterator protocol: a generic/untyped iterable (custom

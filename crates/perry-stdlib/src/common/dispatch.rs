@@ -3372,8 +3372,11 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     // They are pointer-tagged small-integer ids, not heap objects, so the
     // runtime can't walk a prototype chain — register a kind-probe so
     // `x instanceof Response` (Hono's route-fallback guard) resolves. Gated on
-    // the same feature as the fetch module itself.
-    #[cfg(feature = "http-client")]
+    // `web-fetch` — the feature that actually compiles the fetch module and
+    // `js_fetch_handle_kind` (since #5174 split `http-client = ["web-fetch"]`,
+    // auto-optimize enables `web-fetch` directly for bare `new Response()`; the
+    // old `http-client` gate left the probe unregistered in that build).
+    #[cfg(feature = "web-fetch")]
     {
         extern "C" {
             fn js_register_fetch_handle_kind_probe(f: unsafe extern "C" fn(usize) -> u8);

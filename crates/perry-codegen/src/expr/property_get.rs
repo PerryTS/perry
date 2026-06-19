@@ -854,8 +854,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // for the only realistic alternative caller. The full fix
             // would side-channel the original global name through
             // lowering; deferred until a second-callable-builtin
-            // arrives. Other property shapes still fall through to
-            // `0.0`.
+            // arrives. Other unrecognized property shapes fall through
+            // to the `undefined` sentinel (a spec-correct property miss).
             if matches!(object.as_ref(), Expr::GlobalGet(_)) {
                 // `process.env` read as a VALUE (not `process.env.X`) must
                 // materialize the live env object, not the `undefined` sentinel.
@@ -1236,7 +1236,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(PTR, &key_bytes_global), (I64, &key_len)],
                     ));
                 }
-                return Ok(double_literal(0.0));
+                // Unknown member on a builtin global namespace object
+                // (`Reflect.enumerate`, `Math.bogus`, `JSON.bogus`, …): JS
+                // semantics is a plain `undefined` property miss, not `0`. The
+                // HIR collapsed the receiver to the `GlobalGet(0)` sentinel so we
+                // can't tell which namespace it was, but an unrecognized member
+                // read is `undefined` for every one of them. (The legacy `0.0`
+                // here made `typeof Math.bogus === "number"` and broke
+                // feature-detection like `Reflect.enumerate === undefined`.)
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
             }
             // Namespace-import member access: `import * as O from './oids';
             // O.OID_INT2`. The HIR lowers `O` itself to `ExternFuncRef { name:
@@ -1656,6 +1664,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .as_ref()
                         .is_some_and(crate::typed_shape::type_is_raw_f64_candidate);
                         let requires_raw_f64_str = if requires_raw_f64 { "1" } else { "0" };
+                        // #5391 path 2: oversized modules full-outline the entire
+                        // class-field-GET diamond (guard + fast load + fallback +
+                        // phi) to a single `js_class_field_get_ic(...)` call that
+                        // returns the field value. This shrinks large minified
+                        // user functions enough for clang -O0 to compile them
+                        // (the per-function compile time is superlinear in size).
+                        // Mirrors the field-SET full-outline (#5334 lever B).
+                        if crate::codegen::full_outline_ic_enabled() {
+                            let (key_raw, expected_keys) = {
+                                let blk = ctx.block();
+                                let key_box = blk.load(DOUBLE, &key_handle_global);
+                                let key_bits = blk.bitcast_double_to_i64(&key_box);
+                                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                                let expected_keys =
+                                    blk.load(I64, &format!("@{}", keys_global_name));
+                                (key_raw, expected_keys)
+                            };
+                            let val = ctx.block().call(
+                                DOUBLE,
+                                "js_class_field_get_ic",
+                                &[
+                                    (I64, &site_id),
+                                    (DOUBLE, &recv_box),
+                                    (I32, &expected_class_id_str),
+                                    (I64, &expected_keys),
+                                    (I64, &key_raw),
+                                    (I32, &field_idx_str),
+                                    (I32, requires_raw_f64_str),
+                                ],
+                            );
+                            return Ok(val);
+                        }
                         // #5093: build the guard operands once, up front, so both
                         // the inline shape pre-check and the guard-call fallback
                         // can reference them.

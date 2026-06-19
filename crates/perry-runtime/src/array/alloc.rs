@@ -326,6 +326,41 @@ pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
     ptr
 }
 
+/// #5391: build an array literal from a stack buffer of `n` pre-evaluated
+/// element values in ONE call, replacing the inline alloc + per-element
+/// store/layout-note/barrier sequence codegen otherwise emits at every literal
+/// site. For oversized modules that inline expansion makes individual functions
+/// enormous (a minified data-table builder reached 18MB of IR), which `clang
+/// -O0` compiles in superlinear time; outlining the construction keeps the call
+/// site to a buffer fill + one call.
+///
+/// Mirrors the inline `lower_array_literal` semantics: allocate via
+/// `js_array_alloc_literal` (length pre-set to `n`), copy each value, then note
+/// the slot layout and emit the write barrier per element. Both GC helpers
+/// no-op for non-pointer values, so the per-element calls are unconditional and
+/// correct for any mix of numbers and heap references.
+#[no_mangle]
+pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut ArrayHeader {
+    let arr = js_array_alloc_literal(n);
+    if values.is_null() || n == 0 {
+        return arr;
+    }
+    let parent = arr as u64;
+    let elems = unsafe { (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64 };
+    for i in 0..n as usize {
+        let v = unsafe { *values.add(i) };
+        let slot = unsafe { elems.add(i) };
+        // GC_STORE_AUDIT(BARRIERED): element store immediately followed by the
+        // slot layout note + write barrier below, identical to the inline
+        // array-literal element store via emit_jsvalue_slot_store_on_block.
+        unsafe { core::ptr::write(slot, v) };
+        let vbits = v.to_bits();
+        crate::gc::js_gc_note_slot_layout(parent, i as u32, vbits);
+        crate::gc::js_write_barrier_slot(parent, slot as u64, vbits);
+    }
+    arr
+}
+
 /// Issue #179 Phase 2: if `arr` points at a `LazyArrayHeader`
 /// (`GcHeader::obj_type == GC_TYPE_LAZY_ARRAY`), force the lazy
 /// value to materialize and return the real `ArrayHeader` pointer.
