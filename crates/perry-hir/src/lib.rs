@@ -26,7 +26,10 @@ pub mod monomorph;
 pub mod stable_hash;
 pub mod walker;
 
-pub use analysis::{collect_local_refs_expr, collect_local_refs_stmt};
+pub use analysis::{
+    collect_local_refs_expr, collect_local_refs_stmt, infer_expr_type, infer_refinable_expr_type,
+    HirTypeEnv, HirTypeFacts,
+};
 pub use audit::{audit_module, AuditManifest, ModuleAudit};
 pub use capability::{audit_module_capabilities, CapabilityPolicy, CapabilityViolation};
 pub use class_accessors::ClassAccessorNames;

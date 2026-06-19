@@ -325,10 +325,8 @@ unsafe fn raw_object_ptr_is_null(val_f64: f64) -> bool {
     let upper = bits >> 48;
     if upper >= 0x7FF8 {
         (bits & PTR_MASK) == 0
-    } else if upper == 0 && bits >= 0x10000 {
-        false
     } else {
-        true
+        !(upper == 0 && bits >= 0x10000)
     }
 }
 

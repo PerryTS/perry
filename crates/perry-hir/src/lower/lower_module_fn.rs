@@ -923,26 +923,40 @@ pub fn lower_module_full(
     // over EVERY body first (LocalIds are module-unique; the assignment and
     // the `Stmt::Let` can live in different bodies), then rewrite.
     {
-        let mut widening = crate::lower::type_widening::TypeWidening::new();
+        let mut widening = crate::lower::type_widening::TypeWidening::from_module(&module);
         widening.collect(&module.init);
         for func in &module.functions {
             widening.collect(&func.body);
         }
         for class in &module.classes {
             for method in &class.methods {
-                widening.collect(&method.body);
+                widening.collect_in_class(&class.name, &method.body);
             }
+            // `getters`/`setters` hold both instance and static accessors
+            // (static ones flagged in `static_accessor_fn_ids`). Static
+            // accessors bind `this` to the constructor, not an instance, so
+            // only instance accessors get instance-style `this`/`super` facts.
             for (_, getter) in &class.getters {
-                widening.collect(&getter.body);
+                if class.static_accessor_fn_ids.contains(&getter.id) {
+                    widening.collect(&getter.body);
+                } else {
+                    widening.collect_in_class(&class.name, &getter.body);
+                }
             }
             for (_, setter) in &class.setters {
-                widening.collect(&setter.body);
+                if class.static_accessor_fn_ids.contains(&setter.id) {
+                    widening.collect(&setter.body);
+                } else {
+                    widening.collect_in_class(&class.name, &setter.body);
+                }
             }
+            // Static methods bind `this` to the constructor, not an instance,
+            // so instance-member resolution would be wrong — keep it bare.
             for static_method in &class.static_methods {
                 widening.collect(&static_method.body);
             }
             if let Some(ref ctor) = class.constructor {
-                widening.collect(&ctor.body);
+                widening.collect_in_class(&class.name, &ctor.body);
             }
         }
         widening.apply(&mut module.init);

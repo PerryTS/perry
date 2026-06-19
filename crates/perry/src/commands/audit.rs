@@ -10,6 +10,7 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
+use super::compile::{cache_dir_override, resolve_cache_dir};
 use crate::OutputFormat;
 
 #[derive(Args, Debug)]
@@ -43,8 +44,9 @@ pub struct AuditArgs {
     pub verify_url: String,
 
     /// #495: print the local behavioral SBOM produced at the last
-    /// compile (`.perry-cache/audit.json` under the current project
-    /// root). Per-module list of stdlib symbols actually called,
+    /// compile (`audit.json` in the resolved cache dir, default
+    /// `node_modules/.cache/perry`, under the current project root).
+    /// Per-module list of stdlib symbols actually called,
     /// keyed by source file with the owning npm package name when
     /// the source lives under `node_modules/<pkg>/...`. When this
     /// flag is set, the remote security scan is *not* invoked.
@@ -350,20 +352,26 @@ fn display_audit_results(audit: &AuditResponse, fail_on: &str) {
 
 /// Entry point for `perry audit` command
 /// #495: print the local behavioral SBOM emitted by the last
-/// `perry compile`/`perry run` into `<project>/.perry-cache/audit.json`.
+/// `perry compile`/`perry run` into `audit.json` in the resolved cache
+/// dir (default `<project>/node_modules/.cache/perry/audit.json`).
 /// In Text mode, formats a per-module breakdown grouped by owning npm
 /// package; in JSON mode, dumps the raw manifest. Returns a clear
 /// error if the manifest doesn't exist yet (build first).
 fn print_local_sbom(path_arg: &str, format: OutputFormat) -> Result<()> {
     let root = std::path::PathBuf::from(path_arg);
     let root = root.canonicalize().unwrap_or(root);
-    // Walk up to find a directory containing `.perry-cache/audit.json`
-    // — same shape `perry compile` walks up to find `package.json`,
-    // so `perry audit --sbom` works from anywhere in the project tree.
+    // Walk up to find a directory whose resolved cache dir holds
+    // `audit.json` — same shape `perry compile` walks up to find
+    // `package.json`, so `perry audit --sbom` works from anywhere in the
+    // project tree. The cache dir defaults to `node_modules/.cache/perry`
+    // but honors `--cache-dir` / `PERRY_CACHE_DIR` / perry.toml
+    // `[perry] cacheDir` / package.json `perry.cacheDir`, so resolve it per
+    // candidate directory rather than hard-coding a name.
     let manifest_path = {
         let mut dir = root.clone();
         loop {
-            let candidate = dir.join(".perry-cache").join("audit.json");
+            let cache_dir = resolve_cache_dir(&dir, cache_dir_override(&dir).as_deref());
+            let candidate = cache_dir.join("audit.json");
             if candidate.exists() {
                 break Some(candidate);
             }
@@ -374,7 +382,7 @@ fn print_local_sbom(path_arg: &str, format: OutputFormat) -> Result<()> {
     };
     let Some(manifest_path) = manifest_path else {
         bail!(
-            "no .perry-cache/audit.json found under `{}` — run `perry compile` or `perry run` first; the manifest is written on every successful build.",
+            "no audit.json found under `{}` (looked in the resolved cache dir, default `node_modules/.cache/perry`) — run `perry compile` or `perry run` first; the manifest is written on every successful build.",
             root.display()
         );
     };

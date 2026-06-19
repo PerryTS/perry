@@ -373,7 +373,7 @@ static EVENT_EMITTERS: OnceLock<Mutex<EventEmitterRegistry>> = OnceLock::new();
 static EVENTS_RUNTIME_HOOKS_REGISTERED: Once = Once::new();
 
 thread_local! {
-    static EVENTS_GC_REGISTERED: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    static EVENTS_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn event_emitters() -> &'static Mutex<EventEmitterRegistry> {

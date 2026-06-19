@@ -15,17 +15,17 @@ use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Default)]
 pub enum RuntimeSpec {
     Oci,
-    Microvm { config: Option<serde_json::Value> },
-    Wasm { module: Option<String> },
+    Microvm {
+        config: Option<serde_json::Value>,
+    },
+    Wasm {
+        module: Option<String>,
+    },
+    #[default]
     Auto,
-}
-
-impl Default for RuntimeSpec {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -308,21 +308,22 @@ impl WorkloadGraphEngine {
             // when the backend supports it we'll route there; until then,
             // returning `BackendNotAvailable` makes the missing capability
             // visible instead of silently dropping the isolation guarantee.
-            if policy.requires_microvm() && !matches!(node.runtime, RuntimeSpec::Microvm { .. }) {
-                if std::env::var("PERRY_ALLOW_UNTRUSTED_SHARED_KERNEL").is_err() {
-                    return Err(ComposeError::BackendNotAvailable {
-                        name: self.backend.backend_name().to_string(),
-                        reason: format!(
-                            "node '{}' has policy tier 'untrusted' which requires \
+            if policy.requires_microvm()
+                && !matches!(node.runtime, RuntimeSpec::Microvm { .. })
+                && std::env::var("PERRY_ALLOW_UNTRUSTED_SHARED_KERNEL").is_err()
+            {
+                return Err(ComposeError::BackendNotAvailable {
+                    name: self.backend.backend_name().to_string(),
+                    reason: format!(
+                        "node '{}' has policy tier 'untrusted' which requires \
                              microVM isolation, but the active backend doesn't \
                              expose one. Either select RuntimeSpec::MicroVm \
                              explicitly on the node or set \
                              PERRY_ALLOW_UNTRUSTED_SHARED_KERNEL=1 to opt out \
                              (NOT recommended for actually-untrusted code).",
-                            node_id
-                        ),
-                    });
-                }
+                        node_id
+                    ),
+                });
             }
 
             let spec = ContainerSpec {
