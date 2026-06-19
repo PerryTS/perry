@@ -1,8 +1,3 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use std::collections::HashSet;
-
-use super::*;
-
 /// (Issue #50) Return `true` if any statement in `stmts` mutates the local
 /// `id`. A local is "mutated" if:
 ///   - It's the target of a `LocalSet` or `Update` (reassignment), or
@@ -21,20 +16,14 @@ pub fn has_any_mutation(stmts: &[perry_hir::Stmt], id: u32) -> bool {
     use perry_hir::Stmt;
     for s in stmts {
         match s {
-            Stmt::Expr(e) | Stmt::Throw(e) => {
-                if expr_has_mutation(e, id) {
-                    return true;
-                }
+            Stmt::Expr(e) | Stmt::Throw(e) if expr_has_mutation(e, id) => {
+                return true;
             }
-            Stmt::Return(Some(e)) => {
-                if expr_has_mutation(e, id) {
-                    return true;
-                }
+            Stmt::Return(Some(e)) if expr_has_mutation(e, id) => {
+                return true;
             }
-            Stmt::Let { init: Some(e), .. } => {
-                if expr_has_mutation(e, id) {
-                    return true;
-                }
+            Stmt::Let { init: Some(e), .. } if expr_has_mutation(e, id) => {
+                return true;
             }
             Stmt::If {
                 condition,
@@ -123,10 +112,10 @@ pub fn has_any_mutation(stmts: &[perry_hir::Stmt], id: u32) -> bool {
                     }
                 }
             }
-            Stmt::Labeled { body, .. } => {
-                if has_any_mutation(std::slice::from_ref(body.as_ref()), id) {
-                    return true;
-                }
+            Stmt::Labeled { body, .. }
+                if has_any_mutation(std::slice::from_ref(body.as_ref()), id) =>
+            {
+                return true;
             }
             _ => {}
         }

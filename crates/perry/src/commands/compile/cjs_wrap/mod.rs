@@ -43,17 +43,17 @@ mod hoist_classes;
 mod wrap;
 
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
-pub(self) use detect::is_js_reserved_word;
-pub(self) use extract_exports::{
+use detect::is_js_reserved_word;
+use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
     module_reexport_specs,
 };
-pub(self) use extract_requires::{
+use extract_requires::{
     extract_export_star_specs, extract_require_aliases_with_ranges, extract_require_specifiers,
     function_local_specs, identifier_is_declared_binding, identifier_is_reassigned,
 };
-pub(self) use hoist_classes::{
+use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,
     source_has_top_level_return, top_level_class_names,
 };

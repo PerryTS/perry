@@ -99,6 +99,7 @@ impl LoweringContext {
             pending_with_implicit_inits: Vec::new(),
             scope_depth: 0,
             scope_local_marks: Vec::new(),
+            scope_module_shadow_marks: Vec::new(),
             inside_block_scope: 0,
             namespace_vars: Vec::new(),
             current_namespace: None,
@@ -122,12 +123,14 @@ impl LoweringContext {
             module_native_instances_index: HashMap::new(),
             func_return_native_instances_index: HashMap::new(),
             native_modules_index: HashMap::new(),
+            module_shadow_stack: Vec::new(),
             class_statics_index: HashMap::new(),
             weakref_locals: HashSet::new(),
             finreg_locals: HashSet::new(),
             weakmap_locals: HashSet::new(),
             weakset_locals: HashSet::new(),
             namespace_import_locals: HashSet::new(),
+            fetch_call_response_locals: HashSet::new(),
             namespace_import_sources: std::collections::HashMap::new(),
             generator_func_names: HashSet::new(),
             async_generator_func_names: HashSet::new(),
@@ -145,6 +148,8 @@ impl LoweringContext {
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
             forward_class_names: std::collections::HashSet::new(),
+            class_renames: std::collections::HashMap::new(),
+            next_class_rename_id: 0,
             module_class_decl_names: std::collections::HashSet::new(),
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
@@ -389,6 +394,27 @@ impl LoweringContext {
 
     pub(crate) fn lookup_class(&self, name: &str) -> Option<ClassId> {
         self.classes_index.get(name).map(|&idx| self.classes[idx].1)
+    }
+
+    /// Apply any active scope-local class-name alias (see `class_renames`).
+    /// Identity for non-aliased names, so non-colliding classes are unaffected.
+    pub(crate) fn resolve_class_name(&self, name: &str) -> String {
+        self.class_renames
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Register a scope-local rename for `class X` when an outer/prior `class X`
+    /// is already registered (a distinct class that the name-keyed dedup would
+    /// otherwise skip). Returns immediately if no collision or already aliased.
+    /// Call from each body's Phase-1.5 class scan.
+    pub(crate) fn maybe_rename_colliding_class(&mut self, name: &str) {
+        if self.lookup_class(name).is_some() && !self.class_renames.contains_key(name) {
+            let unique = format!("{}${}", name, self.next_class_rename_id);
+            self.next_class_rename_id += 1;
+            self.class_renames.insert(name.to_string(), unique);
+        }
     }
 
     /// Issue #562: look up the `(module, class)` tuple from a class's
@@ -738,6 +764,24 @@ impl LoweringContext {
         self.locals.lookup(name)
     }
 
+    /// Like `lookup_local`, but only searches locals defined in the CURRENT
+    /// function scope (at or after the most recent `enter_scope` mark). Used by
+    /// function-declaration hoisting so a nested `function a` SHADOWS an
+    /// outer-scope binding of the same name (fresh local + box) instead of
+    /// reusing the outer local's box — which, when the outer binding is a
+    /// closure-captured variable (a webpack chunk's `function a` require
+    /// captured by an inner IIFE, with `function a` error-formatters in nested
+    /// module factories), let the nested declaration overwrite the captured
+    /// box at runtime.
+    pub(crate) fn lookup_local_in_current_scope(&self, name: &str) -> Option<LocalId> {
+        let scope_start = self.scope_local_marks.last().copied().unwrap_or(0);
+        self.locals[scope_start..]
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, id, _)| *id)
+    }
+
     fn lookup_local_index(&self, name: &str) -> Option<usize> {
         self.locals.lookup_index(name)
     }
@@ -968,6 +1012,9 @@ impl LoweringContext {
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
+            // Synthetic anon-shape class; no static fields, so static-init
+            // timing is irrelevant.
+            is_nested: false,
         });
 
         self.anon_shape_classes
@@ -1063,10 +1110,44 @@ impl LoweringContext {
     }
 
     pub(crate) fn lookup_native_module(&self, name: &str) -> Option<(&str, Option<&str>)> {
+        // #wall5: a local binding (function parameter / `const`) named the same
+        // as a registered native module (`url`, `util`, `path`, …) SHADOWS that
+        // module within its scope — `native_modules_index` is module-global and
+        // first-match-wins, so without this a nested `function(url){ url.push() }`
+        // (a local array) or undici's own `util` object would route `url.push` /
+        // `util.isStream` through the node-module dispatch and the
+        // unimplemented-API gate fires (Next.js app-page-turbo: 88× `url.push`,
+        // 84× `util.destroy`, the `url.o` render throw). Mirrors the scope-aware
+        // `native_instances` shadowing (shadow_native_instance / truncate).
+        if self.module_shadow_stack.iter().any(|n| n == name) {
+            return None;
+        }
         self.native_modules_index.get(name).map(|&idx| {
             let (_, m, method) = &self.native_modules[idx];
             (m.as_str(), method.as_ref().map(|s| s.as_str()))
         })
+    }
+
+    /// #wall5: shadow a native-module name for the current scope IF it is a
+    /// registered module (so a local/param of that name resolves as a value, not
+    /// the module). No-op for non-module names. Restore with
+    /// `truncate_module_shadow` at scope exit. Parallel to
+    /// `shadow_native_instance_if_present`.
+    pub(crate) fn shadow_native_module_if_present(&mut self, name: &str) {
+        if self.native_modules_index.contains_key(name) {
+            self.module_shadow_stack.push(name.to_string());
+        }
+    }
+
+    /// Current depth of the module-shadow stack (a scope mark).
+    pub(crate) fn module_shadow_mark(&self) -> usize {
+        self.module_shadow_stack.len()
+    }
+
+    /// Restore the module-shadow stack to `mark`, re-exposing modules whose
+    /// shadowing local bindings went out of scope.
+    pub(crate) fn truncate_module_shadow(&mut self, mark: usize) {
+        self.module_shadow_stack.truncate(mark);
     }
 
     pub(crate) fn register_builtin_module_alias(
@@ -1131,6 +1212,36 @@ impl LoweringContext {
             .push((local_name, module_name, class_name));
     }
 
+    /// Shadow any prior native-instance tag for `local_name` by pushing a
+    /// tombstone (empty module). `native_instances` is module-global and
+    /// last-match-wins, so without this a fresh binding of a name that an
+    /// unrelated `new FormData()`/`new Response()`/etc. earlier registered
+    /// (e.g. a minified bundle reusing the local `i`) would inherit the stale
+    /// native tag — routing a plain `i.exports` read through FormData's native
+    /// method dispatch (→ 0) instead of an ordinary property read. A real
+    /// native binding re-registers AFTER this tombstone, so last-match-wins
+    /// keeps the correct tag. (Next.js app-page-turbo `require` fix.)
+    pub(crate) fn shadow_native_instance(&mut self, local_name: String) {
+        self.native_instances
+            .push((local_name, String::new(), String::new()));
+    }
+
+    /// Tombstone a stale native-instance tag for `name` ONLY if one is currently
+    /// live, so a fresh binding (var-decl OR function parameter) of that name
+    /// shadows it. A function PARAMETER named the same as a leaked native
+    /// instance (e.g. a minified `function(e){…}` whose `e` collides with an
+    /// earlier `e = new Response()` in another factory) must NOT route
+    /// `e.<method>` through the stale native dispatch — that folds named reads to
+    /// 0 (the same class as the Fragment `i.exports` wall, but for params: in
+    /// the Next.js app-page bundle superstruct's `enums(e){ e.map(…).join() }`
+    /// saw `e.map`/`e.length`/`e.constructor` all read 0 while `e[0]` and
+    /// `Array.prototype.map.call(e)` worked → `(number).join is not a function`).
+    pub(crate) fn shadow_native_instance_if_present(&mut self, name: &str) {
+        if self.lookup_native_instance(name).is_some() {
+            self.shadow_native_instance(name.to_string());
+        }
+    }
+
     /// Truncate `native_instances` back to `mark`, keeping the
     /// `native_instances_index` shadow stacks in sync: every recorded index
     /// `>= mark` is popped (these belong to bindings whose scope is exiting),
@@ -1180,6 +1291,22 @@ impl LoweringContext {
             // Rewriting those reads as native receiver methods makes them
             // miss the object's actual properties.
             matches!((module, class), ("module", "Module") | ("repl", _))
+        }
+
+        // Tombstone shadowing (see `shadow_native_instance`): if the most
+        // recent `native_instances` entry for `name` is a tombstone (empty
+        // module), this binding deliberately shadows any older native tag of
+        // the same name — resolve to no native instance so the read/call
+        // lowers as an ordinary property access.
+        if let Some((_, module, _)) = self
+            .native_instances
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == name)
+        {
+            if module.is_empty() {
+                return None;
+            }
         }
 
         // Issue #1132 — walk the scoped instances back-to-front so a
@@ -1318,6 +1445,10 @@ impl LoweringContext {
         let local_mark = self.locals.len();
         self.scope_depth += 1;
         self.scope_local_marks.push(local_mark);
+        // #wall5: parallel mark for the native-module shadow stack, restored in
+        // exit_scope (kept off the returned tuple to avoid churning its callers).
+        self.scope_module_shadow_marks
+            .push(self.module_shadow_stack.len());
         (
             local_mark,
             self.native_instances.len(),
@@ -1329,6 +1460,10 @@ impl LoweringContext {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
         self.scope_local_marks.pop();
+        // #wall5: restore native-module shadowing for this scope.
+        if let Some(m) = self.scope_module_shadow_marks.pop() {
+            self.module_shadow_stack.truncate(m);
+        }
         if self.locals.len() > mark.0 {
             let mut kept: Vec<(String, LocalId, Type)> = Vec::new();
             for entry in self.locals.drain_from(mark.0) {

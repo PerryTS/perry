@@ -1,4 +1,3 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
 use std::collections::{HashMap, HashSet};
 
 use super::*;

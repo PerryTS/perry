@@ -82,6 +82,30 @@ pub(crate) fn pre_register_forward_captured_lets(
                         }
                     }
                 }
+            } else {
+                // `var` bindings are already predefined + boxed by
+                // `predefine_var_bindings_in_function_body`, but their box is
+                // NOT in the prealloc set. A closure created EARLIER in the body
+                // that references a `var` declared LATER (`r.d(t,{x:()=>n.x});
+                // var n=r("…")` — the webpack ESM re-export shape in Next.js'
+                // react-server.node.js) must capture the *live* box, not a
+                // TAG_UNDEFINED snapshot. Add forward-captured `var` ids to the
+                // prealloc set so codegen allocates the box at function entry.
+                for decl in &var_decl.decls {
+                    let mut binding_idents: Vec<(String, u32)> = Vec::new();
+                    collect_pat_forward_idents(&decl.name, &mut binding_idents);
+                    for (name, _span_lo) in binding_idents {
+                        if !seen_closure_refs.contains(&name) {
+                            continue;
+                        }
+                        if let Some(id) = ctx.lookup_local(&name) {
+                            if !forward_boxed_ids.contains(&id) {
+                                ctx.var_hoisted_ids.insert(id);
+                                forward_boxed_ids.push(id);
+                            }
+                        }
+                    }
+                }
             }
         }
         // Record closures introduced by THIS statement for subsequent decls.
@@ -906,7 +930,11 @@ pub fn lower_fn_body_block_stmt(
                 continue;
             }
             let name = fn_decl.ident.sym.to_string();
-            let local_id = if let Some(existing) = ctx.lookup_local(&name) {
+            // Reuse only a CURRENT-scope binding (a sibling `var`/`function`
+            // hoisted into this same body). A same-named local from an OUTER
+            // scope must be shadowed with a fresh local, else this declaration
+            // would write into the outer binding's box at runtime.
+            let local_id = if let Some(existing) = ctx.lookup_local_in_current_scope(&name) {
                 existing
             } else {
                 ctx.define_local(name.clone(), Type::Any)
@@ -923,8 +951,13 @@ pub fn lower_fn_body_block_stmt(
     // module function). Scoped: the previous set is restored on exit so
     // names don't leak across function bodies.
     let saved_forward_class_names = ctx.forward_class_names.clone();
+    let saved_class_renames = ctx.class_renames.clone();
     for stmt in &block.stmts {
         if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
+            // Disambiguate a distinct same-named class declared in this body so
+            // its references don't bind to a colliding `class X` elsewhere in
+            // the bundled module (see `class_renames`).
+            ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
             ctx.forward_class_names
                 .insert(class_decl.ident.sym.to_string());
         }
@@ -967,12 +1000,14 @@ pub fn lower_fn_body_block_stmt(
         Err(err) => {
             ctx.current_strict = parent_strict;
             ctx.forward_class_names = saved_forward_class_names;
+            ctx.class_renames = saved_class_renames;
             ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
             ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
             return Err(err);
         }
     };
     ctx.forward_class_names = saved_forward_class_names;
+    ctx.class_renames = saved_class_renames;
 
     // Re-register capture snapshots for classes declared in this body at
     // its END. The decl-site `RegisterClassCaptures` runs before later

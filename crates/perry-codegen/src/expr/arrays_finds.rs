@@ -533,9 +533,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // was kept as a reference; it was unreachable code after the
             // early return above. Removed — the comment block immediately
             // above this arm documents why the runtime call is required.
-            return Ok(ctx
+            Ok(ctx
                 .block()
-                .call(DOUBLE, "js_number_is_nan", &[(DOUBLE, &v)]));
+                .call(DOUBLE, "js_number_is_nan", &[(DOUBLE, &v)]))
         }
         Expr::FsMkdirSync(p) => {
             // Phase H fs: call js_fs_mkdir_sync. Node's fs.mkdirSync

@@ -28,8 +28,9 @@ pub struct NativeLibraryLock {
     pub sha256_per_target: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LockMode {
+    #[default]
     Default,
     Update(Vec<String>),
     Frozen,
@@ -44,12 +45,6 @@ impl LockMode {
             LockMode::Update(pkgs) => pkgs.is_empty() || pkgs.iter().any(|p| p == package),
             _ => false,
         }
-    }
-}
-
-impl Default for LockMode {
-    fn default() -> Self {
-        LockMode::Default
     }
 }
 

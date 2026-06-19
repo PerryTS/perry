@@ -917,7 +917,15 @@ pub extern "C" fn js_object_set_field_by_name(
         // frozen check at the top of each block threw before the accessor was
         // consulted (test262
         // assign/target-is-frozen-accessor-property-set-succeeds).
-        if ACCESSORS_IN_USE.with(|c| c.get()) {
+        //
+        // Gate on the per-object `OBJ_FLAG_HAS_DESCRIPTORS` flag, not just the
+        // thread-global `ACCESSORS_IN_USE`: `ACCESSOR_DESCRIPTORS` is keyed by
+        // raw address, so a fresh object reusing a freed address would otherwise
+        // read back the previous tenant's stale getter-only accessor and falsely
+        // throw "Cannot assign to read only property" on a plain `{}` (Next.js
+        // app-page-turbo runtime's `exports.Fragment = …`). A fresh allocation
+        // has the flag clear, so it skips the stale lookup entirely.
+        if ACCESSORS_IN_USE.with(|c| c.get()) && super::object_has_descriptors(obj as usize) {
             if let Some(ref k) = incoming_key_str {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, k) {
                     if acc.set != 0 {
@@ -1097,7 +1105,18 @@ pub extern "C" fn js_object_set_field_by_name(
                 }
                 // Per-property writable check (set by Object.defineProperty / freeze).
                 // Issue #615 — strict-mode throw on read-only assign.
-                if PROPERTY_ATTRS_IN_USE.with(|c| c.get()) {
+                //
+                // Gate on the per-object `OBJ_FLAG_HAS_DESCRIPTORS` flag, not just
+                // the thread-global `PROPERTY_ATTRS_IN_USE`: `PROPERTY_DESCRIPTORS`
+                // is keyed by raw address, so a fresh object reusing a freed
+                // address would otherwise read back the previous tenant's stale
+                // `(addr, key)` descriptor and falsely throw "Cannot assign to
+                // read only property" on a plain `{}` (Next.js app-page-turbo
+                // runtime's `exports.Fragment = …`). A fresh allocation has the
+                // flag clear, so it skips the lookup entirely.
+                if PROPERTY_ATTRS_IN_USE.with(|c| c.get())
+                    && super::object_has_descriptors(obj as usize)
+                {
                     if let Some(ref k) = incoming_key_str {
                         if let Some(attrs) = get_property_attrs(obj as usize, k) {
                             if !attrs.writable() {

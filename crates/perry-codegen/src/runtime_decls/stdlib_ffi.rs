@@ -1905,6 +1905,11 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, I64, I64, I64],
     );
+    module.declare_function(
+        "js_native_call_method_nullsafe",
+        DOUBLE,
+        &[DOUBLE, I64, I64, I64, I64],
+    );
     module.declare_function("js_native_call_value", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_new_from_handle", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_new_instance", DOUBLE, &[I64, I64, I64, I64, I64]);

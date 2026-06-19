@@ -81,11 +81,9 @@ pub(super) fn collect_locals(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::Let { id, .. } => {
-                if !map.contains_key(id) {
-                    map.insert(*id, offset + *count);
-                    *count += 1;
-                }
+            Stmt::Let { id, .. } if !map.contains_key(id) => {
+                map.insert(*id, offset + *count);
+                *count += 1;
             }
             Stmt::If {
                 then_branch,

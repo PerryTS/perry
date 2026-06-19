@@ -107,6 +107,13 @@ pub(super) fn emit_string_pool(
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
+    // Wall 51: per-class standalone-constructor arity, accounting for the
+    // synthesized `super(...args)` forwarding ctor a no-own-ctor class with
+    // heritage inherits (its arity comes from the nearest ancestor ctor, which
+    // may be cross-module). Keyed by canonical class name. Overrides the naive
+    // `class.constructor.params.len()` (which is 0 for a no-own-ctor class) so
+    // the registered `total_params` matches the emitted ctor's real signature.
+    ctor_arity_overrides: &HashMap<String, u32>,
     closure_rest_params: &HashMap<u32, usize>,
     // Declared ABI arity for non-rest closures, used for runtime padding.
     closure_arities: &HashMap<u32, u32>,
@@ -255,7 +262,7 @@ pub(super) fn emit_string_pool(
                 named.push((cid, class_name.clone()));
             }
         }
-        named.sort_by(|a, b| a.0.cmp(&b.0));
+        named.sort_by_key(|a| a.0);
         named.dedup_by_key(|(cid, _)| *cid);
         for (cid, name) in named {
             let (const_name, byte_len) = llmod.add_string_constant(&name);
@@ -503,6 +510,15 @@ pub(super) fn emit_string_pool(
     // the heap-class-object arm of `js_new_function_construct`, so it's
     // behavior-neutral for top-level class declarations (INT32 ref `new`).
     let mut ctor_triples: Vec<(u32, String, u32)> = Vec::new();
+    // #wall3: class ctors with a rest param (`constructor(...args)`) need their
+    // standalone `_constructor` func_ptr registered in CLOSURE_REST_REGISTRY so
+    // a member-new (`new ns.Sub(opts)` → js_new_function_construct →
+    // js_native_call_value) BUNDLES trailing args into the rest array. Without
+    // this the rest param binds to the first arg as a scalar (a=opts, not
+    // [opts]) and `super(...args)` spreads a bare object → 0x400000000 mis-box →
+    // crash (Next.js `new c.AppPageRouteModule({...})`). Mirrors the
+    // closure-rest registration but keyed by the `_constructor` symbol.
+    let mut ctor_rest_regs: Vec<(String, usize)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (class_table now contains both the
         // canonical name and self-binding aliases like `_X` from
@@ -602,16 +618,32 @@ pub(super) fn emit_string_pool(
         // Class-expression templates with no own/synthesized constructor (no
         // captures) have arity 0 — the standalone ctor then just runs the
         // literal field initializers.
-        let ctor_params = class
+        // Wall 51: prefer the synthesized-ctor arity override (which walks the
+        // ancestor chain for a no-own-ctor class with heritage, incl.
+        // cross-module parents) so the registered `total_params` matches the
+        // standalone ctor function actually emitted in `artifacts.rs`. Falls
+        // back to the own-ctor param count for classes not in the map.
+        let ctor_params = ctor_arity_overrides
+            .get(class_name)
+            .copied()
+            .unwrap_or_else(|| {
+                class
+                    .constructor
+                    .as_ref()
+                    .map(|c| c.params.len() as u32)
+                    .unwrap_or(0)
+            });
+        let ctor_symbol = format!("{}__{}_constructor", module_prefix, class_name);
+        // #wall3: record the rest-param position (in USER params) so the runtime
+        // bundles trailing args at the dynamic member-new dispatch path.
+        if let Some(rest_idx) = class
             .constructor
             .as_ref()
-            .map(|c| c.params.len() as u32)
-            .unwrap_or(0);
-        ctor_triples.push((
-            cid,
-            format!("{}__{}_constructor", module_prefix, class_name),
-            ctor_params,
-        ));
+            .and_then(|c| c.params.iter().position(|p| p.is_rest))
+        {
+            ctor_rest_regs.push((ctor_symbol.clone(), rest_idx));
+        }
+        ctor_triples.push((cid, ctor_symbol, ctor_params));
     }
     method_triples.sort_unstable();
     for (cid, method_name, llvm_name, param_count, has_synth_args, has_rest, spec_length) in
@@ -718,6 +750,20 @@ pub(super) fn emit_string_pool(
                 (I64, &func_i64),
                 (I64, &ctor_params.to_string()),
             ],
+        );
+    }
+    // #wall3: register rest-bearing class ctors' func_ptrs in the closure-rest
+    // side table so the dynamic member-new dispatch (js_native_call_value via
+    // js_new_function_construct) bundles trailing args into the rest array,
+    // matching the static `new` path. See `ctor_rest_regs` above.
+    ctor_rest_regs.sort_unstable();
+    for (ctor_symbol, rest_idx) in ctor_rest_regs {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        let func_ref = format!("@{}", ctor_symbol);
+        blk.call_void(
+            "js_register_closure_rest",
+            &[(PTR, &func_ref), (I32, &rest_idx.to_string())],
         );
     }
 

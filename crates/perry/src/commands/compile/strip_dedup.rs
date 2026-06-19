@@ -42,7 +42,7 @@ const RUST_ALLOCATOR_SYMBOL_PARTS: &[&str] = &[
 ];
 
 fn force_localize_symbol(symbol: &str) -> bool {
-    FORCE_EXCLUDE_SYMBOLS.iter().any(|forced| symbol == *forced)
+    FORCE_EXCLUDE_SYMBOLS.contains(&symbol)
         || RUST_ALLOCATOR_SYMBOL_PARTS
             .iter()
             .any(|part| symbol.contains(part))

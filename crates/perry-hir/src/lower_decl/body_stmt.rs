@@ -266,7 +266,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         }
         ast::Stmt::Decl(ast::Decl::Class(class_decl)) => {
             // Class declared inside a function body (e.g., noble-curves' Point class)
-            let class_name = class_decl.ident.sym.to_string();
+            // Resolve through any scope-local rename: a disambiguated duplicate
+            // has a unique name, so it is NOT a real redeclaration and must be
+            // lowered (not skipped) under that unique name.
+            let class_name = ctx.resolve_class_name(class_decl.ident.sym.as_str());
             // Skip if a class with the same name already exists (avoids duplicate definitions
             // when the same class name appears at both module level and function body level)
             let already_exists = ctx.pending_classes.iter().any(|c| c.name == class_name)
@@ -729,6 +732,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 let param = if let Some(ref pat) = catch_clause.param {
                     let param_name = get_pat_name(pat)?;
                     let param_id = ctx.define_local(param_name.clone(), Type::Any);
+                    ctx.shadow_native_instance_if_present(&param_name);
+                    ctx.shadow_native_module_if_present(&param_name);
                     // Destructured catch binding — `catch ([a, b = d()])` /
                     // `catch ({ message })`: bind the pattern leaves off the
                     // exception value before the user body runs.
@@ -1334,6 +1339,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 && !is_iterable_typed_array
                 && !proven_array;
             if for_of_stmt.is_await && needs_runtime_iterator {
+                // `lower_runtime_for_await_iterator_body` opens and closes its
+                // own block scope, so the one pushed above (`for_scope_mark`)
+                // must be popped before this early return — otherwise it leaks
+                // an unbalanced `inside_block_scope` increment that survives the
+                // enclosing function boundary and corrupts the #1758
+                // pre-registration reuse gate for later module-level vars
+                // (see lower/stmt_loops.rs for the full rationale).
+                ctx.pop_block_scope(for_scope_mark);
                 return lower_runtime_for_await_iterator_body(ctx, for_of_stmt, arr_expr);
             }
             // Lazy iterator protocol for generic iterables (see stmt_loops.rs).

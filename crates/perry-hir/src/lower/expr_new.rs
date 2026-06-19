@@ -20,6 +20,60 @@ use crate::lower_types::extract_ts_type_with_ctx;
 use super::expr_new_builtins::{global_member_constructor_name, module_constructor_name};
 use super::{lower_expr, LoweringContext};
 
+/// Collect the compile-time-constant string fragments of a `+`-concatenation
+/// (or template) expression, skipping any dynamic operands. Used to recognize a
+/// runtime-constructed `new Function` body by its constant skeleton.
+fn collect_const_string_parts(e: &ast::Expr, out: &mut String) {
+    match e {
+        ast::Expr::Lit(ast::Lit::Str(s)) => out.push_str(s.value.as_str().unwrap_or("")),
+        ast::Expr::Bin(b) if b.op == ast::BinaryOp::Add => {
+            collect_const_string_parts(&b.left, out);
+            collect_const_string_parts(&b.right, out);
+        }
+        ast::Expr::Paren(p) => collect_const_string_parts(&p.expr, out),
+        ast::Expr::Tpl(t) => {
+            for q in &t.quasis {
+                out.push_str(q.raw.as_str());
+            }
+        }
+        // Dynamic operand (an identifier, call, etc.) — skip it.
+        _ => {}
+    }
+}
+
+/// Recognize depd's `wrapfunction` deprecation-wrapper shape:
+/// `new Function("fn","log","deprecate","message","site",
+///   '"use strict"\n'+"return function ("+a+") {"+
+///   "log.call(deprecate, message, site)\n"+"return fn.apply(this, arguments)\n"+"}")`.
+/// The five param-name args are constant string literals; only the body
+/// (last arg) is runtime-constructed. The runtime `js_function_ctor_from_strings`
+/// re-verifies the full template and returns the wrapped fn, so matching here
+/// lets the site proceed to that recognizer instead of being deferred to a
+/// throw-on-call value (which `send` invokes eagerly at Next.js startup).
+fn is_depd_wrapfunction_shape(args: &[ast::ExprOrSpread]) -> bool {
+    if args.len() != 6 {
+        return false;
+    }
+    const PARAM_NAMES: [&str; 5] = ["fn", "log", "deprecate", "message", "site"];
+    for (i, name) in PARAM_NAMES.iter().enumerate() {
+        if args[i].spread.is_some() {
+            return false;
+        }
+        match crate::eval_classifier::const_string_of(&args[i].expr) {
+            Some(s) if s == *name => {}
+            _ => return false,
+        }
+    }
+    if args[5].spread.is_some() {
+        return false;
+    }
+    let mut body = String::new();
+    collect_const_string_parts(&args[5].expr, &mut body);
+    body.contains("return function (")
+        && body.contains("log.call(deprecate, message, site)")
+        && body.contains("return fn.apply(this, arguments)")
+}
+
 /// Lower `new TextDecoder(label?, { fatal?, ignoreBOM? })` into
 /// `Expr::TextDecoderNew { label, fatal, ignore_bom }`. Shared by
 /// `expr_new.rs` (bound to a local) and `textencoder.rs` (inline
@@ -880,7 +934,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // Try to extract class name from callee
     match callee_expr {
         ast::Expr::Ident(ident) => {
-            let class_name = ident.sym.to_string();
+            // Resolve through any scope-local class rename so `new X` binds to
+            // the lexically-correct (possibly disambiguated) class.
+            let class_name = ctx.resolve_class_name(ident.sym.as_str());
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
@@ -1153,25 +1209,39 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 )? {
                     return Ok(folded);
                 }
-                // Not fully const-foldable — body is the last argument
-                // (`new Function(p1, p2, body)`); earlier args are param names.
-                let body_arg = args_slice.last().map(|a| a.expr.as_ref());
-                match crate::eval_classifier::check_site(
-                    crate::eval_classifier::EvalSurface::NewFunction,
-                    body_arg,
-                    &ctx.source_file_path,
-                    new_expr.span,
-                )? {
-                    crate::eval_classifier::EvalDecision::Proceed => {}
-                    // #5206: default (defer) mode — compile to a function value
-                    // that throws a descriptive Error only when invoked.
-                    crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => {
-                        return super::const_fold_fn::synth_deferred_eval_value(
-                            ctx,
-                            crate::eval_classifier::EvalSurface::NewFunction,
-                            &message,
-                            new_expr.span,
-                        );
+                // depd `wrapfunction` builds its deprecation wrapper with a
+                // runtime-constructed body (`'…return function ('+a+') {…'`), so
+                // it isn't const-foldable and the classifier would defer it to a
+                // throw-on-call value — which Next.js' `send` invokes eagerly at
+                // startup (`new Function(…)(fn,…)`), crashing before `✓ Ready`.
+                // The runtime `js_function_ctor_from_strings` recognizes this
+                // exact template and returns the wrapped fn (the deprecation log
+                // is a non-essential warning), so PROCEED to the codegen
+                // `Expr::New { "Function" }` path for it instead of deferring.
+                // Any other runtime-unknown body still defers. NO general eval.
+                if is_depd_wrapfunction_shape(args_slice) {
+                    // fall through to `Expr::New { class_name: "Function" }`.
+                } else {
+                    // Not fully const-foldable — body is the last argument
+                    // (`new Function(p1, p2, body)`); earlier args are param names.
+                    let body_arg = args_slice.last().map(|a| a.expr.as_ref());
+                    match crate::eval_classifier::check_site(
+                        crate::eval_classifier::EvalSurface::NewFunction,
+                        body_arg,
+                        &ctx.source_file_path,
+                        new_expr.span,
+                    )? {
+                        crate::eval_classifier::EvalDecision::Proceed => {}
+                        // #5206: default (defer) mode — compile to a function value
+                        // that throws a descriptive Error only when invoked.
+                        crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => {
+                            return super::const_fold_fn::synth_deferred_eval_value(
+                                ctx,
+                                crate::eval_classifier::EvalSurface::NewFunction,
+                                &message,
+                                new_expr.span,
+                            );
+                        }
                     }
                 }
             }
@@ -1878,7 +1948,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 let synthetic_name = format!("__anon_class_{}", ctx.fresh_class());
                 let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
                 ctx.pending_classes.push(class);
-                let args = new_expr
+                let mut args: Vec<Expr> = new_expr
                     .args
                     .as_ref()
                     .map(|args| {
@@ -1888,6 +1958,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
+                // Issue #212 (anon-class-expression parity): a class expression
+                // nested in a function may capture enclosing-scope locals.
+                // `lower_class_from_ast` → `synthesize_class_captures` extended
+                // the synthesized constructor with one param per captured id and
+                // rewrote the METHOD bodies to read `this.__perry_cap_<id>`. The
+                // named-class `new C()` path above forwards those captures as
+                // `LocalGet(id)`; the directly-constructed anonymous form
+                // (`new class { m() { return outer } }()`) must do the same, or
+                // the cap params receive `undefined` and every method that reads
+                // a captured local sees `undefined`. Refs Next.js bundled tracer
+                // (`getActiveScopeSpan` → `trace.getSpan` on undefined `trace`).
+                let class_captures: Vec<LocalId> = ctx
+                    .lookup_class_captures(&synthetic_name)
+                    .map(|c| c.to_vec())
+                    .unwrap_or_default();
+                for cid in class_captures {
+                    args.push(Expr::LocalGet(cid));
+                }
                 let type_args = new_expr
                     .type_args
                     .as_ref()

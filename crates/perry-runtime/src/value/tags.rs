@@ -184,3 +184,11 @@ pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::n
 pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_HTTP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_EVENTS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+// Dynamic `new <bound async_hooks ctor>()` (e.g. `new maybeGlobalAsyncLocalStorage()`
+// where the value came from `globalThis.AsyncLocalStorage = AsyncLocalStorage`).
+// Registered by perry-stdlib at startup so a bound `async_hooks.AsyncLocalStorage` /
+// `AsyncResource` export value constructed dynamically reaches the real handle
+// constructor instead of falling through to the class_id=0 empty object. Takes
+// (method_name_ptr, method_name_len, args_ptr, args_len), returns the NaN-boxed
+// instance. Next.js standalone server startup blocker.
+pub static JS_NATIVE_ASYNC_HOOKS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

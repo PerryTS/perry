@@ -201,7 +201,7 @@ pub fn run(args: CheckArgs, format: OutputFormat, use_color: bool, verbose: u8) 
             }
         };
 
-        all_diagnostics.extend(parse_result.diagnostics.into_iter());
+        all_diagnostics.extend(parse_result.diagnostics);
 
         // Run fixer analysis if --fix or --fix-dry-run is enabled
         if args.fix || args.fix_dry_run {

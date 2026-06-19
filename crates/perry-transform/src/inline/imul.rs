@@ -1,9 +1,6 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
-use std::collections::{HashMap, HashSet};
-
-use super::*;
+use perry_hir::{BinaryOp, Expr, Function, Stmt};
+use perry_types::{FuncId, LocalId};
+use std::collections::HashSet;
 
 pub fn detect_math_imul_polyfill(f: &Function) -> bool {
     if f.is_async || f.is_generator {

@@ -1963,6 +1963,23 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
             }
         }
+        // `new <bound async_hooks.AsyncLocalStorage>()` / `<...AsyncResource>()`.
+        // Next.js stores the native ctor on `globalThis.AsyncLocalStorage` and
+        // later does `new maybeGlobalAsyncLocalStorage()` (a dynamic callee), so
+        // the static `new AsyncLocalStorage()` codegen arm never fires. Without
+        // this the instance was a class_id=0 empty object whose `.getStore` read
+        // back `undefined` -> "getStore is not a function" at server startup.
+        // Route to the stdlib handle constructor via the registered dispatcher.
+        if module == "async_hooks"
+            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource")
+        {
+            let ptr = crate::value::JS_NATIVE_ASYNC_HOOKS_CONSTRUCT
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if !ptr.is_null() {
+                let dispatch: crate::value::JsNativeEventsConstructFn = std::mem::transmute(ptr);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
+            }
+        }
         if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
             let ptr =
                 crate::value::JS_NATIVE_ZLIB_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);

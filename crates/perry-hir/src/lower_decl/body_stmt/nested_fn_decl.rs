@@ -76,6 +76,8 @@ pub(super) fn lower_nested_fn_decl(
         }
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), Type::Any);
+        ctx.shadow_native_instance_if_present(&param_name);
+        ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,

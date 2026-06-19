@@ -1622,6 +1622,17 @@ pub(super) fn try_native_module_methods(
                             perry_api_manifest::module_has_symbol(module_name, &method_name);
                         if perry_api_manifest::module_has_any_entries(module_name)
                             && manifest_entry.is_none()
+                            // #wall4: an unmistakable `String.prototype` method
+                            // (`endsWith`, `slice`, …) called on an identifier that
+                            // shares a node-core module name (`url`, `path`) means
+                            // the receiver is a runtime string, NOT the module —
+                            // don't gate it as an unimplemented module API; fall
+                            // through to dynamic dispatch on the real receiver.
+                            // Next.js app-page-turbo calls `url.endsWith(...)` on a
+                            // URL string bound to a local named `url`.
+                            && !super::super::array_fold::is_known_string_prototype_method(
+                                &method_name,
+                            )
                         {
                             // #925: this is the gate that fires
                             // for `crypto.hmacSha256(data, key)`.

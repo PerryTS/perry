@@ -14,14 +14,53 @@ use std::fmt::Write as FmtWrite;
 
 // ─── JSON.stringify with replacer ────────────────────────────────────────────
 
-/// Call a replacer closure with (key, value) and return the result as f64
+/// Call a replacer closure with (key, value) and return the result as f64.
+///
+/// Per ECMA-262 `SerializeJSONProperty`, the replacer is invoked with `this`
+/// bound to the *holder* — the object/array that contains the property (or, for
+/// the root value, the `{ "": value }` wrapper). Code that relies on the holder
+/// (e.g. `this[key] instanceof Date`, or React's Flight reply encoder which
+/// keys its already-serialized/dedup Maps by `this`) breaks without it — the
+/// Flight encoder's `referenceMap.get(this)` then never finds the parent path,
+/// so it re-serializes endlessly (Next.js standalone startup runaway). Mirror
+/// the reviver path (`internalize_json_property`), which sets the implicit
+/// `this` to the holder around the user-callback call.
 #[inline]
 pub(crate) unsafe fn call_replacer(
     replacer: *const crate::ClosureHeader,
     key_f64: f64,
     value_f64: f64,
+    holder_f64: f64,
 ) -> f64 {
-    crate::js_closure_call2(replacer, key_f64, value_f64)
+    let prev_this = crate::object::js_implicit_this_set(holder_f64);
+    let result = crate::js_closure_call2(replacer, key_f64, value_f64);
+    crate::object::js_implicit_this_set(prev_this);
+    result
+}
+
+/// NaN-box a heap object/array pointer as the holder `this` for `call_replacer`.
+#[inline]
+unsafe fn holder_value(ptr: *const u8) -> f64 {
+    f64::from_bits(POINTER_TAG | (ptr as u64 & POINTER_MASK))
+}
+
+/// Build the spec root holder `{ "": value }` (ECMA-262 `JSON.stringify` step:
+/// `Let wrapper be OrdinaryObjectCreate(...); CreateDataPropertyOrThrow(wrapper,
+/// "", value)`), so the root replacer call sees `this` = the wrapper. GC-safe
+/// (mirrors `apply_reviver_with_source`'s root-holder wrapper).
+unsafe fn root_holder(value_f64: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let val_handle = scope.root_nanbox_f64(value_f64);
+    let wrapper = crate::object::js_object_alloc(0, 1);
+    let wrapper_handle = scope.root_raw_mut_ptr(wrapper);
+    let empty = js_string_from_bytes(b"".as_ptr(), 0);
+    let empty_handle = scope.root_string_ptr(empty);
+    crate::object::js_object_set_field_by_name(
+        wrapper_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
+        empty_handle.get_raw_const_ptr::<StringHeader>(),
+        val_handle.get_nanbox_f64(),
+    );
+    holder_value(wrapper_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as *const u8)
 }
 
 /// Resolve `value.toJSON(key)` if `value` is an object with a callable
@@ -267,7 +306,12 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             }
         }
         let field_after_to_json = apply_to_json_keyed(field_val, key_f64_for_replacer);
-        let replaced = call_replacer(replacer, key_f64_for_replacer, field_after_to_json);
+        let replaced = call_replacer(
+            replacer,
+            key_f64_for_replacer,
+            field_after_to_json,
+            holder_value(ptr),
+        );
         let replaced_bits = replaced.to_bits();
 
         // Omit the property if the replacer returns undefined or a function.
@@ -363,7 +407,7 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
         let key_f64 = nanbox_string_f64(idx_ptr);
 
         let elem_after_to_json = apply_to_json_keyed(elem, key_f64);
-        let replaced = call_replacer(replacer, key_f64, elem_after_to_json);
+        let replaced = call_replacer(replacer, key_f64, elem_after_to_json, holder_value(ptr));
         let replaced_bits = replaced.to_bits();
 
         // Array holes / undefined / functions become null (per JSON spec).
@@ -409,8 +453,16 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     let empty_key_f64 = nanbox_string_f64(empty_str);
     let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
 
-    // Call replacer with ("", root_value)
-    let replaced_root = call_replacer(replacer, empty_key_f64, value_after_to_json);
+    // Call replacer with ("", root_value), `this` = the `{ "": value }` wrapper.
+    // Per spec the holder wraps the ORIGINAL root value (so a root replacer's
+    // `this[""]` observes the pre-`toJSON` value); only the replacer's value
+    // argument is post-`toJSON`. CodeRabbit (PR #5438).
+    let replaced_root = call_replacer(
+        replacer,
+        empty_key_f64,
+        value_after_to_json,
+        root_holder(value),
+    );
     let replaced_bits = replaced_root.to_bits();
 
     // If replacer returns undefined for root, return undefined.
@@ -1250,7 +1302,12 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
         let empty_key_f64 = nanbox_string_f64(empty_str);
         let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
-        let replaced_root = call_replacer(closure_ptr, empty_key_f64, value_after_to_json);
+        let replaced_root = call_replacer(
+            closure_ptr,
+            empty_key_f64,
+            value_after_to_json,
+            root_holder(value_after_to_json),
+        );
         let replaced_bits = replaced_root.to_bits();
         if replaced_bits == TAG_UNDEFINED {
             STRINGIFY_STACK.with(|s| s.borrow_mut().clear());

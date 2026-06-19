@@ -83,7 +83,7 @@ const PREFIXES: &[&str] = &[
 
 /// Is this package on the bundled trust allowlist?
 pub fn is_bundled(name: &str) -> bool {
-    EXACT.iter().any(|n| *n == name) || PREFIXES.iter().any(|p| name.starts_with(p))
+    EXACT.contains(&name) || PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
 #[cfg(test)]

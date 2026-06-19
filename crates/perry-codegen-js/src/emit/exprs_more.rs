@@ -1062,7 +1062,7 @@ impl JsEmitter {
                 self.output.push(')');
             }
             Expr::GetAsyncIterator(val) => {
-                self.output.push_str("(");
+                self.output.push('(');
                 self.emit_expr(val);
                 self.output.push_str(")[Symbol.asyncIterator]?.() ?? (");
                 self.emit_expr(val);

@@ -711,6 +711,12 @@ pub(super) fn init_static_fields_early(
     // static-field & friends. Initialized and computed-key fields are emitted
     // inline at their source position elsewhere and are skipped here.
     for c in &hir.classes {
+        // Next.js wall 54: a nested class (declared inside a function) has its
+        // static-field initializers run when the enclosing function evaluates
+        // the class, NOT at module init — skip them here.
+        if c.is_nested {
+            continue;
+        }
         let Some(&class_id) = ctx.class_ids.get(&c.name) else {
             continue;
         };
@@ -799,6 +805,13 @@ pub(super) fn init_static_fields_late(
         refs.iter().any(|id| !module_local_scope.contains(id))
     };
     for c in &hir.classes {
+        // Next.js wall 54: a nested class's static-field initializers must run
+        // when the enclosing function evaluates the class, not at module init.
+        // Running a side-effectful one eagerly (e.g. `static #a = new Self()`)
+        // both mistimes it and can crash before user code.
+        if c.is_nested {
+            continue;
+        }
         for sf in &c.static_fields {
             // Computed-key static fields go through the class-static-symbol
             // side table. Refs #420 — drizzle's `static [entityKind] =

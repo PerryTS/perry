@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -283,7 +283,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         lowered.push(lower_expr(ctx, a)?);
                     }
                     let arg_kinds: Vec<crate::types::LlvmType> =
-                        std::iter::repeat(DOUBLE).take(args.len()).collect();
+                        std::iter::repeat_n(DOUBLE, args.len()).collect();
                     ctx.pending_declares
                         .push((fn_name.clone(), DOUBLE, arg_kinds));
                     let arg_slices: Vec<(crate::types::LlvmType, &str)> =

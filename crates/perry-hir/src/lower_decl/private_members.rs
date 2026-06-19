@@ -102,6 +102,8 @@ pub fn lower_private_method(
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let is_rest = is_rest_param(&param.pat);
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+        ctx.shadow_native_instance_if_present(&param_name);
+        ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,
@@ -287,6 +289,8 @@ pub fn lower_private_setter(
         let param_name = get_pat_name(&param.pat)?;
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local(param_name.clone(), param_type.clone());
+        ctx.shadow_native_instance_if_present(&param_name);
+        ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,

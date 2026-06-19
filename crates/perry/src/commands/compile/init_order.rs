@@ -34,6 +34,13 @@ use super::CompilationContext;
 pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &Path) {
     let mut eager: HashSet<PathBuf> = HashSet::new();
     eager.insert(entry_path.to_path_buf());
+    // Next.js wall 54 (part 2): the `.next/server/**` page/route/chunk modules
+    // have no static importer (loaded by a runtime-computed path). They are left
+    // Deferred — eager-initing turbopack chunks at startup runs React-SSR code
+    // before the server is ready. Instead, the entry registers each module's
+    // `__init` address by path (`js_register_path_init`), so the first runtime
+    // `require(absolutePath)` (turbopack `R.c()` / `require(getPagePath(...))`)
+    // triggers init lazily and in dependency order.
     loop {
         let mut changed = false;
         let paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();

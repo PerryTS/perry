@@ -337,7 +337,16 @@ pub(super) fn compile_method(
                 }
                 effective_parent = pc.extends_name.as_deref();
             }
-            if let Some(pname) = effective_parent {
+            // Wall 51: a class with a DYNAMIC parent (`extends_expr`, e.g.
+            // `class X extends _mod.Parent {}`) must route its synthesized
+            // super through the runtime dynamic-parent dispatcher below
+            // (`js_fetch_or_value_super` keyed on the decl-time-registered parent
+            // value), NOT this inline static-symbol call — the parent's
+            // standalone ctor symbol lives under a different module prefix and
+            // the static call would target the wrong/empty symbol, so the parent
+            // ctor never ran and inherited fields stayed undefined. Skip the
+            // inline path for dynamic-parent classes.
+            if let Some(pname) = effective_parent.filter(|_| class.extends_expr.is_none()) {
                 let pname_owned = pname.to_string();
                 let node_stream_kind = if pname_owned == "Readable" {
                     node_stream_parent_kind(ctx.classes, class)
@@ -476,6 +485,72 @@ pub(super) fn compile_method(
                     .unwrap_or_else(|| undef_lit.clone());
                 ctx.block()
                     .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
+            }
+
+            // Wall 51: a no-own-ctor class with a DYNAMIC / cross-module parent
+            // (`class X extends _mod.Parent {}`, captured as `extends_expr`) that
+            // the inline walk above could NOT resolve to a local/imported ctor
+            // symbol (the auto-optimize / standalone build compiles each nested
+            // module with the parent absent from `ctx.classes` /
+            // `imported_class_ctors`, resolving it purely as a runtime dynamic
+            // parent). Without an emitted super-call the parent ctor never runs
+            // and inherited `this.<field> = …` writes are lost — Next.js route
+            // matchers (`class PagesRouteMatcher extends _mod.RouteMatcher {}`)
+            // left every `this.definition` undefined, so `matcher.definition
+            // .pathname` threw. Forward this synthesized ctor's params to the
+            // runtime dynamic-parent super dispatcher, mirroring the explicit
+            // `Expr::SuperCall` dynamic-parent path in `expr/this_super_call.rs`.
+            if builtin_parent_runtime.is_none() && class.extends_expr.is_some() {
+                if let Some(cid) = ctx.class_ids.get(&class.name).copied().filter(|c| *c != 0) {
+                    let undef_lit =
+                        crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let mut lowered_args: Vec<String> = Vec::with_capacity(method.params.len());
+                    for p in &method.params {
+                        if let Some(slot) = ctx.locals.get(&p.id).cloned() {
+                            lowered_args.push(ctx.block().load(DOUBLE, &slot));
+                        } else {
+                            lowered_args.push(undef_lit.clone());
+                        }
+                    }
+                    let parent_val = ctx.block().call(
+                        DOUBLE,
+                        "js_get_dynamic_parent_value",
+                        &[(crate::types::I32, &cid.to_string())],
+                    );
+                    let (args_ptr, args_len) = if lowered_args.is_empty() {
+                        ("null".to_string(), "0".to_string())
+                    } else {
+                        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+                        for (i, a_val) in lowered_args.iter().enumerate() {
+                            let slot =
+                                ctx.block()
+                                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                            ctx.block().store(DOUBLE, a_val, &slot);
+                        }
+                        let ptr_reg = ctx.block().next_reg();
+                        ctx.block().emit_raw(format!(
+                            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                            ptr_reg,
+                            lowered_args.len(),
+                            buf_reg
+                        ));
+                        (ptr_reg, lowered_args.len().to_string())
+                    };
+                    let this_box = match ctx.this_stack.last().cloned() {
+                        Some(slot) => ctx.block().load(DOUBLE, &slot),
+                        None => undef_lit.clone(),
+                    };
+                    let _ = ctx.block().call(
+                        DOUBLE,
+                        "js_fetch_or_value_super",
+                        &[
+                            (DOUBLE, &parent_val),
+                            (DOUBLE, &this_box),
+                            (crate::types::PTR, &args_ptr),
+                            (I64, &args_len),
+                        ],
+                    );
+                }
             }
 
             // Apply self field initializers AFTER the parent body chain has

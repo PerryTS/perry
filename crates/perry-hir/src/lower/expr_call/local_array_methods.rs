@@ -148,6 +148,19 @@ pub(super) fn try_local_array_methods(
                         | "reduce"
                         | "reduceRight"
                         | "join"
+                        // wall 49: the mutating array methods are ALSO commonly
+                        // user-class methods (Stack.push, Queue.shift, Next.js
+                        // `DefaultRouteMatcherManager.push`). On an unknown (`Any`)
+                        // receiver the inline array fast path reads the instance's
+                        // ObjectHeader as an ArrayHeader and corrupts it; route
+                        // through dynamic dispatch instead, which handles both real
+                        // arrays and class instances correctly. Typed arrays
+                        // (`Type::Array`) are unaffected — `is_unknown_recv` is
+                        // false for them, so they keep the fast path.
+                        | "push"
+                        | "pop"
+                        | "shift"
+                        | "unshift"
                 );
                 let is_unknown_recv =
                     matches!(type_info, None | Some(Type::Any) | Some(Type::Unknown));

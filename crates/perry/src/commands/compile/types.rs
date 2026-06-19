@@ -13,8 +13,6 @@ use std::path::PathBuf;
 use perry_hir::{Module as HirModule, ModuleKind};
 use serde::{Deserialize, Serialize};
 
-use crate::OutputFormat;
-
 /// Result of a successful compilation
 pub struct CompileResult {
     pub output_path: PathBuf,

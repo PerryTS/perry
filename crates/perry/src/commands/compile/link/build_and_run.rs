@@ -332,7 +332,7 @@ pub(crate) fn build_and_run_link(
                     }
                 }
                 // Tier-3 (tvOS/watchOS) std-duplication dedup; no-op elsewhere.
-                cmd.arg(&dedup_stdlib_for_tier3(target, stdlib));
+                cmd.arg(dedup_stdlib_for_tier3(target, stdlib));
                 // #466 Phase 4 step 2: well-known bindings normally join the
                 // link line right after perry-stdlib so they cover the exact
                 // `_js_*` symbol gap that was just opened by stripping the
@@ -351,7 +351,7 @@ pub(crate) fn build_and_run_link(
                 // Also link runtime for symbols DCE'd from stdlib's bundled
                 // perry-runtime; on tier-3 it's first stripped of stdlib's objects.
                 if !is_android && !is_windows {
-                    cmd.arg(&dedup_runtime_for_tier3(target, runtime_lib, stdlib));
+                    cmd.arg(dedup_runtime_for_tier3(target, runtime_lib, stdlib));
                 }
             } else {
                 if ctx.needs_stdlib {
@@ -826,7 +826,7 @@ pub(crate) fn build_and_run_link(
                 if let Ok(ref output) = pc_out {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.trim().split_whitespace() {
+                        for flag in libs.split_whitespace() {
                             cmd.arg(flag);
                         }
                         got_gtk_libs = true;
@@ -894,7 +894,7 @@ pub(crate) fn build_and_run_link(
                 if let Ok(ref output) = gst_pc_out {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.trim().split_whitespace() {
+                        for flag in libs.split_whitespace() {
                             cmd.arg(flag);
                         }
                         got_gst_libs = true;
@@ -939,7 +939,7 @@ pub(crate) fn build_and_run_link(
                 if let Ok(ref output) = shumate_pc_out {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.trim().split_whitespace() {
+                        for flag in libs.split_whitespace() {
                             cmd.arg(flag);
                         }
                         got_shumate_libs = true;
@@ -977,7 +977,7 @@ pub(crate) fn build_and_run_link(
                 if let Ok(ref output) = webkit_pc_out {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.trim().split_whitespace() {
+                        for flag in libs.split_whitespace() {
                             cmd.arg(flag);
                         }
                         got_webkit_libs = true;
@@ -1362,7 +1362,7 @@ pub(crate) fn build_and_run_link(
                                 && native_lib.module.contains("plugin");
                             if force_load {
                                 cmd.arg(format!("-Wl,-force_load,{}", lib.display()));
-                            } else if is_windows && lib.extension().map_or(false, |e| e == "lib") {
+                            } else if is_windows && lib.extension().is_some_and(|e| e == "lib") {
                                 // On Windows, link native staticlibs directly —
                                 // /FORCE:MULTIPLE handles duplicate symbols.
                                 cmd.arg(&lib);
@@ -1474,7 +1474,7 @@ pub(crate) fn build_and_run_link(
                 if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                     if output.status.success() {
                         let libs = String::from_utf8_lossy(&output.stdout);
-                        for flag in libs.trim().split_whitespace() {
+                        for flag in libs.split_whitespace() {
                             cmd.arg(flag);
                         }
                     }
@@ -1542,7 +1542,7 @@ pub(crate) fn build_and_run_link(
                     if let Ok(output) = Command::new("pkg-config").args(["--libs", pkg]).output() {
                         if output.status.success() {
                             let libs = String::from_utf8_lossy(&output.stdout);
-                            for flag in libs.trim().split_whitespace() {
+                            for flag in libs.split_whitespace() {
                                 cmd.arg(flag);
                             }
                         }

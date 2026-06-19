@@ -218,6 +218,134 @@ pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     make_require(undefined())
 }
 
+/// Next.js wall 54: registry mapping an AOT-compiled CJS module's absolute
+/// source path to its evaluated `module.exports`, so a RUNTIME
+/// `require(absolutePath.js)` (Next.js / turbopack load page + chunk modules by
+/// a path computed at request time, not a static specifier) resolves to the
+/// module Perry already compiled instead of throwing `MODULE_NOT_FOUND`. Keyed
+/// by canonicalized path so `/a/../b` and symlinks normalize to one entry. Each
+/// compiled module self-registers at the end of its CJS wrapper init.
+static MODULE_PATH_REGISTRY: std::sync::RwLock<Option<std::collections::HashMap<String, u64>>> =
+    std::sync::RwLock::new(None);
+
+/// Next.js wall 54 (part 2): registry mapping an AOT-compiled module's absolute
+/// source path to the ADDRESS of its `<prefix>__init` function, so a runtime
+/// `require(absolutePath.js)` can LAZILY trigger init of a module that was NOT
+/// run at startup (Deferred). The `.next/server/**` page/route/chunk modules are
+/// loaded by a path computed at request time; eager-initing them at startup runs
+/// React-SSR code before the server is ready (and turbopack chunks must init in
+/// the order the page loader's `R.c()` calls demand), so they are Deferred and
+/// init on first `require`. Populated once at program start by codegen-emitted
+/// `js_register_path_init` calls (no init runs there — only the address is
+/// recorded). The init function is idempotent (guarded), self-registers its
+/// exports into [`MODULE_PATH_REGISTRY`], and may recursively `require` its own
+/// dependencies (chunk loaders) — all safe because each module inits once.
+static MODULE_PATH_INIT_REGISTRY: std::sync::RwLock<
+    Option<std::collections::HashMap<String, usize>>,
+> = std::sync::RwLock::new(None);
+
+fn canonicalize_module_path(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// Codegen FFI: record that `<prefix>__init` (address `init_addr`) initializes
+/// the module whose absolute source path is `path_value`. Emitted once per
+/// Deferred `.next/server/**` module at the top of `main`. See
+/// [`MODULE_PATH_INIT_REGISTRY`].
+/// # Safety
+/// `path_ptr`/`path_len` describe a valid UTF-8 byte range (a codegen string
+/// constant). `init_addr` is the address of an `extern "C" fn()` module
+/// initializer (from `ptrtoint` of the symbol).
+#[no_mangle]
+pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i64, init_addr: i64) {
+    let slice = std::slice::from_raw_parts(path_ptr, path_len as usize);
+    let path = String::from_utf8_lossy(slice).into_owned();
+    let key = canonicalize_module_path(&path);
+    let mut guard = MODULE_PATH_INIT_REGISTRY.write().unwrap();
+    guard
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(key, init_addr as usize);
+}
+
+/// Codegen FFI: register an AOT-compiled module's exports under its absolute
+/// source path (emitted at the tail of each CJS wrapper). See
+/// [`MODULE_PATH_REGISTRY`].
+#[no_mangle]
+pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
+    let path = value_to_string(path_value, "path");
+    let key = canonicalize_module_path(&path);
+    let mut guard = MODULE_PATH_REGISTRY.write().unwrap();
+    guard
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(key, exports.to_bits());
+}
+
+/// Codegen FFI: resolve a runtime `require(absolutePath.js)` to a registered
+/// AOT-compiled module's exports, or `undefined` when no module is registered
+/// for that path (caller then falls back to the `.json` disk read / throws
+/// `MODULE_NOT_FOUND`). Module exports are always objects, so `undefined`
+/// unambiguously signals "miss".
+#[no_mangle]
+pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
+    let path = value_to_string(path_value, "id");
+    let key = canonicalize_module_path(&path);
+    // Fast path: the module already ran (eager, or a prior require) and
+    // self-registered its exports.
+    {
+        let guard = MODULE_PATH_REGISTRY.read().unwrap();
+        if let Some(map) = guard.as_ref() {
+            if let Some(bits) = map.get(&key) {
+                return f64::from_bits(*bits);
+            }
+        }
+    }
+    // Wall 54 (part 2): no exports yet — if a Deferred module is registered for
+    // this path, trigger its init now. The init self-registers its exports (and
+    // may recursively require its chunk dependencies). Crucially, all registry
+    // locks are RELEASED before calling init, since init re-enters
+    // `js_register_path_module` / `js_require_path_module`.
+    let init_addr = {
+        let guard = MODULE_PATH_INIT_REGISTRY.read().unwrap();
+        guard.as_ref().and_then(|m| m.get(&key).copied())
+    };
+    if let Some(addr) = init_addr {
+        // SAFETY: `addr` is the address of a codegen-emitted `extern "C" fn()`
+        // module initializer, recorded by `js_register_path_init` from a value
+        // produced by `ptrtoint` of the same function symbol. The initializer
+        // is idempotent (guarded by `@__perry_init_done_<prefix>`).
+        let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
+        init_fn();
+        let guard = MODULE_PATH_REGISTRY.read().unwrap();
+        if let Some(map) = guard.as_ref() {
+            if let Some(bits) = map.get(&key) {
+                return f64::from_bits(*bits);
+            }
+        }
+    }
+    undefined()
+}
+
+/// Next.js wall 53: runtime `require(absolutePath)` of a `.json` file.
+///
+/// Emitted only by the CJS wrapper's `require` fallback (cjs_wrap/wrap.rs) for a
+/// specifier computed at runtime (e.g. Next.js `require(this.middlewareManifestPath)`)
+/// — the statically-resolved relative cases can't cover it. Node's `require`
+/// reads + `JSON.parse`s `.json` files; `.json` is pure data so this needs no
+/// code evaluation. Reads the file from disk and parses it, throwing
+/// `MODULE_NOT_FOUND` (matching Node's require) when the path doesn't exist.
+#[no_mangle]
+pub extern "C" fn js_require_json_disk(specifier: f64) -> f64 {
+    let path = value_to_string(specifier, "id");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => throw_module_not_found(&path),
+    };
+    let text_ptr = js_string_from_bytes(content.as_ptr(), content.len() as u32);
+    let parsed = unsafe { crate::json::js_json_parse(text_ptr) };
+    f64::from_bits(parsed.bits())
+}
 /// Ambient `require` for compiled external / `compilePackages` modules (Tier 1 of
 /// #5389, fixes #5373). These modules carry no CJS ambient `require` binding, so a
 /// bare or computed `require(expr)` would otherwise lower to

@@ -319,6 +319,16 @@ crates/perry-codegen/tests/native_proof_regressions.rs
 # `build_optimized_libs` driver + well-known resolution. Splitting the
 # freshness/well-known helpers into a sibling module is tracked under #1435.
 crates/perry/src/commands/compile/optimized_libs.rs
+# Next.js app-router bring-up (PR #5438 / umbrella #793): these three crossed
+# the gate from the wall-fix additions (HIR destructuring var-decl handling,
+# `new <member>()`/anon-class lowering, and the stdlib FFI decl table) layered
+# on top of main's recent growth — each was at/just under 2000 on main
+# (2000/1991/1968) and is now a few-to-~90 LOC over. Topical split (by
+# destructuring-pattern family / new-callee shape / FFI namespace) is a
+# reasonable follow-up, deferred to keep the wall-fix PR focused.
+crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs
+crates/perry-hir/src/destructuring/var_decl.rs
+crates/perry-hir/src/lower/expr_new.rs
 EOF
 )
 

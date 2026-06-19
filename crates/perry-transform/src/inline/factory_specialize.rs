@@ -758,12 +758,12 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         next_class_counter: &mut usize,
         base_class_counter_seed: &str,
     ) -> bool {
-        let Some(class) = classes.iter().find(|c| &c.name == target_name) else {
+        let Some(class) = classes.iter().find(|c| c.name == target_name) else {
             return false;
         };
         // Snapshot the args, padding with Undefined if the call passes
         // fewer args than the function declared params (rare but legal).
-        let mut padded_args: Vec<Expr> = args.iter().cloned().collect();
+        let mut padded_args: Vec<Expr> = args.to_vec();
         while padded_args.len() < param_ids.len() {
             padded_args.push(Expr::Undefined);
         }

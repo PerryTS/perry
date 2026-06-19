@@ -289,10 +289,24 @@ pub extern "C" fn js_fs_read_file_sync_options(
                         c_err.as_ptr(),
                     );
                 }
-                // Return empty string instead of null to prevent crashes when
-                // callers access .length on the result without null-checking.
-                // Perry's try/catch doesn't catch null-pointer segfaults.
-                js_string_from_bytes(b"".as_ptr(), 0)
+                // Node's `readFileSync` THROWS for an unreadable path
+                // (ENOENT/EACCES/EISDIR/…). Returning an empty string here made
+                // callers that try/catch a missing file behave wrongly: e.g.
+                // Next.js `loadManifest` wraps an optional manifest read
+                // (`subresource-integrity-manifest.json`, absent in most builds)
+                // in try/catch and falls back to `{}` on ENOENT — but an empty
+                // string slipped past the catch into `JSON.parse('')`, throwing a
+                // misleading `SyntaxError: Unexpected end of JSON input`. Surface
+                // a Node-shaped fs error instead. This is a real, catchable JS
+                // throw (caught by JS try/catch) — NOT the null-pointer segfault
+                // the previous empty-string workaround was guarding against.
+                let path_str = decode_path_value(path_value).unwrap_or_default();
+                let io_err = std::fs::read(&path_str)
+                    .err()
+                    .unwrap_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound));
+                crate::exception::js_throw(crate::fs::errors::build_fs_error_value(
+                    &io_err, "open", &path_str,
+                ))
             }
         }
     }

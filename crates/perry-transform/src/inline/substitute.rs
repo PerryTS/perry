@@ -1,9 +1,7 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
-use std::collections::{HashMap, HashSet};
-
-use super::*;
+use perry_hir::walker::walk_expr_children_mut;
+use perry_hir::{Expr, Stmt};
+use perry_types::LocalId;
+use std::collections::HashMap;
 
 pub fn substitute_locals(
     expr: &mut Expr,

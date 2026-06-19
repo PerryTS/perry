@@ -1278,6 +1278,30 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
+                } else if class_name == "AsyncLocalStorage"
+                    && matches!(
+                        property_name.as_str(),
+                        "run" | "getStore" | "enterWith" | "exit" | "disable"
+                    )
+                {
+                    // `als.getStore` / `als.run` etc. are method-VALUE reads,
+                    // not zero-arg native calls. A bare read (`const { getStore
+                    // } = als`, `const gs = als.getStore`, `typeof als.getStore`
+                    // — Next.js' cacheComponents / patch-fetch async-storage
+                    // setup) must return the callable BOUND METHOD, not invoke
+                    // `getStore()` with no args (which returns the store →
+                    // undefined → `TypeError: getStore is not a function` at
+                    // server startup, before `✓ Ready`). Keep PropertyGet so the
+                    // runtime handle-property dispatch
+                    // (`dispatch_async_local_storage_property`) binds the method;
+                    // the call form `als.getStore()` still dispatches via the
+                    // runtime handle method dispatch. Mirrors the EventEmitter /
+                    // Console / net.Socket method-value-read arms above.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(module_name.as_str(), "http" | "https")
                     && class_name == "Agent"
                     && property_name == "close"
@@ -2316,6 +2340,16 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         if !obj_is_named_import
             && perry_api_manifest::module_has_any_entries(module)
             && perry_api_manifest::module_has_symbol(module, prop).is_none()
+            // #wall4: a method that is unmistakably a `String.prototype` member
+            // (`endsWith`, `startsWith`, `slice`, …) called on an identifier that
+            // *happens* to share a node-core module name (`url`, `path`) means the
+            // receiver is a runtime string value, NOT the module — don't gate it
+            // as an unimplemented module API; fall through to a normal PropertyGet
+            // so it dispatches dynamically on the real receiver. Next.js's
+            // app-page-turbo bundle calls `url.endsWith(...)` on a URL *string*
+            // bound to a local named `url`, which otherwise threw
+            // "url.endsWith is not implemented in Perry (ahead-of-time)".
+            && !super::array_fold::is_known_string_prototype_method(prop)
         {
             // #3896: a bare *value read* of an absent member on a Node
             // builtin module namespace/default object is an ordinary
