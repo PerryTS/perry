@@ -68,6 +68,27 @@ pub fn compute_max_local_id(module: &Module) -> LocalId {
             }
             scan_stmts_for_max_local(&setter.1.body, &mut max_id);
         }
+        // Issue #5143 (LocalId parallel): class FIELD initializers and
+        // computed-key exprs hold closures whose params/body LocalIds live in
+        // this namespace but are NOT reachable through any method/ctor body.
+        // `compute_max_func_id` already scans these (the #5143 FuncId fix); the
+        // LocalId scan was left incomplete, so the generator/async transform
+        // could synthesize state/done/sent/wrapper LocalIds that COLLIDE with a
+        // field-init closure's locals and corrupt unrelated codegen (e.g. a
+        // module-global/capture read resolving to the wrong value — Next.js
+        // app-page-turbo `()=>X` export getters at scale). A too-high max is
+        // always safe; a missed id collides.
+        for field in class.fields.iter().chain(class.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                scan_expr_for_max_local(init, &mut max_id);
+            }
+            if let Some(key_expr) = &field.key_expr {
+                scan_expr_for_max_local(key_expr, &mut max_id);
+            }
+        }
+        if let Some(extends_expr) = &class.extends_expr {
+            scan_expr_for_max_local(extends_expr, &mut max_id);
+        }
     }
     max_id
 }
@@ -535,6 +556,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             aliases: Vec::new(),
+            is_nested: false,
         }
     }
 
@@ -568,5 +590,51 @@ mod tests {
         class.static_fields.push(arrow_field("handler", 73));
         module.classes.push(class);
         assert_eq!(compute_max_func_id(&module), 73);
+    }
+
+    /// #5143 (LocalId parallel): a class FIELD-initializer closure's param/body
+    /// LocalIds must be visible to `compute_max_local_id` too — they were only
+    /// counted for FuncId, so the generator/async transform could mint a
+    /// state/done LocalId colliding with a field-init local and corrupt codegen.
+    #[test]
+    fn class_field_initializer_locals_visible_to_max_local_id() {
+        let field = ClassField {
+            name: "request".to_string(),
+            key_expr: None,
+            ty: Type::Any,
+            init: Some(Expr::Closure {
+                func_id: 3,
+                params: vec![Param {
+                    id: 91,
+                    name: "input".to_string(),
+                    ty: Type::Any,
+                    default: None,
+                    decorators: Vec::new(),
+                    is_rest: false,
+                    arguments_object: None,
+                }],
+                return_type: Type::Any,
+                body: vec![Stmt::Return(Some(Expr::LocalGet(91)))],
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            }),
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        };
+        let mut module = Module::new("test");
+        module.classes.push(class_with_fields("Hono", vec![field]));
+        assert_eq!(
+            compute_max_local_id(&module),
+            91,
+            "field-initializer closure param LocalId must be counted"
+        );
     }
 }

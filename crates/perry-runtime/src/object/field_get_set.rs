@@ -1076,7 +1076,13 @@ pub extern "C" fn js_object_set_field_by_index(
             let name_len = (*key).byte_len as usize;
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             if let Ok(name) = std::str::from_utf8(name_bytes) {
-                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                // Gate on the per-object descriptor flag: `ACCESSOR_DESCRIPTORS`
+                // is keyed by raw address, so a fresh object reusing a freed
+                // address must not pick up the previous tenant's stale accessor
+                // (it would silently drop `obj.k = v` for a getter-only stale
+                // entry). A fresh allocation has the flag clear.
+                if ACCESSORS_IN_USE.with(|c| c.get()) && super::object_has_descriptors(obj as usize)
+                {
                     if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                         if acc.set != 0 {
                             let closure = (acc.set & crate::value::POINTER_MASK)
@@ -5228,8 +5234,11 @@ pub extern "C" fn js_object_get_field_by_name(
             } else {
                 // Accessor short-circuit: if this (obj, key) has a getter installed,
                 // invoke it instead of reading the slot. The `ACCESSORS_IN_USE`
-                // thread-local gate keeps this off the hot path in the common case.
-                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                // thread-local gate keeps this off the hot path in the common case;
+                // the per-object flag gate avoids invoking a stale getter left by a
+                // freed object whose address this fresh object reused.
+                if ACCESSORS_IN_USE.with(|c| c.get()) && super::object_has_descriptors(obj as usize)
+                {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
@@ -5255,7 +5264,8 @@ pub extern "C" fn js_object_get_field_by_name(
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
             if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
-                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                if ACCESSORS_IN_USE.with(|c| c.get()) && super::object_has_descriptors(obj as usize)
+                {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
@@ -5296,7 +5306,8 @@ pub extern "C" fn js_object_get_field_by_name(
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);
                 }
                 // Accessor short-circuit (see fast path above).
-                if ACCESSORS_IN_USE.with(|c| c.get()) {
+                if ACCESSORS_IN_USE.with(|c| c.get()) && super::object_has_descriptors(obj as usize)
+                {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {

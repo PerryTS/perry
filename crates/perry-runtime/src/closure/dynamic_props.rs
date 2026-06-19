@@ -319,6 +319,18 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     if crate::value::addr_class::is_handle_band(ptr) {
         return false;
     }
+    // #wall2: reject any address outside the platform heap range BEFORE the
+    // `*(ptr + 12)` magic probe. The handle-band check only covers the low
+    // small-id bands; a MIS-BOXED value like `0x4_0000_0000` (i32 4 << 32 — a
+    // Next.js route-module options object whose codegen boxing went wrong) is
+    // aligned and above the handle band, so it passed both guards and the magic
+    // read dereferenced unmapped memory → SIGSEGV (the Next.js startup crash
+    // after app-page-turbo loads). `is_valid_obj_ptr` is the real heap floor
+    // (macOS: 0x2000_0000_0000); a non-heap address is definitively not a
+    // closure, so return false instead of faulting.
+    if !crate::value::addr_class::is_valid_obj_ptr(ptr as *const u8) {
+        return false;
+    }
     if ptr % std::mem::align_of::<ClosureHeader>() != 0 {
         return false;
     }

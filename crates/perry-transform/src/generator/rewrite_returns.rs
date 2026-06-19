@@ -11,13 +11,12 @@ use super::*;
 pub fn rewrite_returns_as_done(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
         match stmt {
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr))
                 // Don't double-wrap if already an iter result
-                if !is_iter_result(expr) {
+                if !is_iter_result(expr) => {
                     let val = expr.clone();
                     *expr = make_iter_result(val, true);
                 }
-            }
             Stmt::Return(None) => {
                 *stmt = Stmt::Return(Some(make_iter_result(Expr::Undefined, true)));
             }
@@ -148,10 +147,10 @@ pub fn body_contains_return(stmts: &[Stmt]) -> bool {
                     }
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                if body_contains_return(body) {
-                    return true;
-                }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. }
+                if body_contains_return(body) =>
+            {
+                return true;
             }
             Stmt::Try {
                 body,
@@ -179,10 +178,10 @@ pub fn body_contains_return(stmts: &[Stmt]) -> bool {
                     }
                 }
             }
-            Stmt::Labeled { body, .. } => {
-                if body_contains_return(std::slice::from_ref(body.as_ref())) {
-                    return true;
-                }
+            Stmt::Labeled { body, .. }
+                if body_contains_return(std::slice::from_ref(body.as_ref())) =>
+            {
+                return true;
             }
             _ => {}
         }

@@ -1,7 +1,6 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
-use std::collections::{HashMap, HashSet};
+use perry_hir::walker::walk_expr_children;
+use perry_hir::{Expr, Function, Stmt};
+use perry_types::LocalId;
 
 use super::*;
 

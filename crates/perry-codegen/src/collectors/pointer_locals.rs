@@ -657,12 +657,12 @@ pub fn collect_pointer_typed_locals(
         for s in stmts {
             match s {
                 Stmt::Let { id, ty, .. }
-                    if is_ptr_typed(ty) && !non_pointer_locals.contains(id) =>
+                    if is_ptr_typed(ty)
+                        && !non_pointer_locals.contains(id)
+                        && !flat_row_alias_ids.contains(id) =>
                 {
-                    if !flat_row_alias_ids.contains(id) {
-                        out.insert(*id, *next_slot);
-                        *next_slot += 1;
-                    }
+                    out.insert(*id, *next_slot);
+                    *next_slot += 1;
                 }
                 Stmt::If {
                     then_branch,

@@ -50,7 +50,8 @@ pub(super) use build_and_run::build_and_run_link;
 use link_cache::prepare_link_cache_status;
 pub(super) use link_cache::{write_link_cache_manifest, LinkCacheStatus};
 pub use platform_cmd::select_linker_command;
-pub(super) use windows_link::WINDOWS_APP_MANIFEST; // guarded by windows_link_tests
+#[cfg(test)]
+pub(super) use windows_link::WINDOWS_APP_MANIFEST; // consumed only by windows_link_tests
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeBackendLinkMetadata {

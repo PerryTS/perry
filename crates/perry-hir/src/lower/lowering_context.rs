@@ -298,6 +298,10 @@ pub struct LoweringContext {
     /// Function-body var prebinding uses the top mark to distinguish
     /// parameters/current-scope locals from outer captures with the same name.
     pub(crate) scope_local_marks: Vec<usize>,
+    /// #wall5: per-scope marks into `module_shadow_stack`, pushed in
+    /// `enter_scope` and popped in `exit_scope` to restore native-module
+    /// shadowing when a scope that re-bound a module name exits.
+    pub(crate) scope_module_shadow_marks: Vec<usize>,
     /// Block scope nesting counter (for bare `{}`, `if`, loops, try/finally).
     /// A local only counts as module-level when both `scope_depth == 0` and
     /// `inside_block_scope == 0`; `const captured = i` inside a top-level for
@@ -407,6 +411,12 @@ pub struct LoweringContext {
     /// `lookup_native_module` scanned FORWARD (first-match-wins), so the index
     /// keeps the FIRST pushed index per name (`entry().or_insert`).
     pub(crate) native_modules_index: HashMap<String, usize>,
+    /// #wall5: scope-stack of native-module names currently SHADOWED by a local
+    /// binding (param / `const`) of the same name. `lookup_native_module`
+    /// returns `None` for shadowed names so a local `url`/`util`/etc. resolves
+    /// as a value, not the node module. Pushed at param/var-decl sites, truncated
+    /// at scope exit (parallel to `native_instances` scoping).
+    pub(crate) module_shadow_stack: Vec<String>,
     /// Perf index for `class_statics` (push-only, never truncated). The old
     /// `has_static_method`/`has_static_field` scanned FORWARD (first-match-wins),
     /// so the index keeps the FIRST pushed index per class name.
@@ -440,6 +450,21 @@ pub struct LoweringContext {
     /// default imports of actual classes (`import { MongoClient }`) are NOT in
     /// this set and keep the static-method path.
     pub(crate) namespace_import_locals: HashSet<String>,
+    /// #5432: locals initialized from a member-call `.fetch(...)` — the
+    /// Fetch-API / WinterCG convention every server framework exposes (Hono
+    /// `app.fetch`, itty-router, Cloudflare Workers handlers) returns a native
+    /// fetch `Response` whose `.headers` is a Headers handle. This set is
+    /// consulted ONLY by the `is_fetch_headers` guard in
+    /// `array_only_methods.rs` so `res.headers.forEach(cb)` /
+    /// `res.headers.entries()` bail the static array-method fold and route
+    /// through the Headers FFI instead of dispatching `js_array_forEach` on a
+    /// handle id (a SIGSEGV). It deliberately does NOT use
+    /// `register_native_instance`, which would hijack EVERY method/property
+    /// access on the local (e.g. a Bookshelf/Backbone `repo.fetch()` returning
+    /// a real array would then mis-route `.map`/`.forEach`). The narrow scope —
+    /// only `<name>.headers.<method>()` is affected — keeps the false-positive
+    /// surface to nil.
+    pub(crate) fetch_call_response_locals: HashSet<String>,
     /// Maps a namespace-import local (`import * as z from "src"`) to its source
     /// module. Used so a later bare `export { z }` re-export of that local routes
     /// to `Export::NamespaceReExport` (equivalent to `export * as z from "src"`)
@@ -531,6 +556,16 @@ pub struct LoweringContext {
     /// call dispatched into `Object.create`. Scoped save/restore in
     /// `lower_fn_body_block_stmt`.
     pub(crate) forward_class_names: std::collections::HashSet<String>,
+    /// Scope-local class-name aliases disambiguating distinct same-named classes
+    /// across nested function/factory scopes within ONE module (class refs are
+    /// name-keyed: `Expr::New { class_name }` / `ClassRef(name)`). When a body
+    /// declares `class X` while an outer/prior `class X` is already registered,
+    /// the body's X is renamed `X$<n>` and `X -> X$<n>` recorded so every
+    /// reference in that body binds to the lexically-correct class. Saved/
+    /// restored per body in both `lower_fn_body_block_stmt` and `lower_fn_expr`.
+    pub(crate) class_renames: std::collections::HashMap<String, String>,
+    /// Monotonic suffix source for `class_renames` unique names.
+    pub(crate) next_class_rename_id: u32,
     /// Names of TOP-LEVEL `class X { … }` declarations in the module being
     /// lowered (populated by the module pre-pass). A NAMED class EXPRESSION
     /// nested in a function body — e.g. minimatch's `defaults()` returns

@@ -2045,6 +2045,7 @@ pub(crate) fn lower_namespace_as_class(
                 decorators: Vec::new(),
                 is_exported,
                 aliases: Vec::new(),
+                is_nested: false,
             });
         }
     };
@@ -2341,5 +2342,6 @@ pub(crate) fn lower_namespace_as_class(
         decorators: Vec::new(),
         is_exported,
         aliases: Vec::new(),
+        is_nested: false,
     })
 }

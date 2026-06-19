@@ -300,7 +300,7 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
     // spec → (seen any site, all sites so far in-function).
     let mut state: HashMap<&str, (bool, bool)> = HashMap::new();
     let mut next_site = 0usize;
-    let in_function = |scopes: &[Scope]| scopes.iter().any(|s| *s == Scope::Function);
+    let in_function = |scopes: &[Scope]| scopes.contains(&Scope::Function);
 
     let mut i = 0usize;
     while i < mbytes.len() {

@@ -2,6 +2,58 @@
 
 use super::*;
 
+/// Returns `Some("fetch")` when `expr` is a bare-`Ident` fetch-like call —
+/// `fetch(url)` / `fetchWithAuth(...)` / `fetchPostWithAuth(...)`. The caller
+/// registers the binding as a fetch `Response` native instance.
+///
+/// Closes #644: all three return the same Response handle, so they must
+/// register under module="fetch". The codegen dispatch in
+/// `lower_fetch_native_method` gates on `module == "fetch"` — pre-fix,
+/// registering under "fetchWithAuth"/"fetchPostWithAuth" missed the gate so a
+/// post-narrowing `r.status` lowered as a NativeMethodCall with
+/// module="fetchWithAuth" and fell through to a generic 0.0-returning arm.
+/// (Without narrowing the access went through generic PropertyGet → handle
+/// dispatch → js_fetch_response_status, so the bug only surfaced inside an
+/// `if r !== null/undefined` block.)
+pub(crate) fn get_fetch_module(expr: &ast::Expr) -> Option<&'static str> {
+    if let ast::Expr::Call(call_expr) = expr {
+        if let ast::Callee::Expr(callee_expr) = &call_expr.callee {
+            if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
+                return match ident.sym.as_ref() {
+                    "fetch" | "fetchWithAuth" | "fetchPostWithAuth" => Some("fetch"),
+                    _ => None,
+                };
+            }
+        }
+    }
+    None
+}
+
+/// #5432: true when `expr` is a member-call `.fetch(...)` (optionally awaited) —
+/// `app.fetch(req)` / `await app.fetch(req)`, the Fetch-API / WinterCG
+/// server-handler convention (Hono, itty-router, Cloudflare Workers) that
+/// returns a native fetch `Response`. Used to populate
+/// `fetch_call_response_locals` so `res.headers.<m>()` routes through the
+/// Headers FFI instead of being folded into `js_array_forEach` on a handle id.
+pub(crate) fn is_member_fetch_call(expr: &ast::Expr) -> bool {
+    let call = match expr {
+        ast::Expr::Await(a) => match a.arg.as_ref() {
+            ast::Expr::Call(c) => c,
+            _ => return false,
+        },
+        ast::Expr::Call(c) => c,
+        _ => return false,
+    };
+    if let ast::Callee::Expr(callee) = &call.callee {
+        if let ast::Expr::Member(member) = callee.as_ref() {
+            if let ast::MemberProp::Ident(prop) = &member.prop {
+                return prop.sym.as_ref() == "fetch";
+            }
+        }
+    }
+    false
+}
+
 /// Recognize the ink-shape `useState(initial)` pattern when the
 /// callee is a perry/tui-imported `useState`. Returns a rewritten
 /// HIR expression that calls `useStateTuple` instead — returning a

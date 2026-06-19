@@ -1,7 +1,4 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
 use std::collections::HashSet;
-
-use super::*;
 
 pub fn collect_closures_in_stmts(
     stmts: &[perry_hir::Stmt],

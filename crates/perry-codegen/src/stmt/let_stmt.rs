@@ -26,7 +26,7 @@ fn is_object_literal_init(init: &perry_hir::Expr) -> bool {
                 && matches!(
                     callee.as_ref(),
                     Expr::Closure { params, .. }
-                        if params.first().map_or(false, |p| p.name == "__perry_obj_iife")
+                        if params.first().is_some_and(|p| p.name == "__perry_obj_iife")
                 )
         }
         _ => false,

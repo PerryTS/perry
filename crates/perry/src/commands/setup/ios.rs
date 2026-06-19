@@ -1,13 +1,10 @@
 use anyhow::{anyhow, bail, Context, Result};
-use clap::Args;
 use console::style;
-use dialoguer::{Confirm, Input, Password, Select};
-use std::path::PathBuf;
+use dialoguer::{Confirm, Input, Select};
 use std::process::Command;
 
 use super::super::publish::{
-    config_path, is_interactive, load_config, save_config, AndroidSavedConfig, AppleSavedConfig,
-    HarmonyosSavedConfig, PerryConfig,
+    config_path, is_interactive, save_config, AppleSavedConfig, PerryConfig,
 };
 
 use super::*;

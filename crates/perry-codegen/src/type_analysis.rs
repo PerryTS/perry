@@ -1064,10 +1064,10 @@ pub(crate) fn scalar_replaced_array_element_is_raw_f64(
     let Some(k) = constant_array_index(index) else {
         return false;
     };
-    if !ctx
+    if ctx
         .scalar_replaced_arrays
         .get(id)
-        .is_some_and(|slots| k < slots.len())
+        .is_none_or(|slots| k >= slots.len())
     {
         return false;
     }
@@ -1464,7 +1464,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             args,
         } => args
             .first()
-            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
+            .is_some_and(|arg| is_definitely_string_expr(ctx, arg)),
         Expr::StringCoerce(_)
         | Expr::TypeOf(_)
         | Expr::ArrayJoin { .. }
@@ -1617,7 +1617,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             args,
         } => args
             .first()
-            .map_or(false, |arg| is_definitely_string_expr(ctx, arg)),
+            .is_some_and(|arg| is_definitely_string_expr(ctx, arg)),
         // String coerce, JSON.stringify, ArrayJoin, etc. all return
         // strings.
         Expr::StringCoerce(_)
@@ -2299,7 +2299,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // local) lets `...digest().toString('hex')` / `...digest()[i]` take
         // the buffer dispatch instead of the Latin-1 string path (#1353).
         Expr::Call { callee, args, .. }
-            if args.first().map_or(true, |a| matches!(a, Expr::Undefined))
+            if args.first().is_none_or(|a| matches!(a, Expr::Undefined))
                 && is_crypto_digest_chain(callee) =>
         {
             Some(HirType::Named("Uint8Array".into()))

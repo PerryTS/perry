@@ -337,6 +337,18 @@ pub(super) fn try_array_only_methods(
                                 | "reduce"
                                 | "reduceRight"
                                 | "join"
+                                // wall 49: mutating array methods are also common
+                                // user-class methods (Stack.push, Queue.shift,
+                                // Next.js DefaultRouteMatcherManager.push). On an
+                                // unknown (`Any`) receiver, folding to the array
+                                // op corrupts a class instance (its ObjectHeader is
+                                // read as an ArrayHeader). Bail to dynamic dispatch;
+                                // real arrays are `Type::Array`, handled by the
+                                // class_typed=false + typed fast paths elsewhere.
+                                | "push"
+                                | "pop"
+                                | "shift"
+                                | "unshift"
                         );
                         class_typed || (unknown_recv && is_overlapping)
                     }
@@ -408,13 +420,20 @@ pub(super) fn try_array_only_methods(
                             // `crates/perry-codegen/src/lower_call.rs:1313`, which
                             // routes `.forEach` / `.get` / `.has` / `.keys` /
                             // `.values` / `.entries` through the Headers FFI.
+                            // #5432: `res.headers.<m>()` where `res` came from a
+                            // member-call `app.fetch(req)` (Hono / WinterCG). It
+                            // is not a `register_native_instance` binding (that
+                            // would hijack every method on `res`), so consult the
+                            // narrow `fetch_call_response_locals` set too.
                             let is_fetch_headers = prop_ident.sym.as_ref() == "headers"
-                                && matches!(
+                                && (matches!(
                                     ctx.lookup_native_instance(obj_ident.sym.as_ref()),
                                     Some(("fetch", _))
                                         | Some(("Request", _))
                                         | Some(("Headers", _))
-                                );
+                                ) || ctx
+                                    .fetch_call_response_locals
+                                    .contains(obj_ident.sym.as_ref()));
                             is_fetch_headers
                         } else {
                             false
@@ -1086,7 +1105,15 @@ pub(super) fn try_array_only_methods(
                             ast::Expr::New(_) => true, // new ClassName().push()
                             _ => false,
                         };
-                        if !is_user_class_receiver {
+                        // wall 49: `recv_is_class` is true for an unknown/`Any`
+                        // receiver (e.g. `const m = new mod.Class(); m.push(x)`,
+                        // where the cross-module dynamic `new` leaves `m` typed
+                        // `Any`). Folding to a native array push corrupts the
+                        // class instance — its ObjectHeader is reinterpreted as an
+                        // ArrayHeader and the user `push` method never runs. Bail
+                        // to dynamic dispatch, which resolves the class method
+                        // first and falls back to the array op for real arrays.
+                        if !is_user_class_receiver && !recv_is_class {
                             let array_expr = lower_expr(ctx, &member.obj)?;
                             let any_spread = call.args.iter().any(|a| a.spread.is_some());
                             if !any_spread {

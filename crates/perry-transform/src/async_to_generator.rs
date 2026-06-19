@@ -644,6 +644,15 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         lift_conditional_with_await_branches(expr, next_id, hoisted);
         return;
     }
+    // A `a || await b()` / `a && await b()` / `a ?? await b()` would
+    // otherwise have the RHS await hoisted unconditionally above the
+    // containing statement, evaluating `b()` even when `a` short-circuits
+    // — breaks JS semantics (issue #5434). Lift it to a guarded if/else
+    // with a temp before the general hoisting walks into it.
+    if matches!(expr, Expr::Logical { .. }) && logical_rhs_contains_await(expr) {
+        lift_logical_with_await_rhs(expr, next_id, hoisted);
+        return;
+    }
     // Recurse into children first (innermost-first hoisting).
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
@@ -767,6 +776,15 @@ fn hoist_awaits_avoiding_top_level(
         lift_conditional_with_await_branches(expr, next_id, hoisted);
         return;
     }
+    // Top-level logical with an await in the RHS, e.g.
+    // `return a || await b();` — see the matching note in
+    // `hoist_awaits_in_expr_full`. Lift here too so the RHS await ends up
+    // inside a guarded if-branch instead of unconditionally above the
+    // statement (issue #5434).
+    if matches!(expr, Expr::Logical { .. }) && logical_rhs_contains_await(expr) {
+        lift_logical_with_await_rhs(expr, next_id, hoisted);
+        return;
+    }
     // Outer is NOT an await. Children may contain awaits which ARE
     // nested — fully hoist them.
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
@@ -845,6 +863,81 @@ fn lift_conditional_with_await_branches(
             condition: *condition,
             then_branch,
             else_branch: Some(else_branch),
+        });
+    }
+}
+
+/// Returns true if the RIGHT operand of `expr` (assumed `Expr::Logical`)
+/// contains an `Expr::Await`, anywhere except inside nested closures. The
+/// LEFT operand is always evaluated, so an await there is fine to hoist
+/// normally — only a guarded RHS await needs the short-circuit lift.
+fn logical_rhs_contains_await(expr: &Expr) -> bool {
+    if let Expr::Logical { right, .. } = expr {
+        return expr_contains_await(right);
+    }
+    false
+}
+
+/// Replace `left || right` / `left && right` / `left ?? right` (where
+/// `right` contains an await) with `LocalGet(__logic_await_N)`, and emit
+/// before the containing statement:
+///
+///   let __logic_await_N: any;
+///   __logic_await_N = left;
+///   if (<short-circuit guard>) { __logic_await_N = right; }
+///
+/// The guard runs `right` only when `left` does NOT already decide the
+/// result, preserving short-circuit semantics:
+///   ||  →  if (!__logic_await_N)          (left falsy)
+///   &&  →  if (__logic_await_N)           (left truthy)
+///   ??  →  if (__logic_await_N == null)   (left null/undefined)
+///
+/// Awaits inside `left`'s assignment and inside the guarded branch are then
+/// hoisted by the recursive `hoist_awaits_in_stmts` calls so each lands at a
+/// top-level position the await→yield rewrite expects. Without this lift the
+/// general hoisting walk pulls `right`'s await unconditionally above the
+/// statement, evaluating it even when `left` short-circuits (issue #5434).
+fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
+    let temp_id = alloc_local(next_id);
+    let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
+    if let Expr::Logical { op, left, right } = owned {
+        hoisted.push(Stmt::Let {
+            id: temp_id,
+            name: format!("__logic_await_{}", temp_id),
+            ty: Type::Any,
+            mutable: true,
+            init: None,
+        });
+
+        // __logic_await_N = left;  — any awaits in `left` are unconditional,
+        // so hoist them normally before the guard.
+        let mut left_stmts = vec![Stmt::Expr(Expr::LocalSet(temp_id, left))];
+        hoist_awaits_in_stmts(&mut left_stmts, next_id);
+        hoisted.extend(left_stmts);
+
+        // Short-circuit guard on the stored left value.
+        let guard = match op {
+            LogicalOp::Or => Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(Expr::LocalGet(temp_id)),
+            },
+            LogicalOp::And => Expr::LocalGet(temp_id),
+            LogicalOp::Coalesce => Expr::Compare {
+                op: CompareOp::LooseEq,
+                left: Box::new(Expr::LocalGet(temp_id)),
+                right: Box::new(Expr::Null),
+            },
+        };
+
+        // if (guard) { __logic_await_N = right; }  — `right`'s awaits get
+        // hoisted into the branch so they only fire when the guard passes.
+        let mut then_branch = vec![Stmt::Expr(Expr::LocalSet(temp_id, right))];
+        hoist_awaits_in_stmts(&mut then_branch, next_id);
+
+        hoisted.push(Stmt::If {
+            condition: guard,
+            then_branch,
+            else_branch: None,
         });
     }
 }
@@ -1053,7 +1146,7 @@ fn strip_in_expr(expr: &mut Expr, non_promise: &HashSet<LocalId>) {
     perry_hir::walker::walk_expr_children_mut(expr, &mut |c| strip_in_expr(c, non_promise));
     if let Expr::Await(inner) = expr {
         if let Some(stripped) = try_strip_promise_resolve(inner, non_promise) {
-            *inner = Box::new(stripped);
+            **inner = stripped;
         }
     }
 }

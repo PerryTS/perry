@@ -176,7 +176,7 @@ pub fn rewrite_call_sites_in_stmts_with_local_pass(
                     next_local,
                     current_out,
                 );
-                *body = Box::new(tmp.into_iter().next().unwrap());
+                **body = tmp.into_iter().next().unwrap();
             }
             _ => {}
         }

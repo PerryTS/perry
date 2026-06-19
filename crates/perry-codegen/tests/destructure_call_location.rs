@@ -23,6 +23,7 @@ fn base_opts() -> CompileOptions {
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
+        nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
         import_function_v8_specifiers: std::collections::HashMap::new(),

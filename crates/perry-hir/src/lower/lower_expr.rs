@@ -623,6 +623,23 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                 ctx.with_env_stack = saved_with_envs;
                 return Ok(wrap_with_gets(&name, fallback?, with_envs));
             }
+            // A class declared in the current function body lexically shadows a
+            // same-named binding from an OUTER scope. Resolution normally checks
+            // `lookup_local` (which finds outer-scope locals) before the class,
+            // so without this a nested `class a` whose name also exists as an
+            // outer local resolved to that outer local. In the Next.js app-page
+            // bundle a webpack chunk's `a` (`a=()=>{}`, undefined at module-init
+            // time) is captured into a module factory that declares
+            // `class a extends Error` (p-timeout's TimeoutError); the export
+            // `e.exports.TimeoutError=a` then read the outer `undefined` instead
+            // of the class, so `new r.TimeoutError` threw "undefined is not a
+            // constructor". Gate on there being NO current-scope local of that
+            // name (a sibling param/var/let still wins).
+            if ctx.forward_class_names.contains(&name)
+                && ctx.lookup_local_in_current_scope(&name).is_none()
+            {
+                return Ok(Expr::ClassRef(ctx.resolve_class_name(&name)));
+            }
             if let Some(id) = ctx.lookup_local(&name) {
                 // A with-fallback implicit global may still be the HOLE
                 // sentinel (the with-env took the write) — reading it then
@@ -665,14 +682,14 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                 })
             } else if ctx.lookup_class(&name).is_some() {
                 // Class used as a first-class value (e.g., { Point: Point })
-                Ok(Expr::ClassRef(name))
+                Ok(Expr::ClassRef(ctx.resolve_class_name(&name)))
             } else if ctx.forward_class_names.contains(&name) {
                 // Forward reference to a sibling class declared LATER in the
                 // same function body (vendored zod: ZodType.optional() →
                 // ZodOptional.create(...)). JS resolves this at call time;
                 // emit a ClassRef by name — codegen resolves it from the
                 // class registry, which has every pending class by then.
-                Ok(Expr::ClassRef(name))
+                Ok(Expr::ClassRef(ctx.resolve_class_name(&name)))
             } else if name == "undefined" {
                 // Global undefined identifier
                 Ok(Expr::Undefined)

@@ -110,6 +110,17 @@ pub extern "C" fn js_set_native_events_construct(func: JsNativeEventsConstructFn
     JS_NATIVE_EVENTS_CONSTRUCT.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Register the async_hooks dynamic-construct dispatcher. Called by perry-stdlib
+/// at startup so `new <bound async_hooks.AsyncLocalStorage>()` (the Next.js
+/// `new maybeGlobalAsyncLocalStorage()` shape, where the ctor value came from
+/// `globalThis.AsyncLocalStorage = AsyncLocalStorage`) builds a real handle
+/// instead of a class_id=0 empty object. Shares the `JsNativeEventsConstructFn`
+/// (method_ptr, method_len, args_ptr, args_len) -> f64 signature.
+#[no_mangle]
+pub extern "C" fn js_set_native_async_hooks_construct(func: JsNativeEventsConstructFn) {
+    JS_NATIVE_ASYNC_HOOKS_CONSTRUCT.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the native module JS property loader (called by perry-jsruntime)
 /// This callback loads a native module via V8 and gets a property from it.
 #[no_mangle]

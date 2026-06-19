@@ -46,8 +46,8 @@ pub(super) fn build_ios_app_bundle(
     let app_dir = exe_path.with_extension("app");
     let _ = fs::create_dir_all(&app_dir);
     let bundle_exe = app_dir.join(exe_path.file_name().unwrap_or_default());
-    fs::copy(&exe_path, &bundle_exe)?;
-    let _ = fs::remove_file(&exe_path);
+    fs::copy(exe_path, &bundle_exe)?;
+    let _ = fs::remove_file(exe_path);
 
     let exe_stem = exe_path
         .file_stem()
@@ -437,7 +437,7 @@ pub(super) fn build_ios_app_bundle(
     // time; the existing `perry publish` flow picks it up
     // automatically when present alongside the .app bundle.
     let info_plist =
-        inject_ios_deeplinks(&info_plist, &input, &app_dir, format).unwrap_or(info_plist);
+        inject_ios_deeplinks(&info_plist, input, &app_dir, format).unwrap_or(info_plist);
 
     // #1178 — augment `app.entitlements` with the
     // `com.apple.security.application-groups` array when
@@ -451,13 +451,13 @@ pub(super) fn build_ios_app_bundle(
     // `[ios] push_notifications = true` is set in perry.toml. Without it
     // `registerForRemoteNotifications` always fails and no APNs token is
     // produced. Idempotent with the deeplinks / app-group passes above.
-    inject_ios_push_entitlement(&input, &app_dir, format);
+    inject_ios_push_entitlement(input, &app_dir, format);
 
     // #1138 — `[google_auth]` block in perry.toml feeds the
     // GoogleSignIn SDK via Info.plist keys the Swift bridge in
     // `@perryts/google-auth` reads at runtime.
     let info_plist =
-        inject_google_auth_info_plist(&info_plist, &input, format).unwrap_or(info_plist);
+        inject_google_auth_info_plist(&info_plist, input, format).unwrap_or(info_plist);
 
     fs::write(app_dir.join("Info.plist"), info_plist)?;
 
@@ -525,8 +525,7 @@ pub(super) fn build_ios_app_bundle(
             };
 
             let image_views = if image_path.is_some() {
-                format!(
-                    r#"
+                r#"
                     <subviews>
                         <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="splash_image" translatesAutoresizingMaskIntoConstraints="NO" id="img-splash-1">
                             <rect key="frame" x="132.5" y="362" width="128" height="128"/>
@@ -539,8 +538,7 @@ pub(super) fn build_ios_app_bundle(
                     <constraints>
                         <constraint firstItem="img-splash-1" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="cx-1"/>
                         <constraint firstItem="img-splash-1" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="cy-1"/>
-                    </constraints>"#
-                )
+                    </constraints>"#.to_string()
             } else {
                 String::new()
             };
@@ -665,7 +663,7 @@ pub(super) fn build_ios_app_bundle(
     }
 
     // --- i18n: generate .lproj bundles for iOS/macOS ---
-    if let (Some(ref table), Some(ref config)) = (&i18n_table, &i18n_config) {
+    if let (Some(table), Some(config)) = (&i18n_table, &i18n_config) {
         if !table.keys.is_empty() {
             for (locale_idx, locale) in config.locales.iter().enumerate() {
                 let lproj_dir = app_dir.join(format!("{}.lproj", locale));
@@ -697,7 +695,7 @@ pub(super) fn build_ios_app_bundle(
         }
     }
 
-    compile_metallib_for_bundle(&ctx, target, &app_dir, format)?;
+    compile_metallib_for_bundle(ctx, target, &app_dir, format)?;
     stage_native_library_artifacts(ctx, &app_dir, format)?;
 
     // Issue #676: build any [[widget]] entries declared in perry.toml,
@@ -706,7 +704,7 @@ pub(super) fn build_ios_app_bundle(
     // inside the helper.
     let widgets_built = {
         let is_ios_sim = matches!(target, Some("ios-simulator"));
-        widget_build::build_declared_widgets_ios(&input, &app_dir, is_ios_sim, &bundle_id, format)?
+        widget_build::build_declared_widgets_ios(input, &app_dir, is_ios_sim, &bundle_id, format)?
     };
 
     match format {

@@ -504,6 +504,16 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         }
         arr
     };
+    // #5432: reject small-handle ids (fetch/zlib/proxy/common-registry) that
+    // reached an array helper as the receiver. On non-macOS hosts HEAP_MIN is
+    // 0x1000 — below the handle band — so a handle like a fetch Headers id
+    // (0x40000) passes the window check above, and the forwarding-chain /
+    // obj_type derefs below (`cleaned - 8`) would read unmapped low memory and
+    // SIGSEGV. Magnitude-classify before any deref and null it (safe
+    // empty-result no-op), mirroring the addr_class band-map contract.
+    if crate::value::addr_class::is_handle_band(cleaned as usize) {
+        return std::ptr::null();
+    }
     // Issue #233: follow GC_FLAG_FORWARDED forwarding chains. When
     // an array grows (js_array_grow) we install a forwarding pointer
     // at the OLD location so any stale reference — e.g. an async
@@ -661,7 +671,15 @@ pub(crate) fn normalize_array_receiver(arr: *const ArrayHeader) -> *const ArrayH
     } else {
         bits as usize
     };
-    if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+    // Reject the small-handle band (fetch/zlib/proxy/registry ids, #5432)
+    // BEFORE any GcHeader deref. A folded `headersHandle.forEach(cb)` can reach
+    // here with a fetch Headers handle (0x40000 band) when the static
+    // array-method fold mis-claimed the receiver; `0x40000 - 8` is unmapped low
+    // memory, so the stale `0x1008` floor used to SIGSEGV (the addr_class.rs
+    // band-map documents this exact #4665/#4800/#5432 shape). Treat any
+    // handle-band payload as "not an array" and fall through to clean_arr_ptr,
+    // which nulls it — a safe empty-result no-op instead of a crash.
+    if crate::value::addr_class::is_above_handle_band(raw_addr) {
         // Hot path first: read the GC-header obj_type byte. A genuine Array is
         // GC_TYPE_ARRAY and falls straight through to `clean_arr_ptr` — the
         // only added cost for `[1,2,3].map(...)` etc. is this one byte read and

@@ -56,6 +56,40 @@ use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
 
+/// Next.js wall 54 (part 2): recursively gather every `*.js` file under `dir`
+/// (page/route loaders + turbopack chunks). Symlinks are not followed; errors
+/// reading a subdirectory are skipped silently (best-effort discovery).
+fn collect_js_files_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_js_files_recursive(&path, out);
+        } else if file_type.is_file() && path.extension().and_then(|e| e.to_str()) == Some("js") {
+            out.push(path);
+        }
+    }
+}
+
+/// Next.js wall 54 (part 2): true for a module discovered under a standalone
+/// bundle's `.next/server/**` tree (page/route/chunk modules loaded by a
+/// runtime-computed path). Matched by the `.next` then `server` path-component
+/// sequence so it never false-matches a user file merely named `next` or a
+/// `node_modules/.next-*` package. Used by init classification (these modules
+/// must be eager so they self-register under their path at startup) and topo
+/// ordering (chunks before the page loaders that `R.c()` them).
+pub(super) fn is_nextjs_runtime_module(path: &std::path::Path) -> bool {
+    let comps: Vec<&std::ffi::OsStr> = path.components().map(|c| c.as_os_str()).collect();
+    comps
+        .windows(2)
+        .any(|w| w[0] == std::ffi::OsStr::new(".next") && w[1] == std::ffi::OsStr::new("server"))
+}
+
 /// Collect all modules to compile (transitive closure of imports)
 pub(super) fn collect_modules(
     entry_path: &PathBuf,
@@ -70,6 +104,37 @@ pub(super) fn collect_modules(
 ) -> Result<()> {
     let mut states: HashMap<PathBuf, VisitState> = HashMap::new();
     let mut stack = vec![WorkFrame::Enter(entry_path.clone())];
+    // Next.js wall 54 (part 2): a standalone `server.js` loads its page, route,
+    // and turbopack chunk modules from `<entry_dir>/.next/server/**` by a path
+    // computed at request time (`require(getPagePath(...))`, turbopack
+    // `R.c("chunkpath")`) — never via a static `import`/`require` literal — so
+    // the import walk below never reaches them and they would not be AOT
+    // compiled. Seed every `.next/server/**/*.js` file as an additional root so
+    // each compiles natively and self-registers under its absolute path (see
+    // cjs_wrap `__perry_register_path_module`), letting the runtime
+    // `require(absolutePath)` resolve it. Detected only when the entry sits next
+    // to a `.next/server` directory (a Next.js standalone bundle).
+    if let Some(entry_dir) = entry_path.parent() {
+        let next_server_dir = entry_dir.join(".next").join("server");
+        if next_server_dir.is_dir() {
+            let mut next_js_files = Vec::new();
+            collect_js_files_recursive(&next_server_dir, &mut next_js_files);
+            if !next_js_files.is_empty() {
+                if matches!(format, OutputFormat::Text) {
+                    println!(
+                        "Next.js standalone: discovered {} runtime module(s) under {}",
+                        next_js_files.len(),
+                        next_server_dir.display()
+                    );
+                }
+                // Push after the entry so the entry is processed first; order
+                // among the discovered files does not matter (the walk dedups).
+                for f in next_js_files {
+                    stack.push(WorkFrame::Enter(f));
+                }
+            }
+        }
+    }
     while let Some(frame) = stack.pop() {
         match frame {
             WorkFrame::Enter(next_path) => {
@@ -177,7 +242,14 @@ fn collect_module_one(
     // and synthesize a throwing-stub module (see the wasm branch below). Real
     // `.wasm` ESM instantiation is the companion issue #5234.
     let is_wasm = is_wasm_asset(&canonical);
-    let is_in_node_modules = canonical.to_string_lossy().contains("node_modules");
+    // Match a real `node_modules/` directory COMPONENT, not a substring: a
+    // file whose NAME contains "node_modules" (e.g. turbopack's bundled chunks
+    // `.next/server/chunks/ssr/node_modules_next_dist_…._.js`) is NOT in
+    // node_modules and must compile natively, not get force-routed to the
+    // (removed) JS runtime. (Next.js wall 54.)
+    let is_in_node_modules = canonical
+        .components()
+        .any(|c| c.as_os_str() == "node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
     let is_in_compiled_pkg = (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
         || ctx.compile_package_dirs.values().any(|dir| {
@@ -481,7 +553,7 @@ fn collect_module_one(
         ..Default::default()
     });
     let ast_module_owned: swc_ecma_ast::Module;
-    let ast_module: &swc_ecma_ast::Module = match parse_cache.as_deref_mut() {
+    let ast_module: &swc_ecma_ast::Module = match parse_cache {
         Some(cache) => match parse_cached(cache, &canonical, &source, parse_filename) {
             Ok(m) => m,
             Err(e) => {
@@ -1624,14 +1696,14 @@ fn collect_module_one(
         }
     }
 
-    return Ok(ModuleDiscovery {
+    Ok(ModuleDiscovery {
         finish: Some(PreparedModule {
             canonical,
             module_name,
             hir_module,
         }),
         children: pending,
-    });
+    })
 }
 
 fn collect_module_finish(

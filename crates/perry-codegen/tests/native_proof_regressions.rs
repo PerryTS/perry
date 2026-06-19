@@ -49,6 +49,7 @@ fn empty_opts() -> CompileOptions {
         app_metadata: AppMetadata::default(),
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
+        nextjs_path_init_modules: Vec::new(),
         deferred_module_prefixes: std::collections::HashSet::new(),
         module_init_deps: Vec::new(),
         is_dynamic_import_target: false,
@@ -230,6 +231,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         decorators: Vec::new(),
         is_exported: false,
         aliases: Vec::new(),
+        is_nested: false,
     }
 }
 

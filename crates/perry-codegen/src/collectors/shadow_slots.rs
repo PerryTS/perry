@@ -1,8 +1,3 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt};
-use std::collections::HashSet;
-
-use super::*;
-
 pub fn collect_shadow_slot_clear_points(
     stmts: &[perry_hir::Stmt],
     shadow_slot_map: &std::collections::HashMap<u32, u32>,

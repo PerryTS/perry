@@ -17,36 +17,21 @@ mod metadata;
 mod remote;
 mod resign;
 
-pub use android::{
-    build_and_run_android, build_and_run_wearos, debug_sign_apk, find_apksigner,
-    find_latest_build_tool, get_android_pid, inject_android_deeplinks,
-    inject_google_auth_android_resources, inject_gradle_dependencies, install_and_launch_android,
-    wire_native_lib_kotlin_sources,
-};
+pub use android::{build_and_run_android, build_and_run_wearos, install_and_launch_android};
 pub use devices::{
     detect_android_devices, detect_booted_simulators, detect_booted_tv_simulators,
     detect_booted_visionos_simulators, detect_booted_watch_simulators, detect_ios_devices,
     is_wear_os_device, pick_device, pick_from_list, DeviceInfo,
 };
-pub use entry::{
-    can_compile_locally, read_perry_toml_entry, resolve_entry_file, resolve_target,
-    rust_target_triple,
-};
-pub use launch::{launch, launch_ios_device, launch_ios_simulator, launch_native, launch_web};
+pub use entry::{can_compile_locally, resolve_entry_file, resolve_target, rust_target_triple};
+pub use launch::{launch, launch_ios_device, launch_ios_simulator, launch_native};
 pub use metadata::{
-    auto_export_p12, build_device_credentials, detect_signing_identity,
-    find_development_provisioning_profile, find_project_root, is_development_profile,
-    read_app_metadata, read_perry_toml_ios,
+    build_device_credentials, find_project_root, read_app_metadata, read_perry_toml_ios,
 };
-pub use remote::{
-    bundle_project_resources, copy_dir_recursive, embed_app_icon, extract_app_from_ipa,
-    find_icon_source, remote_build_and_launch,
-};
+pub use remote::{copy_dir_recursive, remote_build_and_launch};
 pub use resign::{
-    create_dev_profile_via_api, embed_profile_and_sign, find_dev_identity_for_team,
-    find_identity_for_team, find_system_dev_profile, generate_asc_jwt, read_bundle_id_from_app,
-    read_ios_app_group_from_toml, read_ios_push_notifications_from_toml, resign_for_development,
-    try_sign_existing_dev_profile,
+    create_dev_profile_via_api, read_ios_app_group_from_toml,
+    read_ios_push_notifications_from_toml, resign_for_development, try_sign_existing_dev_profile,
 };
 
 #[derive(Args, Debug)]

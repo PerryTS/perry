@@ -523,11 +523,42 @@ pub(crate) unsafe fn replay_class_object_constructor(
     let user_params = (total_params as usize).saturating_sub(effective_caps);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-    for i in 0..user_params {
-        if !args_ptr.is_null() && i < args_len {
-            final_args.push(*args_ptr.add(i));
-        } else {
-            final_args.push(undef);
+    // #wall3: a `constructor(...args)` (rest param) called via the dynamic
+    // member-new path (`new ns.Sub(opts)` → js_new_function_construct →
+    // is_class_object_value → here) must BUNDLE the trailing call args into a JS
+    // array for the rest slot. call_vtable_method's own `has_rest` can't do it
+    // because the rest param is NOT last here — the positional `__perry_cap_*`
+    // capture params follow it — so we pack the rest array ourselves at the rest
+    // index, then append caps. Without this the rest binds to the first arg as a
+    // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
+    // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
+    let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+        .map(|ri| ri as usize)
+        .filter(|ri| *ri < user_params);
+    if let Some(ri) = rest_idx {
+        for i in 0..ri {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
+        }
+        let mut rest_arr = crate::array::js_array_alloc(0);
+        if !args_ptr.is_null() {
+            let mut i = ri;
+            while i < args_len {
+                rest_arr = crate::array::js_array_push_f64(rest_arr, *args_ptr.add(i));
+                i += 1;
+            }
+        }
+        final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
+    } else {
+        for i in 0..user_params {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
         }
     }
     for j in 0..n_caps {
@@ -571,11 +602,43 @@ pub(crate) unsafe fn replay_registered_class_constructor(
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-    for i in 0..user_params {
-        if !args_ptr.is_null() && i < args_len {
-            final_args.push(*args_ptr.add(i));
-        } else {
-            final_args.push(undef);
+    // #wall3: a `constructor(...args)` reached via the dynamic class-REF member-new
+    // path (`new ns.Sub(opts)` where ns.Sub resolves to an INT32 ClassRef at
+    // runtime → js_new_function_construct → constructor_class_ref_id →
+    // construct_registered_class_ref → here) must BUNDLE trailing call args into a
+    // JS array for the rest slot. The rest is NOT the last ctor param (positional
+    // `__perry_cap_*` capture params follow it), so call_vtable_method's own
+    // `has_rest` can't pack it — we pack the rest array ourselves at the rest
+    // index, then append caps. Without this the rest binds to the first arg as a
+    // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
+    // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
+    let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+        .map(|ri| ri as usize)
+        .filter(|ri| *ri < user_params);
+    if let Some(ri) = rest_idx {
+        for i in 0..ri {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
+        }
+        let mut rest_arr = crate::array::js_array_alloc(0);
+        if !args_ptr.is_null() {
+            let mut i = ri;
+            while i < args_len {
+                rest_arr = crate::array::js_array_push_f64(rest_arr, *args_ptr.add(i));
+                i += 1;
+            }
+        }
+        final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
+    } else {
+        for i in 0..user_params {
+            if !args_ptr.is_null() && i < args_len {
+                final_args.push(*args_ptr.add(i));
+            } else {
+                final_args.push(undef);
+            }
         }
     }
     for bits in &caps {

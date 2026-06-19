@@ -321,7 +321,7 @@ pub fn try_lower_namespace_member_call(
         }
     }
     let arg_types: Vec<crate::types::LlvmType> =
-        std::iter::repeat(DOUBLE).take(lowered.len()).collect();
+        std::iter::repeat_n(DOUBLE, lowered.len()).collect();
     ctx.pending_declares
         .push((symbol.clone(), DOUBLE, arg_types));
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
