@@ -299,14 +299,24 @@ fn lower_packed_f64_versioned_for(
     let feedback_site_id = emit_typed_feedback_register_site(
         ctx,
         TypedFeedbackKind::ArrayElement,
-        "array[packed_f64_loop]",
-        TypedFeedbackContract::packed_f64_array_loop(),
+        match matched.array_kind {
+            PackedNumericLoopKind::F64 => "array[packed_f64_loop]",
+            PackedNumericLoopKind::I32 => "array[packed_i32_loop]",
+        },
+        match matched.array_kind {
+            PackedNumericLoopKind::F64 => TypedFeedbackContract::packed_f64_array_loop(),
+            PackedNumericLoopKind::I32 => TypedFeedbackContract::packed_i32_array_loop(),
+        },
     );
     let guard_ok = {
         let blk = ctx.block();
+        let guard_fn = match matched.array_kind {
+            PackedNumericLoopKind::F64 => "js_typed_feedback_packed_f64_array_loop_guard",
+            PackedNumericLoopKind::I32 => "js_typed_feedback_packed_i32_array_loop_guard",
+        };
         let guard_i32 = blk.call(
             I32,
-            "js_typed_feedback_packed_f64_array_loop_guard",
+            guard_fn,
             &[(I64, &feedback_site_id), (DOUBLE, &arr_box)],
         );
         blk.icmp_ne(I32, &guard_i32, "0")

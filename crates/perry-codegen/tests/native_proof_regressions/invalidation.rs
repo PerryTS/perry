@@ -375,6 +375,47 @@ fn packed_f64_read_loop_uses_stable_noalias_array_proof() {
 }
 
 #[test]
+fn packed_i32_read_loop_uses_i32_specific_loop_guard_and_no_slow_helper_in_fast_clone() {
+    let body = vec![
+        int32_array_let(1, "arr", vec![1, 2, 3]),
+        number_let(3, "sum", true, int(0)),
+        for_loop(
+            4,
+            length(1),
+            vec![Stmt::Expr(Expr::LocalSet(
+                3,
+                Box::new(add(local(3), index_get(1, local(4)))),
+            ))],
+        ),
+        Stmt::Return(Some(local(3))),
+    ];
+
+    let ir = compile_ir("packed_i32_read_loop_stable_array.ts", body);
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_i32_array_loop_guard"),
+        "stable noalias Int32[] should get a packed-i32 loop guard:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "packed-i32 proof must not reuse the f64 loop guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_i32_fast"),
+        "stable noalias Int32[] should emit the packed-i32 fast clone:\n{ir}"
+    );
+    let fast_clone = block_between(
+        &ir,
+        "\nfor.packed_i32_fast.cond.",
+        "\nfor.packed_i32_fast.exit.",
+    );
+    assert!(
+        !fast_clone.contains("js_typed_feedback_array_index_get_fallback_boxed")
+            && !fast_clone.contains("js_array_get_f64"),
+        "packed-i32 fast clone should use raw-slot loads without slow helpers:\n{fast_clone}"
+    );
+}
+
+#[test]
 fn packed_f64_read_loop_rejects_prior_array_alias() {
     let ir = compile_ir(
         "packed_f64_read_loop_alias_hazard.ts",

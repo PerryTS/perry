@@ -2633,8 +2633,8 @@ fn packed_i32_loop_read_materializes_integer_native_load_with_fallback() {
 
     let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
     assert!(
-        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
-        "packed-i32 loop should reuse the numeric raw-f64 layout guard:\n{ir}"
+        ir.contains("call i32 @js_typed_feedback_packed_i32_array_loop_guard"),
+        "packed-i32 loop should use the i32-specific raw numeric layout guard:\n{ir}"
     );
     assert!(
         ir.contains("for.packed_i32_fast") && ir.contains("for.packed_i32_slow"),

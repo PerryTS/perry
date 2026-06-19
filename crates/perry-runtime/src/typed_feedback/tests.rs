@@ -778,6 +778,38 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
 }
 
 #[test]
+fn typed_feedback_packed_i32_loop_guard_rejects_fractional_numeric_layout() {
+    let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
+    reset_typed_feedback_for_tests();
+    register(70, TypedFeedbackSiteKind::ArrayElement, "packed_i32_loop");
+
+    let ints = [1.0, 2.0, 3.0];
+    let int_arr = crate::array::js_array_from_f64(ints.as_ptr(), ints.len() as u32);
+    let int_box = crate::value::js_nanbox_pointer(int_arr as i64);
+    assert_eq!(
+        js_typed_feedback_packed_i32_array_loop_guard(70, int_box),
+        1
+    );
+
+    let fractional = [1.0, 2.5, 3.0];
+    let fractional_arr =
+        crate::array::js_array_from_f64(fractional.as_ptr(), fractional.len() as u32);
+    let fractional_box = crate::value::js_nanbox_pointer(fractional_arr as i64);
+    assert_eq!(
+        crate::array::js_array_is_numeric_f64_layout(fractional_arr),
+        1
+    );
+    assert_eq!(
+        js_typed_feedback_packed_i32_array_loop_guard(70, fractional_box),
+        0
+    );
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 1);
+}
+
+#[test]
 fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
     let _guard = TYPED_FEEDBACK_TEST_LOCK.lock().unwrap();
     reset_typed_feedback_for_tests();
@@ -1012,6 +1044,21 @@ fn numeric_array_helpers_have_lto_keepalive_anchors() {
     ] {
         assert_lto_keepalive_anchor(src, static_name, signature, target);
     }
+}
+
+#[test]
+fn typed_feedback_array_loop_helpers_have_lto_keepalive_anchors() {
+    let typed_feedback = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/typed_feedback.rs"
+    ));
+
+    assert_lto_keepalive_anchor(
+        typed_feedback,
+        "KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD",
+        "static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern \"C\" fn(u64, f64) -> i32",
+        "js_typed_feedback_packed_i32_array_loop_guard",
+    );
 }
 
 #[test]

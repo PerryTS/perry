@@ -86,6 +86,10 @@ impl TypedFeedbackContract {
         Self::new("packed_f64_array_loop_guard", "generic_jsvalue_loop")
     }
 
+    pub(crate) const fn packed_i32_array_loop() -> Self {
+        Self::new("packed_i32_array_loop_guard", "generic_jsvalue_loop")
+    }
+
     pub(crate) const fn array_set_index() -> Self {
         Self::new("plain_array_index_set_guard", "js_array_set_f64_extend")
     }
