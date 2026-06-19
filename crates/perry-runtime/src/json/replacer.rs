@@ -454,11 +454,14 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
 
     // Call replacer with ("", root_value), `this` = the `{ "": value }` wrapper.
+    // Per spec the holder wraps the ORIGINAL root value (so a root replacer's
+    // `this[""]` observes the pre-`toJSON` value); only the replacer's value
+    // argument is post-`toJSON`. CodeRabbit (PR #5438).
     let replaced_root = call_replacer(
         replacer,
         empty_key_f64,
         value_after_to_json,
-        root_holder(value_after_to_json),
+        root_holder(value),
     );
     let replaced_bits = replaced_root.to_bits();
 
