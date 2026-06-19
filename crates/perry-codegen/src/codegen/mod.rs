@@ -2392,15 +2392,34 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let Some(f) = func_by_id.get(func_id) else {
                 continue;
             };
-            if &f.name == exported_name {
-                continue;
-            }
+            // NOTE: do NOT early-skip when `f.name == exported_name`. The real
+            // body is emitted under `scoped_fn_name` (the INJECTIVE
+            // `sanitize_member`), but cross-module callers and the #461
+            // undefined-stub / #836 verbatim-alias paths compute the symbol via
+            // plain `sanitize`. For a non-plain name like `$constructor`
+            // (`export function $constructor` in zod core, #5431) those two
+            // manglings diverge — body at `perry_fn_<mod>__u__24constructor`,
+            // callers at `perry_fn_<mod>___constructor` — even though local ==
+            // exported. Without a forwarding alias the #461 loop below claims
+            // `_constructor` with an undefined-returning stub and every
+            // cross-module call resolves to it (function reference is fine,
+            // every CALL returns `undefined`). The `alias_sym == target_sym`
+            // check below is the correct guard: it skips the plain-name case
+            // (where both manglings agree) while still emitting the alias when
+            // they differ.
             let alias_sym = format!("perry_fn_{}__{}", module_prefix, sanitize(exported_name));
             let target_sym = match func_names.get(func_id) {
                 Some(s) => s.clone(),
                 None => continue,
             };
             if alias_sym == target_sym {
+                continue;
+            }
+            // Guard against colliding with an already-emitted body symbol. Two
+            // exports whose names sanitize to the same string (`$x` and `_x`)
+            // would otherwise redefine the alias; the body of whichever is plain
+            // already owns `alias_sym`, so skip rather than redefine.
+            if llmod.has_function(&alias_sym) {
                 continue;
             }
             if !emitted_aliases.insert(alias_sym.clone()) {

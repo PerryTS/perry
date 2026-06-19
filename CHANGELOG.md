@@ -1,3 +1,38 @@
+## v0.5.1196 — fix(codegen): #5431 — cross-module call to a `$`-named exported function returned `undefined`
+
+Calling an exported function whose name contains a non-`[A-Za-z0-9_]` character (e.g.
+`export function $constructor`) across a module boundary returned `undefined` instead of
+running the body. The function *reference* resolved fine (`typeof` was `function`), but every
+*call* produced `undefined`. Surfaced by **zod v4** (issue #5431): `z.string()` calls
+`core._string(ZodString, params)` where `ZodString = /*@__PURE__*/ core.$constructor("ZodString", …)`.
+The `$constructor` call returned `undefined`, so `ZodString` was `undefined` and `new ZodString(…)`
+threw `TypeError: undefined is not a constructor` at `zod/v4/core/api.ts:65`.
+
+**Root cause** — a symbol-mangling desync. A function body whose name contains a non-alphanumeric
+char is emitted under the *injective* `sanitize_member` symbol
+(`perry_fn_<mod>__u__24constructor`), but cross-module callers, the #461 named-export stub loop,
+and the #836 verbatim-`$` alias all compute the symbol via plain `sanitize` (`$`→`_`,
+`perry_fn_<mod>___constructor`). The exported-function forwarding-alias loop in
+`crates/perry-codegen/src/codegen/mod.rs` early-skipped emitting an alias whenever
+`local == exported` — true for `$constructor`. With no alias bridging the two manglings, the
+#461 loop claimed the plain-`sanitize` symbol with an **undefined-returning stub**, and the #836
+alias forwarded the verbatim-`$` symbol to that stub. Net: every cross-module call to a `$`-named
+function resolved to a no-op returning `undefined`. Same-module calls were unaffected (they resolve
+through `func_names` to the real `sanitize_member` body).
+
+**Fix** — drop the `f.name == exported_name` early-skip. The existing `alias_sym == target_sym`
+check is the correct guard: it skips the plain-name no-op case (where both manglings agree) while
+still emitting the forwarding alias when they diverge. Added an `llmod.has_function(&alias_sym)`
+collision guard for the pathological `$x` + `_x` (both sanitize to `_x`) co-export case.
+
+Validated byte-for-byte against `node --experimental-strip-types`: new regression test
+`test-files/test_issue_5431_dollar_named_export_call.ts` (with `fixtures/issue_5431_pkg/`,
+faithful to zod's `$constructor`/`ZodString` shape) is identical to node. Real zod 4.0.0:
+`z.ZodString` went from `undefined` → `function`; `z.string()`, `z.object()`, and chained
+schema definition (`z.boolean().optional().describe(…)`) all work. All 30 export/module gap tests
+and the perry-codegen unit suite pass; issue-836 still clean. (Calling `.parse()` on a zod schema
+still throws "expected a Zod schema" — a separate, deeper zod-runtime gap downstream of this fix.)
+
 ## v0.5.1195 — feat(sharp): AVIF encode + quality-aware encoding
 
 - **`.avif(quality)`** — AVIF output via the `image` crate's `avif` feature (the pure-Rust
