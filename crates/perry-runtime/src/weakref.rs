@@ -5,8 +5,8 @@
 //! FinalizationRegistry cleanup jobs, which are queued after explicit `gc()`.
 
 use crate::array::{
-    js_array_alloc, js_array_alloc_with_length, js_array_get_f64, js_array_length,
-    js_array_push_f64, js_array_set_f64, ArrayHeader,
+    js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64, js_array_set_f64,
+    ArrayHeader,
 };
 use crate::object::{
     js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field, ObjectHeader,
@@ -26,6 +26,13 @@ const FINREG_RECORD_SHAPE_ID: u32 = 0x7FFF_FE14;
 pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0029;
 pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_002A;
 pub const CLASS_ID_FINALIZATION_RECORD: u32 = 0xFFFF_002B;
+/// A single WeakMap/WeakSet entry. Field 0 holds the key — a *weak* slot,
+/// skipped by the GC's strong-edge scanners exactly like a WeakRef target or a
+/// finalization record's target (see `is_weak_target_trace_slot`). Field 1
+/// holds the value (strong; for a WeakSet it is `undefined`). When the key is
+/// collected the post-mark pass tombstones both fields to `undefined`, which
+/// the lookups treat as an empty slot. Issue #2656.
+pub const CLASS_ID_WEAK_ENTRY: u32 = 0xFFFF_002C;
 
 const WEAKREF_TARGET_FIELD: usize = 0;
 const FINREG_CALLBACK_FIELD: usize = 0;
@@ -98,12 +105,18 @@ pub(crate) fn weak_collection_entries(obj: *const ObjectHeader) -> Vec<(f64, f64
         let len = js_array_length(entries_ptr) as usize;
         let mut entries = Vec::with_capacity(len);
         for i in 0..len {
-            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-            if pair_ptr.is_null() {
+            let entry = weak_entry_at(entries_ptr, i);
+            if entry.is_null() {
                 continue;
             }
-            entries.push((js_array_get_f64(pair_ptr, 0), js_array_get_f64(pair_ptr, 1)));
+            let key_bits = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
+            if key_bits == TAG_UNDEFINED {
+                continue; // tombstoned (key collected)
+            }
+            entries.push((
+                f64::from_bits(key_bits),
+                f64::from_bits(object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD)),
+            ));
         }
         entries
     }
@@ -258,7 +271,9 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
     match (*obj).class_id {
-        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD => {
+        // Field 0 is the weak target for all three: WeakRef's referent, a
+        // finalization record's target, and a WeakMap/WeakSet entry's key.
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD | CLASS_ID_WEAK_ENTRY => {
             (*obj).field_count > 0 && slot == object_field_slot(obj, 0)
         }
         _ => false,
@@ -519,6 +534,12 @@ pub(crate) fn process_weak_targets_after_mark(
             CLASS_ID_FINALIZATION_REGISTRY => {
                 process_finreg_after_mark(obj, valid_ptrs, minor_only, enqueue_callbacks);
             }
+            // Each WeakMap/WeakSet entry is its own GcHeader-backed object, so
+            // the arena walk reaches it directly — exactly like a WeakRef. This
+            // mirrors the `CLASS_ID_WEAKREF` arm (which is correct under
+            // evacuation): the weak key slot's address is repaired by the
+            // copy/rewrite pass before this pass reads it.
+            CLASS_ID_WEAK_ENTRY => process_weak_entry_after_mark(obj, valid_ptrs, minor_only),
             _ => {}
         }
     });
@@ -532,6 +553,23 @@ unsafe fn process_weakref_after_mark(
     let target_bits = object_field_bits(obj, WEAKREF_TARGET_FIELD);
     if weak_target_should_clear(target_bits, valid_ptrs, minor_only) {
         write_object_field_bits_raw(obj, WEAKREF_TARGET_FIELD, TAG_UNDEFINED);
+    }
+}
+
+/// A live WeakMap/WeakSet entry whose key was collected is tombstoned: both the
+/// key and the value slots are set to `undefined` so the value becomes
+/// collectible (next cycle) and the lookups skip the slot. The entry object
+/// itself is reclaimed when `delete`/`set` next compacts the entries array (or
+/// when the whole collection dies). Mirrors `process_weakref_after_mark`.
+unsafe fn process_weak_entry_after_mark(
+    entry: *mut ObjectHeader,
+    valid_ptrs: &crate::gc::ValidPointerSet,
+    minor_only: bool,
+) {
+    let key_bits = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
+    if weak_target_should_clear(key_bits, valid_ptrs, minor_only) {
+        write_object_field_bits_raw(entry, WEAK_ENTRY_KEY_FIELD, TAG_UNDEFINED);
+        write_object_field_bits_raw(entry, WEAK_ENTRY_VALUE_FIELD, TAG_UNDEFINED);
     }
 }
 
@@ -677,6 +715,47 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
 
 const WEAKMAP_SHAPE_ID: u32 = 0x7FFF_FE12;
 const WEAKSET_SHAPE_ID: u32 = 0x7FFF_FE13;
+const WEAK_ENTRY_SHAPE_ID: u32 = 0x7FFF_FE15;
+
+const WEAK_ENTRY_KEY_FIELD: usize = 0;
+const WEAK_ENTRY_VALUE_FIELD: usize = 1;
+
+/// Allocate a WeakMap/WeakSet entry object (`CLASS_ID_WEAK_ENTRY`). Field 0 is
+/// the key — a weak slot the GC's strong scanners skip (see
+/// `is_weak_target_trace_slot`), so a key reachable only through the collection
+/// is collectible. Field 1 is the value, traced strongly while the key is live.
+fn weak_entry_new(key: f64, value: f64) -> *mut ObjectHeader {
+    // Sentinel-named slots so `(entry as any).key` can't leak storage and the
+    // names never collide with user fields.
+    let packed = b"__perry_we_key\0__perry_we_value\0";
+    let entry =
+        js_object_alloc_with_shape(WEAK_ENTRY_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
+    js_object_set_field(
+        entry,
+        WEAK_ENTRY_KEY_FIELD as u32,
+        JSValue::from_bits(key.to_bits()),
+    );
+    js_object_set_field(
+        entry,
+        WEAK_ENTRY_VALUE_FIELD as u32,
+        JSValue::from_bits(value.to_bits()),
+    );
+    // Stamp the weak-entry class_id last (mirrors js_weakref_new) so the GC's
+    // weak-slot recognition keys off it on the next mark.
+    unsafe {
+        (*entry).class_id = CLASS_ID_WEAK_ENTRY;
+    }
+    entry
+}
+
+/// Read the entry-object pointer stored at `entries[i]`, or null. Entries hold
+/// `CLASS_ID_WEAK_ENTRY` object pointers (POINTER_TAG); the low 48 bits are the
+/// address regardless of tag.
+#[inline]
+unsafe fn weak_entry_at(entries: *mut ArrayHeader, i: usize) -> *mut ObjectHeader {
+    let v = js_array_get_f64(entries, i as u32);
+    (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader
+}
 
 // Reserved `ObjectHeader.class_id` markers for WeakMap/WeakSet instances.
 // These follow the same `0xFFFF00xx` reserved-builtin convention as
@@ -847,25 +926,42 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
             return f64::from_bits(TAG_UNDEFINED);
         }
         let len = js_array_length(entries_ptr) as usize;
-        // Update existing pair if key matches.
+        // Update the existing entry if the key matches; remember the first
+        // tombstone (an entry whose key the GC collected) so a new key can
+        // reuse the freed slot instead of growing the array unboundedly.
+        let mut first_tomb: i64 = -1;
         for i in 0..len {
-            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-            if pair_ptr.is_null() {
+            let entry = weak_entry_at(entries_ptr, i);
+            if entry.is_null() {
                 continue;
             }
-            let stored_key = js_array_get_f64(pair_ptr, 0);
-            if stored_key.to_bits() == key.to_bits() {
-                js_array_set_f64(pair_ptr, 1, value);
+            let stored_key = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
+            if stored_key == TAG_UNDEFINED {
+                if first_tomb < 0 {
+                    first_tomb = i as i64;
+                }
+                continue;
+            }
+            if stored_key == key.to_bits() {
+                write_object_field_bits_raw(entry, WEAK_ENTRY_VALUE_FIELD, value.to_bits());
                 return map;
             }
         }
-        // Append new [key, value] pair.
-        let pair = js_array_alloc_with_length(2);
-        js_array_set_f64(pair, 0, key);
-        js_array_set_f64(pair, 1, value);
-        let pair_val = f64::from_bits(JSValue::array_ptr(pair).bits());
-        js_array_push_f64(entries_ptr, pair_val);
+        // Not present — build a fresh entry. This allocation may move objects,
+        // but `map`/`key`/`value` and the pointers below are live on the
+        // conservatively-scanned stack, so they stay pinned across it (same
+        // contract the rest of this module relies on).
+        let entry = weak_entry_new(key, value);
+        let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
+        let entries_ptr = entries_array(map_ptr);
+        if first_tomb >= 0 {
+            js_array_set_f64(entries_ptr, first_tomb as u32, entry_val);
+        } else {
+            // js_array_push_f64 may reallocate; rebind the entries field to the
+            // (possibly new) header so the append isn't lost.
+            let grown = js_array_push_f64(entries_ptr, entry_val);
+            js_object_set_field(map_ptr, 0, JSValue::array_ptr(grown));
+        }
     }
     map
 }
@@ -883,14 +979,16 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
         }
         let len = js_array_length(entries_ptr) as usize;
         for i in 0..len {
-            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-            if pair_ptr.is_null() {
+            let entry = weak_entry_at(entries_ptr, i);
+            if entry.is_null() {
                 continue;
             }
-            let stored_key = js_array_get_f64(pair_ptr, 0);
-            if stored_key.to_bits() == key.to_bits() {
-                return js_array_get_f64(pair_ptr, 1);
+            let stored_key = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
+            if stored_key == TAG_UNDEFINED {
+                continue; // tombstoned (key collected)
+            }
+            if stored_key == key.to_bits() {
+                return f64::from_bits(object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD));
             }
         }
     }
@@ -910,13 +1008,15 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
         }
         let len = js_array_length(entries_ptr) as usize;
         for i in 0..len {
-            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-            if pair_ptr.is_null() {
+            let entry = weak_entry_at(entries_ptr, i);
+            if entry.is_null() {
                 continue;
             }
-            let stored_key = js_array_get_f64(pair_ptr, 0);
-            if stored_key.to_bits() == key.to_bits() {
+            let stored_key = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
+            if stored_key == TAG_UNDEFINED {
+                continue; // tombstoned (key collected)
+            }
+            if stored_key == key.to_bits() {
                 return f64::from_bits(TAG_TRUE);
             }
         }
@@ -937,19 +1037,24 @@ pub extern "C" fn js_weakmap_delete(map: f64, key: f64) -> f64 {
         }
         let len = js_array_length(entries_ptr) as usize;
         let mut found = false;
-        let new_arr = js_array_alloc(0);
+        // Rebuild without the deleted key AND without tombstones (entries whose
+        // key the GC already collected), reclaiming the entry objects.
+        let mut new_arr = js_array_alloc(0);
         for i in 0..len {
-            let pair_val_f = js_array_get_f64(entries_ptr, i as u32);
-            let pair_ptr = (pair_val_f.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader;
-            if pair_ptr.is_null() {
+            let entry = weak_entry_at(entries_ptr, i);
+            if entry.is_null() {
                 continue;
             }
-            let stored_key = js_array_get_f64(pair_ptr, 0);
-            if stored_key.to_bits() == key.to_bits() {
+            let stored_key = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
+            if stored_key == TAG_UNDEFINED {
+                continue; // drop tombstone
+            }
+            if stored_key == key.to_bits() {
                 found = true;
                 continue;
             }
-            js_array_push_f64(new_arr, pair_val_f);
+            let entry_val = f64::from_bits(JSValue::pointer(entry as *const u8).bits());
+            new_arr = js_array_push_f64(new_arr, entry_val);
         }
         js_object_set_field(map_ptr, 0, JSValue::array_ptr(new_arr));
         if found {
@@ -1006,8 +1111,11 @@ pub extern "C" fn js_weakset_add(set: f64, value: f64) -> f64 {
     if !crate::collection_iter::is_entry_object(value) {
         throw_invalid_weakset_value();
     }
-    // Reuse js_weakmap_set with value as both key and value (matches JS Set spec).
-    js_weakmap_set(set, value, value);
+    // Store the member as the entry KEY (weak) with an `undefined` value. Using
+    // the member as the value too would pin it through the strong value slot and
+    // defeat weakness (#2656); a WeakSet only needs key presence, so the value
+    // is unused. `has`/`delete` match on the key alone.
+    js_weakmap_set(set, value, f64::from_bits(TAG_UNDEFINED));
     set
 }
 
