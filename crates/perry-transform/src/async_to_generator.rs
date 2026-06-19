@@ -897,11 +897,7 @@ fn logical_rhs_contains_await(expr: &Expr) -> bool {
 /// top-level position the await→yield rewrite expects. Without this lift the
 /// general hoisting walk pulls `right`'s await unconditionally above the
 /// statement, evaluating it even when `left` short-circuits (issue #5434).
-fn lift_logical_with_await_rhs(
-    expr: &mut Expr,
-    next_id: &mut LocalId,
-    hoisted: &mut Vec<Stmt>,
-) {
+fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
     let temp_id = alloc_local(next_id);
     let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
     if let Expr::Logical { op, left, right } = owned {
