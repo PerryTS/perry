@@ -367,7 +367,8 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         let is_module_constructor = ctx
             .lookup_native_module(callee_ident.sym.as_ref())
             .map(|(module_name, method)| {
-                module_name == "module" && matches!(method, Some("Module") | Some("default"))
+                module_name == "module"
+                    && matches!(method.as_deref(), Some("Module") | Some("default"))
             })
             .unwrap_or(false);
         if is_module_constructor {
@@ -403,7 +404,8 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let is_events_module_value = ctx
                 .lookup_native_module(callee_ident.sym.as_ref())
                 .map(|(module_name, method)| {
-                    module_name == "events" && (method.is_none() || method == Some("default"))
+                    module_name == "events"
+                        && (method.is_none() || method.as_deref() == Some("default"))
                 })
                 .unwrap_or(false)
                 || ctx.lookup_builtin_module_alias(callee_ident.sym.as_ref()) == Some("events");
@@ -584,7 +586,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     ctx.lookup_native_module(obj_name)
                         .and_then(|(module_name, method)| {
                             if matches!(module_name, "dns" | "dns/promises")
-                                && (method.is_none() || method == Some("default"))
+                                && (method.is_none() || method.as_deref() == Some("default"))
                             {
                                 Some(module_name.to_string())
                             } else {
@@ -643,7 +645,8 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 || ctx
                     .lookup_native_module(obj_name)
                     .map(|(module_name, method)| {
-                        module_name == "vm" && (method.is_none() || method == Some("default"))
+                        module_name == "vm"
+                            && (method.is_none() || method.as_deref() == Some("default"))
                     })
                     .unwrap_or(false);
             if is_vm_module
@@ -933,7 +936,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
         ast::Expr::Ident(ident) => {
             // Resolve through any scope-local class rename so `new X` binds to
             // the lexically-correct (possibly disambiguated) class.
-            let class_name = ctx.resolve_class_name(ident.sym.as_str());
+            let mut class_name = ctx.resolve_class_name(ident.sym.as_str());
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
@@ -1897,6 +1900,42 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // registered class but IS an imported binding) and constructs it
                 // via `js_new_function_construct` — see
                 // `perry-codegen/src/lower_call/new.rs`.
+            }
+            // #wall: an ALIASED named import of a native built-in class
+            // (`import { BlockList as Wj4 } from "net"; new Wj4()`) must
+            // construct exactly like the un-aliased form. The bare-ident
+            // construction below falls through to `Expr::New { class_name }`,
+            // and codegen's builtin-`New` dispatch recognizes the class by its
+            // LITERAL name ("BlockList", "SocketAddress", "Socket", "Server",
+            // "URL", …). Under an alias the local name ("Wj4") misses every
+            // arm, so codegen builds an empty placeholder object with no native
+            // methods (`q.addSubnet` → "addSubnet is not a function").
+            //
+            // `lookup_native_module` is already alias-aware: the named-import
+            // lowering registers `local → (module, Some(<imported>))`, so a
+            // native-class import resolves the alias to its imported export
+            // name. Rewrite `class_name` to that export so the alias path is
+            // byte-for-byte identical to the un-aliased path. This is a no-op
+            // for the un-aliased case (export == local) and only fires for
+            // native-module class imports (a user `import { foo as bar }` from
+            // a TS module registers as an imported func, NOT a native module,
+            // so `lookup_native_module` returns None — no over-trigger). A
+            // user class or local of the alias name shadows it (handled by the
+            // `lookup_class`/`lookup_local` returns above that precede this).
+            if class_name
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
+            {
+                if let Some((_module, Some(export))) = ctx.lookup_native_module(&class_name) {
+                    if export != class_name
+                        && ctx.lookup_class(&class_name).is_none()
+                        && ctx.lookup_local(&class_name).is_none()
+                    {
+                        class_name = export.to_string();
+                    }
+                }
             }
             // Issue #212: classes nested in a function may capture
             // enclosing-scope locals. `lower_class_decl` extended the

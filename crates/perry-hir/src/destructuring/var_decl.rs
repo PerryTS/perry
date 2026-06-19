@@ -279,17 +279,41 @@ pub(crate) fn lower_var_decl_with_destructuring(
             if let Some(init_expr) = &decl.init {
                 if let ast::Expr::New(new_expr) = init_expr.as_ref() {
                     if let ast::Expr::Ident(class_ident) = new_expr.callee.as_ref() {
-                        let class_name = class_ident.sym.as_ref();
+                        let local_name = class_ident.sym.as_ref();
                         // A user `class Big {...}` in scope shadows the
                         // hardcoded library-name fallback below. Without
                         // this gate `class Big { f0=0; ... } const b = new
                         // Big()` routed through big.js's handle-based
                         // dispatch so every property read returned 0.
-                        let user_class_defined = ctx.classes_index.contains_key(class_name)
-                            || ctx.pending_classes.iter().any(|c| c.name == class_name);
+                        let user_class_defined = ctx.classes_index.contains_key(local_name)
+                            || ctx.pending_classes.iter().any(|c| c.name == local_name);
+                        // #wall: alias-aware native-instance tagging. An
+                        // ALIASED import (`import { BlockList as Wj4 } from
+                        // "net"; const q = new Wj4()`) must register `q` under
+                        // the IMPORTED class ("BlockList"), not the local alias
+                        // ("Wj4"), or `q.addSubnet(...)` dispatch (keyed on
+                        // `("net","BlockList")`) misses and falls to generic
+                        // property access ("addSubnet is not a function").
+                        // `lookup_native_module` is alias-aware (the named
+                        // import registers `local → (module, Some(<imported>))`),
+                        // so resolve the local to its imported export name and
+                        // use THAT as the class name for the hardcoded match and
+                        // the final registration. For the un-aliased case the
+                        // export equals the local, so this is a no-op.
+                        let class_name: &str = ctx
+                            .lookup_native_module(local_name)
+                            .and_then(|(_m, method)| method)
+                            .filter(|export| {
+                                export
+                                    .chars()
+                                    .next()
+                                    .map(|c| c.is_uppercase())
+                                    .unwrap_or(false)
+                            })
+                            .unwrap_or(local_name);
                         // First try the general native module lookup (covers all imported native classes)
                         let module_name =
-                            if let Some((m, method)) = ctx.lookup_native_module(class_name) {
+                            if let Some((m, method)) = ctx.lookup_native_module(local_name) {
                                 match (m, method) {
                                     ("url", Some("URL" | "URLSearchParams"))
                                     | ("util", Some("TextEncoder" | "TextDecoder")) => None,
@@ -1463,7 +1487,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
             ) || decl
                 .init
                 .as_deref()
-                .is_some_and(ast_expr_contains_function_expr);
+                .map_or(false, ast_expr_contains_function_expr);
             let pre_id = if is_function_expr_init
                 && !ctx.pre_registered_module_vars.contains(&name)
                 && ctx.lookup_local(&name).is_none()
@@ -1479,10 +1503,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             if matches!(ty, Type::Any) {
                 match &init {
-                    Some(Expr::NativeMethodCall { module, method, .. })
-                        if module == "stream" && method == "from" =>
-                    {
-                        ty = Type::Named("Readable".to_string());
+                    Some(Expr::NativeMethodCall { module, method, .. }) => {
+                        if module == "stream" && method == "from" {
+                            ty = Type::Named("Readable".to_string());
+                        }
                     }
                     Some(Expr::NewDynamic { callee, .. }) => {
                         if let Expr::PropertyGet { object, property } = callee.as_ref() {
@@ -1858,10 +1882,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             // recogniser later emits
                             // `RegisterFunctionPrototypeMethod { func:
                             // LocalGet(M_id), … }`.
-                            Expr::LocalGet(src_local)
-                                if ctx.function_valued_locals.contains(src_local) =>
-                            {
-                                ctx.prototype_function_locals.insert(id, *src_local);
+                            Expr::LocalGet(src_local) => {
+                                if ctx.function_valued_locals.contains(src_local) {
+                                    ctx.prototype_function_locals.insert(id, *src_local);
+                                }
                             }
                             _ => {}
                         }
