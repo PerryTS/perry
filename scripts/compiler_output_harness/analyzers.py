@@ -222,7 +222,9 @@ def structural_counters(ir_before: str, ir_after: str, assembly: str) -> dict[st
             "runtime_calls": runtime_calls,
             "boxed_number_allocations": after_calls.get("js_boxed_number_new", 0),
             "write_barriers": after_calls.get("js_write_barrier", 0)
-            + after_calls.get("js_write_barrier_slot", 0),
+            + after_calls.get("js_write_barrier_slot", 0)
+            + after_calls.get("js_write_barrier_root_nanbox", 0)
+            + after_calls.get("js_write_barrier_root_heap_word", 0),
             "buffer_slow_path_calls": sum(
                 count
                 for name, count in after_calls.items()

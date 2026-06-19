@@ -305,10 +305,17 @@ echo "runs:   $RUNS"
 echo "python: $PYTHON_BIN"
 
 PERRY_BIN_RESOLVED="$(resolve_perry)"
-if [[ ! -x "$PERRY_BIN_RESOLVED" ]]; then
+if [[ -z "$PERRY_ARG" ]]; then
+  packet_build=(cargo build -p perry -p perry-runtime)
+  case "$PERRY_BIN_RESOLVED" in
+    "$ROOT/target/release/"*) packet_build=(cargo build --release -p perry -p perry-runtime) ;;
+  esac
+  run_logged "packet" "build" "$OUT_ABS/logs/build.log" "${packet_build[@]}"
+  PERRY_BIN_RESOLVED="$(resolve_perry)"
+elif [[ ! -x "$PERRY_BIN_RESOLVED" ]]; then
   run_logged "packet" "build" "$OUT_ABS/logs/build.log" cargo build -p perry
 else
-  record_command "packet" "build" "skipped" 0 "" "using existing Perry binary"
+  record_command "packet" "build" "skipped" 0 "" "using explicit Perry binary"
 fi
 
 if [[ ! -x "$PERRY_BIN_RESOLVED" ]]; then
@@ -318,7 +325,9 @@ else
 fi
 
 RUNTIME_ARCHIVE_RESOLVED="$(resolve_runtime_archive "$PERRY_BIN_RESOLVED")"
-if [[ ! -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
+if [[ -z "$PERRY_ARG" && -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
+  record_command "packet" "build_runtime_archive" "skipped" 0 "" "built by packet build"
+elif [[ ! -f "$RUNTIME_ARCHIVE_RESOLVED" ]]; then
   runtime_build=(cargo build -p perry-runtime)
   case "$PERRY_BIN_RESOLVED" in
     "$ROOT/target/release/"*) runtime_build=(cargo build --release -p perry-runtime) ;;

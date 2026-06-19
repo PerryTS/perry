@@ -1077,6 +1077,25 @@ idxset.bounded_numeric_merge.5:
             self.assertIn("vectorization", workload, name)
             self.assertIn("runtime_budgets", workload, name)
 
+    def test_native_abi_root_barrier_budgets_are_explicit(self):
+        spec = HARNESS.load_workload_spec(HARNESS.DEFAULT_SPEC_PATH)
+        expected = {
+            "h1_native_rep_equivalence": 1,
+            "h1_buffer_alias_negative": 3,
+            "native_owned_typed_views": 1,
+            "native_pod_layout_constants": 2,
+            "native_memory_bulk_fill": 2,
+            "native_memory_fixture": 2,
+        }
+        for name, maximum in expected.items():
+            self.assertEqual(
+                spec["workloads"][name]["runtime_budgets"][
+                    "write_barriers_static"
+                ],
+                maximum,
+                name,
+            )
+
     def test_suite_parser_accepts_native_region_proof(self):
         parser = HARNESS.build_parser()
         args = parser.parse_args(
@@ -1423,7 +1442,12 @@ idxset.bounded_numeric_merge.5:
             GOOD_IR
             + "\n  call double @js_boxed_number_new(double 1.0)\n"
             + "  call double @js_buffer_get(double 1.0, double 0.0)\n"
-            + "  call double @js_typed_array_get(double 1.0, double 0.0)\n",
+            + "  call double @js_typed_array_get(double 1.0, double 0.0)\n"
+            + "  call void @js_write_barrier(i64 1, i64 2)\n"
+            + "  call void @js_write_barrier_slot(i64 1, i64 8, i64 2)\n"
+            + "  call void @js_write_barrier_root_nanbox(i64 2)\n"
+            + "  call void @js_write_barrier_root_heap_word(i64 2)\n"
+            + "  call i32 @js_uint8array_get(i64 1, i32 0)\n",
             GOOD_ASM,
         )
         summary = HARNESS.runtime_counter_summary(
@@ -1443,9 +1467,10 @@ idxset.bounded_numeric_merge.5:
         self.assertEqual(summary["gc_collections_traced"], 2)
         self.assertEqual(summary["allocations_traced"], 4)
         self.assertEqual(summary["write_barriers_traced"], 3)
+        self.assertEqual(summary["write_barriers_static"], 4)
         self.assertEqual(summary["boxed_number_allocations_static"], 1)
-        self.assertEqual(summary["buffer_slow_path_accesses_static"], 1)
-        self.assertEqual(summary["array_slow_path_accesses_static"], 1)
+        self.assertEqual(summary["buffer_slow_path_accesses_static"], 2)
+        self.assertEqual(summary["array_slow_path_accesses_static"], 2)
 
     def test_trace_runtime_budgets_fail_when_gc_trace_disabled(self):
         benchmark = {

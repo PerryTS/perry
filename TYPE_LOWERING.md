@@ -11,6 +11,47 @@ Status legend:
   the architecture item is not complete.
 - `[ ]` not complete for this branch yet.
 
+### 2026-06-19 Integration / Material Gate Status
+
+All six parallel worker tracks are integrated on this branch:
+
+- typed ABI/clones: typed-f64 clones now admit proven raw `Int32` locals;
+- arrays/effects: first packed-i32 store loop slice with versioned side exits;
+- class/scalar: scalar method summaries now inline straight-line immutable
+  local temporaries;
+- strings/collections: `Set<string>` selected paths consume raw `StringRef`
+  values through the native lowering dispatcher;
+- async/BigInt: small BigInt literals lower as region-local `i128` and box only
+  at JS-visible boundaries;
+- verification/observability: packet freshness, release sentinel counts, and
+  material-accounting contracts are reported and gated.
+
+End-to-end smoke evidence:
+`PYTHON=python3 RUSTC_WRAPPER= RUSTFLAGS=-Awarnings bash
+tests/test_native_abi_evidence_packet_smoke.sh
+tmp/native-abi-evidence-smoke-20260619T-integrated-fix2` passed.
+
+The material packet proves a quantitative improvement rather than only local IR
+shape:
+
+- boxed Number allocations: control `3` -> typed `0` (100% reduction);
+- Buffer slow-path helpers: control `6` -> typed `0` (100% reduction);
+- array slow-path helpers: control `6` -> typed `0` (100% reduction);
+- static runtime calls: control `324` -> typed `73` (77.5% reduction);
+- traced allocations: control `640` -> typed `0` (100% reduction);
+- static write-barrier helpers: control `11` -> typed `2` (81.8% reduction);
+- traced write barriers: control `38580` -> typed `0` (100% reduction);
+- median wall time: control `181.62ms` -> typed `8.11ms` (22.4x speedup);
+- p95 wall time: control `184.29ms` -> typed `9.01ms` (20.4x speedup);
+- release/LTO sentinel guard: `101/101` rooted symbols present, with runtime
+  archive/source fingerprints recorded.
+
+The gate matrix is fully passing for native ABI correctness, native-region
+artifacts, explain-lowering accounting, runtime safety, and release/LTO symbol
+guarding. This still does not claim a general typed function/method/closure ABI;
+the proof is for the selected native/region-local lowering packet and the
+tracked production slices above.
+
 | Status | Architecture requirement | Current evidence / remaining work |
 |---|---|---|
 | `[~]` | Lower HIR values into typed SSA/native reps first | Region-local native reps exist for `i32`/`u32`, `i1`, `f64`, buffer views, packed numeric arrays, raw numeric fields, and selected `JsValueBits` consumers. A narrow value-first ordinary-expression path now keeps simple numeric literals, locals, local assignment, and numeric binary ops as `f64`, and simple boolean literals/locals/assignment/comparison/`!` as `i1`, until return/runtime materialization. Broad ordinary expression lowering is still predominantly generic `double` unless a local proof applies. Evidence: `representation_first_numeric_locals_stay_f64_until_abi` and `representation_first_boolean_locals_stay_i1_until_abi`. |

@@ -100,7 +100,7 @@ REQUIRED_RELEASE_SYMBOL_TOKENS = (
     "defines all",
     "sentinel symbols",
 )
-REQUIRED_RELEASE_SENTINEL_COUNT = 98
+REQUIRED_RELEASE_SENTINEL_COUNT = 101
 REQUIRED_RELEASE_FINGERPRINT_FIELDS = (
     "runtime_archive_sha256",
     "runtime_source_digest",
