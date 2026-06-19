@@ -31,11 +31,24 @@ console.log("out:", b.check("10.0.1.5", "ipv4"));     // outside /24
     .unwrap();
     let c = Command::new(perry_bin())
         .current_dir(dir.path())
-        .args(["compile", entry.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .args([
+            "compile",
+            entry.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
-    assert!(c.status.success(), "compile failed: {}", String::from_utf8_lossy(&c.stderr));
+    assert!(
+        c.status.success(),
+        "compile failed: {}",
+        String::from_utf8_lossy(&c.stderr)
+    );
     let r = Command::new(&out).current_dir(dir.path()).output().unwrap();
-    assert!(r.status.success(), "run failed: {}", String::from_utf8_lossy(&r.stderr));
+    assert!(
+        r.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&r.stdout), "in: true\nout: false\n");
 }
