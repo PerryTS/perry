@@ -190,12 +190,13 @@ pub fn get_offset(scroll_handle: i64) -> f64 {
     }
 }
 
-/// Set the vertical scroll offset.
-pub fn set_offset(scroll_handle: i64, offset: f64) {
+/// Set the scroll offset to (x, y). Used to restore scroll position across
+/// rebuilds, so it must not animate.
+pub fn set_offset(scroll_handle: i64, x: f64, y: f64) {
     if let Some(scroll_view) = super::get_widget(scroll_handle) {
         unsafe {
-            let point = CGPoint::new(0.0, offset);
-            let _: () = msg_send![&*scroll_view, setContentOffset: point, animated: true];
+            let point = CGPoint::new(x, y);
+            let _: () = msg_send![&*scroll_view, setContentOffset: point, animated: false];
         }
     }
 }

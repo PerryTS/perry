@@ -643,8 +643,8 @@ pub extern "C" fn perry_ui_scrollview_get_offset(scroll_handle: i64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, offset: f64) {
-    widgets::scrollview::set_offset(scroll_handle, offset);
+pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, x: f64, y: f64) {
+    widgets::scrollview::set_offset(scroll_handle, x, y);
 }
 
 #[no_mangle]
