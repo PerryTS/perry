@@ -618,6 +618,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
         computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported: false,
+        is_nested: false,
         aliases: Vec::new(),
     });
 
@@ -688,6 +689,7 @@ fn infers_named_class_and_interface_property_facts() {
         computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported: false,
+        is_nested: false,
         aliases: Vec::new(),
     });
     module.classes.push(Class {
@@ -710,6 +712,7 @@ fn infers_named_class_and_interface_property_facts() {
         computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported: false,
+        is_nested: false,
         aliases: Vec::new(),
     });
     module.interfaces.push(Interface {
@@ -1645,6 +1648,7 @@ fn resolves_this_and_super_in_class_context() {
         computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported: false,
+        is_nested: false,
         aliases: Vec::new(),
     });
     module.classes.push(Class {
@@ -1667,6 +1671,7 @@ fn resolves_this_and_super_in_class_context() {
         computed_members: Vec::new(),
         decorators: Vec::new(),
         is_exported: false,
+        is_nested: false,
         aliases: Vec::new(),
     });
 
