@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2810 entries across 115 modules.
+Total: 2814 entries across 115 modules.
 
 ## Modules
 
@@ -2941,8 +2941,11 @@ Total: 2810 entries across 115 modules.
 
 ### Methods
 
+- `autoOrient` — instance
 - `blur` — instance
+- `composite` — instance
 - `default` — module
+- `extend` — instance
 - `extract` — instance
 - `flip` — instance
 - `flop` — instance
@@ -2957,6 +2960,7 @@ Total: 2810 entries across 115 modules.
 - `sharpen` — instance
 - `toBuffer` — instance
 - `toFile` — instance
+- `trim` — instance
 - `webp` — instance
 - `width` — instance
 

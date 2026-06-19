@@ -102,6 +102,45 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "sharp",
         has_receiver: true,
+        method: "autoOrient",
+        class_filter: None,
+        runtime: "js_sharp_auto_orient",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // `.extend({ top, bottom, left, right, background })` — options object.
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "extend",
+        class_filter: None,
+        runtime: "js_sharp_extend",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "trim",
+        class_filter: None,
+        runtime: "js_sharp_trim",
+        args: &[],
+        ret: NR_PTR,
+    },
+    // `.composite([{ input, top, left }, …])` — array of layer objects, passed
+    // as a NaN-boxed pointer (NA_F64 slot); `js_sharp_composite` walks it.
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
+        method: "composite",
+        class_filter: None,
+        runtime: "js_sharp_composite",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "sharp",
+        has_receiver: true,
         method: "jpeg",
         class_filter: None,
         runtime: "js_sharp_jpeg",

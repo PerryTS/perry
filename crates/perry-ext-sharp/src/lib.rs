@@ -6,10 +6,10 @@
 
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use perry_ffi::{
-    alloc_buffer, alloc_string, build_object_shape, get_handle, js_object_alloc_with_shape,
-    js_object_set_field, read_buffer_bytes, read_bytes, read_string, register_handle,
-    spawn_blocking, BufferHeader, Handle, JsPromise, JsString, JsValue, ObjectHeader, Promise,
-    StringHeader,
+    alloc_buffer, alloc_string, build_object_shape, get_handle, js_array_get, js_array_length,
+    js_object_alloc_with_shape, js_object_set_field, read_buffer_bytes, read_bytes, read_string,
+    register_handle, spawn_blocking, ArrayHeader, BufferHeader, Handle, JsPromise, JsString,
+    JsValue, ObjectHeader, Promise, StringHeader,
 };
 use std::io::Cursor;
 
@@ -47,10 +47,109 @@ unsafe fn opts_number_field(opts: f64, name: &str) -> Option<f64> {
     }
 }
 
+/// Raw NaN-box bits (as `f64`) of object field `name` — for reading a nested
+/// object field (e.g. `extend({ background })`). `None` if `obj` isn't an
+/// object.
+unsafe fn opts_field_bits(opts: f64, name: &str) -> Option<f64> {
+    let jv = JsValue::from_bits(opts.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let obj = jv.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return None;
+    }
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    Some(js_object_get_field_by_name_f64(obj, key))
+}
+
+/// Read a `{ r, g, b, alpha }` background colour from `opts.background`.
+/// sharp uses `r`/`g`/`b` in 0–255 and `alpha` in 0–1; defaults to opaque
+/// black when absent.
+unsafe fn read_background(opts: f64) -> image::Rgba<u8> {
+    let bg = match opts_field_bits(opts, "background") {
+        Some(b) => b,
+        None => return image::Rgba([0, 0, 0, 255]),
+    };
+    let chan = |n: &str, d: f64| opts_number_field(bg, n).unwrap_or(d).clamp(0.0, 255.0) as u8;
+    let alpha = (opts_number_field(bg, "alpha")
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0)
+        * 255.0)
+        .round() as u8;
+    image::Rgba([chan("r", 0.0), chan("g", 0.0), chan("b", 0.0), alpha])
+}
+
+/// Decode a composite-layer `input` (a path string or a Buffer) to an image.
+///
+/// # Safety
+/// `input_bits` is the raw NaN-box bits of a JS string or Buffer value.
+unsafe fn decode_image_from_value(input_bits: i64) -> Option<DynamicImage> {
+    let ptr = js_get_string_pointer_unified(f64::from_bits(input_bits as u64));
+    if ptr == 0 {
+        return None;
+    }
+    if js_buffer_is_buffer(ptr) != 0 {
+        let bytes = read_buffer_bytes(ptr as *const BufferHeader)?;
+        image::load_from_memory(bytes).ok()
+    } else if JsValue::from_bits(input_bits as u64).is_pointer() {
+        None // object/array — not a valid input
+    } else {
+        let path = read_string(JsString::from_raw(ptr as *mut StringHeader))?;
+        let bytes = std::fs::read(path).ok()?;
+        image::load_from_memory(&bytes).ok()
+    }
+}
+
 pub struct SharpHandle {
     pub image: DynamicImage,
     pub format: ImageFormat,
     pub quality: u8,
+    /// EXIF orientation (1–8) read at load; 1 once consumed by autoOrient.
+    pub orientation: u8,
+}
+
+impl SharpHandle {
+    /// A new handle wrapping `image`, inheriting this handle's
+    /// format / quality / orientation. Used by the transform methods.
+    fn with_image(&self, image: DynamicImage) -> Self {
+        SharpHandle {
+            image,
+            format: self.format,
+            quality: self.quality,
+            orientation: self.orientation,
+        }
+    }
+}
+
+/// EXIF orientation (1–8) from encoded image bytes, defaulting to 1 (normal)
+/// when absent or unreadable.
+fn read_exif_orientation(bytes: &[u8]) -> u8 {
+    let mut cursor = std::io::Cursor::new(bytes);
+    if let Ok(exif) = exif::Reader::new().read_from_container(&mut cursor) {
+        if let Some(field) = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
+            if let Some(v) = field.value.get_uint(0) {
+                if (1..=8).contains(&v) {
+                    return v as u8;
+                }
+            }
+        }
+    }
+    1
+}
+
+/// Apply an EXIF orientation (1–8) so the pixels are upright.
+fn apply_orientation(img: DynamicImage, orientation: u8) -> DynamicImage {
+    match orientation {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img,
+    }
 }
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
@@ -77,20 +176,9 @@ fn fmt_name(format: ImageFormat) -> &'static str {
 /// `path_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_sharp_from_file(path_ptr: *const StringHeader) -> Handle {
-    let path = match read_str(path_ptr) {
-        Some(p) => p,
-        None => return -1,
-    };
-    match image::open(&path) {
-        Ok(img) => {
-            let format = ImageFormat::from_path(&path).unwrap_or(ImageFormat::Png);
-            register_handle(SharpHandle {
-                image: img,
-                format,
-                quality: 80,
-            })
-        }
-        Err(_) => -1,
+    match read_str(path_ptr) {
+        Some(path) => open_image_path(&path),
+        None => -1,
     }
 }
 
@@ -99,30 +187,23 @@ pub unsafe extern "C" fn js_sharp_from_file(path_ptr: *const StringHeader) -> Ha
 /// (binary bytes — UTF-8 not required).
 #[no_mangle]
 pub unsafe extern "C" fn js_sharp_from_buffer(buffer_ptr: *const StringHeader) -> Handle {
-    let buffer = match read_buf(buffer_ptr) {
-        Some(b) => b,
-        None => return -1,
-    };
-    match image::load_from_memory(&buffer) {
-        Ok(img) => {
-            let format = image::guess_format(&buffer).unwrap_or(ImageFormat::Png);
-            register_handle(SharpHandle {
-                image: img,
-                format,
-                quality: 80,
-            })
-        }
-        Err(_) => -1,
+    match read_buf(buffer_ptr) {
+        Some(buffer) => decode_image_bytes(&buffer),
+        None => -1,
     }
 }
 
 fn open_image_path(path: &str) -> Handle {
-    match image::open(path) {
-        Ok(img) => register_handle(SharpHandle {
-            image: img,
-            format: ImageFormat::from_path(path).unwrap_or(ImageFormat::Png),
-            quality: 80,
-        }),
+    match std::fs::read(path) {
+        Ok(bytes) => match image::load_from_memory(&bytes) {
+            Ok(img) => register_handle(SharpHandle {
+                image: img,
+                format: ImageFormat::from_path(path).unwrap_or(ImageFormat::Png),
+                quality: 80,
+                orientation: read_exif_orientation(&bytes),
+            }),
+            Err(_) => -1,
+        },
         Err(_) => -1,
     }
 }
@@ -133,6 +214,7 @@ fn decode_image_bytes(bytes: &[u8]) -> Handle {
             image: img,
             format: image::guess_format(bytes).unwrap_or(ImageFormat::Png),
             quality: 80,
+            orientation: read_exif_orientation(bytes),
         }),
         Err(_) => -1,
     }
@@ -239,6 +321,7 @@ pub extern "C" fn js_sharp_resize(handle: Handle, width: f64, height: f64) -> Ha
             image: resized,
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -247,16 +330,35 @@ pub extern "C" fn js_sharp_resize(handle: Handle, width: f64, height: f64) -> Ha
 #[no_mangle]
 pub extern "C" fn js_sharp_rotate(handle: Handle, angle: f64) -> Handle {
     if let Some(sharp) = get_handle::<SharpHandle>(handle) {
+        // sharp's `.rotate()` with no angle auto-orients from EXIF. A missing
+        // arg arrives as `undefined` (NaN-boxed → NaN here).
+        if angle.is_nan() {
+            let img = apply_orientation(sharp.image.clone(), sharp.orientation);
+            return register_handle(SharpHandle {
+                orientation: 1,
+                ..sharp.with_image(img)
+            });
+        }
         let rotated = match angle as i32 {
             90 => sharp.image.rotate90(),
             180 => sharp.image.rotate180(),
             270 => sharp.image.rotate270(),
             _ => sharp.image.clone(),
         };
+        return register_handle(sharp.with_image(rotated));
+    }
+    -1
+}
+
+/// `.autoOrient()` — rotate/flip the pixels per the EXIF orientation read at
+/// load, then clear the orientation (it's been consumed).
+#[no_mangle]
+pub extern "C" fn js_sharp_auto_orient(handle: Handle) -> Handle {
+    if let Some(sharp) = get_handle::<SharpHandle>(handle) {
+        let img = apply_orientation(sharp.image.clone(), sharp.orientation);
         return register_handle(SharpHandle {
-            image: rotated,
-            format: sharp.format,
-            quality: sharp.quality,
+            orientation: 1,
+            ..sharp.with_image(img)
         });
     }
     -1
@@ -269,6 +371,7 @@ pub extern "C" fn js_sharp_flip(handle: Handle) -> Handle {
             image: sharp.image.flipv(),
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -281,6 +384,7 @@ pub extern "C" fn js_sharp_flop(handle: Handle) -> Handle {
             image: sharp.image.fliph(),
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -293,6 +397,7 @@ pub extern "C" fn js_sharp_grayscale(handle: Handle) -> Handle {
             image: sharp.image.grayscale(),
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -305,6 +410,7 @@ pub extern "C" fn js_sharp_blur(handle: Handle, sigma: f64) -> Handle {
             image: sharp.image.blur(sigma as f32),
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -317,6 +423,7 @@ pub extern "C" fn js_sharp_sharpen(handle: Handle) -> Handle {
             image: sharp.image.unsharpen(1.0, 1),
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -337,6 +444,7 @@ pub extern "C" fn js_sharp_crop(
                 .crop_imm(left as u32, top as u32, width as u32, height as u32),
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -361,7 +469,106 @@ pub unsafe extern "C" fn js_sharp_extract(handle: Handle, opts: f64) -> Handle {
             ),
             format: sharp.format,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
+    }
+    -1
+}
+
+/// `.extend({ top, bottom, left, right, background })` — pad the image with a
+/// background colour (default opaque black).
+///
+/// # Safety
+/// `opts` carries the raw NaN-boxed bits of a JS object.
+#[no_mangle]
+pub unsafe extern "C" fn js_sharp_extend(handle: Handle, opts: f64) -> Handle {
+    if let Some(sharp) = get_handle::<SharpHandle>(handle) {
+        let f = |name: &str| opts_number_field(opts, name).unwrap_or(0.0).max(0.0) as u32;
+        let (top, bottom, left, right) = (f("top"), f("bottom"), f("left"), f("right"));
+        let (w, h) = sharp.image.dimensions();
+        let mut canvas =
+            image::RgbaImage::from_pixel(w + left + right, h + top + bottom, read_background(opts));
+        let src = sharp.image.to_rgba8();
+        image::imageops::overlay(&mut canvas, &src, left as i64, top as i64);
+        return register_handle(sharp.with_image(DynamicImage::ImageRgba8(canvas)));
+    }
+    -1
+}
+
+/// `.trim()` — auto-crop a uniform border, detected from the top-left pixel
+/// with a small colour tolerance (matching sharp's default threshold of 10).
+#[no_mangle]
+pub extern "C" fn js_sharp_trim(handle: Handle) -> Handle {
+    if let Some(sharp) = get_handle::<SharpHandle>(handle) {
+        let rgba = sharp.image.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        if w == 0 || h == 0 {
+            return register_handle(sharp.with_image(sharp.image.clone()));
+        }
+        let bg = *rgba.get_pixel(0, 0);
+        const TOL: i32 = 10;
+        let close =
+            |p: &image::Rgba<u8>| (0..4).all(|c| (p.0[c] as i32 - bg.0[c] as i32).abs() <= TOL);
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (w, h, 0u32, 0u32);
+        let mut found = false;
+        for y in 0..h {
+            for x in 0..w {
+                if !close(rgba.get_pixel(x, y)) {
+                    found = true;
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+        let cropped = if found {
+            sharp
+                .image
+                .crop_imm(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+        } else {
+            sharp.image.clone()
+        };
+        return register_handle(sharp.with_image(cropped));
+    }
+    -1
+}
+
+/// `.composite([{ input, top, left }, …])` — overlay each layer onto the base
+/// image at `(left, top)` with alpha blending. `input` is a path or Buffer.
+///
+/// # Safety
+/// `layers` carries the raw NaN-boxed bits of a JS array of objects.
+#[no_mangle]
+pub unsafe extern "C" fn js_sharp_composite(handle: Handle, layers: f64) -> Handle {
+    if let Some(sharp) = get_handle::<SharpHandle>(handle) {
+        let mut canvas = sharp.image.to_rgba8();
+        let jv = JsValue::from_bits(layers.to_bits());
+        if jv.is_pointer() {
+            let arr = jv.as_pointer::<ArrayHeader>();
+            if !arr.is_null() {
+                let len = js_array_length(arr);
+                for i in 0..len {
+                    let elem = js_array_get(arr, i);
+                    if !elem.is_pointer() {
+                        continue;
+                    }
+                    let elem_f64 = f64::from_bits(elem.bits());
+                    let input_bits = match opts_field_bits(elem_f64, "input") {
+                        Some(b) => b.to_bits() as i64,
+                        None => continue,
+                    };
+                    let layer = match decode_image_from_value(input_bits) {
+                        Some(img) => img.to_rgba8(),
+                        None => continue,
+                    };
+                    let top = opts_number_field(elem_f64, "top").unwrap_or(0.0) as i64;
+                    let left = opts_number_field(elem_f64, "left").unwrap_or(0.0) as i64;
+                    image::imageops::overlay(&mut canvas, &layer, left, top);
+                }
+            }
+        }
+        return register_handle(sharp.with_image(DynamicImage::ImageRgba8(canvas)));
     }
     -1
 }
@@ -373,6 +580,7 @@ pub extern "C" fn js_sharp_jpeg(handle: Handle, quality: f64) -> Handle {
             image: sharp.image.clone(),
             format: ImageFormat::Jpeg,
             quality: if quality > 0.0 { quality as u8 } else { 80 },
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -385,6 +593,7 @@ pub extern "C" fn js_sharp_png(handle: Handle) -> Handle {
             image: sharp.image.clone(),
             format: ImageFormat::Png,
             quality: sharp.quality,
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -397,6 +606,7 @@ pub extern "C" fn js_sharp_webp(handle: Handle, quality: f64) -> Handle {
             image: sharp.image.clone(),
             format: ImageFormat::WebP,
             quality: if quality > 0.0 { quality as u8 } else { 80 },
+            orientation: sharp.orientation,
         });
     }
     -1
@@ -586,6 +796,7 @@ mod tests {
             image: img,
             format: ImageFormat::Png,
             quality: 80,
+            orientation: 1,
         })
     }
 
@@ -632,5 +843,29 @@ mod tests {
     fn invalid_handle_returns_zero_dims() {
         assert_eq!(js_sharp_width(-1), 0.0);
         assert_eq!(js_sharp_height(-1), 0.0);
+    }
+
+    #[test]
+    fn orientation_6_swaps_dimensions() {
+        // EXIF orientation 6 = rotate 90° CW → W×H becomes H×W.
+        let buf: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(10, 4, Rgba([1, 2, 3, 255]));
+        let img = DynamicImage::ImageRgba8(buf);
+        let oriented = apply_orientation(img, 6);
+        assert_eq!(oriented.dimensions(), (4, 10));
+    }
+
+    #[test]
+    fn orientation_1_is_identity() {
+        let buf: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(10, 4, Rgba([1, 2, 3, 255]));
+        let img = DynamicImage::ImageRgba8(buf);
+        assert_eq!(apply_orientation(img, 1).dimensions(), (10, 4));
+    }
+
+    #[test]
+    fn no_exif_orientation_defaults_to_1() {
+        // Raw bytes with no EXIF container parse to orientation 1.
+        assert_eq!(read_exif_orientation(b"not an image"), 1);
     }
 }

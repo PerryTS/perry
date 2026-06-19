@@ -12,6 +12,7 @@ crate-type = ["staticlib", "rlib"]
 perry-ffi.workspace = true
 image = "0.25"
 fast_image_resize = "5"
+kamadak-exif = "0.6"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

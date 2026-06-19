@@ -1,3 +1,36 @@
+## v0.5.1194 — feat(sharp): EXIF auto-orient, `.extend()`, `.trim()`, `.composite()`
+
+More sharp parity, pure-Rust (no libvips):
+
+- **EXIF auto-orient.** The orientation tag (1–8) is read at load (`kamadak-exif`) and
+  stored on the handle. `.autoOrient()` applies the rotate/flip so pixels are upright and
+  clears the tag; `.rotate()` with **no angle** also auto-orients (classic sharp behavior —
+  a missing arg arrives as NaN). A 6×4 JPEG tagged orientation-6 becomes an upright 4×6;
+  images without EXIF are unchanged.
+- **`.extend({ top, bottom, left, right, background })`** pads the image with a background
+  colour (`{ r, g, b, alpha }`, r/g/b 0–255 and alpha 0–1; default opaque black).
+- **`.trim()`** auto-crops a uniform border, detected from the top-left pixel with sharp's
+  default colour tolerance (10).
+- **`.composite([{ input, top, left }, …])`** overlays layers (each `input` a path or
+  Buffer) onto the base with alpha blending, walking the JS array of layer objects at the
+  ext-crate boundary.
+
+All four are wired end-to-end (dispatch rows, FFI decls, manifest entries, fluent-chain
+allowlist) and chain like the rest. Loaders were unified so file and Buffer inputs share the
+EXIF-reading path; `js_sharp_from_file`/`from_buffer` now delegate to the shared
+`open_image_path`/`decode_image_bytes`.
+
+Validated e2e: orientation-6 JPEG → 4×6 via both `.autoOrient()` and `.rotate()`; no-EXIF
+PNG unchanged; `.extend()` grows 8×8 → 14×12; `.trim()` round-trip (white-border extend then
+trim back to exactly 8×8); `.composite()` overlay produces a valid PNG; full
+`autoOrient→resize→extend→jpeg→toBuffer` chain. `perry-ext-sharp` unit suite 9/9 (incl. new
+orientation-transform tests); API docs regenerated (2810→2814 entries).
+
+Not in this change: animated WebP (the `image` crate has no animated-WebP encoder — a much
+larger lift) and removing the now-largely-redundant `perry-stdlib/src/sharp.rs` copy (it's
+still compiled into the default `full` feature set, so deleting it is a feature-graph change
+deserving its own link-validated PR). AVIF encode + SVG rasterization land separately.
+
 ## v0.5.1193 — feat(compile): lower static literal require in user modules (#5447) — clears Next.js W6
 
 Static-literal `require(...)` in user-compiled modules now lowers into Perry's normal import graph *before* HIR lowering, instead of being left as kept-local `let` bindings. Supported forms: `const mod = require("./local")`, `const { value } = require("./local")`, `require("allowed-package").member`, and `createRequire(import.meta.url)` (incl. renamed `createRequire as makeRequire`). Builtins stay on the native path; package specifiers are gated on `perry.compilePackages`; local `require` shadowing and comments/strings are respected. Replaces the old createRequire-only transform with a broader `static_require_transform` pass.
