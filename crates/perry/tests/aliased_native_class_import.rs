@@ -124,8 +124,7 @@ console.log(typeof q.addSubnet, typeof q.check);
     );
     // It must NOT carry the local alias name anywhere a native class is named.
     assert!(
-        !aliased.contains("class_name: \"Wj4\"")
-            && !aliased.contains("class_name: Some(\"Wj4\")"),
+        !aliased.contains("class_name: \"Wj4\"") && !aliased.contains("class_name: Some(\"Wj4\")"),
         "aliased BlockList still carries the local alias name; HIR:\n{aliased}"
     );
     // And it must match the un-aliased HIR for the relevant lines, modulo
@@ -183,7 +182,10 @@ console.log("write:", typeof s.write);
 console.log("destroy:", typeof s.destroy);
 "#,
     );
-    assert_eq!(stdout, "connect: function\nwrite: function\ndestroy: function\n");
+    assert_eq!(
+        stdout,
+        "connect: function\nwrite: function\ndestroy: function\n"
+    );
 }
 
 /// The aliased binding must resolve to the SAME native methods the un-aliased
