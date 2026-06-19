@@ -16,7 +16,7 @@
 //! Request id never collides with a Response/Headers/Blob id.
 
 use super::*;
-use perry_runtime::js_get_string_pointer_unified;
+use perry_runtime::{js_get_string_pointer_unified, js_jsvalue_to_string};
 
 /// Coerce a `Response` body-init value to a `*const StringHeader` (returned as
 /// i64, mirroring `js_get_string_pointer_unified`).
@@ -53,6 +53,23 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             let bytes = crate::streams::drain_readable_into_bytes(id);
             return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
         }
+    }
+    // A heap-object body — a boxed `String` (hono's `raw()` / JSX `c.html()`
+    // returns `new String(value)` with an `isEscaped` expando), an array, or a
+    // plain object — is a `POINTER_TAG` value. `js_get_string_pointer_unified`
+    // would hand back that object's raw address verbatim, so `js_response_new`
+    // then read a bogus `byte_len` off the `ObjectHeader` (offset 4) and
+    // `memmove`'d ~4 GB of it → SIGSEGV on the first server-rendered admin page
+    // (#5453). The old `string_from_header` path survived only by luck: its
+    // `str::from_utf8` bailed on the first non-UTF-8 byte and returned an empty
+    // body; #5435's lossless raw-byte read removed that accidental guard.
+    //
+    // Per the Fetch spec a non-stream/non-buffer body is coerced with ToString,
+    // so route object bodies through the runtime's ToString (`valueOf`/
+    // `toString`/`[Symbol.toPrimitive]`) — for a boxed `String` that yields its
+    // underlying primitive, the result is always a real `StringHeader`.
+    if JSValue::from_bits(value.to_bits()).is_pointer() {
+        return js_jsvalue_to_string(value) as i64;
     }
     js_get_string_pointer_unified(value)
 }
