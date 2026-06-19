@@ -2107,6 +2107,45 @@ fn native_number_to_f64(ctx: &mut FnCtx<'_>, lowered: &LoweredValue) -> Option<S
     }
 }
 
+fn small_bigint_literal_i128(raw: &str) -> Option<i128> {
+    let normalized = raw.replace('_', "");
+    let s = normalized.strip_suffix('n').unwrap_or(&normalized);
+    let (negative, digits) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let (radix, digits) = if let Some(rest) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        (16, rest)
+    } else if let Some(rest) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
+        (8, rest)
+    } else if let Some(rest) = digits
+        .strip_prefix("0b")
+        .or_else(|| digits.strip_prefix("0B"))
+    {
+        (2, rest)
+    } else {
+        (10, digits)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let magnitude = i128::from_str_radix(digits, radix).ok()?;
+    if negative {
+        magnitude.checked_neg()
+    } else {
+        Some(magnitude)
+    }
+}
+
 fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
     if let Expr::Integer(value) = expr {
         return Ok(Some((*value as i32).to_string()));
@@ -2341,6 +2380,45 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
                 false,
                 false,
                 Vec::new(),
+            );
+            Ok(Some(lowered))
+        }
+        Expr::BigInt(raw) => {
+            let Some(value) = small_bigint_literal_i128(raw) else {
+                let lowered = LoweredValue::js_value("0.0");
+                ctx.record_lowered_value_with_access_mode(
+                    "BigInt",
+                    None,
+                    "ordinary_expr_value.small_bigint_literal_rejected",
+                    &lowered,
+                    None,
+                    None,
+                    Some(BufferAccessMode::DynamicFallback),
+                    Some(MaterializationReason::RuntimeApi),
+                    false,
+                    false,
+                    vec![
+                        "small_bigint_rejected=literal_outside_i128_or_invalid".to_string(),
+                        "fallback=js_bigint_from_string".to_string(),
+                    ],
+                );
+                return Ok(None);
+            };
+            let lowered = LoweredValue::small_bigint(value.to_string());
+            ctx.record_lowered_value(
+                "BigInt",
+                None,
+                "ordinary_expr_value.small_bigint_literal_i128",
+                &lowered,
+                None,
+                None,
+                None,
+                false,
+                false,
+                vec![
+                    "proof=bigint_literal_fits_i128".to_string(),
+                    "public_semantics=materialize_bigint_object_before_js_boundary".to_string(),
+                ],
             );
             Ok(Some(lowered))
         }

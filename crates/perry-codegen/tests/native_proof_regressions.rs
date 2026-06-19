@@ -2005,6 +2005,85 @@ fn artifact_records_native_module_handle_and_promise_boundary_boxing() {
 }
 
 #[test]
+fn small_bigint_literal_stays_i128_until_js_boundary() {
+    let body = vec![Stmt::Return(Some(Expr::BigInt(
+        "0x7fff_ffff_ffff_ffffn".to_string(),
+    )))];
+    let module = module_with_classes_and_params(
+        "artifact_small_bigint_literal.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::BigInt,
+        body,
+    );
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i64 @js_bigint_from_i128_parts")
+            && !ir.contains("call i64 @js_bigint_from_string"),
+        "small BigInt literals should allocate from native i128 parts, not parse strings:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "BigInt"
+                && record["consumer"] == "ordinary_expr_value.small_bigint_literal_i128"
+                && record["native_rep_name"] == "small_bigint"
+                && record["llvm_ty"] == "i128"
+                && record["native_value_state"] == "region_local"
+                && record_has_note(record, "proof=bigint_literal_fits_i128")
+        }),
+        "expected small BigInt literal to be recorded as region-local i128:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "materialize_small_bigint"
+                && record["native_value_state"] == "materialized"
+                && record["native_abi_transition"]["from_native_rep"] == "small_bigint"
+                && record["native_abi_transition"]["to_native_rep"] == "js_value"
+                && record["native_abi_transition"]["op"] == "bigint_box"
+                && record["native_abi_transition"]["lossy"] == false
+        }),
+        "expected small BigInt literal to box only at JS boundary:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn oversized_bigint_literal_records_small_bigint_rejection_and_falls_back() {
+    let too_wide = format!("0x1{}n", "0".repeat(32));
+    let body = vec![Stmt::Return(Some(Expr::BigInt(too_wide)))];
+    let module = module_with_classes_and_params(
+        "artifact_oversized_bigint_literal.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::BigInt,
+        body,
+    );
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i64 @js_bigint_from_string"),
+        "oversized BigInt literals must keep the arbitrary-precision parser fallback:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "BigInt"
+                && record["consumer"] == "ordinary_expr_value.small_bigint_literal_rejected"
+                && record["access_mode"] == "dynamic_fallback"
+                && record_has_note(
+                    record,
+                    "small_bigint_rejected=literal_outside_i128_or_invalid",
+                )
+                && record_has_note(record, "fallback=js_bigint_from_string")
+        }),
+        "expected oversized BigInt literal rejection evidence before fallback:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts() {
     let opts = native_library_opts(vec![
         ("native_ret_jsvalue", vec![], "jsvalue"),
