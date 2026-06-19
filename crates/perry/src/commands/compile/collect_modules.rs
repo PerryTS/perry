@@ -31,18 +31,17 @@ use super::{
     ParseCache,
 };
 
-mod create_require_transform;
 mod crypto_ns;
 mod dynamic_glob;
 mod feature_detect;
 mod import_helpers;
 mod native_addon;
 mod parse_error;
+mod static_require_transform;
 #[cfg(test)]
 mod tests;
 mod wasm_asset;
 
-use create_require_transform::transform_create_require_literal_requires;
 use dynamic_glob::expand_dynamic_import_glob;
 use import_helpers::{
     cached_resolve_import_with_lexical_base, collect_js_module_imports, env_defines_for_lowering,
@@ -52,6 +51,7 @@ use import_helpers::{
 pub(super) use import_helpers::known_node_submodule_key;
 use native_addon::refuse_compile_package_native_addon;
 use parse_error::annotate_parse_error;
+use static_require_transform::transform_static_literal_requires;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_stub_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
@@ -499,13 +499,13 @@ fn collect_module_one(
     } else {
         raw_source
     };
-    // #5247: the create-require transform may prepend `import * as` lines,
+    // #5247: the static-require transform may prepend `import * as` lines,
     // shifting BOTH the prefix and the body down by the same number of lines.
     // Capture the wrapped line count, run the transform, then add the line
     // delta to the prefix so the wrapped-line → original-line subtraction is
     // computed against the FINAL parsed source.
     let lines_before_transform = source.bytes().filter(|&b| b == b'\n').count();
-    let source = transform_create_require_literal_requires(&source, &ctx.compile_packages);
+    let source = transform_static_literal_requires(&source, &ctx.compile_packages);
     if was_cjs_wrapped && ctx.debug_symbols {
         if let Some(prefix_lines) = cjs_wrap_body_prefix_lines {
             let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();

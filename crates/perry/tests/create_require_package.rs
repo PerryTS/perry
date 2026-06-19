@@ -1,19 +1,15 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-#[test]
-fn create_require_literal_package_and_file_resolve_to_compiled_modules() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path();
-
+fn write_minicord_fixture(root: &Path) {
     std::fs::write(
         root.join("package.json"),
         r#"{
-  "name": "create-require-package-reducer",
+  "name": "require-package-reducer",
   "type": "module",
   "perry": {
     "compilePackages": ["minicord"],
@@ -60,6 +56,41 @@ export function localCall(value: string): string {
 "#,
     )
     .expect("write local module");
+}
+
+fn compile_and_run(root: &Path, entry: &Path) -> String {
+    let output = root.join("main_bin");
+    let compile = Command::new(perry_bin())
+        .current_dir(root)
+        .arg("compile")
+        .arg(entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    String::from_utf8(run.stdout).expect("stdout utf8")
+}
+
+#[test]
+fn create_require_literal_package_and_file_resolve_to_compiled_modules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_minicord_fixture(root);
 
     let entry = root.join("main.ts");
     std::fs::write(
@@ -81,34 +112,35 @@ console.log("file:", Local.localValue, Local.localCall("C"));
     )
     .expect("write entry");
 
-    let output = root.join("main_bin");
-    let compile = Command::new(perry_bin())
-        .current_dir(root)
-        .arg("compile")
-        .arg(&entry)
-        .arg("-o")
-        .arg(&output)
-        .output()
-        .expect("run perry compile");
-    assert!(
-        compile.status.success(),
-        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&compile.stdout),
-        String::from_utf8_lossy(&compile.stderr)
-    );
-
-    let run = Command::new(&output).output().expect("run compiled binary");
-    assert!(
-        run.status.success(),
-        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
-        run.status,
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&run.stdout);
     assert_eq!(
-        stdout,
+        compile_and_run(root, &entry),
         "builtin: function\npackage: mini-1 make:B login:A\nfile: local-ok local:C\n"
+    );
+}
+
+#[test]
+fn direct_literal_require_package_and_file_resolve_to_compiled_modules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    write_minicord_fixture(root);
+
+    let entry = root.join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+const Mini = require("minicord");
+const { localValue, localCall } = require("./local");
+
+const client = new Mini.Client("A");
+console.log("package:", Mini.version, Mini.make("B"), client.login());
+console.log("file:", localValue, localCall("C"));
+"#,
+    )
+    .expect("write entry");
+
+    assert_eq!(
+        compile_and_run(root, &entry),
+        "package: mini-1 make:B login:A\nfile: local-ok local:C\n"
     );
 }
 
@@ -188,7 +220,6 @@ console.log(shadowed());
 "#,
     )
     .expect("write entry");
-
     let output = root.join("main_bin");
     let compile = Command::new(perry_bin())
         .current_dir(root)

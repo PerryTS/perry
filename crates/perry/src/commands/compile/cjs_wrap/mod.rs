@@ -36,7 +36,7 @@
 //!     follows up to a small depth (2 levels) to handle one level of env
 //!     switching; deeper indirection is rare and gets the no-op fallback.
 
-mod detect;
+pub(in crate::commands::compile) mod detect;
 mod extract_exports;
 mod extract_requires;
 mod hoist_classes;

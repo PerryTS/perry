@@ -99,8 +99,13 @@ fn supported_require_builtin(specifier: &str) -> Option<&str> {
         | "http" | "http2" | "https" | "module" | "net" | "os" | "path" | "path/posix"
         | "path/win32" | "perf_hooks" | "process" | "punycode" | "querystring" | "readline"
         | "readline/promises" | "stream" | "stream/promises" | "string_decoder" | "sys"
-        | "test" | "test/reporters" | "timers" | "timers/promises" | "tty" | "url" | "util"
-        | "util/types" | "worker_threads" | "zlib" => Some(name),
+        | "test" | "test/reporters" | "timers" | "timers/promises" | "tls" | "tty" | "url"
+        | "util" | "util/types" | "vm" | "wasi" | "worker_threads" | "zlib"
+        // Implemented native modules that were missing from the createRequire
+        // allowlist (they have runtime registry buckets + dispatch, but
+        // `require('tls')` etc. via createRequire was rejected as "package/file").
+        | "dgram" | "domain" | "inspector" | "inspector/promises" | "repl"
+        | "sqlite" => Some(name),
         _ => None,
     }
 }

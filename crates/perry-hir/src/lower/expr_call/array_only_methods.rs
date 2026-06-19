@@ -909,29 +909,32 @@ pub(super) fn try_array_only_methods(
                             // Fall through to string/generic dispatch.
                         } else {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            let is_known_string_prop = matches!(&array_expr,
-                                Expr::PropertyGet { property, .. }
-                                if matches!(
-                                    property.as_str(),
-                                    "stack" | "message" | "name" | "sourceSQL" | "expandedSQL"
-                                )
-                            );
-                            if !is_known_string_prop
-                                && matches!(
-                                    &array_expr,
-                                    Expr::ArrayMap { .. }
-                                        | Expr::ArrayFilter { .. }
-                                        | Expr::ArraySort { .. }
-                                        | Expr::ArraySlice { .. }
-                                        | Expr::Array(_)
-                                        | Expr::ArrayFrom(_)
-                                        | Expr::ArrayFromArrayLikeHoley(_)
-                                        | Expr::StringSplit(_, _)
-                                        | Expr::ObjectKeys(_)
-                                        | Expr::ObjectValues(_)
-                                        | Expr::PropertyGet { .. }
-                                )
-                            {
+                            // #5195: a `PropertyGet` receiver
+                            // (`arr[i].id.indexOf(...)`, `p.id.indexOf(...)`) is
+                            // NOT necessarily an array — the property is very often
+                            // a string. Folding it to `ArrayIndexOf` (an
+                            // element-equality search) silently returned the wrong
+                            // result for string-typed properties; the old hardcoded
+                            // `stack|message|name|…` allowlist only patched a
+                            // handful of property names. Only fold receivers that
+                            // are *provably* array-producing; every other receiver
+                            // (all property accesses included) falls through to the
+                            // generic method dispatch, which checks the runtime
+                            // value type and routes string- vs. array-`indexOf`
+                            // correctly — exactly as the `slice` arm above does.
+                            if matches!(
+                                &array_expr,
+                                Expr::ArrayMap { .. }
+                                    | Expr::ArrayFilter { .. }
+                                    | Expr::ArraySort { .. }
+                                    | Expr::ArraySlice { .. }
+                                    | Expr::Array(_)
+                                    | Expr::ArrayFrom(_)
+                                    | Expr::ArrayFromArrayLikeHoley(_)
+                                    | Expr::StringSplit(_, _)
+                                    | Expr::ObjectKeys(_)
+                                    | Expr::ObjectValues(_)
+                            ) {
                                 let mut it = args.into_iter();
                                 let value_expr = it.next().unwrap();
                                 let from_index = it.next().map(Box::new);
@@ -948,30 +951,26 @@ pub(super) fn try_array_only_methods(
                             // Fall through to string/generic dispatch.
                         } else {
                             let array_expr = lower_expr(ctx, &member.obj)?;
-                            // Don't treat known string-valued properties as arrays.
-                            let is_known_string_prop = matches!(&array_expr,
-                                Expr::PropertyGet { property, .. }
-                                if matches!(
-                                    property.as_str(),
-                                    "stack" | "message" | "name" | "sourceSQL" | "expandedSQL"
-                                )
-                            );
-                            if !is_known_string_prop
-                                && matches!(
-                                    &array_expr,
-                                    Expr::ArrayMap { .. }
-                                        | Expr::ArrayFilter { .. }
-                                        | Expr::ArraySort { .. }
-                                        | Expr::ArraySlice { .. }
-                                        | Expr::Array(_)
-                                        | Expr::ArrayFrom(_)
-                                        | Expr::ArrayFromArrayLikeHoley(_)
-                                        | Expr::StringSplit(_, _)
-                                        | Expr::ObjectKeys(_)
-                                        | Expr::ObjectValues(_)
-                                        | Expr::PropertyGet { .. }
-                                )
-                            {
+                            // #5195: see the `indexOf` arm above — a `PropertyGet`
+                            // receiver is not necessarily an array (the property is
+                            // often a string), so folding it to `ArrayIncludes`
+                            // silently returned `false` on string properties. Only
+                            // fold provably array-producing receivers; property
+                            // accesses fall through to the runtime-type-checked
+                            // generic dispatch.
+                            if matches!(
+                                &array_expr,
+                                Expr::ArrayMap { .. }
+                                    | Expr::ArrayFilter { .. }
+                                    | Expr::ArraySort { .. }
+                                    | Expr::ArraySlice { .. }
+                                    | Expr::Array(_)
+                                    | Expr::ArrayFrom(_)
+                                    | Expr::ArrayFromArrayLikeHoley(_)
+                                    | Expr::StringSplit(_, _)
+                                    | Expr::ObjectKeys(_)
+                                    | Expr::ObjectValues(_)
+                            ) {
                                 let mut it = args.into_iter();
                                 let value_expr = it.next().unwrap();
                                 let from_index = it.next().map(Box::new);
