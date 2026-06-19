@@ -50,20 +50,26 @@ fi
 cd "$ROOT"
 
 ORIGINAL_RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+ORIGINAL_RUSTFLAGS="${RUSTFLAGS:-}"
 CARGO_CONFIG_RUSTC_WRAPPER=""
 for cargo_config in "${CARGO_HOME:-$HOME/.cargo}/config.toml" "$ROOT/.cargo/config.toml"; do
   if [[ -f "$cargo_config" ]]; then
     cargo_config_text="$(tr -d '[:space:]' < "$cargo_config")"
-    if [[ "$cargo_config_text" == *"rustc-wrapper=\"/usr/local/bin/sccache-clay\""* ]]; then
-      CARGO_CONFIG_RUSTC_WRAPPER="/usr/local/bin/sccache-clay"
+    if [[ "$cargo_config_text" == *"rustc-wrapper="* ]]; then
+      CARGO_CONFIG_RUSTC_WRAPPER="configured"
       break
     fi
   fi
 done
 SCRUBBED_RUSTC_WRAPPER=0
-if [[ "${PERRY_EVIDENCE_KEEP_RUSTC_WRAPPER:-0}" != "1" && ( "$ORIGINAL_RUSTC_WRAPPER" == *"sccache-clay"* || "$CARGO_CONFIG_RUSTC_WRAPPER" == *"sccache-clay"* ) ]]; then
+if [[ "${PERRY_EVIDENCE_KEEP_RUSTC_WRAPPER:-0}" != "1" && ( -n "$ORIGINAL_RUSTC_WRAPPER" || -n "$CARGO_CONFIG_RUSTC_WRAPPER" ) ]]; then
   export RUSTC_WRAPPER=""
   SCRUBBED_RUSTC_WRAPPER=1
+fi
+if [[ -n "${PERRY_EVIDENCE_RUSTFLAGS:-}" ]]; then
+  export RUSTFLAGS="$PERRY_EVIDENCE_RUSTFLAGS"
+elif [[ -z "$ORIGINAL_RUSTFLAGS" ]]; then
+  export RUSTFLAGS="-Awarnings"
 fi
 
 PYTHON_BIN="${PYTHON:-}"
@@ -112,7 +118,7 @@ mkdir -p "$OUT_ABS/logs"
 METADATA="$OUT_ABS/metadata.json"
 
 write_metadata() {
-  "$PYTHON_BIN" - "$METADATA" "$RUNS" "$GATE" "$PYTHON_BIN" "$ORIGINAL_RUSTC_WRAPPER" "$CARGO_CONFIG_RUSTC_WRAPPER" "$SCRUBBED_RUSTC_WRAPPER" "${RUSTC_WRAPPER:-}" <<'PY'
+  "$PYTHON_BIN" - "$METADATA" "$RUNS" "$GATE" "$PYTHON_BIN" "$ORIGINAL_RUSTC_WRAPPER" "$CARGO_CONFIG_RUSTC_WRAPPER" "$SCRUBBED_RUSTC_WRAPPER" "${RUSTC_WRAPPER:-}" "$ORIGINAL_RUSTFLAGS" "${RUSTFLAGS:-}" <<'PY'
 import json
 import os
 import sys
@@ -136,7 +142,10 @@ existing.update({
         "rustc_wrapper_config": sys.argv[6],
         "rustc_wrapper_scrubbed": sys.argv[7] == "1",
         "rustc_wrapper_effective": sys.argv[8],
+        "rustflags_original": sys.argv[9],
+        "rustflags_effective": sys.argv[10],
         "keep_rustc_wrapper": os.environ.get("PERRY_EVIDENCE_KEEP_RUSTC_WRAPPER") == "1",
+        "rustflags_override": os.environ.get("PERRY_EVIDENCE_RUSTFLAGS", ""),
     },
     "tool_versions": existing.get("tool_versions", {}),
 })

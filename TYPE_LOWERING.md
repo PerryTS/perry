@@ -375,7 +375,11 @@ Compiler evidence for this branch covers:
   the retained evidence. The native ABI evidence packet also runs
   `scripts/check_runtime_symbols.sh` against the resolved runtime archive and
   fails gate mode unless the log proves the archive defines all sentinel
-  release/LTO helper symbols.
+  release/LTO helper symbols. The packet runner scrubs `RUSTC_WRAPPER` by
+  default, forces `RUSTFLAGS=-Awarnings` for verification commands unless an
+  explicit evidence override is supplied, and records the effective wrapper and
+  flags in packet metadata so release evidence can distinguish fresh local
+  builds from stale cached/LTO artifacts.
 
 Still follow-up unless separately implemented:
 

@@ -593,6 +593,9 @@ jobs:
           sudo apt-get install -y clang
 
       - name: Gate native ABI evidence packet
+        env:
+          RUSTC_WRAPPER: ""
+          RUSTFLAGS: -Awarnings
         run: |
           PYTHON=python3 bash tests/test_native_abi_evidence_packet_smoke.sh \
             target/native-abi-evidence-packet
