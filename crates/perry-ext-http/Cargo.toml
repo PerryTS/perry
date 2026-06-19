@@ -26,6 +26,12 @@ perry-ext-http-server = { path = "../perry-ext-http-server" }
 perry-runtime = { workspace = true, features = ["external-ws-symbols"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false }
 tokio = { workspace = true }
+# Zero-copy body chunks: reqwest::Response::chunk() yields a refcounted
+# `Bytes` that slices the receive buffer. Carrying that `Bytes` through the
+# streaming event enum (instead of `.to_vec()`-ing it) drops one heap alloc
+# + memcpy per response chunk. Already in the lockfile via reqwest/hyper, so
+# declaring it pulls nothing new.
+bytes = "1"
 serde_json = "1"
 lazy_static = "1.5"
 

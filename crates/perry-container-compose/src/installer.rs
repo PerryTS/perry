@@ -16,6 +16,12 @@ struct InstallOption {
     docs_url: &'static str,
 }
 
+impl Default for BackendInstaller {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BackendInstaller {
     pub fn new() -> Self {
         let no_prompt = std::env::var("PERRY_NO_INSTALL_PROMPT").is_ok();

@@ -5641,6 +5641,7 @@ dependencies = [
 name = "perry-ext-http"
 version = "0.5.1189"
 dependencies = [
+ "bytes",
  "lazy_static",
  "perry-ext-http-server",
  "perry-ffi",

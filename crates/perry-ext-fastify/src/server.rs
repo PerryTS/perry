@@ -512,7 +512,7 @@ pub extern "C" fn js_fastify_has_active() -> i32 {
             // perry-ext-http-server's `server_is_active`).
             if let Ok(guard) = s.upgrade_rx.lock() {
                 if let Some(rx) = guard.as_ref() {
-                    if !rx.is_closed() && rx.len() > 0 {
+                    if !rx.is_closed() && !rx.is_empty() {
                         active = 1;
                     }
                 }

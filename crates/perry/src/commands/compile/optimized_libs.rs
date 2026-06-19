@@ -12,8 +12,10 @@
 //! profile are no-ops after the first build.
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
 use crate::OutputFormat;
@@ -676,29 +678,93 @@ pub(super) fn build_optimized_libs(
     // "undefined symbol" link failure for exactly the newly-added entrypoints.
     // Keying on the version forces a matching rebuild whenever perry upgrades.
     // Cheap djb2 — no need for the SipHash overhead.
-    let target_str = target.unwrap_or("host");
-    let key_input = format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|v={}",
-        feature_arg,
-        panic_abort_safe,
-        target_str,
-        ctx.needs_wasm_runtime,
-        ctx.uses_regex,
-        ctx.uses_temporal,
-        ctx.uses_event_emitter,
-        ctx.uses_url,
-        ctx.uses_string_normalize,
-        ctx.uses_intl_segmenter,
-        ctx.uses_intl_locale,
-        ctx.uses_diagnostics,
-        ctx.uses_dgram,
-        env!("CARGO_PKG_VERSION"),
-    );
+    let key_input = auto_optimized_cache_key(&feature_arg, panic_abort_safe, target, ctx);
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
     }
     let (target_dir, cargo_env_dir) = auto_target_dir_paths(&workspace_root, hash);
+    let cross_features = auto_optimized_cross_features(ctx, &features, cli_features);
+    let release_dir = if let Some(triple) = rust_target_triple(target) {
+        target_dir.join(triple).join("release")
+    } else {
+        target_dir.join("release")
+    };
+    let runtime_name = match target {
+        Some("windows") | Some("windows-winui") => "perry_runtime.lib",
+        #[cfg(target_os = "windows")]
+        None => "perry_runtime.lib",
+        _ => "libperry_runtime.a",
+    };
+    let stdlib_name = match target {
+        Some("windows") | Some("windows-winui") => "perry_stdlib.lib",
+        #[cfg(target_os = "windows")]
+        None => "perry_stdlib.lib",
+        _ => "libperry_stdlib.a",
+    };
+    let runtime_path = release_dir.join(runtime_name);
+    let stdlib_path = release_dir.join(stdlib_name);
+    let build_stamp =
+        auto_optimized_build_stamp(&key_input, target, &cross_features, &tokio_using_bindings);
+    let build_stamp_path = target_dir.join(".perry-auto-build.stamp");
+
+    // Closes #25 (the v0.5.384 NJOBS 6->3 retreat): serialize parallel
+    // `perry compile` invocations that target the SAME `target/perry-auto
+    // -<hash>` directory via an OS-level file lock. Cargo has its own
+    // target-dir lock (`.cargo-lock`) that prevents concurrent COMPILES,
+    // but the FILE OUTPUT is rename'd at link end -- meaning worker B's
+    // clang can read `libperry_runtime.a` while worker A's cargo is
+    // mid-rename and see errno=2. The race window is sub-second but
+    // fired reliably at NJOBS=6 on the macos-14 compile-smoke runner.
+    //
+    // The lock is per-hash, so different feature combos still build in
+    // parallel. fslock is portable (flock on Unix, LockFileEx on
+    // Windows) and was already a transitive dep -- no new crate cost.
+    //
+    // Best-effort: if the dir create or lock acquisition fails for any
+    // reason, fall through and run cargo unguarded. The retry loop in
+    // the smoke script's compile_one already handles the residual race
+    // window if any worker still slips through.
+    let _build_lock = {
+        let _ = std::fs::create_dir_all(&target_dir);
+        let lock_path = target_dir.join(".perry-auto-build.lock");
+        match fslock::LockFile::open(&lock_path) {
+            Ok(mut lf) => {
+                let _ = lf.lock();
+                Some(lf)
+            }
+            Err(_) => None,
+        }
+    };
+
+    let bitcode_requested = std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1");
+    if !bitcode_requested
+        && auto_optimized_archives_are_fresh(
+            &workspace_root,
+            &runtime_path,
+            &stdlib_path,
+            &tokio_using_bindings,
+            &build_stamp_path,
+            &build_stamp,
+        )
+    {
+        let well_known_libs = resolve_auto_well_known_libs(
+            &workspace_root,
+            &release_dir,
+            &tokio_using_bindings,
+            target,
+            format,
+        );
+        return OptimizedLibs {
+            runtime: Some(runtime_path),
+            stdlib: Some(stdlib_path),
+            runtime_bc: None,
+            stdlib_bc: None,
+            extra_bc: Vec::new(),
+            well_known_libs,
+            prefer_well_known_before_stdlib: false,
+        };
+    }
 
     if matches!(format, OutputFormat::Text) {
         let panic_str = if panic_abort_safe { "abort" } else { "unwind" };
@@ -755,76 +821,6 @@ pub(super) fn build_optimized_libs(
     // selection — we always enable perry-stdlib's stdlib-side bridge so
     // perry-runtime exports the right symbols, and the user-derived
     // stdlib features.
-    let mut cross_features: Vec<String> = vec![
-        // perry-runtime's "full" feature gates plugin + os.hostname/homedir.
-        // Auto-mode keeps it on so existing behavior is preserved; the
-        // panic mode is what shrinks the binary.
-        "perry-runtime/full".to_string(),
-    ];
-    for f in &features {
-        cross_features.push(format!("perry-stdlib/{}", f));
-    }
-    // CLI `--features` values that target the runtime (game-loop entry-point
-    // shims gated behind `ios-game-loop` / `watchos-game-loop` in
-    // `perry-runtime/Cargo.toml`) need `perry-runtime/<f>` passed through, not
-    // `perry-stdlib/<f>` — they gate a Rust module, not an npm dep surface.
-    for f in cli_features {
-        if f == "ios-game-loop" || f == "watchos-game-loop" || f == "ohos-napi" {
-            cross_features.push(format!("perry-runtime/{}", f));
-        }
-    }
-    // Issue #76 — enable perry-runtime's `wasm-host` feature when the
-    // program references `WebAssembly.*`. Without this the shim TU stays
-    // out of libperry_runtime.a, so unrelated programs don't drag in
-    // unresolved `perry_wasm_host_*` references at link time.
-    if ctx.needs_wasm_runtime {
-        cross_features.push("perry-runtime/wasm-host".to_string());
-    }
-    // Enable the regex engine (`regex` + `fancy-regex`, ~1.2 MB) only when the
-    // program can actually produce or use a RegExp — detected in
-    // collect_modules. A program that never evaluates a regex literal/`RegExp`,
-    // a regex-coercing string method, or a glob API links none of it. The
-    // RegExp identity/display layer is always compiled, so non-regex programs
-    // still format/compare values correctly with the engine absent.
-    if ctx.uses_regex {
-        cross_features.push("perry-runtime/regex-engine".to_string());
-    }
-    // Enable the TC39 Temporal engine (`temporal_rs` + tz/calendar deps,
-    // ~580 KB) only when the program references `Temporal.*`. JS `Date` is a
-    // separate implementation and does not require this.
-    if ctx.uses_temporal {
-        cross_features.push("perry-runtime/temporal".to_string());
-    }
-    // Enable the WHATWG URL host/IDNA engine (`url`+`idna`+transitive
-    // `percent_encoding`, ~195 KB) only when the program uses a URL API.
-    if ctx.uses_url {
-        cross_features.push("perry-runtime/url-engine".to_string());
-    }
-    // `String.prototype.normalize` tables (~113 KB) and `Intl.Segmenter`
-    // UAX #29 tables (~73 KB) — each enabled only on its specific usage.
-    if ctx.uses_string_normalize {
-        cross_features.push("perry-runtime/string-normalize".to_string());
-    }
-    if ctx.uses_intl_segmenter {
-        cross_features.push("perry-runtime/intl-segmenter".to_string());
-    }
-    if ctx.uses_intl_locale {
-        cross_features.push("perry-runtime/intl-locale".to_string());
-    }
-    // Cold-path diagnostic JSON serializers (~95 KB incl. the `serde_json`
-    // pulled only by them) — enabled only when the program uses a heap-snapshot
-    // API or `process.report`. The env-driven GC/typed-feedback dev trace JSON
-    // ride this feature and stay off in size-optimized binaries.
-    if ctx.uses_diagnostics {
-        cross_features.push("perry-runtime/diagnostics".to_string());
-    }
-    // Per-Node-module gating: `node:dgram`'s implementation + dispatch arm are
-    // behind `mod-dgram`, enabled only when the program uses dgram (detected via
-    // `module: "dgram"` in the HIR). codegen only emits the `js_dgram_*` externs
-    // for dgram programs, so detection is complete (no dangling symbols).
-    if ctx.uses_dgram {
-        cross_features.push("perry-runtime/mod-dgram".to_string());
-    }
     if !cross_features.is_empty() {
         cargo_cmd.arg("--features").arg(cross_features.join(","));
     }
@@ -896,35 +892,6 @@ pub(super) fn build_optimized_libs(
         cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
     }
 
-    // Closes #25 (the v0.5.384 NJOBS 6→3 retreat): serialize parallel
-    // `perry compile` invocations that target the SAME `target/perry-auto
-    // -<hash>` directory via an OS-level file lock. Cargo has its own
-    // target-dir lock (`.cargo-lock`) that prevents concurrent COMPILES,
-    // but the FILE OUTPUT is rename'd at link end — meaning worker B's
-    // clang can read `libperry_runtime.a` while worker A's cargo is
-    // mid-rename and see errno=2. The race window is sub-second but
-    // fired reliably at NJOBS=6 on the macos-14 compile-smoke runner.
-    //
-    // The lock is per-hash, so different feature combos still build in
-    // parallel. fslock is portable (flock on Unix, LockFileEx on
-    // Windows) and was already a transitive dep — no new crate cost.
-    //
-    // Best-effort: if the dir create or lock acquisition fails for any
-    // reason, fall through and run cargo unguarded. The retry loop in
-    // the smoke script's compile_one already handles the residual race
-    // window if any worker still slips through.
-    let _build_lock = {
-        let _ = std::fs::create_dir_all(&target_dir);
-        let lock_path = target_dir.join(".perry-auto-build.lock");
-        match fslock::LockFile::open(&lock_path) {
-            Ok(mut lf) => {
-                let _ = lf.lock();
-                Some(lf)
-            }
-            Err(_) => None,
-        }
-    };
-
     let status = match cargo_cmd.status() {
         Ok(s) => s,
         Err(e) => {
@@ -948,27 +915,7 @@ pub(super) fn build_optimized_libs(
         }
         return OptimizedLibs::empty();
     }
-
-    // Resolve both archive paths.
-    let runtime_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_runtime.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_runtime.lib",
-        _ => "libperry_runtime.a",
-    };
-    let stdlib_name = match target {
-        Some("windows") | Some("windows-winui") => "perry_stdlib.lib",
-        #[cfg(target_os = "windows")]
-        None => "perry_stdlib.lib",
-        _ => "libperry_stdlib.a",
-    };
-    let release_dir = if let Some(triple) = rust_target_triple(target) {
-        target_dir.join(triple).join("release")
-    } else {
-        target_dir.join("release")
-    };
-    let runtime_path = release_dir.join(runtime_name);
-    let stdlib_path = release_dir.join(stdlib_name);
+    let _ = std::fs::write(&build_stamp_path, &build_stamp);
 
     if matches!(format, OutputFormat::Text) {
         if let Ok(meta) = std::fs::metadata(&runtime_path) {
@@ -1060,7 +1007,6 @@ pub(super) fn build_optimized_libs(
 
     // Phase J: when PERRY_LLVM_BITCODE_LINK=1, also emit LLVM bitcode
     // (.bc) for whole-program LTO via `cargo rustc --emit=llvm-bc,link`.
-    let bitcode_requested = std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1");
     let (runtime_bc, stdlib_bc, extra_bc) = if bitcode_requested {
         if matches!(format, OutputFormat::Text) {
             println!("  auto-optimize: emitting LLVM bitcode for whole-program LTO");
@@ -1223,6 +1169,263 @@ pub(super) fn build_optimized_libs(
         well_known_libs,
         prefer_well_known_before_stdlib: false,
     }
+}
+
+fn auto_optimized_archives_are_fresh(
+    workspace_root: &Path,
+    runtime_path: &Path,
+    stdlib_path: &Path,
+    tokio_using_bindings: &[(String, String, Option<String>)],
+    build_stamp_path: &Path,
+    expected_build_stamp: &str,
+) -> bool {
+    match fs::read_to_string(build_stamp_path) {
+        Ok(stamp) if stamp == expected_build_stamp => {}
+        _ => return false,
+    }
+
+    let Ok(runtime_mtime) = file_modified(runtime_path) else {
+        return false;
+    };
+    let Ok(stdlib_mtime) = file_modified(stdlib_path) else {
+        return false;
+    };
+    let archive_mtime = runtime_mtime.min(stdlib_mtime);
+
+    let mut inputs = vec![
+        workspace_root.join("Cargo.toml"),
+        workspace_root.join("Cargo.lock"),
+        workspace_root.join("crates/perry-runtime"),
+        workspace_root.join("crates/perry-stdlib"),
+    ];
+    for (krate, _lib, _tracking) in tokio_using_bindings {
+        inputs.push(workspace_root.join("crates").join(krate));
+    }
+
+    for input in inputs {
+        if input_newer_than(&input, archive_mtime).unwrap_or(true) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Cache key for the auto-optimize target dir + build stamp. Hashed into the
+/// `target/perry-auto-<hash>` dir name so each (features, panic-mode, target,
+/// runtime-gate, version) combination gets its own incremental cache. Kept in
+/// one place so `build_optimized_libs` and its freshness tests can never drift.
+fn auto_optimized_cache_key(
+    feature_arg: &str,
+    panic_abort_safe: bool,
+    target: Option<&str>,
+    ctx: &CompilationContext,
+) -> String {
+    let target_str = target.unwrap_or("host");
+    format!(
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|v={}",
+        feature_arg,
+        panic_abort_safe,
+        target_str,
+        ctx.needs_wasm_runtime,
+        ctx.uses_regex,
+        ctx.uses_temporal,
+        ctx.uses_event_emitter,
+        ctx.uses_url,
+        ctx.uses_string_normalize,
+        ctx.uses_intl_segmenter,
+        ctx.uses_intl_locale,
+        ctx.uses_diagnostics,
+        ctx.uses_dgram,
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+fn auto_optimized_cross_features(
+    ctx: &CompilationContext,
+    features: &BTreeSet<&'static str>,
+    cli_features: &[String],
+) -> Vec<String> {
+    let mut cross_features: Vec<String> = vec![
+        // perry-runtime's "full" feature gates plugin + os.hostname/homedir.
+        // Auto-mode keeps it on so existing behavior is preserved; the
+        // panic mode is what shrinks the binary.
+        "perry-runtime/full".to_string(),
+    ];
+    for f in features {
+        cross_features.push(format!("perry-stdlib/{}", f));
+    }
+    // CLI `--features` values that target the runtime (game-loop entry-point
+    // shims gated behind `ios-game-loop` / `watchos-game-loop` in
+    // `perry-runtime/Cargo.toml`) need `perry-runtime/<f>` passed through, not
+    // `perry-stdlib/<f>` — they gate a Rust module, not an npm dep surface.
+    for f in cli_features {
+        if f == "ios-game-loop" || f == "watchos-game-loop" || f == "ohos-napi" {
+            cross_features.push(format!("perry-runtime/{}", f));
+        }
+    }
+    // Issue #76 — enable perry-runtime's `wasm-host` feature when the
+    // program references `WebAssembly.*`. Without this the shim TU stays
+    // out of libperry_runtime.a, so unrelated programs don't drag in
+    // unresolved `perry_wasm_host_*` references at link time.
+    if ctx.needs_wasm_runtime {
+        cross_features.push("perry-runtime/wasm-host".to_string());
+    }
+    // Binary-size feature gating (kept in sync with the inline list on `main`):
+    // each engine/table is linked only when the program actually uses it.
+    if ctx.uses_regex {
+        cross_features.push("perry-runtime/regex-engine".to_string());
+    }
+    if ctx.uses_temporal {
+        cross_features.push("perry-runtime/temporal".to_string());
+    }
+    if ctx.uses_url {
+        cross_features.push("perry-runtime/url-engine".to_string());
+    }
+    if ctx.uses_string_normalize {
+        cross_features.push("perry-runtime/string-normalize".to_string());
+    }
+    if ctx.uses_intl_segmenter {
+        cross_features.push("perry-runtime/intl-segmenter".to_string());
+    }
+    if ctx.uses_intl_locale {
+        cross_features.push("perry-runtime/intl-locale".to_string());
+    }
+    if ctx.uses_diagnostics {
+        cross_features.push("perry-runtime/diagnostics".to_string());
+    }
+    if ctx.uses_dgram {
+        cross_features.push("perry-runtime/mod-dgram".to_string());
+    }
+    cross_features
+}
+
+fn auto_optimized_build_stamp(
+    key_input: &str,
+    target: Option<&str>,
+    cross_features: &[String],
+    tokio_using_bindings: &[(String, String, Option<String>)],
+) -> String {
+    let mut stamp = String::new();
+    stamp.push_str("perry-auto-optimized-v1\n");
+    stamp.push_str("key=");
+    stamp.push_str(key_input);
+    stamp.push('\n');
+    stamp.push_str("target=");
+    stamp.push_str(target.unwrap_or("host"));
+    stamp.push('\n');
+    stamp.push_str("triple=");
+    stamp.push_str(rust_target_triple(target).unwrap_or("host"));
+    stamp.push('\n');
+    stamp.push_str("features=");
+    stamp.push_str(&cross_features.join(","));
+    stamp.push('\n');
+    stamp.push_str("tokio=");
+    for (index, (krate, lib, tracking)) in tokio_using_bindings.iter().enumerate() {
+        if index > 0 {
+            stamp.push(',');
+        }
+        stamp.push_str(krate);
+        stamp.push(':');
+        stamp.push_str(lib);
+        stamp.push(':');
+        stamp.push_str(tracking.as_deref().unwrap_or(""));
+    }
+    stamp.push('\n');
+    stamp
+}
+
+fn input_newer_than(path: &Path, archive_mtime: SystemTime) -> std::io::Result<bool> {
+    let meta = fs::metadata(path)?;
+    if meta.is_file() {
+        return Ok(meta.modified()? > archive_mtime);
+    }
+    if !meta.is_dir() {
+        return Ok(false);
+    }
+
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let child = entry.path();
+        let Some(name) = child.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name == "target" || name == ".git" {
+            continue;
+        }
+        if input_newer_than(&child, archive_mtime)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn file_modified(path: &Path) -> std::io::Result<SystemTime> {
+    let meta = fs::metadata(path)?;
+    if !meta.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "expected archive file",
+        ));
+    }
+    meta.modified()
+}
+
+fn resolve_auto_well_known_libs(
+    workspace_root: &Path,
+    release_dir: &Path,
+    tokio_using_bindings: &[(String, String, Option<String>)],
+    target: Option<&str>,
+    format: OutputFormat,
+) -> Vec<PathBuf> {
+    let mut well_known_libs = Vec::new();
+    for (krate, lib, _tracking) in tokio_using_bindings {
+        let lib_filename =
+            super::well_known::ext_staticlib_filename(lib, rust_target_triple(target));
+        let lib_path = release_dir.join(&lib_filename);
+        if lib_path.exists() {
+            well_known_libs.push(lib_path);
+            continue;
+        }
+
+        let fallback = if let Some(triple) = rust_target_triple(target) {
+            let triple_path = workspace_root
+                .join("target")
+                .join(triple)
+                .join("release")
+                .join(&lib_filename);
+            if triple_path.exists() {
+                triple_path
+            } else {
+                workspace_root
+                    .join("target")
+                    .join("release")
+                    .join(&lib_filename)
+            }
+        } else {
+            workspace_root
+                .join("target")
+                .join("release")
+                .join(&lib_filename)
+        };
+        if fallback.exists() {
+            if matches!(format, OutputFormat::Text) {
+                eprintln!(
+                    "  well-known: rebuild produced no `{}` in {} — \
+                     using workspace fallback (CONTEXT panic risk on tokio I/O)",
+                    lib_filename,
+                    release_dir.display()
+                );
+            }
+            well_known_libs.push(fallback);
+        } else if matches!(format, OutputFormat::Text) {
+            eprintln!(
+                "  well-known: rebuild produced no `{}` for `{}`; \
+                 skipping — link will likely fail with unresolved js_* symbols.",
+                lib_filename, krate
+            );
+        }
+    }
+    well_known_libs
 }
 
 /// #2532 / #3954 — resolve the `perry-ext-*` staticlibs a program needs
@@ -1466,6 +1669,180 @@ mod tests {
             Some(value) => std::env::set_var(key, value),
             None => std::env::remove_var(key),
         }
+    }
+
+    fn write_file(path: &Path, contents: &[u8]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir parent");
+        }
+        std::fs::write(path, contents).expect("write test file");
+    }
+
+    fn minimal_auto_workspace(dir: &Path) {
+        write_file(&dir.join("Cargo.toml"), b"[workspace]\n");
+        write_file(&dir.join("Cargo.lock"), b"# lock\n");
+        write_file(&dir.join("crates/perry-runtime/Cargo.toml"), b"[package]\n");
+        write_file(
+            &dir.join("crates/perry-runtime/src/lib.rs"),
+            b"pub fn rt() {}\n",
+        );
+        write_file(&dir.join("crates/perry-stdlib/Cargo.toml"), b"[package]\n");
+        write_file(
+            &dir.join("crates/perry-stdlib/src/lib.rs"),
+            b"pub fn stdlib() {}\n",
+        );
+    }
+
+    #[test]
+    fn auto_optimized_archives_are_fresh_when_newer_than_sources() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        minimal_auto_workspace(dir.path());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let runtime = dir
+            .path()
+            .join("target/perry-auto/release/libperry_runtime.a");
+        let stdlib = dir
+            .path()
+            .join("target/perry-auto/release/libperry_stdlib.a");
+        write_file(&runtime, b"!<arch>\n");
+        write_file(&stdlib, b"!<arch>\n");
+        let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
+        write_file(&stamp, b"test-stamp");
+
+        assert!(auto_optimized_archives_are_fresh(
+            dir.path(),
+            &runtime,
+            &stdlib,
+            &[],
+            &stamp,
+            "test-stamp"
+        ));
+    }
+
+    #[test]
+    fn build_optimized_libs_reuses_fresh_auto_archives_without_cargo() {
+        let _env = env_lock();
+        let original_path = std::env::var_os("PATH");
+        let original_bitcode = std::env::var_os("PERRY_LLVM_BITCODE_LINK");
+        let workspace_root = find_perry_workspace_root().expect("workspace root");
+
+        let mut ctx = CompilationContext::new(workspace_root.clone());
+        ctx.needs_wasm_runtime = true;
+
+        // Derive the cache key / target dir / stamp exactly as
+        // `build_optimized_libs` does for this ctx, so the freshness probe finds
+        // the archives we plant (instead of hardcoding a key string that drifts
+        // whenever the cache-key inputs change).
+        // Mirror build_optimized_libs's feature derivation for this import-free
+        // ctx: it always force-adds `crypto` (perry-stdlib's crypto module is
+        // unconditionally linked into the auto-optimize rebuild), and the
+        // import-/fetch-driven unions don't fire for a fresh ctx.
+        let mut features = compute_required_features(
+            &ctx.native_module_imports,
+            ctx.uses_fetch,
+            ctx.uses_crypto_builtins,
+        );
+        features.insert("crypto");
+        let feature_arg = features_to_cargo_arg(&features);
+        let panic_abort_safe =
+            !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
+        let key_input = auto_optimized_cache_key(&feature_arg, panic_abort_safe, None, &ctx);
+        let mut hash: u64 = 5381;
+        for b in key_input.as_bytes() {
+            hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
+        }
+        let (target_dir, _) = auto_target_dir_paths(&workspace_root, hash);
+        let release_dir = target_dir.join("release");
+        let runtime = release_dir.join("libperry_runtime.a");
+        let stdlib = release_dir.join("libperry_stdlib.a");
+        std::fs::create_dir_all(&release_dir).expect("mkdir release dir");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        write_file(&runtime, b"!<arch>\n");
+        write_file(&stdlib, b"!<arch>\n");
+        let cross_features = auto_optimized_cross_features(&ctx, &features, &[]);
+        let stamp = auto_optimized_build_stamp(&key_input, None, &cross_features, &[]);
+        write_file(
+            &target_dir.join(".perry-auto-build.stamp"),
+            stamp.as_bytes(),
+        );
+
+        let fake_path = tempfile::tempdir().expect("fake PATH");
+        std::env::set_var("PATH", fake_path.path());
+        std::env::remove_var("PERRY_LLVM_BITCODE_LINK");
+
+        let libs = build_optimized_libs(&ctx, None, &[], OutputFormat::Json, 0);
+
+        set_env_var("PATH", original_path.as_deref().and_then(|v| v.to_str()));
+        set_env_var(
+            "PERRY_LLVM_BITCODE_LINK",
+            original_bitcode.as_deref().and_then(|v| v.to_str()),
+        );
+
+        assert_eq!(libs.runtime.as_deref(), Some(runtime.as_path()));
+        assert_eq!(libs.stdlib.as_deref(), Some(stdlib.as_path()));
+    }
+
+    #[test]
+    fn auto_optimized_archives_are_stale_when_runtime_source_is_newer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        minimal_auto_workspace(dir.path());
+        let runtime = dir
+            .path()
+            .join("target/perry-auto/release/libperry_runtime.a");
+        let stdlib = dir
+            .path()
+            .join("target/perry-auto/release/libperry_stdlib.a");
+        write_file(&runtime, b"!<arch>\n");
+        write_file(&stdlib, b"!<arch>\n");
+        let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
+        write_file(&stamp, b"test-stamp");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        write_file(
+            &dir.path().join("crates/perry-runtime/src/lib.rs"),
+            b"pub fn rt_changed() {}\n",
+        );
+
+        assert!(!auto_optimized_archives_are_fresh(
+            dir.path(),
+            &runtime,
+            &stdlib,
+            &[],
+            &stamp,
+            "test-stamp"
+        ));
+    }
+
+    #[test]
+    fn auto_optimized_freshness_ignores_nested_target_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        minimal_auto_workspace(dir.path());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let runtime = dir
+            .path()
+            .join("target/perry-auto/release/libperry_runtime.a");
+        let stdlib = dir
+            .path()
+            .join("target/perry-auto/release/libperry_stdlib.a");
+        write_file(&runtime, b"!<arch>\n");
+        write_file(&stdlib, b"!<arch>\n");
+        let stamp = dir.path().join("target/perry-auto/.perry-auto-build.stamp");
+        write_file(&stamp, b"test-stamp");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        write_file(
+            &dir.path()
+                .join("crates/perry-runtime/target/debug/stale-marker"),
+            b"newer but irrelevant\n",
+        );
+
+        assert!(auto_optimized_archives_are_fresh(
+            dir.path(),
+            &runtime,
+            &stdlib,
+            &[],
+            &stamp,
+            "test-stamp"
+        ));
     }
 
     /// Closes #507. The well-known flip's "shared tokio" allowlist

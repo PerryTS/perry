@@ -27,6 +27,7 @@ pub mod strings;
 pub mod stubs;
 pub(crate) mod type_analysis;
 pub(crate) mod type_analysis_class_fields;
+pub(crate) mod type_analysis_facts;
 pub(crate) mod type_analysis_net;
 pub(crate) mod typed_shape;
 pub mod types;

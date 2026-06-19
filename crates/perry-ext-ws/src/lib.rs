@@ -416,7 +416,7 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
         entry
             .listeners
             .entry(event_name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(callback_ptr);
     }
     // Issue #577 Phase 4 — drain any messages that arrived before this

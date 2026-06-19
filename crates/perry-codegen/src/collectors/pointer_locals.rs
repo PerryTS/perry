@@ -1,4 +1,4 @@
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::{infer_expr_type, BinaryOp, Expr, HirTypeFacts};
 use perry_types::{FunctionType, Type};
 use std::collections::{HashMap, HashSet};
 
@@ -79,6 +79,27 @@ fn pointer_analysis_type_inner(ty: &Type, depth: usize) -> Type {
 
 fn pointer_analysis_array_type(elem: Type) -> Type {
     Type::Array(Box::new(pointer_analysis_type_inner(&elem, 1)))
+}
+
+struct PointerAnalysisFacts<'a> {
+    local_types: &'a HashMap<u32, Type>,
+    local_value_types: &'a HashMap<u32, Type>,
+}
+
+impl HirTypeFacts for PointerAnalysisFacts<'_> {
+    fn local_type(&self, id: u32) -> Option<&Type> {
+        self.local_value_types
+            .get(&id)
+            .or_else(|| self.local_types.get(&id))
+    }
+
+    fn global_type(&self, _id: u32) -> Option<&Type> {
+        None
+    }
+
+    fn function_return_type(&self, _id: u32) -> Option<&Type> {
+        None
+    }
 }
 
 pub fn collect_pointer_typed_locals(
@@ -282,7 +303,16 @@ pub fn collect_pointer_typed_locals(
                 Some(Type::Named("Uint8Array".into()))
             }
             Expr::Void(_) => Some(Type::Void),
-            _ => None,
+            _ => {
+                let facts = PointerAnalysisFacts {
+                    local_types,
+                    local_value_types,
+                };
+                match infer_expr_type(expr, &facts) {
+                    Type::Any | Type::Unknown => None,
+                    ty => Some(pointer_analysis_type(&ty)),
+                }
+            }
         }
     }
 
@@ -819,5 +849,29 @@ mod tests {
         let slots = collect_pointer_typed_locals(&function.params, &function.body, &HashSet::new());
         assert!(slots.contains_key(&1));
         assert!(slots.contains_key(&3));
+    }
+
+    #[test]
+    fn pointer_analysis_reuses_shared_hir_scalar_facts() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "pid".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::ProcessPid),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "date".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::DateNew(vec![])),
+            },
+        ];
+
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(!slots.contains_key(&1));
+        assert!(slots.contains_key(&2));
     }
 }
