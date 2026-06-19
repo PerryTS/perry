@@ -145,14 +145,32 @@ pub(crate) fn index_object_is_class_or_proto_ref(ctx: &FnCtx<'_>, object: &Expr)
 }
 
 /// Compute the receiver handle to pass to `js_object_get_field_by_name`-family
-/// helpers from a NaN-boxed receiver value (`obj_bits`). Heap objects must be
-/// masked to a raw pointer, but an INT32-tagged class ref (`0x7FFE`) must keep
-/// its tag bits so the runtime routes to the static field / method / accessor
-/// tables. When the receiver's class-ref-ness is known at compile time
-/// (`static_known`), pass full bits unconditionally; otherwise branch at runtime
-/// on the tag so a runtime class-ref value (e.g. a function parameter bound to a
-/// class — `function f(C, k){ return C[k]; }`) is handled too. (test262
-/// class/elements propertyHelper `isWritable(C, name)` does `C[name]`.)
+/// helpers from a NaN-boxed receiver value (`obj_bits`). Only a *genuine heap
+/// pointer* — POINTER_TAG (`0x7FFD`, plain objects/arrays) or STRING_TAG
+/// (`0x7FFF`, heap strings) — may be masked down to a raw pointer for the runtime
+/// to dereference. Every other receiver shape keeps its full NaN-boxed bits:
+///
+/// * an INT32-tagged class ref (`0x7FFE`) keeps its tag so the runtime routes to
+///   the static field / method / accessor tables (test262 class/elements
+///   propertyHelper `isWritable(C, name)` does `C[name]`);
+/// * a plain number, SSO string, bigint, or bool/null/undefined keeps its bits
+///   so the by-name runtime helper recognizes the tag and returns `undefined`
+///   instead of masking the value's low 48 bits into a bogus heap address and
+///   dereferencing it.
+///
+/// The masking-everything-but-classref predecessor crashed on `(<number>)[k]`:
+/// the timestamp float `dayjs(1749820051142)` (`0x4279_7696_70ec_6000`) had its
+/// low 48 bits (`0x7696_70ec_6000`) masked into a plausible-looking heap pointer,
+/// and `js_typed_feedback_object_get_field_by_name_f64` then deref'd `ptr - 8`
+/// for the GcHeader → SIGSEGV (#5429). Keeping full bits routes the number
+/// through `normalize_raw_object_addr`, which rejects it (top16 `0x4279` masks to
+/// `0`), matching the dotted `n.format` path's receiver-tag triage.
+///
+/// When the receiver's heap-pointer-ness is known at compile time
+/// (`static_known` — a class or `.prototype` ref), pass full bits unconditionally;
+/// otherwise branch at runtime on the tag so a runtime class-ref value (e.g. a
+/// function parameter bound to a class — `function f(C, k){ return C[k]; }`) is
+/// handled too.
 pub(crate) fn classref_preserving_handle(
     blk: &mut crate::block::LlBlock,
     obj_bits: &str,
@@ -162,9 +180,12 @@ pub(crate) fn classref_preserving_handle(
         return obj_bits.to_string();
     }
     let top16 = blk.lshr(I64, obj_bits, "48");
-    let is_classref = blk.icmp_eq(I64, &top16, "32766"); // 0x7FFE
+    // (top16 & 0xFFFD) == 0x7FFD is true for exactly POINTER_TAG (0x7FFD) and
+    // STRING_TAG (0x7FFF) — the two heap-pointer-carrying tags.
+    let masked_tag = blk.and(I64, &top16, "65533"); // 0xFFFD
+    let is_heap_ptr = blk.icmp_eq(I64, &masked_tag, "32765"); // 0x7FFD
     let masked = blk.and(I64, obj_bits, POINTER_MASK_I64);
-    blk.select(crate::types::I1, &is_classref, I64, obj_bits, &masked)
+    blk.select(crate::types::I1, &is_heap_ptr, I64, &masked, obj_bits)
 }
 
 fn lower_class_method_bind(
