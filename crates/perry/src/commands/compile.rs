@@ -78,6 +78,7 @@ use link::{build_and_run_link, write_link_cache_manifest};
 pub use lock_scan::collect_native_archives_for_lock;
 pub(crate) use lock_scan::run_lock_verify_for_compile;
 pub use object_cache::ObjectCache;
+pub use object_cache::{cache_dir_override, resolve_cache_dir};
 use object_cache::{compute_object_cache_key, djb2_hash};
 use optimized_libs::{build_optimized_libs, OptimizedLibs};
 use parse_cache::parse_cached;
@@ -448,11 +449,29 @@ pub fn run_with_parse_cache(
 
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
+    // Resolve the on-disk cache directory ONCE, here, before any cache
+    // consumer runs. Precedence: `--cache-dir` → `PERRY_CACHE_DIR` →
+    // perry.toml `[perry] cacheDir` → package.json `perry.cacheDir` →
+    // default `<cache_root>/node_modules/.cache/perry` (the find-cache-dir
+    // convention). `cache_dir_override` reads the env + perry.toml +
+    // package.json half; the CLI flag wins over all three. Relative
+    // overrides resolve against `cache_root`. Computed here because the
+    // build-cache probe below runs before
+    // `host_config::apply_pkg_and_toml_config`, so the build cache must
+    // already know the dir. host_config re-resolves `ctx.cache_dir` to the
+    // same value when it parses the config alongside its sibling `perry.*`
+    // fields — that pass owns the canonical read.
+    let cache_dir_override = args
+        .cache_dir
+        .clone()
+        .or_else(|| object_cache::cache_dir_override(&ctx.cache_root));
+    ctx.cache_dir = object_cache::resolve_cache_dir(&ctx.cache_root, cache_dir_override.as_deref());
     // #5247: propagate `--debug-symbols` so `collect_modules` records the
     // CJS-wrap source mapping needed to render original-source line numbers.
     ctx.debug_symbols = args.debug_symbols;
 
-    let build_cache_probe = BuildCacheProbe::new(&args, &project_root, &ctx.cache_root);
+    let build_cache_probe =
+        BuildCacheProbe::new(&args, &project_root, &ctx.cache_root, &ctx.cache_dir);
     let mut build_cache_stats = build_cache_probe.probe();
     if build_cache_stats.hit {
         if let OutputFormat::Json = format {
@@ -1810,7 +1829,7 @@ pub fn run_with_parse_cache(
     // mode here so the per-module codegen can emit .ll instead of .o.
     let bitcode_link = std::env::var("PERRY_LLVM_BITCODE_LINK").ok().as_deref() == Some("1");
 
-    // V2.2: Per-module object cache at `.perry-cache/objects/<target>/<key>.o`.
+    // V2.2: Per-module object cache at `<cache_dir>/objects/<target>/<key>.o`.
     // Disabled when the user passed `--no-cache`, when `PERRY_NO_CACHE=1`, or
     // when we're in bitcode-link mode (the artifacts aren't object files), or
     // when native-region verification is enabled and lowering must run.
@@ -1828,7 +1847,7 @@ pub fn run_with_parse_cache(
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
     let cache_target_dir = target.as_deref().unwrap_or("host");
-    let object_cache = ObjectCache::new(&ctx.cache_root, cache_target_dir, cache_enabled);
+    let object_cache = ObjectCache::new(&ctx.cache_dir, cache_target_dir, cache_enabled);
     let perry_version = env!("CARGO_PKG_VERSION");
 
     // Issue #100: precompute the dynamic-import plumbing so the rayon
@@ -4164,11 +4183,11 @@ pub fn run_with_parse_cache(
                     );
                 }
                 // PERRY_CACHE_DEBUG_HIR=1: also dump the post-transform HIR of
-                // misses to .perry-cache/debug/<key>.txt so a user can diff two
+                // misses to <cache_dir>/debug/<key>.txt so a user can diff two
                 // miss-dumps and see exactly what differed. Best-effort — IO
                 // errors never fail the build.
                 if std::env::var("PERRY_CACHE_DEBUG_HIR").as_deref() == Ok("1") {
-                    let dump_dir = ctx.cache_root.join(".perry-cache").join("debug");
+                    let dump_dir = ctx.cache_dir.join("debug");
                     if std::fs::create_dir_all(&dump_dir).is_ok() {
                         let dump_path = dump_dir.join(format!("{:016x}.txt", k));
                         let _ = std::fs::write(

@@ -1,4 +1,3 @@
-use crate::error::Result;
 use md5::{Digest, Md5};
 
 pub fn generate_name(input: &str) -> String {

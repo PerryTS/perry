@@ -180,11 +180,9 @@ fn collect_pems(v: &serde_json::Value, out: &mut Vec<Vec<u8>>) {
     use serde_json::Value;
     match v {
         Value::String(s) => out.push(s.as_bytes().to_vec()),
-        Value::Object(map) => {
-            if map.get("type").and_then(|t| t.as_str()) == Some("Buffer") {
-                if let Some(data) = map.get("data").and_then(|d| d.as_array()) {
-                    out.push(numeric_array_to_bytes(data));
-                }
+        Value::Object(map) if map.get("type").and_then(|t| t.as_str()) == Some("Buffer") => {
+            if let Some(data) = map.get("data").and_then(|d| d.as_array()) {
+                out.push(numeric_array_to_bytes(data));
             }
         }
         Value::Array(arr) => {

@@ -108,7 +108,7 @@ pub(crate) fn validate_client_options(opts: &serde_json::Value, default_protocol
     if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
         if path.chars().any(|c| {
             let cp = c as u32;
-            cp < 0x21 || cp > 0xff
+            !(0x21..=0xff).contains(&cp)
         }) {
             throw_type_error_with_code(
                 "Request path contains unescaped characters",

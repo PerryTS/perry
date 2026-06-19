@@ -149,7 +149,7 @@ pub unsafe extern "C" fn js_zlib_inflate_sync(data_bits: i64) -> *mut BufferHead
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_gzip(data_value: f64, callback_value: f64) {
-    stream::queue_one_shot_callback(data_value, callback_value, "Gzip", |b| gzip_bytes(b));
+    stream::queue_one_shot_callback(data_value, callback_value, "Gzip", gzip_bytes);
 }
 
 /// `zlib.gunzip(data, callback) -> undefined`.
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn js_zlib_gzip(data_value: f64, callback_value: f64) {
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_gunzip(data_value: f64, callback_value: f64) {
-    stream::queue_one_shot_callback(data_value, callback_value, "Gunzip", |b| gunzip_bytes(b));
+    stream::queue_one_shot_callback(data_value, callback_value, "Gunzip", gunzip_bytes);
 }
 
 /// `zlib.deflate(data, callback) -> undefined`.
@@ -167,7 +167,7 @@ pub unsafe extern "C" fn js_zlib_gunzip(data_value: f64, callback_value: f64) {
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_deflate(data_value: f64, callback_value: f64) {
-    stream::queue_one_shot_callback(data_value, callback_value, "Deflate", |b| deflate_bytes(b));
+    stream::queue_one_shot_callback(data_value, callback_value, "Deflate", deflate_bytes);
 }
 
 /// `zlib.inflate(data, callback) -> undefined`.
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn js_zlib_deflate(data_value: f64, callback_value: f64) {
 /// `data_value` and `callback_value` are raw NaN-boxed JS values.
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_inflate(data_value: f64, callback_value: f64) {
-    stream::queue_one_shot_callback(data_value, callback_value, "Inflate", |b| inflate_bytes(b));
+    stream::queue_one_shot_callback(data_value, callback_value, "Inflate", inflate_bytes);
 }
 
 #[cfg(test)]

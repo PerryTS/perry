@@ -31,10 +31,7 @@ pub(super) unsafe fn dispatch_error_monitor(
     }
     for l in snapshot {
         if l.callback != 0 {
-            let args: &[f64] = match arg.as_ref() {
-                Some(a) => std::slice::from_ref(a),
-                None => &[],
-            };
+            let args: &[f64] = arg.as_slice();
             let _ = call_emitter_listener(handle, l.callback, args);
         }
     }
