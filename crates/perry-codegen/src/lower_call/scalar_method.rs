@@ -296,10 +296,29 @@ fn lower_scalar_method_inline_body(
     let dummy_this = ctx.func.alloca_entry(DOUBLE);
     ctx.this_stack.push(dummy_this);
 
-    let result = match method.body.as_slice() {
-        [perry_hir::Stmt::Return(Some(expr))] => lower_expr(ctx, expr)?,
-        _ => unreachable!("simple scalar method summary only accepts one return"),
-    };
+    let mut result = None;
+    for stmt in &method.body {
+        match stmt {
+            perry_hir::Stmt::Let {
+                id,
+                ty,
+                init: Some(init),
+                ..
+            } => {
+                let value = lower_expr(ctx, init)?;
+                let slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.block().store(DOUBLE, &value, &slot);
+                ctx.locals.insert(*id, slot);
+                ctx.local_types.insert(*id, ty.clone());
+            }
+            perry_hir::Stmt::Return(Some(expr)) => {
+                result = Some(lower_expr(ctx, expr)?);
+                break;
+            }
+            _ => unreachable!("simple scalar method summary only accepts lets and one return"),
+        }
+    }
+    let result = result.expect("simple scalar method summary must return a value");
 
     ctx.this_stack.truncate(saved_this_len);
     ctx.class_stack.truncate(saved_class_len);
@@ -372,10 +391,29 @@ fn lower_scalar_method_int32_inline_body(
     let dummy_this = ctx.func.alloca_entry(DOUBLE);
     ctx.this_stack.push(dummy_this);
 
-    let raw_i32 = match method.body.as_slice() {
-        [perry_hir::Stmt::Return(Some(expr))] => lower_expr_as_i32(ctx, expr)?,
-        _ => unreachable!("simple scalar method summary only accepts one return"),
-    };
+    let mut raw_i32 = None;
+    for stmt in &method.body {
+        match stmt {
+            perry_hir::Stmt::Let {
+                id,
+                ty,
+                init: Some(init),
+                ..
+            } => {
+                let value = lower_expr_as_i32(ctx, init)?;
+                let slot = ctx.func.alloca_entry(I32);
+                ctx.block().store(I32, &value, &slot);
+                ctx.i32_counter_slots.insert(*id, slot);
+                ctx.local_types.insert(*id, ty.clone());
+            }
+            perry_hir::Stmt::Return(Some(expr)) => {
+                raw_i32 = Some(lower_expr_as_i32(ctx, expr)?);
+                break;
+            }
+            _ => unreachable!("simple scalar method summary only accepts lets and one return"),
+        }
+    }
+    let raw_i32 = raw_i32.expect("simple scalar method summary must return a value");
     let result = i32_to_nanbox(ctx.block(), &raw_i32);
 
     ctx.this_stack.truncate(saved_this_len);

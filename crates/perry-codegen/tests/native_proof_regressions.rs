@@ -9394,6 +9394,82 @@ fn scalar_method_shadowed_by_field_module() -> Module {
     module
 }
 
+fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Module {
+    let mut module = scalar_method_summary_module();
+    module.name = format!("scalar_method_numeric_local_temp_{case}.ts");
+    module.classes[0].methods.clear();
+    module.classes[0].methods.push(Function {
+        id: 103,
+        name: "weighted".to_string(),
+        type_params: Vec::new(),
+        params: vec![param(12, "scale", Type::Number)],
+        return_type: Type::Number,
+        body: vec![
+            Stmt::Let {
+                id: 130,
+                name: "shifted".to_string(),
+                ty: Type::Number,
+                mutable: mutable_temp,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "x".to_string(),
+                    }),
+                    right: Box::new(local(12)),
+                }),
+            },
+            Stmt::Let {
+                id: 131,
+                name: "scaled".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(local(130)),
+                    right: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "y".to_string(),
+                    }),
+                }),
+            },
+            Stmt::Return(Some(local(131))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    module.functions[0].body = vec![
+        Stmt::Let {
+            id: 20,
+            name: "p".to_string(),
+            ty: Type::Named("Point".to_string()),
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: "Point".to_string(),
+                args: vec![number(1.25), number(2.75)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        },
+        Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(local(20)),
+                property: "weighted".to_string(),
+            }),
+            args: vec![number(3.0)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })),
+    ];
+    module
+}
+
 fn scalar_predicate_method_body(field: &str) -> Expr {
     Expr::Compare {
         op: CompareOp::Gt,
@@ -9656,6 +9732,46 @@ fn scalar_method_int32_unsigned_shift_module() -> Module {
         }),
         right: Box::new(int(0)),
     }))];
+    module
+}
+
+fn scalar_method_int32_bitwise_local_temp_module() -> Module {
+    let mut module = scalar_method_int32_bitwise_module("local_temp", Type::Int32, Type::Int32);
+    module.classes[0].methods[0].body = vec![
+        Stmt::Let {
+            id: 130,
+            name: "mixed".to_string(),
+            ty: Type::Int32,
+            mutable: false,
+            init: Some(Expr::Binary {
+                op: BinaryOp::BitXor,
+                left: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "mask".to_string(),
+                }),
+                right: Box::new(local(12)),
+            }),
+        },
+        Stmt::Let {
+            id: 131,
+            name: "shifted".to_string(),
+            ty: Type::Int32,
+            mutable: false,
+            init: Some(Expr::Binary {
+                op: BinaryOp::Shl,
+                left: Box::new(local(130)),
+                right: Box::new(int(1)),
+            }),
+        },
+        Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::BitOr,
+            left: Box::new(local(131)),
+            right: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::This),
+                property: "salt".to_string(),
+            }),
+        })),
+    ];
     module
 }
 
@@ -12480,6 +12596,62 @@ fn scalar_method_summary_rejects_own_property_shadow() {
 }
 
 #[test]
+fn scalar_replaced_numeric_method_with_local_temps_inlines_without_dispatch_or_allocation() {
+    let module = scalar_method_numeric_local_temp_module("inline", false);
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        !ir.contains("call double @js_native_call_method"),
+        "scalar-replaced numeric method with local temps should not dispatch dynamically:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_object_alloc"),
+        "scalar-replaced numeric method with local temps should not materialize the receiver:\n{ir}"
+    );
+    assert!(
+        ir.contains("fadd double") && ir.contains("fmul double"),
+        "numeric local temp summary should rebuild native arithmetic in the inlined body:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "consumed_facts",
+                    "consumed",
+                    "exact_receiver_summary",
+                )
+                && record_has_note(record, "method=weighted")
+                && record_has_note(record, "summary_return=number")
+        }),
+        "expected scalar numeric local-temp summary inline artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_method_local_temp_rejects_mutable_binding() {
+    let module = scalar_method_numeric_local_temp_module("mutable", true);
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call double @js_native_call_method"),
+        "mutable local temp must keep dynamic method dispatch fallback:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i64 @js_object_alloc"),
+        "mutable local temp must materialize the scalar receiver for fallback:\n{ir}"
+    );
+    let artifact = compile_artifact_json_for_module(module);
+    assert!(
+        !artifact_has_scalar_method_inline(&artifact, "weighted"),
+        "mutable local temp must not record a scalar method summary inline:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn scalar_replaced_boolean_method_predicate_inlines_without_dispatch_or_allocation() {
     let ir = String::from_utf8(
         compile_module(&scalar_method_boolean_predicate_module(), empty_opts()).unwrap(),
@@ -12953,6 +13125,43 @@ fn scalar_method_int32_bitwise_guards_public_int32_argument_and_preserves_fallba
                 && record_has_note(record, "method=mix")
         }),
         "guarded public Int32 arg should record scalar fallback evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn scalar_replaced_int32_bitwise_method_with_local_temps_inlines_without_dispatch() {
+    let module = scalar_method_int32_bitwise_local_temp_module();
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        !ir.contains("call double @js_native_call_method"),
+        "scalar-replaced Int32 local-temp method should not dispatch dynamically:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_object_alloc"),
+        "scalar-replaced Int32 local-temp method should not materialize the receiver:\n{ir}"
+    );
+    assert!(
+        ir.contains("xor i32") && ir.contains("shl i32") && ir.contains("or i32"),
+        "Int32 local temp summary should keep bitwise temps in native i32:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "ScalarMethodCall"
+                && record["consumer"] == "scalar_method_summary_inline"
+                && record_has_scalar_method_summary_fact(record, "consumed_facts", "consumed")
+                && record_has_scalar_method_summary_detail(
+                    record,
+                    "consumed_facts",
+                    "consumed",
+                    "exact_receiver_summary",
+                )
+                && record_has_note(record, "method=mix")
+                && record_has_note(record, "summary_return=int32")
+        }),
+        "expected Int32 local-temp scalar method summary inline artifact:\n{artifact:#}"
     );
 }
 

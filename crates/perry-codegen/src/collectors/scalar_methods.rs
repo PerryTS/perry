@@ -6,7 +6,8 @@
 //! - `return <numeric expression>` over numeric parameters, numeric literals,
 //!   and direct `this.field` reads of public numeric fields; or
 //! - `return <Int32 expression>` over public Int32 fields/params/in-range
-//!   integer literals and signed bitwise binary operators; or
+//!   integer literals, signed bitwise binary operators, and immutable local
+//!   temporaries built from those expressions; or
 //! - `return <numeric expression> <cmp> <numeric expression>` for boolean
 //!   predicates over the same safe numeric expression subset.
 
@@ -58,7 +59,7 @@ pub(crate) fn is_simple_scalar_method(
         return false;
     }
 
-    let mut numeric_params = HashSet::new();
+    let mut numeric_locals = HashSet::new();
     for param in &method.params {
         let param_type_is_safe = match return_kind {
             ScalarMethodReturnKind::Int32 => is_int32_type(&param.ty),
@@ -74,13 +75,64 @@ pub(crate) fn is_simple_scalar_method(
         {
             return false;
         }
-        numeric_params.insert(param.id);
+        numeric_locals.insert(param.id);
     }
 
-    let [Stmt::Return(Some(expr))] = method.body.as_slice() else {
+    let Some((return_expr, local_temps)) = scalar_method_straight_line_return(method, return_kind)
+    else {
         return false;
     };
-    scalar_method_return_expr_is_safe(classes, class_name, expr, &numeric_params, return_kind)
+    for (id, init) in local_temps {
+        if !scalar_method_return_expr_is_safe(
+            classes,
+            class_name,
+            init,
+            &numeric_locals,
+            return_kind,
+        ) {
+            return false;
+        }
+        numeric_locals.insert(id);
+    }
+    scalar_method_return_expr_is_safe(
+        classes,
+        class_name,
+        return_expr,
+        &numeric_locals,
+        return_kind,
+    )
+}
+
+fn scalar_method_straight_line_return<'a>(
+    method: &'a Function,
+    return_kind: ScalarMethodReturnKind,
+) -> Option<(&'a Expr, Vec<(u32, &'a Expr)>)> {
+    let mut local_temps = Vec::new();
+    for (idx, stmt) in method.body.iter().enumerate() {
+        match stmt {
+            Stmt::Let {
+                id,
+                ty,
+                mutable,
+                init: Some(init),
+                ..
+            } if !*mutable && scalar_method_temp_type_is_safe(ty, return_kind) => {
+                local_temps.push((*id, init));
+            }
+            Stmt::Return(Some(expr)) if idx + 1 == method.body.len() => {
+                return Some((expr, local_temps));
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn scalar_method_temp_type_is_safe(ty: &Type, return_kind: ScalarMethodReturnKind) -> bool {
+    match return_kind {
+        ScalarMethodReturnKind::Int32 => is_int32_type(ty),
+        ScalarMethodReturnKind::Numeric | ScalarMethodReturnKind::Boolean => is_numeric_type(ty),
+    }
 }
 
 fn scalar_method_return_kind(ty: &Type) -> Option<ScalarMethodReturnKind> {
