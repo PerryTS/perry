@@ -238,6 +238,7 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
                 record.function, record.block_label, record.consumer
             ));
         }
+        validate_fact_uses(record, &mut errors);
         validate_raw_f64_layout_facts(record, &mut errors);
         validate_packed_f64_loop_record(record, &mut errors);
     }
@@ -250,6 +251,44 @@ pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<(
         );
     }
     Ok(())
+}
+
+fn validate_fact_uses(record: &NativeRepRecord, errors: &mut Vec<String>) {
+    for (field, facts) in [
+        ("consumed_facts", record.consumed_facts.as_slice()),
+        ("rejected_facts", record.rejected_facts.as_slice()),
+    ] {
+        for fact in facts {
+            if fact.fact_id.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty fact_id",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if fact.kind.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty kind",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if fact.state.trim().is_empty() {
+                errors.push(format!(
+                    "{}:{} {} {field} has empty state",
+                    record.function, record.block_label, record.consumer
+                ));
+            }
+            if field == "rejected_facts"
+                && fact.reason.is_none()
+                && fact.detail.trim().is_empty()
+                && !matches!(fact.state.as_str(), "rejected" | "invalidated" | "missing")
+            {
+                errors.push(format!(
+                    "{}:{} {} rejected fact {} lacks reason/detail",
+                    record.function, record.block_label, record.consumer, fact.fact_id
+                ));
+            }
+        }
+    }
 }
 
 fn raw_f64_checked_native_consumer(record: &NativeRepRecord) -> bool {
@@ -1170,6 +1209,61 @@ mod tests {
             detail: state.to_string(),
             reason,
         }
+    }
+
+    fn type_fact(
+        state: &str,
+        detail: &str,
+        reason: Option<MaterializationReason>,
+    ) -> NativeFactUse {
+        NativeFactUse {
+            fact_id: format!("test.type_fact.{state}.{detail}"),
+            kind: "type_fact".to_string(),
+            local_id: Some(1),
+            state: state.to_string(),
+            detail: detail.to_string(),
+            reason,
+        }
+    }
+
+    #[test]
+    fn verifier_accepts_structured_consumed_and_rejected_facts() {
+        let mut r = record();
+        r.consumed_facts
+            .push(type_fact("consumed", "packed_i32", None));
+        r.rejected_facts.push(type_fact(
+            "rejected",
+            "unknown_call_escape",
+            Some(MaterializationReason::UnknownCallEscape),
+        ));
+
+        assert!(verify_native_rep_records(&[r]).is_ok());
+    }
+
+    #[test]
+    fn verifier_rejects_malformed_fact_uses() {
+        let mut r = record();
+        r.consumed_facts.push(NativeFactUse {
+            fact_id: String::new(),
+            kind: "type_fact".to_string(),
+            local_id: Some(1),
+            state: "consumed".to_string(),
+            detail: "packed_i32".to_string(),
+            reason: None,
+        });
+        r.rejected_facts.push(NativeFactUse {
+            fact_id: "test.type_fact.rejected".to_string(),
+            kind: "type_fact".to_string(),
+            local_id: Some(1),
+            state: "guard_failed".to_string(),
+            detail: String::new(),
+            reason: None,
+        });
+
+        let err = verify_native_rep_records(&[r]).expect_err("malformed facts should fail");
+        let text = err.to_string();
+        assert!(text.contains("empty fact_id"));
+        assert!(text.contains("lacks reason/detail"));
     }
 
     fn packed_f64_loop_store_record() -> NativeRepRecord {

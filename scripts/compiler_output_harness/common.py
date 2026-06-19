@@ -37,6 +37,9 @@ DYNAMIC_PROPERTY_HELPERS = (
 BUFFER_SLOW_PATH_HELPERS = (
     "js_buffer_get",
     "js_buffer_set",
+)
+
+ARRAY_SLOW_PATH_HELPERS = (
     "js_typed_array_get",
     "js_typed_array_set",
     "js_uint8array_get",

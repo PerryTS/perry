@@ -1414,7 +1414,10 @@ idxset.bounded_numeric_merge.5:
     def test_runtime_counter_summary_combines_static_and_trace_counts(self):
         counters = HARNESS.structural_counters(
             GOOD_IR,
-            GOOD_IR + "\n  call double @js_boxed_number_new(double 1.0)\n",
+            GOOD_IR
+            + "\n  call double @js_boxed_number_new(double 1.0)\n"
+            + "  call double @js_buffer_get(double 1.0, double 0.0)\n"
+            + "  call double @js_typed_array_get(double 1.0, double 0.0)\n",
             GOOD_ASM,
         )
         summary = HARNESS.runtime_counter_summary(
@@ -1435,6 +1438,8 @@ idxset.bounded_numeric_merge.5:
         self.assertEqual(summary["allocations_traced"], 4)
         self.assertEqual(summary["write_barriers_traced"], 3)
         self.assertEqual(summary["boxed_number_allocations_static"], 1)
+        self.assertEqual(summary["buffer_slow_path_accesses_static"], 1)
+        self.assertEqual(summary["array_slow_path_accesses_static"], 1)
 
     def test_trace_runtime_budgets_fail_when_gc_trace_disabled(self):
         benchmark = {

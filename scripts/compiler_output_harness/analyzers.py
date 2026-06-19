@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import (
+    ARRAY_SLOW_PATH_HELPERS,
     BUFFER_SLOW_PATH_HELPERS,
     DYNAMIC_PROPERTY_HELPERS,
     RUNTIME_CALL_PREFIXES,
@@ -227,6 +228,11 @@ def structural_counters(ir_before: str, ir_after: str, assembly: str) -> dict[st
                 for name, count in after_calls.items()
                 if any(helper in name for helper in BUFFER_SLOW_PATH_HELPERS)
             ),
+            "array_slow_path_calls": sum(
+                count
+                for name, count in after_calls.items()
+                if any(helper in name for helper in ARRAY_SLOW_PATH_HELPERS)
+            ),
             "dynamic_property_calls": sum(
                 count
                 for name, count in after_calls.items()
@@ -443,6 +449,9 @@ def runtime_counter_summary(
         ),
         "buffer_slow_path_accesses_static": int(
             after.get("buffer_slow_path_calls", 0) or 0
+        ),
+        "array_slow_path_accesses_static": int(
+            after.get("array_slow_path_calls", 0) or 0
         ),
     }
 

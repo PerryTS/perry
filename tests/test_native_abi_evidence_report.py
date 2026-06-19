@@ -135,6 +135,7 @@ def create_compiler_output(root):
         {
             "boxed_number_allocations_static": 0,
             "buffer_slow_path_accesses_static": 0,
+            "array_slow_path_accesses_static": 0,
             "allocations_traced": 5,
             "write_barriers_static": 0,
             "write_barriers_traced": 8,
@@ -153,6 +154,7 @@ def create_compiler_output(root):
         {
             "boxed_number_allocations_static": 64,
             "buffer_slow_path_accesses_static": 128,
+            "array_slow_path_accesses_static": 256,
             "allocations_traced": 640,
             "write_barriers_static": 6,
             "write_barriers_traced": 360,
@@ -390,6 +392,8 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             fields = packet["benchmark_deltas"]["fields"]
             self.assertEqual(fields["buffer_slow_path_accesses_static"]["delta"], -128.0)
             self.assertEqual(fields["buffer_slow_path_accesses_static"]["reduction_pct"], 100.0)
+            self.assertEqual(fields["array_slow_path_accesses_static"]["delta"], -256.0)
+            self.assertEqual(fields["array_slow_path_accesses_static"]["reduction_pct"], 100.0)
             self.assertEqual(fields["median_wall_ms"]["delta_pct"], -60.0)
             self.assertEqual(fields["median_wall_ms"]["speedup"], 2.5)
             self.assertEqual(fields["p95_wall_ms"]["speedup"], 1.6)

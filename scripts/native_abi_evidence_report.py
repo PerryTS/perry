@@ -90,6 +90,7 @@ REQUIRED_PACKET_STDOUT_CHECKS = {
 DELTA_FIELDS = (
     "boxed_number_allocations_static",
     "buffer_slow_path_accesses_static",
+    "array_slow_path_accesses_static",
     "allocations_traced",
     "write_barriers_static",
     "write_barriers_traced",
@@ -99,6 +100,7 @@ DELTA_FIELDS = (
 REQUIRED_IMPROVEMENT_FIELDS = (
     "boxed_number_allocations_static",
     "buffer_slow_path_accesses_static",
+    "array_slow_path_accesses_static",
     "allocations_traced",
 )
 
@@ -110,6 +112,7 @@ MATERIAL_REDUCTION_THRESHOLDS = {
 MATERIAL_ELIMINATION_FIELDS = (
     "boxed_number_allocations_static",
     "buffer_slow_path_accesses_static",
+    "array_slow_path_accesses_static",
 )
 
 MATERIAL_SPEEDUP_THRESHOLDS = {
@@ -126,6 +129,7 @@ PACKET_WORKLOAD_CONTRACTS: dict[str, dict[str, Any]] = {
         "zero_static_fields": (
             "boxed_number_allocations_static",
             "buffer_slow_path_accesses_static",
+            "array_slow_path_accesses_static",
         ),
         "required_native_records": (
             {
@@ -150,6 +154,7 @@ PACKET_WORKLOAD_CONTRACTS: dict[str, dict[str, Any]] = {
         "positive_static_fields": (
             "boxed_number_allocations_static",
             "buffer_slow_path_accesses_static",
+            "array_slow_path_accesses_static",
         ),
     },
 }

@@ -115,6 +115,9 @@ pub(super) struct LoweringSummary {
     pub scalar_replacements: u64,
     pub scalar_replacement_fallbacks: u64,
     pub scalar_replacement_rejections: u64,
+    pub typed_path_selections: u64,
+    pub typed_path_fallbacks: u64,
+    pub typed_path_rejections: u64,
     pub typed_clone_selections: u64,
     pub typed_clone_fallback_decisions: u64,
     pub generic_fallback_emissions: u64,
@@ -138,6 +141,10 @@ pub(super) struct LoweringSummary {
     pub typed_clone_decision_counts: BTreeMap<String, u64>,
     pub typed_clone_selection_reason_counts: BTreeMap<String, u64>,
     pub typed_clone_rejection_reason_counts: BTreeMap<String, u64>,
+    pub typed_path_decision_counts: BTreeMap<String, u64>,
+    pub typed_path_selection_reason_counts: BTreeMap<String, u64>,
+    pub typed_path_fallback_reason_counts: BTreeMap<String, u64>,
+    pub typed_path_rejection_reason_counts: BTreeMap<String, u64>,
     pub collection_helper_decision_counts: BTreeMap<String, u64>,
     pub collection_helper_family_counts: BTreeMap<String, u64>,
     pub collection_helper_selection_reason_counts: BTreeMap<String, u64>,
@@ -175,6 +182,7 @@ pub(super) struct LoweringEvidence {
     pub scalar_replacements: Vec<EvidenceRow>,
     pub collection_helper_decisions: Vec<EvidenceRow>,
     pub collection_typed_value_decisions: Vec<EvidenceRow>,
+    pub typed_path_decisions: Vec<EvidenceRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +200,8 @@ pub(super) struct EvidenceRow {
     pub reason_category: Option<String>,
     pub typed_clone: Option<String>,
     pub generic_fallback: Option<String>,
+    pub consumed_facts: Vec<String>,
+    pub rejected_facts: Vec<String>,
     pub notes: Vec<String>,
 }
 
@@ -360,6 +370,14 @@ fn aggregate_record(
     if is_dynamic_fallback {
         let reason = dynamic_boundary_reason(record);
         increment(&mut summary.dynamic_boundary_reason_counts, &reason);
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "fallback",
+            format!("dynamic_boundary:{reason}"),
+        );
         push_evidence(
             &mut evidence.dynamic_fallbacks,
             module,
@@ -524,7 +542,15 @@ fn aggregate_record(
             module,
             record,
             Some("collection_typed_value_selected".to_string()),
-            Some(reason),
+            Some(reason.clone()),
+        );
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "selected",
+            "collection_typed_value_selected".to_string(),
         );
     } else if let Some(reason) = collection_typed_value_rejection_reason(record, &notes) {
         summary.collection_typed_value_fallback_decisions += 1;
@@ -541,7 +567,15 @@ fn aggregate_record(
             module,
             record,
             Some("collection_typed_value_rejected".to_string()),
-            Some(reason),
+            Some(reason.clone()),
+        );
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "rejected",
+            format!("collection_typed_value:{reason}"),
         );
     }
 
@@ -550,9 +584,25 @@ fn aggregate_record(
         increment(&mut summary.typed_clone_decision_counts, "selected");
         let reason = typed_clone_selection_reason(&consumer);
         increment(&mut summary.typed_clone_selection_reason_counts, &reason);
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "selected",
+            format!("typed_clone:{reason}"),
+        );
         if let Some(reason) = generic_fallback_reason(record, &notes) {
             summary.generic_fallback_emissions += 1;
             increment(&mut summary.generic_fallback_reason_counts, &reason);
+            push_typed_path_evidence(
+                summary,
+                evidence,
+                module,
+                record,
+                "fallback",
+                format!("generic_fallback:{reason}"),
+            );
         }
         if generic_fallback_name(&notes).is_some() || notes_text.contains("fallback") {
             summary.typed_clone_fallback_decisions += 1;
@@ -567,6 +617,14 @@ fn aggregate_record(
     } else if let Some(reason) = typed_clone_rejection_reason(record, &notes) {
         increment(&mut summary.typed_clone_decision_counts, "rejected");
         increment(&mut summary.typed_clone_rejection_reason_counts, &reason);
+        push_typed_path_evidence(
+            summary,
+            evidence,
+            module,
+            record,
+            "rejected",
+            format!("typed_clone:{reason}"),
+        );
         push_evidence(
             &mut evidence.typed_clone_decisions,
             module,
@@ -599,6 +657,10 @@ fn print_text_report(report: &ExplainLoweringReport) {
         summary.js_value_bits_records,
         summary.typed_clone_selections,
         summary.typed_clone_fallback_decisions
+    );
+    println!(
+        "  typed paths: {} selected  {} fallback  {} rejected",
+        summary.typed_path_selections, summary.typed_path_fallbacks, summary.typed_path_rejections
     );
     println!(
         "  runtime property gets: {}  direct field loads: {}  bounds eliminations: {}",
@@ -658,6 +720,30 @@ fn print_text_report(report: &ExplainLoweringReport) {
         println!(
             "  typed clone rejection reasons: {}",
             format_counts(&summary.typed_clone_rejection_reason_counts)
+        );
+    }
+    if !summary.typed_path_decision_counts.is_empty() {
+        println!(
+            "  typed path decisions: {}",
+            format_counts(&summary.typed_path_decision_counts)
+        );
+    }
+    if !summary.typed_path_selection_reason_counts.is_empty() {
+        println!(
+            "  typed path selection reasons: {}",
+            format_counts(&summary.typed_path_selection_reason_counts)
+        );
+    }
+    if !summary.typed_path_fallback_reason_counts.is_empty() {
+        println!(
+            "  typed path fallback reasons: {}",
+            format_counts(&summary.typed_path_fallback_reason_counts)
+        );
+    }
+    if !summary.typed_path_rejection_reason_counts.is_empty() {
+        println!(
+            "  typed path rejection reasons: {}",
+            format_counts(&summary.typed_path_rejection_reason_counts)
         );
     }
     if !summary.collection_helper_decision_counts.is_empty() {
@@ -828,8 +914,43 @@ fn push_evidence(
         reason_category,
         typed_clone: typed_clone_name(&notes),
         generic_fallback: generic_fallback_name(&notes),
+        consumed_facts: fact_labels(record, "consumed_facts"),
+        rejected_facts: fact_labels(record, "rejected_facts"),
         notes,
     });
+}
+
+fn push_typed_path_evidence(
+    summary: &mut LoweringSummary,
+    evidence: &mut LoweringEvidence,
+    module: &str,
+    record: &Value,
+    decision: &str,
+    reason: String,
+) {
+    match decision {
+        "selected" => {
+            summary.typed_path_selections += 1;
+            increment(&mut summary.typed_path_selection_reason_counts, &reason);
+        }
+        "fallback" => {
+            summary.typed_path_fallbacks += 1;
+            increment(&mut summary.typed_path_fallback_reason_counts, &reason);
+        }
+        "rejected" => {
+            summary.typed_path_rejections += 1;
+            increment(&mut summary.typed_path_rejection_reason_counts, &reason);
+        }
+        _ => {}
+    }
+    increment(&mut summary.typed_path_decision_counts, decision);
+    push_evidence(
+        &mut evidence.typed_path_decisions,
+        module,
+        record,
+        Some(format!("typed_path_{decision}")),
+        Some(reason),
+    );
 }
 
 fn increment(counts: &mut BTreeMap<String, u64>, key: &str) {
@@ -869,6 +990,27 @@ fn notes(record: &Value) -> Vec<String> {
                 .iter()
                 .filter_map(Value::as_str)
                 .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn fact_labels(record: &Value, field: &str) -> Vec<String> {
+    record
+        .get(field)
+        .and_then(Value::as_array)
+        .map(|facts| {
+            facts
+                .iter()
+                .filter_map(|fact| {
+                    let fact_id = string_field(fact, "fact_id")?;
+                    let state =
+                        string_field(fact, "state").unwrap_or_else(|| NOT_RECORDED.to_string());
+                    let reason = string_field(fact, "reason")
+                        .or_else(|| string_field(fact, "detail"))
+                        .unwrap_or_else(|| NOT_RECORDED.to_string());
+                    Some(format!("{fact_id}:{state}:{reason}"))
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -1428,6 +1570,37 @@ mod tests {
             report.summary.typed_clone_decision_counts.get("selected"),
             Some(&1)
         );
+        assert_eq!(report.summary.typed_path_selections, 1);
+        assert_eq!(report.summary.typed_path_fallbacks, 2);
+        assert_eq!(
+            report.summary.typed_path_decision_counts.get("selected"),
+            Some(&1)
+        );
+        assert_eq!(
+            report.summary.typed_path_decision_counts.get("fallback"),
+            Some(&2)
+        );
+        assert_eq!(
+            report
+                .summary
+                .typed_path_selection_reason_counts
+                .get("typed_clone:typed_f64_function_direct_call"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .typed_path_fallback_reason_counts
+                .get("generic_fallback:generic_wrapper"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .summary
+                .typed_path_fallback_reason_counts
+                .get("dynamic_boundary:runtime_api"),
+            Some(&1)
+        );
         assert_eq!(
             report.summary.typed_clone_decision_counts.get(NOT_RECORDED),
             Some(&1)
@@ -1508,10 +1681,12 @@ mod tests {
 
         let json = serde_json::to_value(&report).unwrap();
         assert!(json["summary"]["typed_clone_selection_reason_counts"].is_object());
+        assert!(json["summary"]["typed_path_decision_counts"].is_object());
         assert!(json["summary"]["dynamic_boundary_reason_counts"].is_object());
         assert!(json["summary"]["box_reason_counts"].is_object());
         assert!(json["summary"]["unbox_or_coercion_reason_counts"].is_object());
         assert!(json["evidence"]["typed_clone_decisions"][0]["typed_clone"].is_string());
+        assert!(json["evidence"]["typed_path_decisions"].is_array());
     }
 
     #[test]
@@ -1554,6 +1729,12 @@ mod tests {
         );
         assert_eq!(
             report.summary.typed_clone_decision_counts.get("rejected"),
+            Some(&1)
+        );
+        assert_eq!(report.summary.typed_path_selections, 1);
+        assert_eq!(report.summary.typed_path_rejections, 1);
+        assert_eq!(
+            report.summary.typed_path_decision_counts.get("rejected"),
             Some(&1)
         );
         assert_eq!(
