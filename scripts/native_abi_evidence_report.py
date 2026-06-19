@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -98,6 +99,11 @@ REQUIRED_RUNTIME_TESTS = (
 REQUIRED_RELEASE_SYMBOL_TOKENS = (
     "defines all",
     "sentinel symbols",
+)
+REQUIRED_RELEASE_SENTINEL_COUNT = 98
+REQUIRED_RELEASE_FINGERPRINT_FIELDS = (
+    "runtime_archive_sha256",
+    "runtime_source_digest",
 )
 
 REQUIRED_COMPILER_ARTIFACTS = (
@@ -232,6 +238,13 @@ MATERIAL_ACCOUNTING_CONTRACT = (
         "proves": "typed packet keeps tail latency materially faster",
     },
 )
+
+MATERIAL_CONTRACTS = {
+    "reductions": MATERIAL_REDUCTION_THRESHOLDS,
+    "eliminations": {field: 0 for field in MATERIAL_ELIMINATION_FIELDS},
+    "speedups": MATERIAL_SPEEDUP_THRESHOLDS,
+    "stat_quality": MATERIAL_REQUIRED_STAT_QUALITY,
+}
 
 PACKET_WORKLOAD_CONTRACTS: dict[str, dict[str, Any]] = {
     "native_abi_packet_typed": {
@@ -384,6 +397,16 @@ def ratio_delta(control: Optional[float], typed: Optional[float]) -> dict[str, A
         "reduction_pct": None if reduction_pct is None else round(reduction_pct, 1),
         "speedup": None if speedup is None else round(speedup, 3),
     }
+
+
+def release_sentinel_counts(log: str) -> list[int]:
+    counts: list[int] = []
+    for match in re.finditer(r"defines all\s+(\d+)\s+sentinel symbols", log):
+        try:
+            counts.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return counts
 
 
 def native_reps_text(evidence_dir: Path) -> str:
@@ -1109,6 +1132,7 @@ def benchmark_deltas(compiler: dict[str, Any], errors: list[str], *, gate: bool)
         "typed_workload": "native_abi_packet_typed",
         "control_workload": "native_abi_packet_control",
         "required_improvement_fields": list(REQUIRED_IMPROVEMENT_FIELDS),
+        "material_contracts": MATERIAL_CONTRACTS,
         "material_reduction_thresholds": MATERIAL_REDUCTION_THRESHOLDS,
         "material_elimination_fields": list(MATERIAL_ELIMINATION_FIELDS),
         "material_speedup_thresholds": MATERIAL_SPEEDUP_THRESHOLDS,
@@ -1165,7 +1189,23 @@ def release_symbol_summary(
     log = read_text(log_path) if log_path else ""
     missing_tokens = [token for token in REQUIRED_RELEASE_SYMBOL_TOKENS if token not in log]
     archive = metadata.get("runtime_archive", "") if isinstance(metadata, dict) else ""
-    passed = status == "pass" and bool(log) and not missing_tokens
+    fingerprints = {
+        key: metadata.get(key, "") if isinstance(metadata, dict) else ""
+        for key in REQUIRED_RELEASE_FINGERPRINT_FIELDS
+    }
+    missing_fingerprints = [key for key, value in fingerprints.items() if not value]
+    sentinel_counts = release_sentinel_counts(log)
+    stale_symbol_count = [
+        count for count in sentinel_counts if count < REQUIRED_RELEASE_SENTINEL_COUNT
+    ]
+    passed = (
+        status == "pass"
+        and bool(log)
+        and not missing_tokens
+        and bool(sentinel_counts)
+        and not stale_symbol_count
+        and not missing_fingerprints
+    )
     if gate and status != "pass":
         errors.append(f"release:runtime_symbols: command status is {status}")
     if gate and not log:
@@ -1175,6 +1215,18 @@ def release_symbol_summary(
             "release:runtime_symbols: expected proof tokens missing from log: "
             f"{missing_tokens}"
         )
+    if gate and not sentinel_counts:
+        errors.append("release:runtime_symbols: sentinel count proof is missing from log")
+    if gate and stale_symbol_count:
+        errors.append(
+            "release:runtime_symbols: sentinel count is below current guard set "
+            f"(required={REQUIRED_RELEASE_SENTINEL_COUNT}, observed={sentinel_counts})"
+        )
+    if gate and missing_fingerprints:
+        errors.append(
+            "release:runtime_symbols: archive/source freshness fingerprints missing: "
+            f"{missing_fingerprints}"
+        )
     return {
         "status": "pass" if passed else "fail",
         "command": command,
@@ -1182,6 +1234,11 @@ def release_symbol_summary(
         "log": str(log_path) if log_path else "",
         "required_tokens": list(REQUIRED_RELEASE_SYMBOL_TOKENS),
         "missing_tokens": missing_tokens,
+        "required_sentinel_count": REQUIRED_RELEASE_SENTINEL_COUNT,
+        "sentinel_counts": sentinel_counts,
+        "stale_symbol_counts": stale_symbol_count,
+        "fingerprints": fingerprints,
+        "missing_fingerprints": missing_fingerprints,
     }
 
 
@@ -1329,10 +1386,14 @@ def markdown_for_packet(packet: dict[str, Any], repo_root: Path) -> str:
     lines.append("")
     lines.append("## Release / LTO Symbol Guard")
     symbols = packet.get("release_symbol_guard", {})
+    fingerprints = symbols.get("fingerprints", {})
     lines.append(
         f"- Runtime symbol guard: `{symbols.get('status', 'missing')}`; "
         f"archive=`{symbols.get('runtime_archive', '')}`; "
-        f"missing_tokens={symbols.get('missing_tokens', [])}"
+        f"sentinels={symbols.get('sentinel_counts', [])}/{symbols.get('required_sentinel_count', '')}; "
+        f"missing_tokens={symbols.get('missing_tokens', [])}; "
+        f"archive_sha256=`{fingerprints.get('runtime_archive_sha256', '')}`; "
+        f"source_digest=`{fingerprints.get('runtime_source_digest', '')}`"
     )
 
     lines.append("")
@@ -1345,6 +1406,14 @@ def markdown_for_packet(packet: dict[str, Any], repo_root: Path) -> str:
         f"control=`{deltas.get('benchmark_stat_quality', {}).get('control')}` "
         f"required=`{deltas.get('material_required_stat_quality')}`"
     )
+    contracts = deltas.get("material_contracts", {})
+    if contracts:
+        lines.append(
+            f"- Contract: reductions={contracts.get('reductions', {})}; "
+            f"eliminations={contracts.get('eliminations', {})}; "
+            f"speedups={contracts.get('speedups', {})}; "
+            f"stat_quality=`{contracts.get('stat_quality', '')}`"
+        )
     if deltas.get("material_failures"):
         lines.extend(f"  - {failure}" for failure in deltas.get("material_failures", []))
     if deltas.get("missing_values"):

@@ -194,13 +194,15 @@ def create_metadata(root):
     write_text(runtime_log, "\n".join(REPORT.REQUIRED_RUNTIME_TESTS) + "\n")
     write_text(
         symbol_log,
-        "ok: target/debug/libperry_runtime.a defines all 66 sentinel symbols\n",
+        f"ok: target/debug/libperry_runtime.a defines all {REPORT.REQUIRED_RELEASE_SENTINEL_COUNT} sentinel symbols\n",
     )
     write_json(
         root / "metadata.json",
         {
             "schema_version": 1,
             "runtime_archive": "target/debug/libperry_runtime.a",
+            "runtime_archive_sha256": "a" * 64,
+            "runtime_source_digest": "b" * 64,
             "commands": {
                 "correctness": {
                     "native_abi_contract": command(),
@@ -263,6 +265,9 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             self.assertIn("stdout_missing=0", markdown)
             self.assertIn("## Release / LTO Symbol Guard", markdown)
             self.assertIn("Runtime symbol guard: `pass`", markdown)
+            self.assertIn("source_digest=", markdown)
+            self.assertIn("## Packet Deltas", markdown)
+            self.assertIn("Contract: reductions=", markdown)
             self.assertIn("## Material Accounting", markdown)
             self.assertTrue(
                 all(row["status"] == "pass" for row in packet["gate_matrix"]),
@@ -409,6 +414,40 @@ class NativeAbiEvidenceReportTests(unittest.TestCase):
             self.assertEqual(packet["release_symbol_guard"]["status"], "fail")
             self.assertTrue(
                 any("release:runtime_symbols" in error for error in packet["errors"])
+            )
+
+    def test_stale_runtime_symbol_count_fails_gate(self):
+        temp, root, repo_root = self.make_packet()
+        with temp:
+            metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+            log_path = Path(metadata["commands"]["release"]["runtime_symbols"]["log"])
+            write_text(
+                log_path,
+                f"ok: target/debug/libperry_runtime.a defines all {REPORT.REQUIRED_RELEASE_SENTINEL_COUNT - 1} sentinel symbols\n",
+            )
+
+            packet = REPORT.build_packet(root, root / "metadata.json", repo_root, gate=True)
+            self.assertEqual(packet["status"], "fail")
+            self.assertEqual(packet["release_symbol_guard"]["status"], "fail")
+            self.assertTrue(
+                any("sentinel count is below" in error for error in packet["errors"]),
+                packet["errors"],
+            )
+
+    def test_missing_runtime_fingerprints_fail_gate(self):
+        temp, root, repo_root = self.make_packet()
+        with temp:
+            metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+            metadata.pop("runtime_archive_sha256")
+            metadata.pop("runtime_source_digest")
+            write_json(root / "metadata.json", metadata)
+
+            packet = REPORT.build_packet(root, root / "metadata.json", repo_root, gate=True)
+            self.assertEqual(packet["status"], "fail")
+            self.assertEqual(packet["release_symbol_guard"]["status"], "fail")
+            self.assertEqual(
+                packet["release_symbol_guard"]["missing_fingerprints"],
+                ["runtime_archive_sha256", "runtime_source_digest"],
             )
 
     def test_benchmark_delta_calculation(self):

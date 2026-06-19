@@ -333,14 +333,39 @@ fi
 snapshot_tool_artifacts "$PERRY_BIN_RESOLVED" "$RUNTIME_ARCHIVE_RESOLVED"
 
 "$PYTHON_BIN" - "$METADATA" "$PERRY_BIN_RESOLVED" "$RUNTIME_ARCHIVE_RESOLVED" <<'PY'
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+repo = Path.cwd()
 data = json.loads(path.read_text(encoding="utf-8"))
 data["perry"] = sys.argv[2]
 data["runtime_archive"] = sys.argv[3]
+archive = Path(sys.argv[3])
+if archive.exists():
+    data["runtime_archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+runtime_inputs = []
+for base in (repo / "crates" / "perry-runtime" / "src",):
+    runtime_inputs.extend(sorted(p for p in base.rglob("*") if p.is_file()))
+for extra in (
+    repo / "crates" / "perry-runtime" / "Cargo.toml",
+    repo / "crates" / "perry-runtime" / "build.rs",
+    repo / "scripts" / "check_runtime_symbols.sh",
+):
+    if extra.exists():
+        runtime_inputs.append(extra)
+digest = hashlib.sha256()
+for source in sorted(set(runtime_inputs)):
+    rel = source.relative_to(repo).as_posix()
+    digest.update(rel.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(hashlib.sha256(source.read_bytes()).digest())
+    digest.update(b"\0")
+data["runtime_source_digest"] = digest.hexdigest()
+data["runtime_source_digest_inputs"] = len(set(runtime_inputs))
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 
