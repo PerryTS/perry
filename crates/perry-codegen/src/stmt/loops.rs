@@ -546,14 +546,13 @@ fn match_packed_f64_versioned_loop(
     {
         return None;
     }
-    let body_is_supported_store = local_allows_packed_f64_loop_store(ctx, hoist.arr_id)
-        && body_is_supported_packed_f64_loop_store(ctx, body, hoist.arr_id, hoist.counter_id);
-    let array_kind = if body_is_supported_store {
-        if ctx.native_facts.proves_noalias_array(hoist.arr_id) {
-            PackedNumericLoopKind::F64
-        } else {
+    let store_array_kind =
+        supported_packed_numeric_loop_store_kind(ctx, body, hoist.arr_id, hoist.counter_id);
+    let array_kind = if let Some(store_array_kind) = store_array_kind {
+        if !ctx.native_facts.proves_noalias_array(hoist.arr_id) {
             return None;
         }
+        store_array_kind
     } else if ctx.native_facts.proves_packed_i32_array(hoist.arr_id)
         && local_is_int32_array(ctx, hoist.arr_id)
     {
@@ -570,7 +569,7 @@ fn match_packed_f64_versioned_loop(
     if !local_is_number_array(ctx, hoist.arr_id) {
         return None;
     }
-    let body_is_supported = body_is_supported_store
+    let body_is_supported = store_array_kind.is_some()
         || body
             .iter()
             .all(|stmt| stmt_is_packed_f64_loop_safe(ctx, stmt, hoist.arr_id, hoist.counter_id));
@@ -596,8 +595,7 @@ fn local_is_number_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
 fn local_allows_packed_f64_loop_store(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     matches!(
         ctx.local_types.get(&local_id),
-        Some(perry_types::Type::Array(elem))
-            if matches!(elem.as_ref(), perry_types::Type::Number | perry_types::Type::Int32)
+        Some(perry_types::Type::Array(elem)) if matches!(elem.as_ref(), perry_types::Type::Number)
     )
 }
 
@@ -660,22 +658,34 @@ fn stmt_is_packed_f64_loop_safe(
     }
 }
 
-fn body_is_supported_packed_f64_loop_store(
+fn supported_packed_numeric_loop_store_kind(
     ctx: &FnCtx<'_>,
     body: &[Stmt],
     arr_id: u32,
     counter_id: u32,
-) -> bool {
+) -> Option<PackedNumericLoopKind> {
     let [Stmt::Expr(perry_hir::Expr::IndexSet {
         object,
         index,
         value,
     })] = body
     else {
-        return false;
+        return None;
     };
-    is_packed_f64_loop_index(object, index, arr_id, counter_id)
+    if !is_packed_f64_loop_index(object, index, arr_id, counter_id) {
+        return None;
+    }
+    if local_is_int32_array(ctx, arr_id)
+        && expr_is_packed_i32_loop_store_rhs_safe(ctx, value, arr_id, counter_id)
+    {
+        return Some(PackedNumericLoopKind::I32);
+    }
+    if local_allows_packed_f64_loop_store(ctx, arr_id)
         && expr_is_packed_f64_loop_store_rhs_safe(ctx, value, arr_id, counter_id)
+    {
+        return Some(PackedNumericLoopKind::F64);
+    }
+    None
 }
 
 fn expr_is_packed_f64_loop_store_rhs_safe(
@@ -718,6 +728,67 @@ fn expr_is_packed_f64_loop_store_abs_rhs_safe(
             perry_hir::Expr::IndexGet { object, index }
                 if is_packed_f64_loop_index(object, index, arr_id, counter_id)
         )
+}
+
+fn expr_is_packed_i32_loop_store_rhs_safe(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::{BinaryOp, Expr};
+
+    match expr {
+        Expr::IndexGet { object, index } => {
+            is_packed_f64_loop_index(object, index, arr_id, counter_id)
+        }
+        Expr::LocalGet(id) => *id != arr_id && local_is_int32_value(ctx, *id),
+        Expr::Integer(n) => (i32::MIN as i64..=i32::MAX as i64).contains(n),
+        Expr::Number(n)
+            if n.is_finite()
+                && n.fract() == 0.0
+                && *n >= i32::MIN as f64
+                && *n <= i32::MAX as f64 =>
+        {
+            true
+        }
+        Expr::MathImul(left, right) => {
+            expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
+                && expr_is_packed_i32_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
+        }
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left,
+            right,
+        } if matches!(right.as_ref(), Expr::Integer(0)) => {
+            expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
+        }
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::Mul
+                    | BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+                    | BinaryOp::UShr
+            ) =>
+        {
+            expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
+                && expr_is_packed_i32_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
+        }
+        _ => false,
+    }
+}
+
+fn local_is_int32_value(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    matches!(
+        ctx.local_types.get(&local_id),
+        Some(perry_types::Type::Int32)
+    ) || ctx.integer_locals.contains(&local_id)
 }
 
 fn expr_is_packed_f64_loop_safe(

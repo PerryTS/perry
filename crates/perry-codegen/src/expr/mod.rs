@@ -1149,6 +1149,38 @@ impl PackedNumericLoopKind {
             Self::U32 => "packed_u32_loop_load_f64",
         }
     }
+
+    pub(crate) fn store_expr_kind(self) -> &'static str {
+        match self {
+            Self::F64 => "PackedF64LoopStore",
+            Self::I32 => "PackedI32LoopStore",
+            Self::U32 => "PackedU32LoopStore",
+        }
+    }
+
+    pub(crate) fn store_consumer(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_store",
+            Self::I32 => "packed_i32_loop_store",
+            Self::U32 => "packed_u32_loop_store",
+        }
+    }
+
+    pub(crate) fn store_side_exit_consumer(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_store_side_exit",
+            Self::I32 => "packed_i32_loop_store_side_exit",
+            Self::U32 => "packed_u32_loop_store_side_exit",
+        }
+    }
+
+    pub(crate) fn store_guard_detail(self) -> &'static str {
+        match self {
+            Self::F64 => "packed_f64_loop_store_guard",
+            Self::I32 => "packed_i32_loop_store_guard",
+            Self::U32 => "packed_u32_loop_store_guard",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

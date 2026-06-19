@@ -2856,6 +2856,170 @@ fn packed_u32_loop_read_materializes_unsigned_native_load_with_fallback() {
 }
 
 #[test]
+fn packed_i32_loop_store_update_versions_with_side_exit() {
+    let module = module_with_classes_and_params(
+        "packed_i32_store_update_side_exit.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            int32_array_let(1, "values", vec![1, 2, 3]),
+            for_loop(
+                4,
+                length(1),
+                vec![array_set(
+                    1,
+                    local(4),
+                    bit_or_zero(add(index_get(1, local(4)), int(1))),
+                )],
+            ),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_i32_array_loop_guard"),
+        "safe Int32[] store-update loop should get a packed-i32 loop guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_i32_fast") && ir.contains("for.packed_i32_slow"),
+        "safe Int32[] store-update loop should emit fast and slow clones:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "Int32[] store-update loop should not use the packed-f64 loop guard:\n{ir}"
+    );
+    let fast_start = ir
+        .find("for.packed_i32_fast.body")
+        .expect("expected packed-i32 fast body");
+    let fast_tail = &ir[fast_start..];
+    let fast_end = fast_tail
+        .find("for.packed_i32_fast.update")
+        .map(|offset| fast_start + offset)
+        .unwrap_or(ir.len());
+    let fast_body = &ir[fast_start..fast_end];
+    assert!(
+        fast_body.contains("fptosi double") && fast_body.contains("add i32"),
+        "packed-i32 store RHS should stay in the i32 lane before the store guard:\n{fast_body}\n\n{ir}"
+    );
+    assert!(
+        !fast_body.contains("js_array_numeric_value_to_raw_f64"),
+        "packed-i32 loop body should not canonicalize through the f64 numeric store helper:\n{fast_body}"
+    );
+    let store_fast_start = ir
+        .find("\npacked_i32_loop_store.fast.")
+        .map(|pos| pos + 1)
+        .expect("expected packed-i32 store fast block");
+    let store_fast_tail = &ir[store_fast_start..];
+    let store_fast_end = store_fast_tail
+        .find("\npacked_i32_loop_store.fallback.")
+        .map(|offset| store_fast_start + offset)
+        .unwrap_or(ir.len());
+    let store_fast = &ir[store_fast_start..store_fast_end];
+    assert!(
+        store_fast.contains("store double") && !store_fast.contains("js_array_numeric_value_to_raw_f64"),
+        "packed-i32 fast store should write the exact f64 slot without f64 canonicalization:\n{store_fast}"
+    );
+
+    let fallback_start = ir
+        .find("\npacked_i32_loop_store.fallback.")
+        .map(|pos| pos + 1)
+        .expect("expected packed-i32 store fallback block");
+    let fallback_tail = &ir[fallback_start..];
+    let fallback_end = fallback_tail
+        .find("\n\n")
+        .map(|offset| fallback_start + offset)
+        .unwrap_or(ir.len());
+    let fallback_block = &ir[fallback_start..fallback_end];
+    assert!(
+        fallback_block.contains("br label %packed_i32.loop.slow.preheader."),
+        "packed-i32 store guard failure must side-exit to the slow clone preheader:\n{fallback_block}\n\n{ir}"
+    );
+    assert!(
+        !fallback_block.contains("js_typed_feedback_array_index_set_fallback_boxed"),
+        "packed-i32 fast clone must not perform boxed fallback before side-exiting:\n{fallback_block}\n\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedI32LoopStore"
+                && record["consumer"] == "packed_i32_loop_store"
+                && record["native_rep_name"] == "i32"
+                && record["llvm_ty"] == "i32"
+                && record["access_mode"] == "checked_native"
+                && record_has_array_kind_fact(record, "consumed_facts", "consumed", "packed_i32")
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+                && record_has_note(record, "rhs_i32_store=sitofp_i32_to_raw_f64_slot")
+                && record_has_note(record, "store_guard_failure=side_exit_slow_restart")
+        }),
+        "expected checked packed-i32 loop store record:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PackedI32LoopStore"
+                && record["consumer"] == "packed_i32_loop_store_side_exit"
+                && record["access_mode"] == "dynamic_fallback"
+                && record["materialization_reason"] == "runtime_api"
+                && record_has_array_kind_fact(record, "rejected_facts", "rejected", "packed_i32")
+                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
+        }),
+        "expected packed-i32 store side-exit fallback evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn packed_i32_loop_store_rejects_fractional_number_rhs() {
+    let module = module_with_classes_and_params(
+        "packed_i32_store_fractional_rhs_rejected.ts",
+        Vec::new(),
+        vec![param(2, "delta", Type::Number)],
+        Type::Number,
+        vec![
+            int32_array_let(1, "values", vec![1, 2, 3]),
+            for_loop(
+                4,
+                length(1),
+                vec![array_set(
+                    1,
+                    local(4),
+                    add(index_get(1, local(4)), local(2)),
+                )],
+            ),
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_i32_array_loop_guard"),
+        "fractional-capable number RHS must not get a packed-i32 store clone:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "fractional-capable Int32[] store RHS must not fall back to the packed-f64 store clone:\n{ir}"
+    );
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            matches!(
+                record["expr_kind"].as_str(),
+                Some(
+                    "PackedI32LoopStore"
+                        | "PackedI32LoopGuard"
+                        | "PackedF64LoopStore"
+                        | "PackedF64LoopGuard"
+                )
+            )
+        }),
+        "fractional-capable Int32[] store should not record packed loop store facts:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
     let module = module_with_classes_and_params(
         "packed_f64_unary_math_store_side_exit.ts",

@@ -52,8 +52,8 @@ use super::{
     nanbox_pointer_inline_pub, nanbox_string_inline, proxy_build_args_array, raw_f64_layout_fact,
     try_flat_const_2d_int, try_lower_flat_const_index_get, try_match_channel_reduction,
     try_static_class_name, unbox_str_handle, unbox_to_i64, variant_name, BufferAccessSpec,
-    ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, PackedF64LoopFact, TypedFeedbackContract,
-    TypedFeedbackKind,
+    ChannelReduction, FlatConstInfo, FnCtx, I18nLowerCtx, PackedF64LoopFact, PackedNumericLoopKind,
+    TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn canonicalize_raw_f64_numeric_store_value(
@@ -288,26 +288,57 @@ fn lower_packed_f64_loop_store_value(
     Ok((lower_expr(ctx, value)?, Vec::new()))
 }
 
-fn lower_packed_f64_loop_index_set(
+fn lower_packed_numeric_loop_store_value(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    value: &Expr,
+    array_kind: PackedNumericLoopKind,
+) -> Result<(String, String, Vec<String>)> {
+    match array_kind {
+        PackedNumericLoopKind::F64 => {
+            let (value, notes) = lower_packed_f64_loop_store_value(ctx, arr_id, value)?;
+            Ok((value.clone(), value, notes))
+        }
+        PackedNumericLoopKind::I32 => {
+            let value_i32 = lower_expr_as_i32(ctx, value)?;
+            let value_double = ctx.block().sitofp(I32, &value_i32, DOUBLE);
+            Ok((
+                value_double,
+                value_i32,
+                vec!["rhs_i32_store=sitofp_i32_to_raw_f64_slot".to_string()],
+            ))
+        }
+        PackedNumericLoopKind::U32 => bail!("packed-u32 loop stores are not implemented"),
+    }
+}
+
+fn lower_packed_numeric_loop_index_set(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
     idx_i32: &str,
     value: &Expr,
     guard_id: &str,
     side_exit_label: &str,
+    array_kind: PackedNumericLoopKind,
 ) -> Result<String> {
-    let (val_double, rhs_notes) = lower_packed_f64_loop_store_value(ctx, arr_id, value)?;
+    let (val_double, native_value, rhs_notes) =
+        lower_packed_numeric_loop_store_value(ctx, arr_id, value, array_kind)?;
     let arr_expr = Expr::LocalGet(arr_id);
     let arr_box = lower_expr(ctx, &arr_expr)?;
     let feedback_site_id = emit_typed_feedback_register_site(
         ctx,
         TypedFeedbackKind::ArrayElement,
-        "array[packed_f64_loop]=",
+        match array_kind {
+            PackedNumericLoopKind::F64 => "array[packed_f64_loop]=",
+            PackedNumericLoopKind::I32 => "array[packed_i32_loop]=",
+            PackedNumericLoopKind::U32 => "array[packed_u32_loop]=",
+        },
         TypedFeedbackContract::bounded_numeric_array_set_index(),
     );
-    let fast_idx = ctx.new_block("packed_f64_loop_store.fast");
-    let fallback_idx = ctx.new_block("packed_f64_loop_store.fallback");
-    let merge_idx = ctx.new_block("packed_f64_loop_store.merge");
+    let loop_label = array_kind.loop_label();
+    let fast_idx = ctx.new_block(&format!("{loop_label}_loop_store.fast"));
+    let fallback_idx = ctx.new_block(&format!("{loop_label}_loop_store.fallback"));
+    let merge_idx = ctx.new_block(&format!("{loop_label}_loop_store.merge"));
     let fast_label = ctx.block_label(fast_idx);
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
@@ -339,9 +370,9 @@ fn lower_packed_f64_loop_index_set(
             value: arr_box.clone(),
         };
         ctx.record_lowered_value_with_access_mode_and_facts(
-            "PackedF64LoopStore",
+            array_kind.store_expr_kind(),
             Some(arr_id),
-            "packed_f64_loop_store_side_exit",
+            array_kind.store_side_exit_consumer(),
             &fallback,
             Some(BoundsState::Unknown),
             None,
@@ -351,10 +382,16 @@ fn lower_packed_f64_loop_index_set(
             None,
             Vec::new(),
             vec![
+                array_kind_fact(
+                    Some(arr_id),
+                    "rejected",
+                    array_kind.array_kind_label(),
+                    Some(MaterializationReason::RuntimeApi),
+                ),
                 raw_f64_layout_fact(
                     Some(arr_id),
                     "rejected",
-                    "packed_f64_loop_store_guard",
+                    array_kind.store_guard_detail(),
                     Some(MaterializationReason::RuntimeApi),
                 ),
                 raw_f64_layout_fact(
@@ -374,10 +411,16 @@ fn lower_packed_f64_loop_index_set(
     }
 
     ctx.current_block = fast_idx;
-    let numeric_value = {
-        let numeric_value = {
-            let blk = ctx.block();
-            canonicalize_raw_f64_numeric_store_value(blk, &val_double)
+    {
+        let slot_value = {
+            match array_kind {
+                PackedNumericLoopKind::F64 => {
+                    let blk = ctx.block();
+                    canonicalize_raw_f64_numeric_store_value(blk, &val_double)
+                }
+                PackedNumericLoopKind::I32 => val_double.clone(),
+                PackedNumericLoopKind::U32 => val_double.clone(),
+            }
         };
         let fast_arr_box = lower_expr(ctx, &arr_expr)?;
         let blk = ctx.block();
@@ -388,20 +431,27 @@ fn lower_packed_f64_loop_index_set(
         let with_header = blk.add(I64, &byte_offset, "8");
         let element_addr = blk.add(I64, &arr_handle, &with_header);
         let element_ptr = blk.inttoptr(I64, &element_addr);
-        blk.store(DOUBLE, &numeric_value, &element_ptr);
+        blk.store(DOUBLE, &slot_value, &element_ptr);
         blk.br(&merge_label);
-        numeric_value
-    };
+    }
     let stored = LoweredValue {
         semantic: SemanticKind::JsNumber,
-        rep: NativeRep::F64,
-        llvm_ty: DOUBLE,
-        value: numeric_value,
+        rep: match array_kind {
+            PackedNumericLoopKind::F64 => NativeRep::F64,
+            PackedNumericLoopKind::I32 => NativeRep::I32,
+            PackedNumericLoopKind::U32 => NativeRep::U32,
+        },
+        llvm_ty: match array_kind {
+            PackedNumericLoopKind::F64 => DOUBLE,
+            PackedNumericLoopKind::I32 => I32,
+            PackedNumericLoopKind::U32 => I32,
+        },
+        value: native_value,
     };
     ctx.record_lowered_value_with_access_mode_and_facts(
-        "PackedF64LoopStore",
+        array_kind.store_expr_kind(),
         Some(arr_id),
-        "packed_f64_loop_store",
+        array_kind.store_consumer(),
         &stored,
         Some(BoundsState::Guarded {
             guard_id: guard_id.to_string(),
@@ -412,7 +462,12 @@ fn lower_packed_f64_loop_index_set(
         None,
         None,
         vec![
-            array_kind_fact(Some(arr_id), "consumed", "packed_f64", None),
+            array_kind_fact(
+                Some(arr_id),
+                "consumed",
+                array_kind.array_kind_label(),
+                None,
+            ),
             raw_f64_layout_fact(Some(arr_id), "consumed", guard_id, None),
         ],
         Vec::new(),
@@ -421,14 +476,17 @@ fn lower_packed_f64_loop_index_set(
         {
             let mut notes = vec![
                 "rhs_numeric_guard=js_typed_feedback_numeric_array_index_set_guard".to_string(),
-                "raw_f64_canonicalized=js_array_numeric_value_to_raw_f64".to_string(),
                 "array_reloaded_after_rhs=1".to_string(),
                 "array_reloaded_after_store_guard=1".to_string(),
-                "array_reloaded_after_canonicalization=1".to_string(),
                 "store_guard_failure=side_exit_slow_restart".to_string(),
                 "index_range=nonnegative_i32".to_string(),
                 "length_range=guarded_i32".to_string(),
+                format!("storage_layout={}", array_kind.array_kind_label()),
             ];
+            if matches!(array_kind, PackedNumericLoopKind::F64) {
+                notes.push("raw_f64_canonicalized=js_array_numeric_value_to_raw_f64".to_string());
+                notes.push("array_reloaded_after_canonicalization=1".to_string());
+            }
             notes.extend(rhs_notes);
             notes
         },
@@ -702,13 +760,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(fact) = packed_f64_loop_fact(ctx, *arr_id, *idx_id) {
                         if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
                             let idx_i32 = ctx.block().load(I32, &i32_slot);
-                            return lower_packed_f64_loop_index_set(
+                            return lower_packed_numeric_loop_index_set(
                                 ctx,
                                 *arr_id,
                                 &idx_i32,
                                 value.as_ref(),
                                 &fact.guard_id,
                                 &fact.store_side_exit_label,
+                                fact.array_kind,
                             );
                         }
                     }
