@@ -25,6 +25,8 @@ use crate::closure::{
     js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
 };
 use crate::object::js_object_set_field_by_name;
+#[cfg(test)]
+use crate::object::{js_object_get_field_by_name_f64, ObjectHeader};
 use crate::value::JSValue;
 
 mod async_iterator;
