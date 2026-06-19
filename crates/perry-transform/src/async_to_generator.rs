@@ -1146,7 +1146,7 @@ fn strip_in_expr(expr: &mut Expr, non_promise: &HashSet<LocalId>) {
     perry_hir::walker::walk_expr_children_mut(expr, &mut |c| strip_in_expr(c, non_promise));
     if let Expr::Await(inner) = expr {
         if let Some(stripped) = try_strip_promise_resolve(inner, non_promise) {
-            *inner = Box::new(stripped);
+            **inner = stripped;
         }
     }
 }

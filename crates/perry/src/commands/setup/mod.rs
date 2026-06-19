@@ -24,7 +24,7 @@ mod windows;
 
 // Per-platform wizards — used by `run` below.
 pub(crate) use android::android_wizard;
-pub(crate) use harmonyos::{harmonyos_wizard, prompt_password};
+pub(crate) use harmonyos::harmonyos_wizard;
 pub(crate) use ios::{ios_development_setup, ios_wizard};
 pub(crate) use macos::macos_wizard;
 pub(crate) use tvos::tvos_wizard;
@@ -41,15 +41,8 @@ pub(crate) use helpers::{
 };
 
 // Cert utilities used by macos (re-exported in case any other module wants them).
-pub(crate) use macos::{
-    create_apple_certificate, create_p12_from_cert_content, export_cert_from_keychain,
-    merge_p12_files,
-};
 
 // Per-platform per-bundle-id savers.
-pub(crate) use tvos::save_tvos_bundle_id;
-pub(crate) use visionos::save_visionos_bundle_id;
-pub(crate) use watchos::save_watchos_bundle_id;
 
 use super::publish::{is_interactive, load_config, save_config};
 

@@ -800,7 +800,8 @@ pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
         let mut keys = m
             .borrow()
             .keys()
-            .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
+            .filter(|&(owner, _key)| *owner == obj)
+            .map(|(_owner, key)| key.clone())
             .collect::<Vec<_>>();
         keys.sort();
         keys

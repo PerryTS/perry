@@ -227,9 +227,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[
                         (PTR, &msg_bytes_global),
                         (I64, &msg_len_str),
-                        (PTR, &"null".to_string()),
-                        (I64, &"0".to_string()),
-                        (I32, &"0".to_string()),
+                        (PTR, "null"),
+                        (I64, "0"),
+                        (I32, "0"),
                     ],
                 );
                 blk.unreachable();

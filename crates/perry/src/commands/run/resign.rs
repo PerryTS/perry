@@ -397,7 +397,7 @@ pub async fn create_dev_profile_via_api(
         first["id"].as_str().unwrap_or("").to_string()
     } else {
         // Create App ID
-        let app_name = bundle_id.split('.').last().unwrap_or("app");
+        let app_name = bundle_id.split('.').next_back().unwrap_or("app");
         let resp = client
             .post(format!("{base}/bundleIds"))
             .bearer_auth(&token)

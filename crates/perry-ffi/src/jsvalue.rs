@@ -162,7 +162,7 @@ impl JsValue {
         // sentinels live in 0x7FF8 / 0x7FFC..7FFF — anything in
         // those tag bands is NOT a number.
         let high = bits & TAG_MASK;
-        let nan_band = high >= 0x7FF8_0000_0000_0000 && high <= 0x7FFF_0000_0000_0000;
+        let nan_band = (0x7FF8_0000_0000_0000..=0x7FFF_0000_0000_0000).contains(&high);
         !nan_band || self.is_int32()
     }
 

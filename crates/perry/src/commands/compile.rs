@@ -1,8 +1,6 @@
 //! Compile command - compiles TypeScript to native executable
 
 use anyhow::{anyhow, Result};
-use clap::Args;
-use perry_hir::{Module as HirModule, ModuleKind};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -97,7 +95,8 @@ use resolve::{
 };
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
-    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
+    localize_stdlib_stub_symbols_for_windows, strip_duplicate_objects_from_lib,
+    strip_duplicate_objects_from_well_known_lib,
 };
 use targets::{
     apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
@@ -761,7 +760,7 @@ pub fn run_with_parse_cache(
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.
     let mut all_type_aliases: std::collections::BTreeMap<String, perry_types::Type> =
         std::collections::BTreeMap::new();
-    for (_path, hir_module) in &ctx.native_modules {
+    for hir_module in ctx.native_modules.values() {
         for ta in &hir_module.type_aliases {
             if ta.type_params.is_empty() {
                 all_type_aliases.insert(ta.name.clone(), ta.ty.clone());
@@ -793,7 +792,7 @@ pub fn run_with_parse_cache(
     // `hir_module.imports` doesn't even mention the source module.
     let mut all_program_type_names: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    for (_path, hir_module) in &ctx.native_modules {
+    for hir_module in ctx.native_modules.values() {
         for class in &hir_module.classes {
             all_program_type_names.insert(class.name.clone());
         }
@@ -1039,9 +1038,7 @@ pub fn run_with_parse_cache(
         BTreeMap::new();
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
-        let exports = all_module_exports
-            .entry(path_str.clone())
-            .or_insert_with(BTreeMap::new);
+        let exports = all_module_exports.entry(path_str.clone()).or_default();
         // Exported functions
         for func in &hir_module.functions {
             if func.is_exported {
@@ -1130,7 +1127,7 @@ pub fn run_with_parse_cache(
                 {
                     all_module_export_origin_names
                         .entry(path_str.clone())
-                        .or_insert_with(BTreeMap::new)
+                        .or_default()
                         .insert(exported.clone(), local.clone());
                 }
             }
@@ -1312,7 +1309,7 @@ pub fn run_with_parse_cache(
         for (module_path, name, origin, origin_name) in new_export_entries {
             all_module_exports
                 .entry(module_path.clone())
-                .or_insert_with(BTreeMap::new)
+                .or_default()
                 .insert(name.clone(), origin);
             // Only record the origin-name entry when it actually differs
             // from the export name (the common identity case is implicit —
@@ -1322,7 +1319,7 @@ pub fn run_with_parse_cache(
             if origin_name != name {
                 all_module_export_origin_names
                     .entry(module_path)
-                    .or_insert_with(BTreeMap::new)
+                    .or_default()
                     .insert(name, origin_name);
             }
         }
@@ -1934,7 +1931,7 @@ pub fn run_with_parse_cache(
     // Set of native-module paths that are dynamic-import targets. We
     // also build a parallel set keyed by Module::name for flatten_exports.
     let mut dyn_target_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for (_path, hir_module) in &ctx.native_modules {
+    for hir_module in ctx.native_modules.values() {
         for import in &hir_module.imports {
             // `is_dynamic` covers dynamic-only synthetic edges;
             // `is_dynamic_target` (#1672) covers a static edge that is
@@ -1994,9 +1991,7 @@ pub fn run_with_parse_cache(
                     .iter()
                     .find(|c| c.name == fe.source_local)
                 {
-                    perry_codegen::NamespaceEntryKind::LocalClass {
-                        class_id: class.id as u32,
-                    }
+                    perry_codegen::NamespaceEntryKind::LocalClass { class_id: class.id }
                 } else if let Some(global) = target_hir
                     .globals
                     .iter()
@@ -2033,9 +2028,7 @@ pub fn run_with_parse_cache(
                     } else if let Some(class) =
                         src.classes.iter().find(|c| c.name == fe.source_local)
                     {
-                        perry_codegen::NamespaceEntryKind::LocalClass {
-                            class_id: class.id as u32,
-                        }
+                        perry_codegen::NamespaceEntryKind::LocalClass { class_id: class.id }
                     } else {
                         perry_codegen::NamespaceEntryKind::ForeignVar {
                             source_prefix: source_prefix.clone(),
@@ -2408,7 +2401,7 @@ pub fn run_with_parse_cache(
                 }
                 for spec in &import.specifiers {
                     if let perry_hir::ImportSpecifier::Namespace { local } = spec {
-                        if !namespace_imports.contains(&local) {
+                        if !namespace_imports.contains(local) {
                             namespace_imports.push(local.clone());
                         }
                     }
@@ -4256,14 +4249,14 @@ pub fn run_with_parse_cache(
                     stored_cache_path: true,
                 });
             }
-            return Ok(NativeObjectArtifact {
+            Ok(NativeObjectArtifact {
                 path: obj_path,
                 bytes: Some(object_code),
                 fingerprint: object_fingerprint,
                 cleanup_after_link: true,
                 reused_cache_path: false,
                 stored_cache_path: false,
-            });
+            })
         })
         .collect();
 
@@ -5333,7 +5326,64 @@ pub fn run_with_parse_cache(
 
     // For dylib output, skip runtime/stdlib linking — symbols resolve from host at dlopen time
     if is_dylib {
-        let mut cmd = if is_linux {
+        let is_dylib_windows = matches!(target.as_deref(), Some("windows") | Some("windows-winui"))
+            || (target.is_none() && cfg!(target_os = "windows"));
+        let has_plugin_deactivate = ctx
+            .native_modules
+            .values()
+            .any(|m| m.exported_functions.iter().any(|(n, _)| n == "deactivate"));
+        let mut cmd = if is_dylib_windows {
+            // Windows — emit a .dll via lld-link. The plugin DLL's external
+            // references to `perry_*` / `js_*` resolve against the host
+            // process at LoadLibrary time, just like macOS
+            // `-flat_namespace -undefined dynamic_lookup`.
+            //
+            // A .def file IS still needed here — lld-link's default is to
+            // emit an empty export table, and the host's `loadPlugin` calls
+            // `GetProcAddress(handle, "plugin_activate")` to find the
+            // plugin's entry point. The `LIBRARY` directive names the DLL
+            // and the `EXPORTS` section lists the three plugin ABI symbols
+            // that the codegen layer emits for the dylib's entry module
+            // (see `compile_module_entry`). `plugin_deactivate` is
+            // optional and only listed when the user's `deactivate`
+            // function is actually exported.
+            //
+            // `/FORCE:UNRESOLVED` lets the linker produce the DLL even though
+            // every `perry_*` / `js_*` symbol is undefined; the loader fills
+            // them in from the host at LoadLibrary time. Without it, the
+            // link fails with LNK2019 on the first unresolved `js_*` symbol
+            // and no DLL is emitted.
+            //
+            // We use lld-link rather than MSVC link.exe here: lld-link honors
+            // /FORCE:UNRESOLVED on the LLVM .o files that Perry emits (treating
+            // the missing symbols as warnings that produce a runnable DLL),
+            // whereas MSVC link.exe returns 0 without writing the DLL — see
+            // the cross-linker note in `select_linker_command`.
+            let linker = find_lld_link().unwrap_or_else(|| PathBuf::from("lld-link"));
+            let mut c = Command::new(linker);
+            c.arg("/NOLOGO").arg("/DLL").arg("/FORCE:UNRESOLVED");
+            let stem = exe_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("perry_plugin");
+            let def_path = std::env::temp_dir().join(format!(
+                "perry_plugin_dylib_{}_{}.def",
+                std::process::id(),
+                stem
+            ));
+            if let Ok(mut def_file) = std::fs::File::create(&def_path) {
+                use std::io::Write;
+                let _ = writeln!(def_file, "LIBRARY {}", stem);
+                let _ = writeln!(def_file, "EXPORTS");
+                let _ = writeln!(def_file, "    plugin_activate");
+                let _ = writeln!(def_file, "    perry_plugin_abi_version");
+                if has_plugin_deactivate {
+                    let _ = writeln!(def_file, "    plugin_deactivate");
+                }
+            }
+            c.arg(format!("/DEF:{}", def_path.display()));
+            c
+        } else if is_linux {
             let mut c = Command::new("cc");
             c.arg("-shared");
             c
@@ -5351,7 +5401,12 @@ pub fn run_with_parse_cache(
             cmd.arg(obj_path);
         }
 
-        cmd.arg("-o").arg(&exe_path);
+        if is_dylib_windows {
+            // MSVC link.exe takes the output path as `/OUT:<path>`, not `-o`.
+            cmd.arg(format!("/OUT:{}", exe_path.display()));
+        } else {
+            cmd.arg("-o").arg(&exe_path);
+        }
 
         let status = cmd.status()?;
         if !status.success() {

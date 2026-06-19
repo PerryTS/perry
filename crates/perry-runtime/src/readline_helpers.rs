@@ -203,7 +203,7 @@ fn parse_keypress(chunk: &[u8]) -> Option<(Option<String>, String, bool, bool, b
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => ((b as char).to_string(), false),
             _ => (seq.clone(), false),
         };
-        let shift = matches!(b, b'A'..=b'Z');
+        let shift = b.is_ascii_uppercase();
         return Some((Some(seq.clone()), name, ctrl, shift, false, seq));
     }
     Some((Some(seq.clone()), seq.clone(), false, false, false, seq))

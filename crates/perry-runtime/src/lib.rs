@@ -330,7 +330,7 @@ mod stdlib_pump {
     #[no_mangle]
     pub extern "C" fn js_register_aux_pump(f: extern "C" fn() -> i32) {
         if let Ok(mut pumps) = AUX_PUMPS.lock() {
-            if !pumps.iter().any(|&g| g == f) {
+            if !pumps.contains(&f) {
                 pumps.push(f);
             }
         }
@@ -342,7 +342,7 @@ mod stdlib_pump {
     #[no_mangle]
     pub extern "C" fn js_register_aux_has_active(f: extern "C" fn() -> i32) {
         if let Ok(mut fns) = AUX_HAS_ACTIVE.lock() {
-            if !fns.iter().any(|&g| g == f) {
+            if !fns.contains(&f) {
                 fns.push(f);
             }
         }

@@ -60,7 +60,7 @@ pub use match_all::{
 /// the regex engine (which produces these iterators) is compiled out.
 pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
 #[cfg(feature = "regex-engine")]
-use replace_expand::{expand_js_replacement, replace_regex_fn_fancy};
+use replace_expand::expand_js_replacement;
 #[cfg(feature = "regex-engine")]
 pub use replace_expand::{
     js_string_replace_all_regex_fn, js_string_replace_all_regex_named, js_string_replace_regex_fn,
@@ -1014,18 +1014,13 @@ fn expand_js_replacement_fancy(
                     }
                 }
             }
-            b'<' => {
-                if has_named_groups {
-                    if let Some(rel) = repl[i + 2..].find('>') {
-                        let name = &repl[i + 2..i + 2 + rel];
-                        if let Some(m) = caps.name(name) {
-                            out.push_str(m.as_str());
-                        }
-                        i += 2 + rel + 1;
-                    } else {
-                        out.push('$');
-                        i += 1;
+            b'<' if has_named_groups => {
+                if let Some(rel) = repl[i + 2..].find('>') {
+                    let name = &repl[i + 2..i + 2 + rel];
+                    if let Some(m) = caps.name(name) {
+                        out.push_str(m.as_str());
                     }
+                    i += 2 + rel + 1;
                 } else {
                     out.push('$');
                     i += 1;
@@ -1664,7 +1659,7 @@ pub fn scan_last_exec_groups_root(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_last_exec_groups_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     LAST_EXEC_GROUPS.with(|g| {
-        visitor.visit_raw_mut_ptr_slot(&mut *g.borrow_mut());
+        visitor.visit_raw_mut_ptr_slot(&mut g.borrow_mut());
     });
 }
 

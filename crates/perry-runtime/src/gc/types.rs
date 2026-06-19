@@ -546,7 +546,7 @@ pub(crate) fn gc_type_large_object_policy(obj_type: u8) -> GcLargeObjectPolicy {
 #[allow(dead_code)]
 #[inline]
 pub(crate) fn gc_type_is_pointer_free(obj_type: u8) -> bool {
-    gc_type_info(obj_type).map_or(true, |info| info.pointer_free)
+    gc_type_info(obj_type).is_none_or(|info| info.pointer_free)
 }
 
 #[inline]

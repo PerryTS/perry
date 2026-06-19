@@ -2,7 +2,7 @@ use super::*;
 
 thread_local! {
     pub(super) static MARK_SEEDS: std::cell::UnsafeCell<Vec<*mut GcHeader>> =
-        std::cell::UnsafeCell::new(Vec::new());
+        const { std::cell::UnsafeCell::new(Vec::new()) };
 }
 
 const VALID_POINTER_ARENA_RUN_CAPACITY: usize = 1024;

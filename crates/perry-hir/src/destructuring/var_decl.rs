@@ -1463,7 +1463,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
             ) || decl
                 .init
                 .as_deref()
-                .map_or(false, ast_expr_contains_function_expr);
+                .is_some_and(ast_expr_contains_function_expr);
             let pre_id = if is_function_expr_init
                 && !ctx.pre_registered_module_vars.contains(&name)
                 && ctx.lookup_local(&name).is_none()
@@ -1479,10 +1479,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
             let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
             if matches!(ty, Type::Any) {
                 match &init {
-                    Some(Expr::NativeMethodCall { module, method, .. }) => {
-                        if module == "stream" && method == "from" {
-                            ty = Type::Named("Readable".to_string());
-                        }
+                    Some(Expr::NativeMethodCall { module, method, .. })
+                        if module == "stream" && method == "from" =>
+                    {
+                        ty = Type::Named("Readable".to_string());
                     }
                     Some(Expr::NewDynamic { callee, .. }) => {
                         if let Expr::PropertyGet { object, property } = callee.as_ref() {
@@ -1858,10 +1858,10 @@ pub(crate) fn lower_var_decl_with_destructuring(
                             // recogniser later emits
                             // `RegisterFunctionPrototypeMethod { func:
                             // LocalGet(M_id), … }`.
-                            Expr::LocalGet(src_local) => {
-                                if ctx.function_valued_locals.contains(src_local) {
-                                    ctx.prototype_function_locals.insert(id, *src_local);
-                                }
+                            Expr::LocalGet(src_local)
+                                if ctx.function_valued_locals.contains(src_local) =>
+                            {
+                                ctx.prototype_function_locals.insert(id, *src_local);
                             }
                             _ => {}
                         }

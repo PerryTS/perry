@@ -19,7 +19,7 @@ use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
 use crate::string::js_string_from_bytes;
-use crate::value::{JSValue, TAG_FALSE, TAG_TRUE};
+use crate::value::{JSValue, TAG_FALSE};
 use std::os::raw::c_int;
 
 #[inline]

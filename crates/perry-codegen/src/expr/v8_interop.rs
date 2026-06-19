@@ -60,8 +60,8 @@ pub(crate) fn emit_v8_export_call(
         lit.push_str("\\00\"");
         lit
     };
-    let spec_bytes = specifier.as_bytes().len();
-    let name_bytes = export_name.as_bytes().len();
+    let spec_bytes = specifier.len();
+    let name_bytes = export_name.len();
     ctx.typed_parse_rodata.push(format!(
         "@{} = private unnamed_addr constant [{} x i8] {}",
         spec_global,
@@ -157,9 +157,9 @@ pub(crate) fn emit_v8_member_method_call(
         lit.push_str("\\00\"");
         lit
     };
-    let spec_bytes = specifier.as_bytes().len();
-    let member_bytes = member.as_bytes().len();
-    let method_bytes = method.as_bytes().len();
+    let spec_bytes = specifier.len();
+    let member_bytes = member.len();
+    let method_bytes = method.len();
     ctx.typed_parse_rodata.push(format!(
         "@{} = private unnamed_addr constant [{} x i8] {}",
         spec_global,

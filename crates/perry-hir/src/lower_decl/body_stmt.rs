@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
@@ -11,7 +11,6 @@ use crate::lower::{
     wrap_lazy_for_of_body_close_on_throw, LoweringContext,
 };
 use crate::lower_patterns::*;
-use crate::lower_types::*;
 
 use super::class_computed::{
     class_computed_member_registration_expr, push_deduped_class_computed_keys,

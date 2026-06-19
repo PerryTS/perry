@@ -2,12 +2,11 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
 /// Is `expr` a reference to a node:stream class constructor — bare
 /// (`Readable`) or namespaced (`stream.Readable`)? Used by
@@ -240,10 +239,7 @@ fn chain_roots_at_iterator_from(expr: &ast::Expr) -> bool {
     }
 }
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{lower_expr, LoweringContext};
 
 pub(super) fn try_array_only_methods(
     ctx: &mut LoweringContext,
@@ -438,11 +434,7 @@ pub(super) fn try_array_only_methods(
                                 ) || ctx
                                     .fetch_call_response_locals
                                     .contains(obj_ident.sym.as_ref()));
-                            if is_fetch_headers {
-                                true
-                            } else {
-                                false
-                            }
+                            is_fetch_headers
                         } else {
                             false
                         }
@@ -1161,7 +1153,7 @@ pub(super) fn try_array_only_methods(
                             // final length, which is exactly what the last
                             // element of the `Sequence` yields. (#4508)
                             let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
-                            for (ast_arg, arg) in call.args.iter().zip(args.into_iter()) {
+                            for (ast_arg, arg) in call.args.iter().zip(args) {
                                 let method = if ast_arg.spread.is_some() {
                                     "push_spread"
                                 } else {

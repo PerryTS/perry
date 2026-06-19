@@ -406,7 +406,7 @@ fn try_unroll_for(
     let mut out: Vec<Stmt> = Vec::with_capacity((trips as usize) * body.len());
     for n in 0..trips {
         let value = lo + n;
-        let mut cloned: Vec<Stmt> = body.iter().cloned().collect();
+        let mut cloned: Vec<Stmt> = body.to_vec();
         for s in &mut cloned {
             substitute_localget_with_int_in_stmt(s, iv_id, value);
         }
@@ -526,7 +526,7 @@ fn expr_is_unrollable(e: &Expr, iv_id: LocalId) -> bool {
         // create closures inside its blur loops, so this restriction
         // is free for the target workload.
         Expr::Closure { body, captures, .. } => {
-            if captures.iter().any(|cap| *cap == iv_id) {
+            if captures.contains(&iv_id) {
                 return false;
             }
             // Defensive: walk the closure body to catch any direct

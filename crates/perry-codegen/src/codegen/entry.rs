@@ -430,7 +430,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: main_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
-            closure_rest_params: closure_rest_params,
+            closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
             option_object_locals: HashMap::new(),
@@ -876,7 +876,7 @@ pub(super) fn compile_module_entry(
             func_returns_class: &cross_module.func_returns_class,
             boxed_vars: init_boxed_vars,
             prealloc_boxes: std::collections::HashSet::new(),
-            closure_rest_params: closure_rest_params,
+            closure_rest_params,
             local_closure_func_ids: HashMap::new(),
             local_closure_param_counts: HashMap::new(),
             option_object_locals: HashMap::new(),
@@ -1017,12 +1017,80 @@ pub(super) fn compile_module_entry(
         let pending = std::mem::take(&mut ctx.pending_declares);
         let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
         let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
+        let has_plugin_activate = hir
+            .exported_functions
+            .iter()
+            .any(|(name, _)| name == "activate");
+        let has_plugin_deactivate = hir
+            .exported_functions
+            .iter()
+            .any(|(name, _)| name == "deactivate");
         drop(ctx);
         llmod.ic_counter = ic_end;
         llmod.buffer_alias_counter += buffer_alias_used;
         llmod.native_rep_records.extend(native_rep_records);
         for (name, ret, params) in pending {
             llmod.declare_function(&name, ret, &params);
+        }
+
+        // Plugin ABI shim — only emitted when the entry module is being
+        // built as a dylib (perry compile --output-type dylib). The host's
+        // `loadPlugin` calls `GetProcAddress(handle, "plugin_activate")`
+        // (Windows) / `dlsym(handle, "plugin_activate")` (macOS/Linux) to
+        // find the entry, so every dylib must export that name (and
+        // `plugin_deactivate` if the user supplied one). The shim unwraps
+        // the NaN-boxed `api` handle, calls the user's `activate(api)`
+        // with the raw pointer, and returns 1 on success / 0 if the
+        // module doesn't export `activate` (host treats that as load
+        // failure). `perry_plugin_abi_version` is the version the runtime
+        // checks against the host's expected ABI before calling activate
+        // — bump when the shim contract changes.
+        if is_dylib {
+            use crate::codegen::helpers::scoped_fn_name;
+            use crate::nanbox::{POINTER_MASK_I64, POINTER_TAG_I64};
+
+            {
+                let abi_fn = llmod.define_function("perry_plugin_abi_version", I64, vec![]);
+                let _ = abi_fn.create_block("entry");
+                let blk = abi_fn.block_mut(0).unwrap();
+                blk.ret(I64, "2");
+            }
+
+            if has_plugin_activate {
+                let user_activate = scoped_fn_name(module_prefix, "activate");
+                llmod.declare_function(&user_activate, DOUBLE, &[DOUBLE]);
+                let fn_def = llmod.define_function(
+                    "plugin_activate",
+                    I64,
+                    vec![(I64, "api_handle".to_string())],
+                );
+                let _ = fn_def.create_block("entry");
+                let blk = fn_def.block_mut(0).unwrap();
+                let lower48 = blk.and(I64, "api_handle", POINTER_MASK_I64);
+                let tagged = blk.or(I64, &lower48, POINTER_TAG_I64);
+                let boxed = blk.bitcast_i64_to_double(&tagged);
+                let _ = blk.call(DOUBLE, &user_activate, &[(DOUBLE, &boxed)]);
+                blk.ret(I64, "1");
+            } else {
+                let fn_def = llmod.define_function(
+                    "plugin_activate",
+                    I64,
+                    vec![(I64, "_api_handle".to_string())],
+                );
+                let _ = fn_def.create_block("entry");
+                let blk = fn_def.block_mut(0).unwrap();
+                blk.ret(I64, "0");
+            }
+
+            if has_plugin_deactivate {
+                let user_deactivate = scoped_fn_name(module_prefix, "deactivate");
+                llmod.declare_function(&user_deactivate, DOUBLE, &[]);
+                let fn_def = llmod.define_function("plugin_deactivate", VOID, vec![]);
+                let _ = fn_def.create_block("entry");
+                let blk = fn_def.block_mut(0).unwrap();
+                blk.call_void(&user_deactivate, &[]);
+                blk.ret_void();
+            }
         }
         for ic_name in &ic_globals {
             llmod.add_raw_global(format!(

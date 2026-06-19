@@ -588,12 +588,12 @@ pub extern "C" fn js_perry_tui_animated_spinner(interval_ms: f64, frames_ptr: i6
     let frames: Vec<&str> = if frames_ptr != 0 {
         frames_owned = read_string_array(frames_ptr);
         if frames_owned.is_empty() {
-            DEFAULT_SPINNER_FRAMES.iter().copied().collect()
+            DEFAULT_SPINNER_FRAMES.to_vec()
         } else {
             frames_owned.iter().map(|s| s.as_str()).collect()
         }
     } else {
-        DEFAULT_SPINNER_FRAMES.iter().copied().collect()
+        DEFAULT_SPINNER_FRAMES.to_vec()
     };
     let idx = ((process_elapsed_ms() / interval) as usize) % frames.len();
     super::tree::register(Node::Text {

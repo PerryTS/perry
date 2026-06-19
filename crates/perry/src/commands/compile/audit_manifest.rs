@@ -60,8 +60,7 @@ fn write_audit_manifest(ctx: &CompilationContext) -> std::io::Result<()> {
     let dir = &ctx.cache_dir;
     fs::create_dir_all(dir)?;
     let path = dir.join("audit.json");
-    let json = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(&manifest).map_err(|e| std::io::Error::other(e))?;
     fs::write(&path, json)?;
     Ok(())
 }

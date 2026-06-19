@@ -24,33 +24,23 @@ mod rewrite_returns;
 // `use super::*;`. Globs don't propagate transitively, so spell every
 // cross-module symbol here.
 pub(crate) use break_continue::{
-    body_contains_yield, collect_hoisted_vars, collect_vars_recursive,
-    fix_break_continue_sentinels, fix_break_continue_sentinels_in_catches,
-    fix_break_continue_sentinels_in_stmt, fix_break_continue_sentinels_in_stmts,
-    fix_placeholder_state, rewrite_break_continue_in_stmt, rewrite_break_continue_in_stmts,
+    body_contains_yield, collect_hoisted_vars, fix_break_continue_sentinels,
+    fix_break_continue_sentinels_in_catches, fix_break_continue_sentinels_in_stmts,
+    fix_placeholder_state, rewrite_break_continue_in_stmts,
 };
 pub(crate) use helpers::{
-    alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmt, rewrite_hoisted_lets_in_stmts,
-    wrap_in_promise_resolve, wrap_returns_in_promise,
+    alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmts, wrap_returns_in_promise,
 };
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
-pub(crate) use id_scan::{
-    compute_max_func_id, compute_max_local_id, scan_expr_for_max_func, scan_expr_for_max_local,
-    scan_stmt_for_max_func, scan_stmt_for_max_local, scan_stmts_for_max_func,
-    scan_stmts_for_max_local,
-};
-pub(crate) use iter_result_rewrite::{rewrite_expr, rewrite_expr_children, rewrite_stmt};
+pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};
+pub(crate) use iter_result_rewrite::rewrite_stmt;
 pub(crate) use linearize::{linearize_body, CatchRoute, FinallyRoute, State, StateExit};
 pub(crate) use lower::{
-    build_async_step_driver_direct, transform_generator_function,
-    transform_generator_function_with_extra_captures,
+    transform_generator_function, transform_generator_function_with_extra_captures,
 };
 pub(crate) use rewrite_returns::{
-    body_contains_return, is_iter_result, prepend_done_before_returns,
-    rewrite_catch_returns_to_iter_result, rewrite_catch_returns_to_iter_result_in_stmt,
+    body_contains_return, prepend_done_before_returns, rewrite_catch_returns_to_iter_result,
     rewrite_iter_results_in_stmts, rewrite_returns_as_done, rewrite_returns_to_labeled_break,
-    rewrite_returns_to_labeled_break_in_stmt, rewrite_yield_to_await_in_expr,
-    rewrite_yield_to_await_in_expr_children, rewrite_yield_to_await_in_stmt,
     rewrite_yield_to_await_in_stmts,
 };
 

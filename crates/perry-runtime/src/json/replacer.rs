@@ -1177,7 +1177,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
     // point it at the materialized tree (not the lazy header
     // whose fields aren't element f64s).
     let value = redirect_lazy_to_materialized(value);
-    let value_bits = value.to_bits();
+    let _value_bits = value.to_bits();
 
     // Determine spacer/indent. A `Number`/`String` wrapper object spacer
     // (`JSON.stringify(v, null, new Number(2))`) is coerced per ECMA-262

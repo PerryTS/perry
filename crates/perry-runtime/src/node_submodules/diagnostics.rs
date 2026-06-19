@@ -1346,7 +1346,7 @@ pub(crate) extern "C" fn diag_channel_run_stores(
     // fixed-width scalar slots, so the variadic tail rides in a single array
     // handle).
     let cb_args_arr = unsafe { build_arg_array(&cb_args) };
-    let mut next = js_closure_alloc(cast0(store_next_thunk), 5);
+    let next = js_closure_alloc(cast0(store_next_thunk), 5);
     js_register_closure_arity(cast0(store_next_thunk), 0);
     js_closure_set_capture_ptr(next, 0, id);
     js_closure_set_capture_ptr(next, 1, data.to_bits() as i64);
@@ -1602,7 +1602,7 @@ pub(crate) extern "C" fn diag_trace_promise(
             );
             publish_channel(events[2], context);
             publish_channel(events[3], context);
-            return result;
+            result
         } else if state == 2 {
             // Node's TracingChannel#tracePromise rejection order is
             // start, end, error, asyncStart, asyncEnd — confirmed
@@ -1619,7 +1619,7 @@ pub(crate) extern "C" fn diag_trace_promise(
             publish_channel(events[4], context);
             publish_channel(events[2], context);
             publish_channel(events[3], context);
-            return result;
+            result
         } else {
             publish_channel(events[1], context);
             set_field_value(
@@ -1629,7 +1629,7 @@ pub(crate) extern "C" fn diag_trace_promise(
             );
             publish_channel(events[2], context);
             publish_channel(events[3], context);
-            return result;
+            result
         }
     } else {
         // Node publishes only start/end for non-thenable returns, sets
@@ -1642,7 +1642,7 @@ pub(crate) extern "C" fn diag_trace_promise(
             result,
         );
         publish_channel(events[1], context);
-        return result;
+        result
     }
 }
 

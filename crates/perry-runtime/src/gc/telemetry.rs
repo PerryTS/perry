@@ -85,8 +85,9 @@ pub(super) struct EvacuationTraceStats {
     pub(super) retained_forwarded_stub_bytes: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub(super) enum CopiedMinorFallbackReason {
+    #[default]
     None,
     NotAttempted,
     BarriersInactive,
@@ -113,12 +114,6 @@ impl CopiedMinorFallbackReason {
             Self::PinnedYoungDirtySlot => "pinned_young_dirty_slot",
             Self::PinnedYoungTransitive => "pinned_young_transitive",
         }
-    }
-}
-
-impl Default for CopiedMinorFallbackReason {
-    fn default() -> Self {
-        Self::None
     }
 }
 

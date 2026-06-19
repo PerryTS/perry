@@ -1,6 +1,6 @@
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
-use perry_types::{FuncId, LocalId, Type};
+use perry_hir::walker::walk_expr_children;
+use perry_hir::{Expr, Stmt};
+use perry_types::LocalId;
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -287,15 +287,11 @@ pub fn collect_exact_receiver_refs_in_expr(
     out: &mut HashSet<LocalId>,
 ) {
     match expr {
-        Expr::LocalGet(id) | Expr::LocalSet(id, _) => {
-            if facts.contains_key(id) {
-                out.insert(*id);
-            }
+        Expr::LocalGet(id) | Expr::LocalSet(id, _) if facts.contains_key(id) => {
+            out.insert(*id);
         }
-        Expr::Update { id, .. } => {
-            if facts.contains_key(id) {
-                out.insert(*id);
-            }
+        Expr::Update { id, .. } if facts.contains_key(id) => {
+            out.insert(*id);
         }
         Expr::Closure {
             params,

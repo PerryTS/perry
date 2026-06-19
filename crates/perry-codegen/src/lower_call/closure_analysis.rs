@@ -198,10 +198,8 @@ fn find_outer_writes_expr(
             }
             find_outer_writes_expr(val, inner_ids, out);
         }
-        Expr::Update { id, .. } => {
-            if !inner_ids.contains(id) {
-                out.push(*id);
-            }
+        Expr::Update { id, .. } if !inner_ids.contains(id) => {
+            out.push(*id);
         }
         Expr::Closure { .. } => {
             // Stop at nested closure boundary — it has its own scope and

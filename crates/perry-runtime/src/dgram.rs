@@ -1549,7 +1549,7 @@ fn set_broadcast_impl(socket: f64, args: &[f64]) -> f64 {
 
 fn set_ttl_impl(socket: f64, args: &[f64]) -> f64 {
     let ttl = validate_number_arg(args.first().copied().unwrap_or_else(undefined_value), "ttl");
-    if !ttl.is_finite() || ttl < 1.0 || ttl > 255.0 {
+    if !ttl.is_finite() || !(1.0..=255.0).contains(&ttl) {
         throw_socket_errno("setTTL", "EINVAL");
     }
     ensure_running(socket, "setTTL");
@@ -1563,7 +1563,7 @@ fn set_ttl_impl(socket: f64, args: &[f64]) -> f64 {
 
 fn set_multicast_ttl_impl(socket: f64, args: &[f64]) -> f64 {
     let ttl = validate_number_arg(args.first().copied().unwrap_or_else(undefined_value), "ttl");
-    if ttl < 0.0 || ttl > 255.0 {
+    if !(0.0..=255.0).contains(&ttl) {
         throw_socket_errno("setMulticastTTL", "EINVAL");
     }
     ensure_running(socket, "setMulticastTTL");

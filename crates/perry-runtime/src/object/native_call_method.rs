@@ -1306,9 +1306,7 @@ pub(crate) unsafe fn try_dispatch_value_called_proto_method(
     if (*closure).func_ptr != super::global_this::global_this_builtin_noop_thunk as *const u8 {
         return None;
     }
-    if super::native_module::builtin_closure_length(closure as usize).is_none() {
-        return None;
-    }
+    super::native_module::builtin_closure_length(closure as usize)?;
     let name_val = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
     let name_jsv = JSValue::from_bits(name_val.to_bits());
     if !name_jsv.is_any_string() {
@@ -4476,7 +4474,7 @@ pub unsafe extern "C" fn js_native_call_method(
                     .and_then(super::canonical_array_index)
                     .is_some_and(|idx| {
                         let buf = raw as *const crate::buffer::BufferHeader;
-                        idx < (*buf).length as u32
+                        idx < (*buf).length
                     });
                 return f64::from_bits(JSValue::bool(enumerable).bits());
             }
@@ -4556,7 +4554,7 @@ pub unsafe extern "C" fn js_native_call_method(
             if !own_key_present(obj_ptr as *mut ObjectHeader, key_str) {
                 return f64::from_bits(JSValue::bool(false).bits());
             }
-            let enumerable = get_property_attrs(obj_ptr as usize, &key_name)
+            let enumerable = get_property_attrs(obj_ptr as usize, key_name)
                 .map(|attrs| attrs.enumerable())
                 .unwrap_or(true);
             return f64::from_bits(JSValue::bool(enumerable).bits());
@@ -4665,7 +4663,7 @@ pub unsafe extern "C" fn js_native_call_method(
                 } else {
                     std::ptr::null()
                 };
-                let rest_len = if args_len > 1 { args_len - 1 } else { 0 };
+                let rest_len = args_len.saturating_sub(1);
                 let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
                 // Static bound-method value (`C.m.call(x)`): arm the one-shot
                 // static-`this` override so the method body sees `x` instead

@@ -104,10 +104,7 @@ pub unsafe extern "C" fn js_json_raw_json(text: f64) -> f64 {
         let tag = bits & 0xFFFF_0000_0000_0000;
         if tag == crate::value::STRING_TAG {
             let str_ptr = (bits & crate::value::POINTER_MASK) as *const StringHeader;
-            match super::stringify_api::string_from_header(str_ptr) {
-                Some(s) => s,
-                None => String::new(),
-            }
+            super::stringify_api::string_from_header(str_ptr).unwrap_or_default()
         } else if tag == crate::value::SHORT_STRING_TAG {
             let jv = JSValue::from_bits(bits);
             let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];

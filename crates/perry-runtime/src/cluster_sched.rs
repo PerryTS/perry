@@ -659,10 +659,10 @@ pub extern "C" fn perry_cluster_worker_query_listen(
             return -1;
         }
         let host = unsafe { read_host(host_ptr, host_len) };
-        return match worker_query_listen(&host, port, address_type, rr != 0) {
+        match worker_query_listen(&host, port, address_type, rr != 0) {
             Some(p) => p as i32,
             None => -1,
-        };
+        }
     }
     #[cfg(not(unix))]
     {
@@ -676,7 +676,7 @@ pub extern "C" fn perry_cluster_worker_query_listen(
 pub extern "C" fn perry_cluster_worker_recv_fd(key_id: u32) -> i32 {
     #[cfg(unix)]
     {
-        return worker_recv_fd(key_id) as i32;
+        worker_recv_fd(key_id) as i32
     }
     #[cfg(not(unix))]
     {
@@ -696,7 +696,7 @@ pub extern "C" fn perry_cluster_compute_key_id(
     #[cfg(unix)]
     {
         let host = unsafe { read_host(host_ptr, host_len) };
-        return compute_key_id(&host, port.max(0) as u16, address_type);
+        compute_key_id(&host, port.max(0) as u16, address_type)
     }
     #[cfg(not(unix))]
     {

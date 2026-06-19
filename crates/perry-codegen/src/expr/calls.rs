@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -315,8 +315,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // crypto workload) needs the Buffer path — it XORs, hashes, and
             // base64-encodes raw bytes. Route to _bytes FFI variants when no
             // encoding was specified.
-            let want_buffer = digest_args.first().is_none()
-                || matches!(digest_args.first(), Some(Expr::Undefined));
+            let want_buffer =
+                digest_args.is_empty() || matches!(digest_args.first(), Some(Expr::Undefined));
 
             // The inline `js_crypto_sha256` / `js_crypto_md5` fast path only
             // produces a hex string (or, for the no-arg form, a raw-byte

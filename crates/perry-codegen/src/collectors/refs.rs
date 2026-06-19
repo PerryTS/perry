@@ -1,7 +1,5 @@
-use perry_hir::{BinaryOp, Expr, Function, Stmt, WithSetFallback};
+use perry_hir::WithSetFallback;
 use std::collections::HashSet;
-
-use super::*;
 
 pub fn collect_let_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
     for s in stmts {

@@ -1065,7 +1065,7 @@ pub(super) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
     if ptr.is_null() {
         return None;
     }
-    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<crate::closure::ClosureHeader>()) {
         return None;
     }
     if !is_valid_obj_ptr(ptr as *const u8) {
@@ -1383,7 +1383,7 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
             .as_mut()
             .unwrap()
             .entry(class_id)
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(name.clone(), value_bits);
     }
     invalidate_class_prototype_fast_guards();
@@ -2977,7 +2977,7 @@ fn is_callable_function_value(value: f64) -> bool {
     if ptr.is_null() {
         return false;
     }
-    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<crate::closure::ClosureHeader>()) {
         return false;
     }
     if !is_valid_obj_ptr(ptr as *const u8) {
@@ -2993,7 +2993,7 @@ fn is_arrow_function_value(value: f64) -> bool {
         return false;
     }
     let ptr = jv.as_pointer() as *const crate::closure::ClosureHeader;
-    if (ptr as usize) % std::mem::align_of::<crate::closure::ClosureHeader>() != 0 {
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<crate::closure::ClosureHeader>()) {
         return false;
     }
     if ptr.is_null() || !is_valid_obj_ptr(ptr as *const u8) {
@@ -5644,16 +5644,16 @@ unsafe fn try_native_static_method_in_proto_chain(
             }
         }
         let proto_obj = class_prototype_object(cid);
-        if !proto_obj.is_null() && (*proto_obj).class_id == NATIVE_MODULE_CLASS_ID {
-            if read_native_module_name(proto_obj as *const ObjectHeader).as_deref()
+        if !proto_obj.is_null()
+            && (*proto_obj).class_id == NATIVE_MODULE_CLASS_ID
+            && read_native_module_name(proto_obj as *const ObjectHeader).as_deref()
                 == Some("buffer.Buffer")
-            {
-                let result = crate::object::native_module::call_native_module_dispatch_hook(
-                    proto_obj, name, args_ptr, args_len,
-                );
-                if !JSValue::from_bits(result.to_bits()).is_undefined() {
-                    return Some(result);
-                }
+        {
+            let result = crate::object::native_module::call_native_module_dispatch_hook(
+                proto_obj, name, args_ptr, args_len,
+            );
+            if !JSValue::from_bits(result.to_bits()).is_undefined() {
+                return Some(result);
             }
         }
         cid = get_parent_class_id(cid).unwrap_or(0);

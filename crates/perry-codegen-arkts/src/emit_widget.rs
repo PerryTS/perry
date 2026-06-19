@@ -229,10 +229,9 @@ pub(crate) fn emit_widget(
                 // first arg (handled above). Falling here means the
                 // user used TreeNode in an unsupported position —
                 // emit a comment + placeholder so the build still works.
-                "TreeNode" => format!(
-                    "// TreeNode used outside TreeView's first arg — not renderable\n\
+                "TreeNode" => "// TreeNode used outside TreeView's first arg — not renderable\n\
                      Text('[TreeNode misplaced]').fontSize(14).fontColor('#888888')"
-                ),
+                    .to_string(),
                 other => format!(
                     "// unsupported perry/ui widget: {} (Phase 2 v12)\n\
                      Text('[unsupported: {}]').fontSize(16).fontColor('#888888')",
@@ -327,9 +326,8 @@ pub(crate) fn emit_widget(
                 local_hint,
             )
         }
-        _ => format!(
-            "// unrecognized body expression (must be a perry/ui widget call)\n\
+        _ => "// unrecognized body expression (must be a perry/ui widget call)\n\
              Text('[unrecognized body]').fontSize(16).fontColor('#888888')"
-        ),
+            .to_string(),
     }
 }

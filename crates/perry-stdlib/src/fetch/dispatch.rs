@@ -30,6 +30,15 @@ use perry_runtime::js_get_string_pointer_unified;
 /// (`c.json`/`c.text`) are unaffected.
 #[no_mangle]
 pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
+    // A binary body — Buffer / Uint8Array / typed array / ArrayBuffer — must
+    // copy its RAW bytes. Such a value is a BufferHeader/TypedArrayHeader
+    // pointer, NOT a StringHeader; passing it straight to `string_from_header`
+    // read the byte length but data at the wrong offset (zero-fill), so the
+    // payload came back all zeroes (#5435). Materialize the bytes into a heap
+    // StringHeader so `js_response_new`'s lossless byte read recovers them.
+    if let Some(bytes) = unsafe { body_value_buffer_bytes(value) } {
+        return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
+    }
     // A non-integral or out-of-range value can't be a stream, so skip the
     // registry probe for the common cases.
     if value.is_finite()
@@ -46,6 +55,64 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         }
     }
     js_get_string_pointer_unified(value)
+}
+
+/// Read a body `*const StringHeader` losslessly as raw bytes (no UTF-8
+/// validation). Mirrors `string_from_header` but never round-trips through
+/// `str::from_utf8`, so a binary body materialized by `js_response_body_init_ptr`
+/// (a Buffer / Uint8Array / ArrayBuffer copied verbatim into a StringHeader)
+/// keeps every byte instead of being dropped when the bytes aren't valid UTF-8.
+/// Refs #5435. `None` for a null/sub-page pointer (no body).
+pub(crate) unsafe fn body_bytes_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
+    if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data_ptr = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    Some(std::slice::from_raw_parts(data_ptr, len).to_vec())
+}
+
+/// If `value` is a binary body — a typed array, Buffer/Uint8Array, or
+/// ArrayBuffer — return a copy of its raw bytes; `None` for anything else
+/// (strings, stream handles, numbers) so callers fall back to string coercion.
+///
+/// A typed array / buffer is laid out as `BufferHeader` (length at offset 0,
+/// data at offset 8) or `TypedArrayHeader`, NOT `StringHeader` (data at offset
+/// 20). Feeding such a pointer straight to `string_from_header` read the byte
+/// length correctly but the data at the wrong offset — zero-filled padding —
+/// so `new Response(new Uint8Array([1,2,3]))` came back all zeroes (#5435).
+/// Materializing the real bytes here lets the body round-trip byte-for-byte.
+pub(crate) unsafe fn body_value_buffer_bytes(value: f64) -> Option<Vec<u8>> {
+    let jsval = JSValue::from_bits(value.to_bits());
+    // A typed array / Buffer / ArrayBuffer body is a POINTER_TAG value; decode
+    // it via the shared `JSValue` accessors rather than reconstructing the tag
+    // mask here. A raw untagged heap pointer (no NaN-box tag) is also accepted.
+    // A string body is STRING_TAG, so `is_pointer()` is false and it falls
+    // through to the ordinary string coercion.
+    let addr = if jsval.is_pointer() {
+        jsval.as_pointer::<u8>() as usize
+    } else {
+        let bits = value.to_bits();
+        if (bits >> 48) == 0 && bits >= 0x10000 {
+            bits as usize
+        } else {
+            return None;
+        }
+    };
+    if addr < 0x1000 {
+        return None;
+    }
+    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
+        return perry_runtime::typedarray::typed_array_bytes(ta).map(|b| b.to_vec());
+    }
+    if perry_runtime::buffer::is_registered_buffer(addr) {
+        let ptr = addr as *const perry_runtime::buffer::BufferHeader;
+        let len = (*ptr).length as usize;
+        let data = perry_runtime::buffer::buffer_data(ptr);
+        return Some(std::slice::from_raw_parts(data, len).to_vec());
+    }
+    None
 }
 
 lazy_static::lazy_static! {

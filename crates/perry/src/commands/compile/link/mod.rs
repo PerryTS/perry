@@ -24,6 +24,7 @@
 
 use anyhow::{anyhow, Result};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -34,9 +35,10 @@ use super::{
     dedup_stdlib_for_tier3, find_geisterhand_library, find_geisterhand_runtime,
     find_geisterhand_stdlib, find_geisterhand_ui, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
-    find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime, rust_target_triple,
-    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
-    windows_pe_subsystem_flag, windows_subsystem_needs_ui, CompilationContext,
+    find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime,
+    localize_stdlib_stub_symbols_for_windows, rust_target_triple, strip_duplicate_objects_from_lib,
+    strip_duplicate_objects_from_well_known_lib, windows_pe_subsystem_flag,
+    windows_subsystem_needs_ui, CompilationContext,
 };
 
 mod build_and_run;
@@ -50,7 +52,75 @@ pub(super) use build_and_run::build_and_run_link;
 use link_cache::prepare_link_cache_status;
 pub(super) use link_cache::{write_link_cache_manifest, LinkCacheStatus};
 pub use platform_cmd::select_linker_command;
-pub(super) use windows_link::WINDOWS_APP_MANIFEST; // guarded by windows_link_tests
+#[cfg(test)]
+pub(super) use windows_link::WINDOWS_APP_MANIFEST; // consumed only by windows_link_tests
+
+/// Symbols a plugin host must export so `dlopen`'d / `LoadLibrary`'d plugin
+/// shared libraries can resolve them against the host process at load time.
+///
+/// Plugins (`.dylib` / `.so` / `.dll`) link against the host's copies of
+/// these symbols rather than bringing their own — see
+/// `crates/perry-runtime/src/plugin.rs::perry_plugin_load`. On macOS we
+/// use `-Wl,-u,_<sym>` to force the linker to keep them past dead-strip;
+/// on Linux `-rdynamic` exports the whole set; on Windows we write a
+/// `.def` file and pass `/DEF:<path>` to `link.exe` (the MSVC equivalent
+/// of `-rdynamic`).
+pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
+    // Runtime allocation / value primitives
+    "js_array_alloc",
+    "js_array_from_f64",
+    "js_array_push_f64",
+    "js_bigint_is_zero",
+    "js_closure_alloc",
+    "js_console_log_spread",
+    "js_dynamic_object_get_property",
+    "js_dynamic_string_equals",
+    "js_gc_register_global_root",
+    "js_is_truthy",
+    "js_jsvalue_compare",
+    "js_jsvalue_equals",
+    "js_nanbox_get_pointer",
+    "js_nanbox_pointer",
+    "js_nanbox_string",
+    "js_native_call_method",
+    "js_object_alloc_class_with_keys",
+    "js_object_alloc_with_shape",
+    "js_register_class_method",
+    "js_string_char_code_at",
+    "js_string_from_bytes",
+    "js_string_length",
+    "perry_debug_trace_init",
+    "perry_debug_trace_init_done",
+    "perry_init_guard_check_and_set",
+    // Plugin manager (perry-plugin)
+    "perry_plugin_abi_version",
+    "perry_plugin_load",
+    "perry_plugin_unload",
+    "perry_plugin_lookup_symbol",
+    "perry_plugin_emit_hook",
+    "perry_plugin_emit_event",
+    "perry_plugin_invoke_tool",
+    "perry_plugin_register_hook",
+    "perry_plugin_register_hook_ex",
+    "perry_plugin_unregister_hook",
+    "perry_plugin_register_tool",
+    "perry_plugin_unregister_tool",
+    "perry_plugin_register_service",
+    "perry_plugin_unregister_service",
+    "perry_plugin_register_route",
+    "perry_plugin_unregister_route",
+    "perry_plugin_list_plugins",
+    "perry_plugin_list_hooks",
+    "perry_plugin_list_tools",
+    "perry_plugin_plugin_count",
+    "perry_plugin_set_metadata",
+    "perry_plugin_get_config",
+    "perry_plugin_subscribe_event",
+    "perry_plugin_unsubscribe_event",
+    "perry_plugin_emit_event_bus",
+    "perry_plugin_init",
+    "perry_plugin_last_load_error",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeBackendLinkMetadata {

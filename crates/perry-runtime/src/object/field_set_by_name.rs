@@ -644,7 +644,7 @@ pub extern "C" fn js_object_set_field_by_name(
             // instead of falling through to the frozen-object throw.
             if !module_name.is_empty() && property_name != "__module__" {
                 super::native_module::native_namespace_prop_override_store(
-                    &module_name,
+                    module_name,
                     property_name,
                     value,
                 );

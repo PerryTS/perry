@@ -56,7 +56,7 @@ pub(super) enum RuntimeHandleSlot {
 
 thread_local! {
     pub(super) static ROOT_SCANNERS: RefCell<Vec<fn(&mut dyn FnMut(f64))>> = RefCell::new(Vec::new());
-    pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerEntry>> = RefCell::new(Vec::new());
+    pub(super) static MUTABLE_ROOT_SCANNERS: RefCell<Vec<MutableRootScannerEntry>> = const { RefCell::new(Vec::new()) };
     pub(super) static FFI_ROOT_SCANNERS: RefCell<Vec<PerryFfiRootScanner>> = RefCell::new(Vec::new());
     pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
     pub(super) static FFI_NAMED_MUTABLE_ROOT_SCANNERS: RefCell<Vec<(PerryFfiNamedMutableRootScanner, usize)>> = RefCell::new(Vec::new());
@@ -136,9 +136,10 @@ pub(crate) enum ConservativeStackScanMode {
     Full,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub(super) enum ConservativeStackScanDecision {
     Scan,
+    #[default]
     SkipDisabled,
 }
 
@@ -150,12 +151,6 @@ impl ConservativeStackScanDecision {
             Self::Scan => "scan",
             Self::SkipDisabled => "skip_disabled",
         }
-    }
-}
-
-impl Default for ConservativeStackScanDecision {
-    fn default() -> Self {
-        Self::SkipDisabled
     }
 }
 
@@ -1310,7 +1305,7 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     /// Visit a root slot that stores a raw heap pointer as `i64`.
     pub fn visit_i64_slot(&mut self, slot: &mut i64) -> bool {
-        self.record_source_scan_addr((*slot > 0).then_some(*slot as usize).unwrap_or(0));
+        self.record_source_scan_addr(if *slot > 0 { *slot as usize } else { 0 });
         if *slot <= 0 {
             return false;
         }
@@ -1367,7 +1362,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         store_ordering: std::sync::atomic::Ordering,
     ) -> bool {
         let current = slot.load(load_ordering);
-        self.record_source_scan_addr((current > 0).then_some(current as usize).unwrap_or(0));
+        self.record_source_scan_addr(if current > 0 { current as usize } else { 0 });
         if current <= 0 {
             return false;
         }
@@ -1754,10 +1749,8 @@ pub(super) fn mark_copy_only_scanner_bits(
             push_mark_seed(header);
         }
     }
-    if pin_discoveries {
-        if pin_conservative_root_header(header) {
-            return Some(unsafe { (*header).size as usize });
-        }
+    if pin_discoveries && pin_conservative_root_header(header) {
+        return Some(unsafe { (*header).size as usize });
     }
     None
 }
@@ -1776,7 +1769,7 @@ pub(super) fn record_copy_only_scanner_mark_emission(
     let user = unsafe { (header as *mut u8).add(GC_HEADER_SIZE) as usize };
     if crate::arena::pointer_in_nursery(user) {
         legacy_stats.emitted_young_roots += 1;
-    } else if MALLOC_STATE.with(|s| s.borrow().objects.iter().any(|&tracked| tracked == header)) {
+    } else if MALLOC_STATE.with(|s| s.borrow().objects.contains(&header)) {
         legacy_stats.emitted_malloc_roots += 1;
     } else {
         legacy_stats.emitted_old_roots += 1;

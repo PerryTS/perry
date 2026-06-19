@@ -1,13 +1,9 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
-use crate::analysis::*;
-use crate::destructuring::*;
 use crate::ir::*;
-use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
-};
+use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 

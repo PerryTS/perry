@@ -209,7 +209,7 @@ pub extern "C" fn js_process_setgroups(groups: f64) {
     if arr_ptr.is_null() {
         return;
     }
-    let len = unsafe { crate::array::js_array_length(arr_ptr) } as u32;
+    let len = unsafe { crate::array::js_array_length(arr_ptr) };
     #[cfg(unix)]
     {
         let mut gids: Vec<libc::gid_t> = Vec::with_capacity(len as usize);
@@ -292,7 +292,7 @@ pub extern "C" fn js_process_getgroups() -> f64 {
                 Vec::new()
             } else {
                 buf.truncate(got as usize);
-                buf.into_iter().map(|g| g as u32).collect()
+                buf.into_iter().collect()
             }
         }
     };

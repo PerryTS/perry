@@ -27,46 +27,31 @@ pub use cross_module::{
 
 // Internal-to-crate re-exports for cross-sibling access via `use super::*;`.
 pub(crate) use analysis::{
-    body_calls_func, class_chain_property_sets, construction_expr_can_affect_method_lookup,
-    construction_stmt_can_affect_method_lookup, construction_stmts_can_affect_method_lookup,
     find_max_local_id_in_module, is_inlinable, is_inlinable_method, method_lookup_is_unshadowed,
 };
-pub(crate) use call_inliner::{
-    build_inline_arg_bindings, convert_returns_in_stmts, inline_calls_in_expr,
-    inline_calls_in_stmts, is_trivial_expr, stmt_contains_return, try_inline_call,
-    try_inline_simple_call,
-};
+pub(crate) use call_inliner::inline_calls_in_stmts;
 pub(crate) use clamp::{is_clamp3, is_clamp_u8};
 pub(crate) use closure_analysis::{
     body_contains_closure_capturing, body_contains_super_call, body_references_dynamic_this,
     collect_closure_captured_local_ids, collect_mutated_local_ids, find_max_local_id,
     has_simple_control_flow, is_pure_function, method_body_blocks_this_substitution,
 };
-pub(crate) use cross_module::{
-    body_references_class_in_set, collect_nonexported_class_names,
-    is_cross_module_safe_with_externs,
-};
 pub(crate) use exact_receivers::{
     apply_exact_receiver_stmt_effect, apply_exact_receiver_stmt_effects,
-    clear_exact_receivers_after_global_effect, collect_exact_receiver_refs_in_expr,
-    collect_exact_receiver_refs_in_stmt, intersect_exact_receiver_facts,
-    invalidate_exact_receivers_for_expr, kill_referenced_exact_receivers, resolve_receiver_class,
+    intersect_exact_receiver_facts, invalidate_exact_receivers_for_expr,
+    kill_referenced_exact_receivers,
 };
 pub(crate) use factory_specialize::specialize_captured_class_factories;
-pub(crate) use imul::{
-    detect_math_imul_polyfill, is_half_extract, rewrite_imul_calls_in_expr,
-    rewrite_imul_calls_in_stmts,
-};
+pub(crate) use imul::{detect_math_imul_polyfill, rewrite_imul_calls_in_stmts};
 pub(crate) use substitute::{
     collect_body_local_ids, substitute_locals, substitute_locals_in_stmts, substitute_this,
     substitute_this_in_stmts,
 };
-pub(crate) use super_detect::{
-    enter_inline_expr_recursion, method_contains_lexical_super, MAX_INLINE_EXPR_RECURSION_DEPTH,
-};
+#[cfg(test)]
+pub(crate) use super_detect::MAX_INLINE_EXPR_RECURSION_DEPTH;
+pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexical_super};
 
-use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
-use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
+use perry_hir::{Class, Expr, Function, Module, Stmt};
 use perry_types::{FuncId, LocalId, Type};
 use std::collections::{BTreeMap, HashMap, HashSet};
 

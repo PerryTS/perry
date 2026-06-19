@@ -331,7 +331,7 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     if !crate::value::addr_class::is_valid_obj_ptr(ptr as *const u8) {
         return false;
     }
-    if ptr % std::mem::align_of::<ClosureHeader>() != 0 {
+    if !ptr.is_multiple_of(std::mem::align_of::<ClosureHeader>()) {
         return false;
     }
     unsafe {

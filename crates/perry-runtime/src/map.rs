@@ -475,9 +475,9 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
 /// Issue #434: pre-fix, jsvalue_eq only handled heap-pointer string
 /// representations, so `Map.get(JSON.parse('"hello"'))` missed the
 /// `"hello"` key stored as STRING_TAG.
-fn string_view_from_bits<'a>(
+fn string_view_from_bits(
     bits: u64,
-    scratch: &'a mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
 ) -> Option<(*const u8, u32)> {
     let upper = bits >> 48;
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {
@@ -1346,10 +1346,7 @@ pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
     }
 
     match constructor_iter(value_handle.get_nanbox_f64()) {
-        ConstructorIter::Empty => {
-            let map = js_map_alloc(4);
-            return map;
-        }
+        ConstructorIter::Empty => js_map_alloc(4),
         ConstructorIter::Array(arr_value) => {
             let arr_handle = scope.root_nanbox_f64(arr_value);
             let map = js_map_alloc(4);

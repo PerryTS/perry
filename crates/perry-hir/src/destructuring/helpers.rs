@@ -146,7 +146,7 @@ pub(crate) fn ast_expr_contains_function_expr(e: &ast::Expr) -> bool {
         }
         Expr::New(n) => {
             ast_expr_contains_function_expr(&n.callee)
-                || n.args.as_ref().map_or(false, |args| {
+                || n.args.as_ref().is_some_and(|args| {
                     args.iter()
                         .any(|a| ast_expr_contains_function_expr(&a.expr))
                 })

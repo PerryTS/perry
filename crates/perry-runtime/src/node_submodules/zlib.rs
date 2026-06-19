@@ -258,7 +258,7 @@ pub extern "C" fn js_zlib_validate_buffer_arg(data_bits: i64) {
     let bits = value.to_bits();
     let raw = if jv.is_pointer() || jv.is_string() {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
         bits as usize
     } else {
         0

@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -187,7 +187,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &current_class_name,
                 crate::lower_call::FieldInitMode::SelfOnly,
             )?;
-            return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }
         // parent is `current_class.extends_name` (Perry uses the string
         // form for cross-module/late-resolved cases) or

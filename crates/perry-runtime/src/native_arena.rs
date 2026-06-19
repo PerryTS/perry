@@ -285,7 +285,7 @@ pub extern "C" fn js_native_arena_view(
     let byte_length = length
         .checked_mul(elem_size)
         .unwrap_or_else(|| throw_range_error(b"NativeArena view is out of bounds"));
-    if byte_offset % elem_size != 0 {
+    if !byte_offset.is_multiple_of(elem_size) {
         throw_range_error(b"NativeArena view byteOffset is unaligned");
     }
     let owner = unsafe { clean_owner_ptr(owner_raw) };
@@ -337,7 +337,10 @@ pub extern "C" fn js_native_pod_view(
     let record_count = record_count as u64;
     let stride = stride as u64;
     let alignment = alignment as u64;
-    if !alignment.is_power_of_two() || byte_offset % alignment != 0 || stride % alignment != 0 {
+    if !alignment.is_power_of_two()
+        || !byte_offset.is_multiple_of(alignment)
+        || !stride.is_multiple_of(alignment)
+    {
         throw_range_error(b"NativePodView byteOffset or stride is unaligned");
     }
     let byte_length = record_count
@@ -379,7 +382,7 @@ fn strict_pod_view_from_value(value: f64, expected_layout_id: u64) -> *const Nat
     let bits = value.to_bits();
     let raw_ptr = if crate::value::JSValue::from_bits(bits).is_pointer() {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
         bits as usize
     } else {
         0

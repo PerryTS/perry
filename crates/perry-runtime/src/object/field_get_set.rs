@@ -2287,7 +2287,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         if (bits >> 48) == 0x7FFE {
             let class_id = (bits & 0xFFFF_FFFF) as u32;
             // Symbol key path.
-            if let Some(_) = crate::symbol::class_static_symbol_lookup(class_id, key) {
+            if crate::symbol::class_static_symbol_lookup(class_id, key).is_some() {
                 return nanbox_true;
             }
             // String key path: check CLASS_DYNAMIC_PROPS via the get-by-name fn.
@@ -3476,18 +3476,16 @@ pub extern "C" fn js_object_get_field_by_name(
                     // `name` member (method/field, handled above) still wins.
                     // This is what `assert.throws` reads via
                     // `thrown.constructor.name` to label the thrown error.
-                    if name == "name" && class_id != 0 {
-                        if !super::class_registry::class_is_key_deleted(class_id, name) {
-                            if let Some(cname) = super::class_registry::class_name_for_id(class_id)
-                            {
-                                let s = crate::string::js_string_from_bytes(
-                                    cname.as_ptr(),
-                                    cname.len() as u32,
-                                );
-                                return JSValue::from_bits(
-                                    crate::js_nanbox_string(s as i64).to_bits(),
-                                );
-                            }
+                    if name == "name"
+                        && class_id != 0
+                        && !super::class_registry::class_is_key_deleted(class_id, name)
+                    {
+                        if let Some(cname) = super::class_registry::class_name_for_id(class_id) {
+                            let s = crate::string::js_string_from_bytes(
+                                cname.as_ptr(),
+                                cname.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
                         }
                     }
                 }

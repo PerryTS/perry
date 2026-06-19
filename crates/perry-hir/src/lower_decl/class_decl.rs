@@ -1,13 +1,9 @@
-use anyhow::{anyhow, bail, Result};
-use perry_types::{FuncId, LocalId, Type};
+use anyhow::Result;
+use perry_types::{FuncId, Type};
 use swc_ecma_ast as ast;
 
-use crate::analysis::*;
-use crate::destructuring::*;
 use crate::ir::*;
-use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
-};
+use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
@@ -764,7 +760,7 @@ pub fn lower_class_decl(
                                     is_rest: false,
                                     arguments_object: None,
                                 });
-                                new_params.extend(getter.params.into_iter());
+                                new_params.extend(getter.params);
                                 let mut body = getter.body;
                                 crate::analysis::replace_this_in_stmts(&mut body, this_id);
                                 let top_fn = Function {

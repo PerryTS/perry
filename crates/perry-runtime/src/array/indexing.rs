@@ -1334,7 +1334,7 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
 
     let numeric = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
         Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
-    } else if top16 < 0x7FF8 || top16 > 0x7FFF {
+    } else if !(0x7FF8..=0x7FFF).contains(&top16) {
         Some(idx)
     } else {
         None
@@ -1405,7 +1405,7 @@ pub extern "C" fn js_array_set_index_or_string(
     // ordinary string properties.
     let numeric = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
         Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
-    } else if top16 < 0x7FF8 || top16 > 0x7FFF {
+    } else if !(0x7FF8..=0x7FFF).contains(&top16) {
         Some(idx)
     } else {
         None

@@ -15,10 +15,7 @@ pub(crate) use builtins::{
 };
 
 mod uses_this;
-pub(crate) use uses_this::{
-    closure_uses_new_target, closure_uses_this, uses_new_target_expr, uses_new_target_stmt,
-    uses_this_expr, uses_this_stmt,
-};
+pub(crate) use uses_this::{closure_uses_new_target, closure_uses_this, uses_this_stmt};
 
 mod value_types;
 pub use value_types::{infer_expr_type, infer_refinable_expr_type, HirTypeEnv, HirTypeFacts};
@@ -467,7 +464,7 @@ pub fn substitute_lexical_this_in_stmts(stmts: &mut [Stmt], replacement: &Expr) 
 }
 
 fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
-    let mut on_expr = |e: &mut Expr| substitute_lexical_this_in_expr(e, replacement);
+    let on_expr = |e: &mut Expr| substitute_lexical_this_in_expr(e, replacement);
     match stmt {
         Stmt::Let { init, .. } => {
             if let Some(e) = init {

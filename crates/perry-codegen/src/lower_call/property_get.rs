@@ -489,8 +489,8 @@ pub fn try_lower_property_get_method_call(
     // `.catch(cb)` is sugar for `.then(undefined, cb)`.
     if matches!(property.as_str(), "then" | "catch" | "finally") && is_promise_expr(ctx, object) {
         match property.as_str() {
-            "then" => {
-                if !args.is_empty() {
+            "then"
+                if !args.is_empty() => {
                     // Fused fast path: detect `Promise.resolve(<expr>).then(cb_f, cb_e?)`
                     // and route to `js_promise_resolved_then`, which skips
                     // the intermediate Promise-#1 allocation when `<expr>`
@@ -584,9 +584,8 @@ pub fn try_lower_property_get_method_call(
                     );
                     return Ok(Some(nanbox_pointer_inline(blk, &new_promise)));
                 }
-            }
-            "catch" => {
-                if !args.is_empty() {
+            "catch"
+                if !args.is_empty() => {
                     let promise_box = lower_expr(ctx, object)?;
                     let on_rejected_box = lower_expr(ctx, &args[0])?;
                     let blk = ctx.block();
@@ -604,14 +603,13 @@ pub fn try_lower_property_get_method_call(
                     );
                     return Ok(Some(nanbox_pointer_inline(blk, &new_promise)));
                 }
-            }
-            "finally" => {
+            "finally"
                 // .finally(cb) — per spec: call cb() ignoring its return value,
                 // then propagate the upstream value/reason unchanged.
                 // Routes through js_promise_finally which wraps cb in
                 // fulfill/reject proxy closures that call cb() and then
                 // return the upstream value (or re-throw the upstream reason).
-                if !args.is_empty() {
+                if !args.is_empty() => {
                     let promise_box = lower_expr(ctx, object)?;
                     let on_finally_box = lower_expr(ctx, &args[0])?;
                     let blk = ctx.block();
@@ -624,7 +622,6 @@ pub fn try_lower_property_get_method_call(
                     );
                     return Ok(Some(nanbox_pointer_inline(blk, &new_promise)));
                 }
-            }
             _ => {}
         }
     }
@@ -1097,7 +1094,7 @@ pub fn try_lower_property_get_method_call(
         &ctx.local_id_to_name,
         &ctx.local_class_aliases,
         ctx.func_returns_class,
-        &ctx.class_ids,
+        ctx.class_ids,
     );
     if let Some(cls_name) = static_dispatch_cls {
         // `C.prop(args)` where `prop` is a static ACCESSOR reads the accessor and

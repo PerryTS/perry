@@ -37,7 +37,7 @@ use perry_hir::Module as HirModule;
 use crate::module::LlModule;
 use crate::runtime_decls;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I64, VOID};
+use crate::types::{LlvmType, DOUBLE, I64};
 
 pub(crate) mod arguments;
 mod artifacts;
@@ -1665,15 +1665,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // by the imported alias resolve to the local definition.
             for sf_name in &ic.static_field_names {
                 let key = (effective_name.to_string(), sf_name.clone());
-                if !static_field_globals.contains_key(&key) {
+                static_field_globals.entry(key).or_insert_with(|| {
                     let global_name = format!(
                         "perry_static_{}__{}__{}",
                         module_prefix,
                         sanitize_member(&ic.name),
                         sanitize_member(sf_name),
                     );
-                    static_field_globals.insert(key, global_name);
-                }
+                    global_name
+                });
             }
             continue;
         }

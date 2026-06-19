@@ -123,26 +123,21 @@ impl OutUsageAnalyzer {
         // below (which would otherwise flag the LocalGet(out) inside
         // them as unsafe).
         match e {
-            Expr::ArrayPush { array_id, value } => {
-                if *array_id == self.out_id {
-                    // Safe: out.push(v). Visit only `value`.
-                    self.visit_expr(value);
-                    return;
-                }
+            Expr::ArrayPush { array_id, value } if *array_id == self.out_id => {
+                // Safe: out.push(v). Visit only `value`.
+                self.visit_expr(value);
+                return;
             }
-            Expr::ArrayPushSpread { array_id, source } => {
-                if *array_id == self.out_id {
-                    self.visit_expr(source);
-                    return;
-                }
+            Expr::ArrayPushSpread { array_id, source } if *array_id == self.out_id => {
+                self.visit_expr(source);
+                return;
             }
-            Expr::PropertyGet { object, property } => {
+            Expr::PropertyGet { object, property }
                 if matches!(object.as_ref(), Expr::LocalGet(id) if *id == self.out_id)
-                    && property == "length"
-                {
-                    // Safe: out.length read.
-                    return;
-                }
+                    && property == "length" =>
+            {
+                // Safe: out.length read.
+                return;
             }
             Expr::IndexGet { object, index } => {
                 if matches!(object.as_ref(), Expr::LocalGet(id) if *id == self.out_id) {

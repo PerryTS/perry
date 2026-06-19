@@ -90,14 +90,14 @@ pub(super) fn expand_js_replacement(
                     }
                 }
             }
-            b'<' => {
+            b'<'
                 // `$<name>` is a named-group reference ONLY when the regex
                 // actually defines named capture groups. With no named groups,
                 // JS emits `$<...>` literally (e.g. /n/ has none, so
                 // "$<bad>" stays "$<bad>"). When the regex has named groups but
                 // this particular name is absent, JS substitutes the empty
                 // string.
-                if has_named_groups {
+                if has_named_groups => {
                     if let Some(rel) = repl[i + 2..].find('>') {
                         let name = &repl[i + 2..i + 2 + rel];
                         if let Some(m) = caps.name(name) {
@@ -108,11 +108,7 @@ pub(super) fn expand_js_replacement(
                         out.push('$');
                         i += 1;
                     }
-                } else {
-                    out.push('$');
-                    i += 1;
                 }
-            }
             _ => {
                 out.push('$');
                 i += 1;

@@ -3,16 +3,11 @@
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
 use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{lower_expr, LoweringContext};
 use super::os::user_info_expr_for_call;
 
 pub(super) fn try_global_builtins(
@@ -492,125 +487,105 @@ pub(super) fn try_global_builtins(
         if let Some((module_name, _method)) = ctx.lookup_native_module(func_name) {
             if module_name == "child_process" {
                 match func_name {
-                    "execSync" => {
-                        if !args.is_empty() {
-                            let mut args_iter = args.into_iter();
-                            let command = args_iter.next().unwrap();
-                            let options = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessExecSync {
-                                command: Box::new(command),
-                                options,
-                            }));
-                        }
+                    "execSync" if !args.is_empty() => {
+                        let mut args_iter = args.into_iter();
+                        let command = args_iter.next().unwrap();
+                        let options = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessExecSync {
+                            command: Box::new(command),
+                            options,
+                        }));
                     }
-                    "spawnSync" => {
-                        if !args.is_empty() {
-                            let mut args_iter = args.into_iter();
-                            let command = args_iter.next().unwrap();
-                            let spawn_args = args_iter.next().map(Box::new);
-                            let options = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessSpawnSync {
-                                command: Box::new(command),
-                                args: spawn_args,
-                                options,
-                            }));
-                        }
+                    "spawnSync" if !args.is_empty() => {
+                        let mut args_iter = args.into_iter();
+                        let command = args_iter.next().unwrap();
+                        let spawn_args = args_iter.next().map(Box::new);
+                        let options = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessSpawnSync {
+                            command: Box::new(command),
+                            args: spawn_args,
+                            options,
+                        }));
                     }
-                    "spawn" => {
-                        if !args.is_empty() {
-                            let mut args_iter = args.into_iter();
-                            let command = args_iter.next().unwrap();
-                            let spawn_args = args_iter.next().map(Box::new);
-                            let options = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessSpawn {
-                                command: Box::new(command),
-                                args: spawn_args,
-                                options,
-                            }));
-                        }
+                    "spawn" if !args.is_empty() => {
+                        let mut args_iter = args.into_iter();
+                        let command = args_iter.next().unwrap();
+                        let spawn_args = args_iter.next().map(Box::new);
+                        let options = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessSpawn {
+                            command: Box::new(command),
+                            args: spawn_args,
+                            options,
+                        }));
                     }
-                    "fork" => {
-                        if !args.is_empty() {
-                            let mut args_iter = args.into_iter();
-                            let module = args_iter.next().unwrap();
-                            let fork_args = args_iter.next().map(Box::new);
-                            let options = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessFork {
-                                module: Box::new(module),
-                                args: fork_args,
-                                options,
-                            }));
-                        }
+                    "fork" if !args.is_empty() => {
+                        let mut args_iter = args.into_iter();
+                        let module = args_iter.next().unwrap();
+                        let fork_args = args_iter.next().map(Box::new);
+                        let options = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessFork {
+                            module: Box::new(module),
+                            args: fork_args,
+                            options,
+                        }));
                     }
-                    "exec" => {
-                        if !args.is_empty() {
-                            let mut args_iter = args.into_iter();
-                            let command = args_iter.next().unwrap();
-                            let options = args_iter.next().map(Box::new);
-                            let callback = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessExec {
-                                command: Box::new(command),
-                                options,
-                                callback,
-                            }));
-                        }
+                    "exec" if !args.is_empty() => {
+                        let mut args_iter = args.into_iter();
+                        let command = args_iter.next().unwrap();
+                        let options = args_iter.next().map(Box::new);
+                        let callback = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessExec {
+                            command: Box::new(command),
+                            options,
+                            callback,
+                        }));
                     }
-                    "execFile" => {
-                        if !args.is_empty() {
-                            let mut args_iter = args.into_iter();
-                            let file = args_iter.next().unwrap();
-                            let file_args = args_iter.next().map(Box::new);
-                            let options = args_iter.next().map(Box::new);
-                            let callback = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessExecFile {
-                                file: Box::new(file),
-                                args: file_args,
-                                options,
-                                callback,
-                            }));
-                        }
+                    "execFile" if !args.is_empty() => {
+                        let mut args_iter = args.into_iter();
+                        let file = args_iter.next().unwrap();
+                        let file_args = args_iter.next().map(Box::new);
+                        let options = args_iter.next().map(Box::new);
+                        let callback = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessExecFile {
+                            file: Box::new(file),
+                            args: file_args,
+                            options,
+                            callback,
+                        }));
                     }
-                    "execFileSync" => {
-                        if !args.is_empty() {
-                            let mut args_iter = args.into_iter();
-                            let file = args_iter.next().unwrap();
-                            let file_args = args_iter.next().map(Box::new);
-                            let options = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessExecFileSync {
-                                file: Box::new(file),
-                                args: file_args,
-                                options,
-                            }));
-                        }
+                    "execFileSync" if !args.is_empty() => {
+                        let mut args_iter = args.into_iter();
+                        let file = args_iter.next().unwrap();
+                        let file_args = args_iter.next().map(Box::new);
+                        let options = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessExecFileSync {
+                            file: Box::new(file),
+                            args: file_args,
+                            options,
+                        }));
                     }
-                    "spawnBackground" => {
-                        if args.len() >= 3 {
-                            let mut args_iter = args.into_iter();
-                            let command = args_iter.next().unwrap();
-                            let spawn_args = args_iter.next().map(Box::new);
-                            let log_file = args_iter.next().unwrap();
-                            let env_json = args_iter.next().map(Box::new);
-                            return Ok(Ok(Expr::ChildProcessSpawnBackground {
-                                command: Box::new(command),
-                                args: spawn_args,
-                                log_file: Box::new(log_file),
-                                env_json,
-                            }));
-                        }
+                    "spawnBackground" if args.len() >= 3 => {
+                        let mut args_iter = args.into_iter();
+                        let command = args_iter.next().unwrap();
+                        let spawn_args = args_iter.next().map(Box::new);
+                        let log_file = args_iter.next().unwrap();
+                        let env_json = args_iter.next().map(Box::new);
+                        return Ok(Ok(Expr::ChildProcessSpawnBackground {
+                            command: Box::new(command),
+                            args: spawn_args,
+                            log_file: Box::new(log_file),
+                            env_json,
+                        }));
                     }
-                    "getProcessStatus" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::ChildProcessGetProcessStatus(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "getProcessStatus" if !args.is_empty() => {
+                        return Ok(Ok(Expr::ChildProcessGetProcessStatus(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "killProcess" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::ChildProcessKillProcess(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "killProcess" if !args.is_empty() => {
+                        return Ok(Ok(Expr::ChildProcessKillProcess(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
                     _ => {} // Fall through
                 }
@@ -635,12 +610,10 @@ pub(super) fn try_global_builtins(
                         }
                         return Ok(Ok(result));
                     }
-                    "dirname" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::PathDirname(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "dirname" if !args.is_empty() => {
+                        return Ok(Ok(Expr::PathDirname(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
                     "basename" => {
                         if args.len() >= 2 {
@@ -658,12 +631,10 @@ pub(super) fn try_global_builtins(
                             ))));
                         }
                     }
-                    "extname" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::PathExtname(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "extname" if !args.is_empty() => {
+                        return Ok(Ok(Expr::PathExtname(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
                     "resolve" => {
                         if args.is_empty() {
@@ -682,59 +653,45 @@ pub(super) fn try_global_builtins(
                             return Ok(Ok(Expr::PathResolve(Box::new(joined))));
                         }
                     }
-                    "isAbsolute" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::PathIsAbsolute(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "isAbsolute" if !args.is_empty() => {
+                        return Ok(Ok(Expr::PathIsAbsolute(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "relative" => {
-                        if args.len() >= 2 {
-                            let mut iter = args.into_iter();
-                            let from = iter.next().unwrap();
-                            let to = iter.next().unwrap();
-                            return Ok(Ok(Expr::PathRelative(Box::new(from), Box::new(to))));
-                        }
+                    "relative" if args.len() >= 2 => {
+                        let mut iter = args.into_iter();
+                        let from = iter.next().unwrap();
+                        let to = iter.next().unwrap();
+                        return Ok(Ok(Expr::PathRelative(Box::new(from), Box::new(to))));
                     }
-                    "normalize" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::PathNormalize(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "normalize" if !args.is_empty() => {
+                        return Ok(Ok(Expr::PathNormalize(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "parse" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::PathParse(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "parse" if !args.is_empty() => {
+                        return Ok(Ok(Expr::PathParse(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "format" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::PathFormat(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "format" if !args.is_empty() => {
+                        return Ok(Ok(Expr::PathFormat(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "toNamespacedPath" | "_makeLong" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "toNamespacedPath" | "_makeLong" if !args.is_empty() => {
+                        return Ok(Ok(Expr::PathToNamespacedPath(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "matchesGlob" => {
-                        if args.len() >= 2 {
-                            let mut iter = args.into_iter();
-                            let path_arg = iter.next().unwrap();
-                            let pattern = iter.next().unwrap();
-                            return Ok(Ok(Expr::PathMatchesGlob(
-                                Box::new(path_arg),
-                                Box::new(pattern),
-                            )));
-                        }
+                    "matchesGlob" if args.len() >= 2 => {
+                        let mut iter = args.into_iter();
+                        let path_arg = iter.next().unwrap();
+                        let pattern = iter.next().unwrap();
+                        return Ok(Ok(Expr::PathMatchesGlob(
+                            Box::new(path_arg),
+                            Box::new(pattern),
+                        )));
                     }
                     _ => {} // Fall through
                 }
@@ -743,17 +700,16 @@ pub(super) fn try_global_builtins(
             // Check if this is a named import from url (e.g., fileURLToPath)
             if module_name == "url" {
                 match func_name {
-                    "fileURLToPath" => {
+                    "fileURLToPath"
                         // Only the 1-arg form takes the dedicated fast path. The
                         // 2-arg form `fileURLToPath(url, { windows })` (#2975)
                         // must fall through to the native dispatch table so the
                         // options object reaches the runtime.
-                        if args.len() == 1 {
+                        if args.len() == 1 => {
                             return Ok(Ok(Expr::FileURLToPath(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));
                         }
-                    }
                     _ => {} // Fall through
                 }
             }
@@ -761,70 +717,51 @@ pub(super) fn try_global_builtins(
             // Check if this is a named import from fs (e.g., existsSync, mkdirSync, etc.)
             if module_name == "fs" {
                 match func_name {
-                    "readFileSync" => {
-                        if args.len() == 1 {
-                            // readFileSync(path) without encoding — returns Buffer (Node parity)
-                            return Ok(Ok(Expr::FsReadFileBinary(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "readFileSync" if args.len() == 1 => {
+                        // readFileSync(path) without encoding — returns Buffer (Node parity)
+                        return Ok(Ok(Expr::FsReadFileBinary(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "writeFileSync" => {
-                        if args.len() == 2 {
-                            let mut iter = args.into_iter();
-                            let path = iter.next().unwrap();
-                            let content = iter.next().unwrap();
-                            return Ok(Ok(Expr::FsWriteFileSync(
-                                Box::new(path),
-                                Box::new(content),
-                            )));
-                        }
+                    "writeFileSync" if args.len() == 2 => {
+                        let mut iter = args.into_iter();
+                        let path = iter.next().unwrap();
+                        let content = iter.next().unwrap();
+                        return Ok(Ok(Expr::FsWriteFileSync(Box::new(path), Box::new(content))));
                     }
-                    "existsSync" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::FsExistsSync(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "existsSync" if !args.is_empty() => {
+                        return Ok(Ok(Expr::FsExistsSync(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "mkdirSync" => {
-                        if args.len() == 1 {
-                            return Ok(Ok(Expr::FsMkdirSync(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "mkdirSync" if args.len() == 1 => {
+                        return Ok(Ok(Expr::FsMkdirSync(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "unlinkSync" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::FsUnlinkSync(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "unlinkSync" if !args.is_empty() => {
+                        return Ok(Ok(Expr::FsUnlinkSync(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "appendFileSync" => {
-                        if args.len() == 2 {
-                            let mut iter = args.into_iter();
-                            let path = iter.next().unwrap();
-                            let content = iter.next().unwrap();
-                            return Ok(Ok(Expr::FsAppendFileSync(
-                                Box::new(path),
-                                Box::new(content),
-                            )));
-                        }
+                    "appendFileSync" if args.len() == 2 => {
+                        let mut iter = args.into_iter();
+                        let path = iter.next().unwrap();
+                        let content = iter.next().unwrap();
+                        return Ok(Ok(Expr::FsAppendFileSync(
+                            Box::new(path),
+                            Box::new(content),
+                        )));
                     }
-                    "readFileBuffer" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::FsReadFileBinary(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "readFileBuffer" if !args.is_empty() => {
+                        return Ok(Ok(Expr::FsReadFileBinary(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
-                    "rmRecursive" => {
-                        if !args.is_empty() {
-                            return Ok(Ok(Expr::FsRmRecursive(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
+                    "rmRecursive" if !args.is_empty() => {
+                        return Ok(Ok(Expr::FsRmRecursive(Box::new(
+                            args.into_iter().next().unwrap(),
+                        ))));
                     }
                     // Issue #648 fallout: see twin arm above.
                     "rmSync" => {}
@@ -864,24 +801,22 @@ pub(super) fn try_global_builtins(
                     // call-site form already exercises (handled in
                     // `expr.rs` near the createHash/createHmac block)
                     // so both shapes share one codegen path.
-                    "createSecretKey" => {
-                        if !args.is_empty() {
-                            let mut iter = args.into_iter();
-                            let key_arg = iter.next().unwrap();
-                            let mut new_args = vec![key_arg];
-                            if let Some(enc) = iter.next() {
-                                new_args.push(enc);
-                            }
-                            return Ok(Ok(Expr::Call {
-                                callee: Box::new(Expr::PropertyGet {
-                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
-                                    property: "createSecretKey".to_string(),
-                                }),
-                                args: new_args,
-                                type_args: vec![],
-                                byte_offset: 0,
-                            }));
+                    "createSecretKey" if !args.is_empty() => {
+                        let mut iter = args.into_iter();
+                        let key_arg = iter.next().unwrap();
+                        let mut new_args = vec![key_arg];
+                        if let Some(enc) = iter.next() {
+                            new_args.push(enc);
                         }
+                        return Ok(Ok(Expr::Call {
+                            callee: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                property: "createSecretKey".to_string(),
+                            }),
+                            args: new_args,
+                            type_args: vec![],
+                            byte_offset: 0,
+                        }));
                     }
                     // #3927: `generateKeySync(alg, options)` from a named import.
                     // Like createSecretKey above, rewrite to the dotted-form
@@ -889,21 +824,19 @@ pub(super) fn try_global_builtins(
                     // dedicated `js_crypto_generate_key_sync` dispatch in
                     // `expr/calls.rs` (a generic NativeMethodCall has no runtime
                     // dispatcher for it and returns undefined).
-                    "generateKeySync" => {
-                        if args.len() >= 2 {
-                            let mut iter = args.into_iter();
-                            let alg_arg = iter.next().unwrap();
-                            let options_arg = iter.next().unwrap();
-                            return Ok(Ok(Expr::Call {
-                                callee: Box::new(Expr::PropertyGet {
-                                    object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
-                                    property: "generateKeySync".to_string(),
-                                }),
-                                args: vec![alg_arg, options_arg],
-                                type_args: vec![],
-                                byte_offset: 0,
-                            }));
-                        }
+                    "generateKeySync" if args.len() >= 2 => {
+                        let mut iter = args.into_iter();
+                        let alg_arg = iter.next().unwrap();
+                        let options_arg = iter.next().unwrap();
+                        return Ok(Ok(Expr::Call {
+                            callee: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
+                                property: "generateKeySync".to_string(),
+                            }),
+                            args: vec![alg_arg, options_arg],
+                            type_args: vec![],
+                            byte_offset: 0,
+                        }));
                     }
                     _ => {} // Fall through
                 }

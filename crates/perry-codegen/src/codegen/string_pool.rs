@@ -262,7 +262,7 @@ pub(super) fn emit_string_pool(
                 named.push((cid, class_name.clone()));
             }
         }
-        named.sort_by(|a, b| a.0.cmp(&b.0));
+        named.sort_by_key(|a| a.0);
         named.dedup_by_key(|(cid, _)| *cid);
         for (cid, name) in named {
             let (const_name, byte_len) = llmod.add_string_constant(&name);

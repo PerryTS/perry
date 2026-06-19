@@ -38,8 +38,9 @@ impl Default for AppMetadata {
 /// `On` and `Fast` currently emit the same per-instruction flag while
 /// remaining distinct user-facing/cache-key modes.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FpContractMode {
+    #[default]
     Off,
     On,
     Fast,
@@ -65,12 +66,6 @@ impl FpContractMode {
 
     pub fn permits_contract(self) -> bool {
         !matches!(self, Self::Off)
-    }
-}
-
-impl Default for FpContractMode {
-    fn default() -> Self {
-        Self::Off
     }
 }
 

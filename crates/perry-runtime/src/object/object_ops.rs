@@ -115,7 +115,7 @@ unsafe fn registered_buffer_index_own_property_present(
     let idx = super::has_own_helpers::str_from_string_header(key_str)
         .and_then(super::canonical_array_index)?;
     let buf = raw_buffer_addr as *const crate::buffer::BufferHeader;
-    Some(idx < (*buf).length as u32)
+    Some(idx < (*buf).length)
 }
 
 /// `ToPropertyDescriptor` field presence: `HasProperty(descriptor, name)` —
@@ -2830,109 +2830,103 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
             return obj_value;
         }
     }
-    if top16 == 0 {
-        if bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
-            if let Some(proto) = typed_array_instance_prototype(bits as usize) {
-                return proto;
+    if top16 == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+        if let Some(proto) = typed_array_instance_prototype(bits as usize) {
+            return proto;
+        }
+        if let Some(proto) = buffer_backed_prototype(bits as usize) {
+            return proto;
+        }
+        if let Some(proto) = buffer_backed_uint8array_prototype(bits as usize) {
+            return proto;
+        }
+        if let Some(proto) = collection_prototype(bits as usize) {
+            return proto;
+        }
+        // #2820: explicit setPrototypeOf side-table takes precedence.
+        if let Some(proto_bits) = super::prototype_chain::object_static_prototype(bits as usize) {
+            return f64::from_bits(proto_bits);
+        }
+        unsafe {
+            let obj = bits as *const ObjectHeader;
+            let gc = gc_header_for(obj);
+            if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+                return f64::from_bits(TAG_NULL);
             }
-            if let Some(proto) = buffer_backed_prototype(bits as usize) {
-                return proto;
+            if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
+                let p = crate::object::typed_array_intrinsic_proto_ptr();
+                if !p.is_null() {
+                    return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
+                }
             }
-            if let Some(proto) = buffer_backed_uint8array_prototype(bits as usize) {
-                return proto;
-            }
-            if let Some(proto) = collection_prototype(bits as usize) {
-                return proto;
-            }
-            // #2820: explicit setPrototypeOf side-table takes precedence.
-            if let Some(proto_bits) = super::prototype_chain::object_static_prototype(bits as usize)
-            {
-                return f64::from_bits(proto_bits);
-            }
-            unsafe {
-                let obj = bits as *const ObjectHeader;
-                let gc = gc_header_for(obj);
-                if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-                    return f64::from_bits(TAG_NULL);
-                }
-                if (*gc)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0 {
-                    let p = crate::object::typed_array_intrinsic_proto_ptr();
-                    if !p.is_null() {
-                        return f64::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits());
-                    }
-                }
-                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
-                    let err = bits as *const crate::error::ErrorHeader;
-                    if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
-                        return proto;
-                    }
-                }
-                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
-                    if let Some(proto) = super::array_get_prototype_of_addr(bits as usize) {
-                        return proto;
-                    }
-                }
-                // #489 / #2145: function/constructor receiver — see the
-                // 0x7FFD branch above. Return the recorded static
-                // prototype if any, else null to break the chain-walk
-                // self-cycle.
-                if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
-                    if let Some(proto_bits) =
-                        crate::closure::closure_static_prototype(bits as usize)
-                    {
-                        return f64::from_bits(proto_bits);
-                    }
-                    // #3664: generator/async-generator [[Prototype]] resolution.
-                    if let Some(proto) = crate::object::generator_function_proto_of(bits as usize) {
-                        return proto;
-                    }
-                    return function_prototype_or_null();
-                }
-                if let Some(proto) = constructor_dynamic_prototype(obj) {
+            if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
+                let err = bits as *const crate::error::ErrorHeader;
+                if let Some(proto) = error_kind_prototype_value((*err).error_kind) {
                     return proto;
                 }
-                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
-                    && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
-                {
-                    if let Some(proto_bits) =
-                        super::prototype_chain::default_object_prototype_for_owner(bits as usize)
-                    {
-                        return f64::from_bits(proto_bits);
-                    }
-                    return f64::from_bits(TAG_NULL);
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if let Some(proto) = super::array_get_prototype_of_addr(bits as usize) {
+                    return proto;
                 }
-                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
-                    if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
-                        return proto;
-                    }
-                    if let Some(proto) =
-                        super::class_registry::class_decl_prototype_value_for_instance_class(
-                            (*obj).class_id,
-                        )
-                    {
-                        return proto;
-                    }
-                    // #3986: `Object.create(proto)` and `new F()` (a plain
-                    // function ctor, whose instances carry a synthetic
-                    // function-prototype class id) record the actual
-                    // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
-                    // keyed by that synthetic class id. Return the exact stored
-                    // pointer so `Object.getPrototypeOf(o) === proto` holds by
-                    // identity (test262 built-ins/Object/create/15.2.3.5-*,
-                    // S9.9 ToObject identity). Declared ES classes use the
-                    // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
-                    // above, so this does not perturb the
-                    // `getPrototypeOf(instance) === instance` model their
-                    // `.constructor` resolution relies on. Without this the
-                    // synthetic-class instance fell through to the
-                    // `return obj_value` self-prototype fallback below.
-                    let synth_proto =
-                        super::class_registry::class_prototype_object((*obj).class_id);
-                    if !synth_proto.is_null() {
-                        return f64::from_bits(
-                            crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
-                        );
-                    }
+            }
+            // #489 / #2145: function/constructor receiver — see the
+            // 0x7FFD branch above. Return the recorded static
+            // prototype if any, else null to break the chain-walk
+            // self-cycle.
+            if (*gc).obj_type == crate::gc::GC_TYPE_CLOSURE {
+                if let Some(proto_bits) = crate::closure::closure_static_prototype(bits as usize) {
+                    return f64::from_bits(proto_bits);
+                }
+                // #3664: generator/async-generator [[Prototype]] resolution.
+                if let Some(proto) = crate::object::generator_function_proto_of(bits as usize) {
+                    return proto;
+                }
+                return function_prototype_or_null();
+            }
+            if let Some(proto) = constructor_dynamic_prototype(obj) {
+                return proto;
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+            {
+                if let Some(proto_bits) =
+                    super::prototype_chain::default_object_prototype_for_owner(bits as usize)
+                {
+                    return f64::from_bits(proto_bits);
+                }
+                return f64::from_bits(TAG_NULL);
+            }
+            if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                if let Some(proto) = super::iterator_prototype_for_class_id((*obj).class_id) {
+                    return proto;
+                }
+                if let Some(proto) =
+                    super::class_registry::class_decl_prototype_value_for_instance_class(
+                        (*obj).class_id,
+                    )
+                {
+                    return proto;
+                }
+                // #3986: `Object.create(proto)` and `new F()` (a plain
+                // function ctor, whose instances carry a synthetic
+                // function-prototype class id) record the actual
+                // [[Prototype]] object pointer in CLASS_PROTOTYPE_OBJECTS
+                // keyed by that synthetic class id. Return the exact stored
+                // pointer so `Object.getPrototypeOf(o) === proto` holds by
+                // identity (test262 built-ins/Object/create/15.2.3.5-*,
+                // S9.9 ToObject identity). Declared ES classes use the
+                // separate CLASS_DECL_PROTOTYPE_OBJECTS table handled just
+                // above, so this does not perturb the
+                // `getPrototypeOf(instance) === instance` model their
+                // `.constructor` resolution relies on. Without this the
+                // synthetic-class instance fell through to the
+                // `return obj_value` self-prototype fallback below.
+                let synth_proto = super::class_registry::class_prototype_object((*obj).class_id);
+                if !synth_proto.is_null() {
+                    return f64::from_bits(
+                        crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
+                    );
                 }
                 // A native-module namespace object (`require("path")` etc.,
                 // class_id NATIVE_MODULE_CLASS_ID, the `__module__`-tagged
@@ -2953,8 +2947,8 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     return f64::from_bits(TAG_NULL);
                 }
             }
-            return obj_value;
         }
+        return obj_value;
     }
     f64::from_bits(TAG_NULL)
 }

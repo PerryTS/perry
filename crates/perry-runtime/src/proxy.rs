@@ -1062,7 +1062,7 @@ fn prototype_of_for_set(value: f64) -> Option<f64> {
     let bits = value.to_bits();
     if (bits >> 48) == (POINTER_TAG >> 48) {
         let raw = (bits & POINTER_MASK) as usize;
-        if raw >= (crate::gc::GC_HEADER_SIZE as usize) + 0x1000 {
+        if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             if let Some(proto_bits) = crate::object::prototype_chain::object_static_prototype(raw) {
                 if proto_bits == TAG_NULL || proto_bits == TAG_UNDEFINED || proto_bits == bits {
                     return None;

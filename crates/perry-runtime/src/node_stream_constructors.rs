@@ -305,8 +305,8 @@ pub(super) fn init_writable_state(stream: f64, opts: f64) {
             TAG_FALSE
         }),
     );
-    let decode_strings = !get_hidden_value(opts, hidden_key(b"decodeStrings"))
-        .is_some_and(|v| v.to_bits() == TAG_FALSE);
+    let decode_strings = get_hidden_value(opts, hidden_key(b"decodeStrings"))
+        .is_none_or(|v| v.to_bits() != TAG_FALSE);
     set_hidden_value(
         stream,
         hidden_writable_decode_strings_key(),

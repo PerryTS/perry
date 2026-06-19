@@ -36,8 +36,8 @@ use std::sync::{
 };
 
 use sync_run::{
-    cp_read_async_run_options, cp_read_run_options, cp_read_spawn_sync_run_options,
-    cp_read_sync_stdio_run_options, cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
+    cp_read_async_run_options, cp_read_spawn_sync_run_options, cp_read_sync_stdio_run_options,
+    cp_run_to_completion, CpRun, CpRunError, CpRunOptions,
 };
 
 use crate::closure::{
@@ -927,9 +927,7 @@ pub(super) fn cp_read_kill_signal(opts_val: f64) -> i32 {
 }
 
 pub(super) fn cp_read_timeout(opts_val: f64) -> Option<std::time::Duration> {
-    if cp_object_ptr(opts_val).is_none() {
-        return None;
-    }
+    cp_object_ptr(opts_val)?;
     let value = cp_get_field(opts_val, b"timeout");
     let js = JSValue::from_bits(value.to_bits());
     if js.is_undefined() || js.is_null() {
@@ -1613,16 +1611,12 @@ fn cp_apply_options(command: &mut Command, opts_val: f64) {
 }
 
 pub(super) fn cp_read_argv0(opts_val: f64) -> Option<String> {
-    if cp_object_ptr(opts_val).is_none() {
-        return None;
-    }
+    cp_object_ptr(opts_val)?;
     cp_value_to_string(cp_get_field(opts_val, b"argv0"))
 }
 
 pub(super) fn cp_read_abort_signal(opts_val: f64) -> Option<f64> {
-    if cp_object_ptr(opts_val).is_none() {
-        return None;
-    }
+    cp_object_ptr(opts_val)?;
     let signal = cp_get_field(opts_val, b"signal");
     if JSValue::from_bits(signal.to_bits()).is_undefined() {
         return None;

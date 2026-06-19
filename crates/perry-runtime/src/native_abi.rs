@@ -51,7 +51,7 @@ fn strict_buffer_from_value(value: f64) -> *const BufferHeader {
     let js_value = JSValue::from_bits(bits);
     let raw_ptr = if js_value.is_pointer() || js_value.is_string() {
         (bits & POINTER_MASK) as usize
-    } else if !value.is_nan() && bits >= 0x1000 && bits < 0x0001_0000_0000_0000 {
+    } else if !value.is_nan() && (0x1000..0x0001_0000_0000_0000).contains(&bits) {
         bits as usize
     } else {
         0
@@ -153,7 +153,7 @@ pub extern "C" fn js_native_abi_check_ptr(value: f64) -> i64 {
     if js_value.is_pointer() || js_value.is_string() {
         return (bits & POINTER_MASK) as i64;
     }
-    if !value.is_nan() && bits >= 0x10000 && bits < 0x0001_0000_0000_0000 && (bits & 0x7) == 0 {
+    if !value.is_nan() && (0x10000..0x0001_0000_0000_0000).contains(&bits) && (bits & 0x7) == 0 {
         return bits as i64;
     }
     throw_type_error("Expected pointer-compatible value for native ptr parameter")

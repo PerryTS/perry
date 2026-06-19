@@ -2,18 +2,14 @@
 //!
 //! Extracted from `expr_call/mod.rs` as a mechanical move.
 
-use anyhow::{anyhow, Result};
-use perry_types::{LocalId, Type};
+use anyhow::Result;
+use perry_types::Type;
 use swc_ecma_ast as ast;
 
 use super::url_search_params::build_url_search_params_method_call;
 use crate::ir::*;
-use crate::lower_types::extract_ts_type_with_ctx;
 
-use super::super::{
-    extract_typed_parse_source_order, is_generator_call_expr, is_widget_modifier_name, lower_expr,
-    resolve_typed_parse_ty, LoweringContext,
-};
+use super::super::{lower_expr, LoweringContext};
 
 /// True when `recv_ty` is a statically-known class/namespace instance type
 /// (a `Named` or `Generic` type that is not itself an array). Used to gate
@@ -316,7 +312,7 @@ pub(super) fn try_local_array_methods(
                                         }));
                                     }
                                     let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
-                                    for (ast_arg, arg) in call.args.iter().zip(args.into_iter()) {
+                                    for (ast_arg, arg) in call.args.iter().zip(args) {
                                         if ast_arg.spread.is_some() {
                                             stmts.push(Expr::ArrayPushSpread {
                                                 array_id,
@@ -353,21 +349,20 @@ pub(super) fn try_local_array_methods(
                             "shift" => {
                                 return Ok(Ok(Expr::ArrayShift(array_id)));
                             }
-                            "unshift" => {
+                            "unshift"
                                 // #2814: the single-value fast path only handles
                                 // exactly one argument. Zero-arg and multi-arg
                                 // calls fall through to generic dispatch, which
                                 // routes to the variadic runtime helper.
-                                if args.len() == 1 {
+                                if args.len() == 1 => {
                                     return Ok(Ok(Expr::ArrayUnshift {
                                         array_id,
                                         value: Box::new(args.into_iter().next().unwrap()),
                                     }));
                                 }
-                            }
-                            "indexOf" => {
+                            "indexOf"
                                 // #2804: carry the optional fromIndex (2nd arg).
-                                if !args.is_empty() {
+                                if !args.is_empty() => {
                                     let mut it = args.into_iter();
                                     let value = it.next().unwrap();
                                     let from_index = it.next().map(Box::new);
@@ -377,9 +372,8 @@ pub(super) fn try_local_array_methods(
                                         from_index,
                                     }));
                                 }
-                            }
-                            "includes" => {
-                                if !args.is_empty() {
+                            "includes"
+                                if !args.is_empty() => {
                                     let mut it = args.into_iter();
                                     let value = it.next().unwrap();
                                     let from_index = it.next().map(Box::new);
@@ -389,14 +383,13 @@ pub(super) fn try_local_array_methods(
                                         from_index,
                                     }));
                                 }
-                            }
                             // arr.lastIndexOf(value, fromIndex?) — route to the
                             // array runtime fn. Without this, a known-not-string
                             // / typed-array local fell through to the *string*
                             // lastIndexOf (#2457): `new Int32Array(...).lastIndexOf`
                             // threw "(number).lastIndexOf is not a function".
-                            "lastIndexOf" => {
-                                if !args.is_empty() {
+                            "lastIndexOf"
+                                if !args.is_empty() => {
                                     let mut it = args.into_iter();
                                     let value = it.next().unwrap();
                                     let from_index = it.next().map(Box::new);
@@ -406,7 +399,6 @@ pub(super) fn try_local_array_methods(
                                         from_index,
                                     }));
                                 }
-                            }
                             "slice" => {
                                 // arr.slice(start, end?) - returns new array
                                 // Only convert to ArraySlice if we KNOW it's an Array type
@@ -566,8 +558,8 @@ pub(super) fn try_local_array_methods(
                                     }
                                 }
                             }
-                            "flatMap" => {
-                                if !args.is_empty() {
+                            "flatMap"
+                                if !args.is_empty() => {
                                     let cb = args.into_iter().next().unwrap();
                                     let cb = ctx.maybe_wrap_builtin_callback(cb, &call.args[0]);
                                     return Ok(Ok(Expr::ArrayFlatMap {
@@ -575,8 +567,7 @@ pub(super) fn try_local_array_methods(
                                         callback: Box::new(cb),
                                     }));
                                 }
-                            }
-                            "sort" => {
+                            "sort"
                                 // semver `module.exports.sort = (list) => …` is
                                 // re-exported as a plain function and called as
                                 // `semver.sort(list)`. The receiver there is a
@@ -589,15 +580,14 @@ pub(super) fn try_local_array_methods(
                                 // the `map`/`filter`/`with` guards).
                                 if !args.is_empty()
                                     && !receiver_is_class_instance(ctx.lookup_local_type(&arr_name))
-                                {
+                                => {
                                     return Ok(Ok(Expr::ArraySort {
                                         array: Box::new(Expr::LocalGet(array_id)),
                                         comparator: Box::new(args.into_iter().next().unwrap()),
                                     }));
                                 }
-                            }
-                            "reduce" => {
-                                if !args.is_empty() {
+                            "reduce"
+                                if !args.is_empty() => {
                                     let mut args_iter = args.into_iter();
                                     let callback = args_iter.next().unwrap();
                                     let initial = args_iter.next().map(Box::new);
@@ -607,7 +597,6 @@ pub(super) fn try_local_array_methods(
                                         initial,
                                     }));
                                 }
-                            }
                             "join" => {
                                 // arr.join(separator?) -> string
                                 let separator = args.into_iter().next().map(Box::new);
@@ -616,20 +605,19 @@ pub(super) fn try_local_array_methods(
                                     separator,
                                 }));
                             }
-                            "flat" => {
+                            "flat"
                                 // arr.flat() folds to depth=1 fast path;
                                 // arr.flat(depth) falls through so the
                                 // depth arg can reach the codegen
                                 // `lower_array_method.rs::flat` arm and
                                 // route to `js_array_flat_depth`.
-                                if args.is_empty() {
+                                if args.is_empty() => {
                                     return Ok(Ok(Expr::ArrayFlat {
                                         array: Box::new(Expr::LocalGet(array_id)),
                                     }));
                                 }
-                            }
-                            "reduceRight" => {
-                                if !args.is_empty() {
+                            "reduceRight"
+                                if !args.is_empty() => {
                                     let mut args_iter = args.into_iter();
                                     let callback = args_iter.next().unwrap();
                                     let initial = args_iter.next().map(Box::new);
@@ -639,7 +627,6 @@ pub(super) fn try_local_array_methods(
                                         initial,
                                     }));
                                 }
-                            }
                             "toReversed" => {
                                 return Ok(Ok(Expr::ArrayToReversed {
                                     array: Box::new(Expr::LocalGet(array_id)),
@@ -1003,19 +990,17 @@ pub(super) fn try_local_array_methods(
                             .lookup_local_type(&arr_name)
                             .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
                             .unwrap_or(false);
-                        if is_text_decoder {
-                            if method_name == "decode" {
-                                let decoder = lower_expr(ctx, &member.obj)?;
-                                let input = if !args.is_empty() {
-                                    args.into_iter().next().unwrap()
-                                } else {
-                                    Expr::Undefined
-                                };
-                                return Ok(Ok(Expr::TextDecoderDecode {
-                                    decoder: Box::new(decoder),
-                                    input: Box::new(input),
-                                }));
-                            }
+                        if is_text_decoder && method_name == "decode" {
+                            let decoder = lower_expr(ctx, &member.obj)?;
+                            let input = if !args.is_empty() {
+                                args.into_iter().next().unwrap()
+                            } else {
+                                Expr::Undefined
+                            };
+                            return Ok(Ok(Expr::TextDecoderDecode {
+                                decoder: Box::new(decoder),
+                                input: Box::new(input),
+                            }));
                         }
                     }
                 } // close is_array_type check
@@ -1029,12 +1014,10 @@ pub(super) fn try_local_array_methods(
                     // Lower the object expression (e.g., 'this' or a local variable)
                     let _object_expr = lower_expr(ctx, &obj_member.obj)?;
 
-                    if method_name == "push" {
-                        if !args.is_empty() {
-                            // For now, fall through to generic Call handling
-                            // We'll compile this in codegen using inline property access
-                            // property-based push: object.{property}.push()
-                        }
+                    if method_name == "push" && !args.is_empty() {
+                        // For now, fall through to generic Call handling
+                        // We'll compile this in codegen using inline property access
+                        // property-based push: object.{property}.push()
                     }
                 }
             }

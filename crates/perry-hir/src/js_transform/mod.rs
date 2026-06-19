@@ -10,10 +10,6 @@
 //! 6. Transforms new expressions for JS classes to JsNew
 //! 7. Wraps closures passed to JS functions with JsCreateCallback
 
-use crate::ir::{Expr, Module, ModuleKind, Stmt};
-use perry_types::LocalId;
-use std::collections::{BTreeMap, HashMap, HashSet};
-
 mod cross_module_natives;
 mod imports;
 mod local_natives;

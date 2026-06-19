@@ -38,24 +38,22 @@ mod context;
 pub(crate) mod expr_assign;
 mod expr_call;
 mod expr_function;
-pub(crate) use expr_function::{capture_function_source, lower_fn_expr};
+pub(crate) use expr_function::capture_function_source;
 mod expr_member;
-pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE};
+pub(crate) use expr_member::{wrap_private_guard, PRIV_OP_WRITE};
 mod expr_misc;
 mod expr_new;
 mod expr_new_builtins;
 mod expr_object;
-mod unimpl_hints;
-pub(crate) use context::*;
 mod stmt;
+mod unimpl_hints;
 pub(crate) use stmt::*;
 mod for_head;
-pub(crate) use for_head::{for_head_binding_stmts, predefine_for_head, ForHeadBinding};
+pub(crate) use for_head::{for_head_binding_stmts, predefine_for_head};
 mod stmt_loops;
 pub(crate) use stmt_loops::{
-    insert_iterator_close_on_abrupt, iterator_close_guarded_stmt, iterator_next_call,
-    lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in, lower_stmt_for_of,
-    wrap_lazy_for_of_body_close_on_throw,
+    insert_iterator_close_on_abrupt, lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in,
+    lower_stmt_for_of, wrap_lazy_for_of_body_close_on_throw,
 };
 mod module_decl;
 pub(crate) use module_decl::*;
@@ -94,11 +92,8 @@ pub(crate) use typed_parse::{extract_typed_parse_source_order, resolve_typed_par
 
 mod array_fold;
 pub(crate) use array_fold::{
-    is_known_array_prototype_method, is_known_array_static_method, is_known_json_static_method,
-    is_known_math_static_method, is_known_namespace_static_function, is_known_number_static_method,
-    is_known_object_prototype_method, is_known_object_static_method,
-    is_known_promise_static_method, is_known_string_prototype_method,
-    is_known_string_static_method, try_fold_array_method_call,
+    is_known_array_prototype_method, is_known_namespace_static_function,
+    is_known_object_prototype_method, is_known_string_prototype_method, try_fold_array_method_call,
 };
 
 mod lower_module_fn;

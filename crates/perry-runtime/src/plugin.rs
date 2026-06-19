@@ -42,6 +42,111 @@ const DEFAULT_PRIORITY: i32 = 10;
 struct LibHandle(*mut libc::c_void);
 unsafe impl Send for LibHandle {}
 
+// ============================================================================
+// Platform-specific raw library load/sym/close — implemented per OS.
+//
+// The plugin ABI is the same on every platform (perry_plugin_abi_version,
+// plugin_activate, plugin_deactivate + the per-handler FFI surface in
+// `register_hook` / `register_tool` / etc. above), so the only divergence
+// between Unix and Windows is the dynamic-loader API:
+//   - Unix:    `libc::dlopen` / `libc::dlsym` / `libc::dlclose` (POSIX)
+//   - Windows: `LoadLibraryW` / `GetProcAddress` / `FreeLibrary` (Win32)
+//
+// The helpers below collapse those to a small uniform shape so the
+// `perry_plugin_load` / `perry_plugin_unload` bodies don't have to fork.
+// ============================================================================
+
+#[cfg(unix)]
+type RawLibHandle = *mut libc::c_void;
+
+#[cfg(windows)]
+type RawLibHandle = windows_sys::Win32::Foundation::HMODULE;
+
+#[cfg(unix)]
+unsafe fn open_library(path: &str) -> Option<RawLibHandle> {
+    let c_path = CString::new(path).ok()?;
+    let h = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+    if h.is_null() {
+        None
+    } else {
+        Some(h)
+    }
+}
+
+#[cfg(windows)]
+unsafe fn open_library(path: &str) -> Option<RawLibHandle> {
+    use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
+    // LoadLibraryW takes a NUL-terminated UTF-16 path. Encode once, free on return.
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let h = LoadLibraryW(wide.as_ptr());
+    if h.is_null() {
+        None
+    } else {
+        Some(h)
+    }
+}
+
+#[cfg(unix)]
+unsafe fn lookup_symbol(handle: RawLibHandle, name: &str) -> Option<*mut libc::c_void> {
+    let c_name = CString::new(name).ok()?;
+    let p = libc::dlsym(handle, c_name.as_ptr());
+    if p.is_null() {
+        None
+    } else {
+        Some(p)
+    }
+}
+
+#[cfg(windows)]
+unsafe fn lookup_symbol(handle: RawLibHandle, name: &str) -> Option<*mut libc::c_void> {
+    use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
+    // GetProcAddress's `lpProcName` is a NUL-terminated *ANSI* string. The
+    // plugin ABI surface (perry_plugin_*, plugin_activate, plugin_deactivate)
+    // is all ASCII, so a CString is the right shape. GetProcAddress returns
+    // `Option<unsafe extern "system" fn() -> isize>` — None means "symbol
+    // not found", which is what we want to forward up the call chain.
+    let c_name = CString::new(name).ok()?;
+    let p = GetProcAddress(handle, c_name.as_ptr() as *const u8);
+    match p {
+        Some(f) => Some(f as *mut libc::c_void),
+        None => None,
+    }
+}
+
+#[cfg(unix)]
+unsafe fn close_library(_handle: RawLibHandle) {
+    libc::dlclose(_handle);
+}
+
+#[cfg(windows)]
+unsafe fn close_library(handle: RawLibHandle) {
+    use windows_sys::Win32::Foundation::FreeLibrary;
+    let _ = FreeLibrary(handle);
+}
+
+#[cfg(unix)]
+fn last_load_error(path: &str) -> String {
+    unsafe {
+        let err = libc::dlerror();
+        if err.is_null() {
+            format!("dlopen failed for {}", path)
+        } else {
+            format!(
+                "dlopen failed for {}: {}",
+                path,
+                CStr::from_ptr(err).to_string_lossy()
+            )
+        }
+    }
+}
+
+#[cfg(windows)]
+fn last_load_error(path: &str) -> String {
+    use windows_sys::Win32::Foundation::GetLastError;
+    let err = unsafe { GetLastError() };
+    format!("LoadLibraryW failed for {}: Win32 error {}", path, err)
+}
+
 struct PluginMetadata {
     name: String,
     version: String,
@@ -51,7 +156,10 @@ struct PluginMetadata {
 struct PluginEntry {
     id: u64,
     path_name: String,
-    #[cfg(unix)]
+    // `*mut c_void` because the concrete handle type differs per OS
+    // (`*mut c_void` on Unix = `libc::dlopen` return; `HMODULE` on Windows
+    // = `*mut c_void` per windows-sys). Stored as a raw void pointer so the
+    // field's shape is platform-agnostic.
     lib_handle: LibHandle,
     activate_called: bool,
     metadata: Option<PluginMetadata>,
@@ -587,36 +695,31 @@ pub extern "C" fn perry_plugin_off(api_handle: i64, event: f64, handler: f64) ->
 // Host-side functions — called by the host application
 // ============================================================================
 
-/// Load a plugin from a shared library path
-/// Returns the plugin ID (> 0) on success, 0 on failure
-#[cfg(unix)]
+/// Load a plugin from a shared library path.
+/// Returns the plugin ID (> 0) on success, 0 on failure.
+///
+/// Cross-platform: Unix uses `libc::dlopen` (POSIX), Windows uses
+/// `LoadLibraryW` (Win32). Both paths converge through the
+/// `open_library` / `lookup_symbol` / `close_library` / `last_load_error`
+/// helpers above, so the activate/deactivate orchestration is shared.
 #[no_mangle]
 pub extern "C" fn perry_plugin_load(path_val: f64) -> i64 {
     let path_str = unsafe { extract_string(path_val) };
 
-    let c_path = match CString::new(path_str.clone()) {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("[plugin] Invalid path: {}", path_str);
+    let handle = match unsafe { open_library(&path_str) } {
+        Some(h) => h,
+        None => {
+            eprintln!("[plugin] {}", last_load_error(&path_str));
             return 0;
         }
     };
 
     unsafe {
-        let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
-        if handle.is_null() {
-            let err = libc::dlerror();
-            if !err.is_null() {
-                let err_str = CStr::from_ptr(err).to_string_lossy();
-                eprintln!("[plugin] dlopen failed for {}: {}", path_str, err_str);
-            }
-            return 0;
-        }
-
-        // Check ABI version if available
-        let abi_sym = CString::new("perry_plugin_abi_version").unwrap();
-        let abi_fn_ptr = libc::dlsym(handle, abi_sym.as_ptr());
-        if !abi_fn_ptr.is_null() {
+        // Check ABI version if the plugin exports it. A plugin that omits
+        // this symbol still loads — version checks are an opt-in safety net
+        // for plugin authors, not a hard requirement (matches the Unix
+        // behavior pre-Windows-support).
+        if let Some(abi_fn_ptr) = lookup_symbol(handle, "perry_plugin_abi_version") {
             let abi_fn: extern "C" fn() -> u64 = std::mem::transmute(abi_fn_ptr);
             let version = abi_fn();
             if version != PLUGIN_ABI_VERSION {
@@ -624,19 +727,20 @@ pub extern "C" fn perry_plugin_load(path_val: f64) -> i64 {
                     "[plugin] ABI version mismatch for {}: plugin={}, host={}",
                     path_str, version, PLUGIN_ABI_VERSION
                 );
-                libc::dlclose(handle);
+                close_library(handle);
                 return 0;
             }
         }
 
-        // Look up plugin_activate
-        let activate_sym = CString::new("plugin_activate").unwrap();
-        let activate_ptr = libc::dlsym(handle, activate_sym.as_ptr());
-        if activate_ptr.is_null() {
-            eprintln!("[plugin] No plugin_activate symbol in {}", path_str);
-            libc::dlclose(handle);
-            return 0;
-        }
+        // plugin_activate is mandatory — every plugin must export it.
+        let activate_ptr = match lookup_symbol(handle, "plugin_activate") {
+            Some(p) => p,
+            None => {
+                eprintln!("[plugin] No plugin_activate symbol in {}", path_str);
+                close_library(handle);
+                return 0;
+            }
+        };
 
         let mut reg = REGISTRY.lock().unwrap();
         let plugin_id = reg.alloc_plugin_id();
@@ -651,7 +755,7 @@ pub extern "C" fn perry_plugin_load(path_val: f64) -> i64 {
         reg.plugins.push(PluginEntry {
             id: plugin_id,
             path_name: name.clone(),
-            lib_handle: LibHandle(handle),
+            lib_handle: LibHandle(handle as *mut libc::c_void),
             activate_called: false,
             metadata: None,
         });
@@ -682,8 +786,7 @@ pub extern "C" fn perry_plugin_load(path_val: f64) -> i64 {
     }
 }
 
-/// Unload a plugin by its ID
-#[cfg(unix)]
+/// Unload a plugin by its ID. Cross-platform: see `perry_plugin_load`.
 #[no_mangle]
 pub extern "C" fn perry_plugin_unload(plugin_id_val: i64) {
     let plugin_id = plugin_id_val as u64;
@@ -711,13 +814,14 @@ pub extern "C" fn perry_plugin_unload(plugin_id_val: i64) {
     drop(reg);
 
     unsafe {
-        let deactivate_sym = CString::new("plugin_deactivate").unwrap();
-        let deactivate_ptr = libc::dlsym(handle, deactivate_sym.as_ptr());
-        if !deactivate_ptr.is_null() {
+        // plugin_deactivate is optional — a plugin that doesn't export it
+        // still unloads cleanly (the registry teardown already cleared
+        // its hooks/tools/services/routes/events).
+        if let Some(deactivate_ptr) = lookup_symbol(handle as RawLibHandle, "plugin_deactivate") {
             let deactivate_fn: extern "C" fn() = std::mem::transmute(deactivate_ptr);
             deactivate_fn();
         }
-        libc::dlclose(handle);
+        close_library(handle as RawLibHandle);
     }
 
     eprintln!("[plugin] Unloaded: {} (id={})", name, plugin_id);
