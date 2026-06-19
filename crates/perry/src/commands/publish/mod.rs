@@ -36,6 +36,8 @@ pub(crate) use saved_config::{
     check_beta_consent, config_path, is_interactive, load_config, prompt_input, report_beta_error,
     save_config, AndroidSavedConfig, AppleSavedConfig, HarmonyosSavedConfig, PerryConfig,
 };
+#[cfg(test)]
+pub(crate) use saved_config::IosSavedConfig; // consumed only by tests
 pub(crate) use tarball::{create_project_tarball, create_project_tarball_with_excludes};
 
 // Sibling-only items used by run_async and tests.
