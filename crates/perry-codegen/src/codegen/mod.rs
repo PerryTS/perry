@@ -58,11 +58,12 @@ pub use opts::{
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use typed_abi::{
-    generic_closure_body_name, generic_function_body_name, generic_method_body_name,
-    typed_f64_closure_name, typed_f64_function_name, typed_f64_method_name,
-    typed_f64_receiver_method_info, typed_f64_receiver_method_name, typed_i1_closure_name,
-    typed_i1_function_name, typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name,
-    typed_i32_method_name, typed_string_closure_name, typed_string_function_name,
+    emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
+    generic_function_body_name, generic_method_body_name, typed_f64_closure_name,
+    typed_f64_function_name, typed_f64_method_name, typed_f64_receiver_method_info,
+    typed_f64_receiver_method_name, typed_i1_closure_name, typed_i1_function_name,
+    typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name, typed_i32_method_name,
+    typed_param_reps_match_args, typed_string_closure_name, typed_string_function_name,
     typed_string_method_name, TypedParamRep, TypedReceiverMethodInfo,
 };
 
@@ -1180,6 +1181,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         match typed_abi::typed_f64_function_rejection_reason(f) {
             None => {
                 typed_f64_functions.insert(f.id);
+                if let Some(reps) = typed_abi::typed_param_reps_for_params(&f.params) {
+                    typed_i1_function_param_reps.insert(f.id, reps);
+                }
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -1196,6 +1200,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         match typed_abi::typed_i32_function_rejection_reason(f) {
             None => {
                 typed_i32_functions.insert(f.id);
+                if let Some(reps) = typed_abi::typed_param_reps_for_params(&f.params) {
+                    typed_i1_function_param_reps.insert(f.id, reps);
+                }
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -1231,6 +1238,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         match typed_abi::typed_string_function_rejection_reason(f) {
             None => {
                 typed_string_functions.insert(f.id);
+                if let Some(reps) = typed_abi::typed_param_reps_for_params(&f.params) {
+                    typed_i1_function_param_reps.insert(f.id, reps);
+                }
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -1256,7 +1266,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             let source_function = format!("{}::{}", class.name, method.name);
             match typed_abi::typed_f64_method_rejection_reason(method) {
                 None => {
-                    typed_f64_methods.insert((class.name.clone(), method.name.clone()));
+                    let key = (class.name.clone(), method.name.clone());
+                    typed_f64_methods.insert(key.clone());
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(&method.params) {
+                        typed_i1_method_param_reps.insert(key, reps);
+                    }
                 }
                 Some(reason) => record_typed_clone_rejection(
                     &mut typed_clone_rejection_records,
@@ -1318,7 +1332,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             match typed_abi::typed_i32_method_rejection_reason(method) {
                 None => {
-                    typed_i32_methods.insert((class.name.clone(), method.name.clone()));
+                    let key = (class.name.clone(), method.name.clone());
+                    typed_i32_methods.insert(key.clone());
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(&method.params) {
+                        typed_i1_method_param_reps.insert(key, reps);
+                    }
                 }
                 Some(reason) => record_typed_clone_rejection(
                     &mut typed_clone_rejection_records,
@@ -1335,7 +1353,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
             match typed_abi::typed_string_method_rejection_reason(method) {
                 None => {
-                    typed_string_methods.insert((class.name.clone(), method.name.clone()));
+                    let key = (class.name.clone(), method.name.clone());
+                    typed_string_methods.insert(key.clone());
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(&method.params) {
+                        typed_i1_method_param_reps.insert(key, reps);
+                    }
                 }
                 Some(reason) => record_typed_clone_rejection(
                     &mut typed_clone_rejection_records,
@@ -2479,6 +2501,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         match typed_abi::typed_f64_closure_rejection_reason_with_types(expr, &module_local_types) {
             None => {
                 cross_module.typed_f64_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -2530,6 +2559,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         match typed_abi::typed_i32_closure_rejection_reason_with_types(expr, &module_local_types) {
             None => {
                 cross_module.typed_i32_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
             }
             Some(reason) => record_typed_clone_rejection(
                 &mut typed_clone_rejection_records,
@@ -2553,6 +2589,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         {
             None => {
                 cross_module.typed_string_closures.insert(*func_id);
+                if let perry_hir::Expr::Closure { params, .. } = expr {
+                    if let Some(reps) = typed_abi::typed_param_reps_for_params(params) {
+                        cross_module
+                            .typed_i1_closure_param_reps
+                            .insert(*func_id, reps);
+                    }
+                }
                 let capture_count =
                     typed_abi::typed_string_closure_capture_reps(expr, &module_local_types)
                         .map(|captures| captures.len())

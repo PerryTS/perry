@@ -7245,6 +7245,33 @@ fn typed_f64_rejected_signature_module(case: &str) -> Module {
     module
 }
 
+fn typed_f64_mixed_clone_test_module() -> Module {
+    let mut module = typed_f64_clone_test_module(false);
+    module.name = "typed_f64_mixed_function_abi.ts".to_string();
+    module.functions[0].params = vec![
+        param(1, "a", Type::Number),
+        param(2, "b", Type::Int32),
+        param(6, "flag", Type::Boolean),
+    ];
+    module.functions[0].body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(local(1)),
+        right: Box::new(local(2)),
+    }))];
+    module.functions[1].params = vec![
+        param(3, "x", Type::Number),
+        param(4, "y", Type::Int32),
+        param(7, "flag", Type::Boolean),
+    ];
+    module.functions[1].body = vec![Stmt::Return(Some(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![local(3), local(4), local(7)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }))];
+    module
+}
+
 fn typed_i1_clone_test_module() -> Module {
     typed_i1_clone_test_module_named("typed_i1_function_abi.ts")
 }
@@ -9616,7 +9643,80 @@ fn artifact_records_typed_string_direct_call_selection() {
 }
 
 #[test]
-fn typed_f64_function_clone_rejects_any_and_mixed_parameter_signatures() {
+fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
+    let ir = String::from_utf8(
+        compile_module(&typed_f64_mixed_clone_test_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_fn_typed_f64_mixed_function_abi_ts__add";
+    let typed = "perry_fn_typed_f64_mixed_function_abi_ts__add__typed_f64";
+    let generic_body = "perry_fn_typed_f64_mixed_function_abi_ts__add__generic";
+    let caller = "perry_fn_typed_f64_mixed_function_abi_ts__caller";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let caller_ir = defined_function_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!(
+            "define internal double @{typed}(double %arg1, i32 %arg2, i1 %arg6)"
+        )),
+        "typed f64 clone should carry mixed raw params internally:\n{ir}"
+    );
+    assert!(
+        ir.contains(&format!(
+            "define double @{public}(double %arg1, double %arg2, double %arg6)"
+        )),
+        "public wrapper must preserve the JSValue ABI:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains("sitofp i32 %arg2 to double")
+            && typed_ir.contains("fadd double")
+            && !typed_ir.contains("js_typed_f64_arg_to_raw")
+            && !typed_ir.contains("js_nanbox"),
+        "typed clone body should avoid JSValue traffic on the hot path:\n{typed_ir}"
+    );
+    assert!(
+        wrapper_ir.contains("call i32 @js_typed_f64_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i32_arg_guard")
+            && wrapper_ir.contains("call i32 @js_typed_i1_arg_guard")
+            && wrapper_ir.contains(&format!("call double @{typed}(double %"))
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public wrapper should guard mixed JSValue args and keep generic fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("typed_f64_call.fast")
+            && caller_ir.contains("call i32 @js_typed_i32_arg_to_raw")
+            && caller_ir.contains("call i32 @js_typed_i1_arg_to_raw")
+            && caller_ir.contains(&format!("call double @{typed}(double "))
+            && caller_ir.contains(&format!("call double @{generic_body}("))
+            && !caller_ir.contains(&format!("call double @{public}(")),
+        "same-module direct call should use the mixed raw clone plus generic body fallback, not the public wrapper:\n{caller_ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(typed_f64_mixed_clone_test_module());
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "Call"
+                && record["consumer"] == "typed_f64_func_ref_call"
+                && record["native_value_state"] == "region_local"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| {
+                        note.as_str().is_some_and(|text| {
+                            text.contains(&format!("typed_clone={typed}"))
+                                && text.contains(&format!("generic_body={generic_body}"))
+                        })
+                    }) && notes
+                        .iter()
+                        .any(|note| note == "typed_signature=f64(f64, ...)->f64")
+                })
+        }),
+        "expected mixed typed-f64 direct call artifact:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_f64_function_clone_rejects_any_and_unsafe_mixed_parameter_signatures() {
     for case in ["any", "mixed"] {
         let ir = String::from_utf8(
             compile_module(&typed_f64_rejected_signature_module(case), empty_opts()).unwrap(),
@@ -9624,7 +9724,7 @@ fn typed_f64_function_clone_rejects_any_and_mixed_parameter_signatures() {
         .unwrap();
         assert!(
             !ir.contains("__typed_f64") && !ir.contains("__generic"),
-            "{case} non-numeric ABI surface must stay generic:\n{ir}"
+            "{case} unsafe ABI surface must stay generic:\n{ir}"
         );
     }
 }

@@ -71,6 +71,8 @@ pub(crate) fn typed_param_rep_for_type(ty: &Type) -> Option<TypedParamRep> {
         Some(TypedParamRep::F64)
     } else if matches!(ty, Type::Boolean) {
         Some(TypedParamRep::I1)
+    } else if is_string_type(ty) {
+        Some(TypedParamRep::StringRef)
     } else {
         None
     }
@@ -89,21 +91,17 @@ pub(crate) fn typed_f64_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
 ) -> Option<Vec<(u32, TypedParamRep)>> {
-    let Expr::Closure { captures, .. } = expr else {
-        return None;
-    };
-    let mut reps = Vec::with_capacity(captures.len());
-    for id in captures {
-        let ty = module_local_types.get(id)?;
-        if !is_f64_type(ty) {
-            return None;
-        }
-        reps.push((*id, TypedParamRep::F64));
-    }
-    Some(reps)
+    typed_closure_capture_reps(expr, module_local_types)
 }
 
 pub(crate) fn typed_i1_closure_capture_reps(
+    expr: &Expr,
+    module_local_types: &HashMap<u32, Type>,
+) -> Option<Vec<(u32, TypedParamRep)>> {
+    typed_closure_capture_reps(expr, module_local_types)
+}
+
+fn typed_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
 ) -> Option<Vec<(u32, TypedParamRep)>> {
@@ -123,36 +121,14 @@ pub(crate) fn typed_i32_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
 ) -> Option<Vec<(u32, TypedParamRep)>> {
-    let Expr::Closure { captures, .. } = expr else {
-        return None;
-    };
-    let mut reps = Vec::with_capacity(captures.len());
-    for id in captures {
-        let ty = module_local_types.get(id)?;
-        if !matches!(ty, Type::Int32) {
-            return None;
-        }
-        reps.push((*id, TypedParamRep::I32));
-    }
-    Some(reps)
+    typed_closure_capture_reps(expr, module_local_types)
 }
 
 pub(crate) fn typed_string_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
 ) -> Option<Vec<(u32, TypedParamRep)>> {
-    let Expr::Closure { captures, .. } = expr else {
-        return None;
-    };
-    let mut reps = Vec::with_capacity(captures.len());
-    for id in captures {
-        let ty = module_local_types.get(id)?;
-        if !is_string_type(ty) {
-            return None;
-        }
-        reps.push((*id, TypedParamRep::StringRef));
-    }
-    Some(reps)
+    typed_closure_capture_reps(expr, module_local_types)
 }
 
 pub(crate) fn emit_typed_arg_guard(
@@ -198,6 +174,29 @@ pub(crate) fn emit_typed_arg_to_raw(
             &[(crate::types::DOUBLE, arg)],
         ),
     }
+}
+
+pub(crate) fn typed_param_reps_match_args(
+    ctx: &crate::expr::FnCtx<'_>,
+    reps: &[TypedParamRep],
+    args: &[Expr],
+) -> bool {
+    reps.len() == args.len()
+        && args.iter().zip(reps.iter()).all(|(arg, rep)| match rep {
+            TypedParamRep::F64 => crate::type_analysis::is_numeric_expr(ctx, arg),
+            TypedParamRep::I32 => {
+                matches!(
+                    crate::type_analysis::static_type_of(ctx, arg),
+                    Some(Type::Int32)
+                ) || matches!(
+                    arg,
+                    Expr::Integer(n)
+                        if (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n)
+                )
+            }
+            TypedParamRep::I1 => crate::type_analysis::is_bool_expr(ctx, arg),
+            TypedParamRep::StringRef => crate::type_analysis::is_definitely_string_expr(ctx, arg),
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -434,10 +433,12 @@ pub(crate) fn typed_string_function_rejection_reason(
         if param.arguments_object.is_some() {
             return Some(TypedCloneRejectionReason::ArgumentsObject);
         }
-        if !is_string_type(&param.ty) {
+        let Some(rep) = typed_param_rep_for_type(&param.ty) else {
             return Some(TypedCloneRejectionReason::ParamNotString);
+        };
+        if matches!(rep, TypedParamRep::StringRef) {
+            locals.insert(param.id);
         }
-        locals.insert(param.id);
     }
 
     typed_string_body_rejection_reason(&function.body, locals)
@@ -521,7 +522,7 @@ pub(crate) fn typed_f64_closure_rejection_reason_with_types(
         return Some(TypedCloneRejectionReason::Captures);
     }
 
-    let mut numeric_params = HashSet::new();
+    let mut numeric_params = HashMap::new();
     for param in params {
         if param.default.is_some() {
             return Some(TypedCloneRejectionReason::ParamDefault);
@@ -532,16 +533,16 @@ pub(crate) fn typed_f64_closure_rejection_reason_with_types(
         if param.arguments_object.is_some() {
             return Some(TypedCloneRejectionReason::ArgumentsObject);
         }
-        if !is_f64_type(&param.ty) {
+        let Some(rep) = typed_param_rep_for_type(&param.ty) else {
             return Some(TypedCloneRejectionReason::ParamNotF64);
-        }
-        numeric_params.insert(param.id);
+        };
+        numeric_params.insert(param.id, rep);
     }
     let Some(capture_reps) = typed_f64_closure_capture_reps(expr, module_local_types) else {
         return Some(TypedCloneRejectionReason::Captures);
     };
-    for (capture_id, _) in capture_reps {
-        numeric_params.insert(capture_id);
+    for (capture_id, rep) in capture_reps {
+        numeric_params.insert(capture_id, rep);
     }
 
     typed_f64_body_rejection_reason(body, numeric_params)
@@ -663,10 +664,10 @@ pub(crate) fn typed_i32_closure_rejection_reason_with_types(
         if param.arguments_object.is_some() {
             return Some(TypedCloneRejectionReason::ArgumentsObject);
         }
-        if !matches!(param.ty, Type::Int32) {
+        let Some(rep) = typed_param_rep_for_type(&param.ty) else {
             return Some(TypedCloneRejectionReason::ParamNotI32);
-        }
-        locals.insert(param.id, TypedParamRep::I32);
+        };
+        locals.insert(param.id, rep);
     }
     let Some(capture_reps) = typed_i32_closure_capture_reps(expr, module_local_types) else {
         return Some(TypedCloneRejectionReason::Captures);
@@ -731,16 +732,20 @@ pub(crate) fn typed_string_closure_rejection_reason_with_types(
         if param.arguments_object.is_some() {
             return Some(TypedCloneRejectionReason::ArgumentsObject);
         }
-        if !is_string_type(&param.ty) {
+        let Some(rep) = typed_param_rep_for_type(&param.ty) else {
             return Some(TypedCloneRejectionReason::ParamNotString);
+        };
+        if matches!(rep, TypedParamRep::StringRef) {
+            locals.insert(param.id);
         }
-        locals.insert(param.id);
     }
     let Some(capture_reps) = typed_string_closure_capture_reps(expr, module_local_types) else {
         return Some(TypedCloneRejectionReason::Captures);
     };
-    for (capture_id, _) in capture_reps {
-        locals.insert(capture_id);
+    for (capture_id, rep) in capture_reps {
+        if matches!(rep, TypedParamRep::StringRef) {
+            locals.insert(capture_id);
+        }
     }
 
     typed_string_body_rejection_reason(body, locals)
@@ -803,10 +808,10 @@ fn typed_i32_function_rejection_reason_impl(
         if param.arguments_object.is_some() {
             return Some(TypedCloneRejectionReason::ArgumentsObject);
         }
-        if !matches!(param.ty, Type::Int32) {
+        let Some(rep) = typed_param_rep_for_type(&param.ty) else {
             return Some(TypedCloneRejectionReason::ParamNotI32);
-        }
-        locals.insert(param.id, TypedParamRep::I32);
+        };
+        locals.insert(param.id, rep);
     }
 
     typed_i32_body_rejection_reason(&function.body, locals)
@@ -823,7 +828,7 @@ fn typed_f64_callable_rejection_reason(function: &Function) -> Option<TypedClone
         return Some(TypedCloneRejectionReason::ReturnTypeNotF64);
     }
 
-    let mut numeric_params = HashSet::new();
+    let mut numeric_params = HashMap::new();
     for param in &function.params {
         if param.default.is_some() {
             return Some(TypedCloneRejectionReason::ParamDefault);
@@ -834,10 +839,10 @@ fn typed_f64_callable_rejection_reason(function: &Function) -> Option<TypedClone
         if param.arguments_object.is_some() {
             return Some(TypedCloneRejectionReason::ArgumentsObject);
         }
-        if !is_f64_type(&param.ty) {
+        let Some(rep) = typed_param_rep_for_type(&param.ty) else {
             return Some(TypedCloneRejectionReason::ParamNotF64);
-        }
-        numeric_params.insert(param.id);
+        };
+        numeric_params.insert(param.id, rep);
     }
 
     typed_f64_body_rejection_reason(&function.body, numeric_params)
@@ -1047,12 +1052,8 @@ fn receiver_expr_is_typed_f64_safe(
 
 fn typed_f64_body_rejection_reason(
     body: &[Stmt],
-    numeric_locals: HashSet<u32>,
+    mut locals: HashMap<u32, TypedParamRep>,
 ) -> Option<TypedCloneRejectionReason> {
-    let mut locals: HashMap<u32, TypedParamRep> = numeric_locals
-        .into_iter()
-        .map(|id| (id, TypedParamRep::F64))
-        .collect();
     let Some((last, prefix)) = body.split_last() else {
         return Some(TypedCloneRejectionReason::BodyNotSingleReturn);
     };
@@ -1446,12 +1447,23 @@ pub(crate) fn lower_typed_f64_body_with_seed_locals(
     blk: &mut crate::block::LlBlock,
     params: &[perry_hir::Param],
     body: &[Stmt],
-    mut locals: HashMap<u32, String>,
+    locals: HashMap<u32, String>,
 ) -> anyhow::Result<String> {
-    let mut reps = HashMap::new();
+    lower_typed_f64_body_with_seed_locals_and_reps(blk, params, body, locals, HashMap::new())
+}
+
+pub(crate) fn lower_typed_f64_body_with_seed_locals_and_reps(
+    blk: &mut crate::block::LlBlock,
+    params: &[perry_hir::Param],
+    body: &[Stmt],
+    mut locals: HashMap<u32, String>,
+    mut reps: HashMap<u32, TypedParamRep>,
+) -> anyhow::Result<String> {
     for param in params {
         locals.insert(param.id, format!("%arg{}", param.id));
-        reps.insert(param.id, TypedParamRep::F64);
+        if let Some(rep) = typed_param_rep_for_type(&param.ty) {
+            reps.insert(param.id, rep);
+        }
     }
     let Some((last, prefix)) = body.split_last() else {
         anyhow::bail!("typed-f64 clone cannot lower empty body");
@@ -1733,4 +1745,141 @@ pub(crate) fn lower_typed_i1_body(
     body: &[Stmt],
 ) -> anyhow::Result<String> {
     lower_typed_i1_body_with_seed_locals(blk, params, body, HashMap::new(), HashMap::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::Param;
+
+    fn param(id: u32, name: &str, ty: Type) -> Param {
+        Param {
+            id,
+            name: name.to_string(),
+            ty,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }
+    }
+
+    fn function(return_type: Type, params: Vec<Param>, body: Vec<Stmt>) -> Function {
+        Function {
+            id: 1,
+            name: "mixed".to_string(),
+            type_params: Vec::new(),
+            params,
+            return_type,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    fn ret(expr: Expr) -> Vec<Stmt> {
+        vec![Stmt::Return(Some(expr))]
+    }
+
+    #[test]
+    fn f64_clone_accepts_mixed_raw_params_when_return_expr_is_numeric_safe() {
+        let f = function(
+            Type::Number,
+            vec![
+                param(10, "n", Type::Number),
+                param(11, "i", Type::Int32),
+                param(12, "flag", Type::Boolean),
+            ],
+            ret(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(10)),
+                right: Box::new(Expr::LocalGet(11)),
+            }),
+        );
+
+        assert_eq!(typed_f64_function_rejection_reason(&f), None);
+        assert_eq!(
+            typed_param_reps_for_params(&f.params),
+            Some(vec![
+                TypedParamRep::F64,
+                TypedParamRep::I32,
+                TypedParamRep::I1
+            ])
+        );
+    }
+
+    #[test]
+    fn f64_clone_rejects_unsafe_mixed_rep_use() {
+        let f = function(
+            Type::Number,
+            vec![
+                param(10, "n", Type::Number),
+                param(11, "flag", Type::Boolean),
+            ],
+            ret(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(10)),
+                right: Box::new(Expr::LocalGet(11)),
+            }),
+        );
+
+        assert_eq!(
+            typed_f64_function_rejection_reason(&f),
+            Some(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe)
+        );
+    }
+
+    #[test]
+    fn string_clone_accepts_mixed_params_when_only_string_rep_flows_to_return() {
+        let f = function(
+            Type::String,
+            vec![
+                param(10, "s", Type::String),
+                param(11, "i", Type::Int32),
+                param(12, "flag", Type::Boolean),
+            ],
+            ret(Expr::LocalGet(10)),
+        );
+
+        assert_eq!(typed_string_function_rejection_reason(&f), None);
+    }
+
+    #[test]
+    fn closure_clone_accepts_mixed_immutable_captures_for_numeric_return() {
+        let expr = Expr::Closure {
+            func_id: 7,
+            params: vec![param(20, "scale", Type::Number)],
+            return_type: Type::Number,
+            body: ret(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(20)),
+                right: Box::new(Expr::LocalGet(30)),
+            }),
+            captures: vec![30, 31],
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        };
+        let module_local_types = HashMap::from([(30, Type::Int32), (31, Type::Boolean)]);
+
+        assert_eq!(
+            typed_f64_closure_rejection_reason_with_types(&expr, &module_local_types),
+            None
+        );
+        assert_eq!(
+            typed_f64_closure_capture_reps(&expr, &module_local_types),
+            Some(vec![(30, TypedParamRep::I32), (31, TypedParamRep::I1)])
+        );
+    }
 }

@@ -2072,11 +2072,12 @@ pub fn try_lower_property_get_method_call(
                         .methods
                         .get(&typed_method_key)
                         .is_some_and(|name| name == &fallback_fn)
-                    && args.len() == typed_formal_count
-                    && args
-                        .iter()
-                        .all(|arg| crate::type_analysis::is_numeric_expr(ctx, arg))
-                {
+                    && ctx
+                        .typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .is_some_and(|reps| {
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
+                        }) {
                     Some(crate::codegen::typed_f64_method_name(&fallback_fn))
                 } else {
                     None
@@ -2086,17 +2087,12 @@ pub fn try_lower_property_get_method_call(
                         .methods
                         .get(&typed_method_key)
                         .is_some_and(|name| name == &fallback_fn)
-                    && args.len() == typed_formal_count
-                    && args.iter().all(|arg| {
-                        matches!(
-                            crate::type_analysis::static_type_of(ctx, arg),
-                            Some(perry_types::Type::Int32)
-                        ) || matches!(
-                            arg,
-                            Expr::Integer(n)
-                                if (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(n)
-                        )
-                    }) {
+                    && ctx
+                        .typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .is_some_and(|reps| {
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
+                        }) {
                     Some(crate::codegen::typed_i32_method_name(&fallback_fn))
                 } else {
                     None
@@ -2110,53 +2106,35 @@ pub fn try_lower_property_get_method_call(
                         .typed_i1_method_param_reps
                         .get(&typed_method_key)
                         .is_some_and(|reps| {
-                            args.len() == reps.len()
-                                && args.iter().zip(reps.iter()).all(|(arg, rep)| match rep {
-                                    crate::codegen::TypedParamRep::F64 => {
-                                        crate::type_analysis::is_numeric_expr(ctx, arg)
-                                    }
-                                    crate::codegen::TypedParamRep::I32 => {
-                                        matches!(
-                                            crate::type_analysis::static_type_of(ctx, arg),
-                                            Some(perry_types::Type::Int32)
-                                        ) || matches!(
-                                            arg,
-                                            Expr::Integer(n)
-                                                if (i64::from(i32::MIN)
-                                                    ..=i64::from(i32::MAX))
-                                                    .contains(n)
-                                        )
-                                    }
-                                    crate::codegen::TypedParamRep::I1 => {
-                                        crate::type_analysis::is_bool_expr(ctx, arg)
-                                    }
-                                    crate::codegen::TypedParamRep::StringRef => {
-                                        crate::type_analysis::is_definitely_string_expr(ctx, arg)
-                                    }
-                                })
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
                         }) {
                     Some(crate::codegen::typed_i1_method_name(&fallback_fn))
                 } else {
                     None
                 };
-                let typed_string_direct_name =
-                    if ctx.typed_string_methods.contains(&typed_method_key)
-                        && ctx
-                            .methods
-                            .get(&typed_method_key)
-                            .is_some_and(|name| name == &fallback_fn)
-                        && args.len() == typed_formal_count
-                        && args
-                            .iter()
-                            .all(|arg| crate::type_analysis::is_definitely_string_expr(ctx, arg))
-                    {
-                        Some(crate::codegen::typed_string_method_name(&fallback_fn))
-                    } else {
-                        None
-                    };
-                let typed_direct = typed_direct_name
-                    .as_ref()
-                    .map(|name| (name.as_str(), typed_formal_count));
+                let typed_string_direct_name = if ctx
+                    .typed_string_methods
+                    .contains(&typed_method_key)
+                    && ctx
+                        .methods
+                        .get(&typed_method_key)
+                        .is_some_and(|name| name == &fallback_fn)
+                    && ctx
+                        .typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .is_some_and(|reps| {
+                            crate::codegen::typed_param_reps_match_args(ctx, reps, args)
+                        }) {
+                    Some(crate::codegen::typed_string_method_name(&fallback_fn))
+                } else {
+                    None
+                };
+                let typed_direct = typed_direct_name.as_ref().and_then(|name| {
+                    ctx.typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .cloned()
+                        .map(|reps| (name.as_str(), reps))
+                });
                 let typed_receiver_direct = match (
                     typed_receiver_direct_name.as_ref(),
                     typed_receiver_info.as_ref(),
@@ -2164,18 +2142,24 @@ pub fn try_lower_property_get_method_call(
                     (Some(name), Some(info)) => Some((name.as_str(), typed_formal_count, info)),
                     _ => None,
                 };
-                let typed_i32_direct = typed_i32_direct_name
-                    .as_ref()
-                    .map(|name| (name.as_str(), typed_formal_count));
+                let typed_i32_direct = typed_i32_direct_name.as_ref().and_then(|name| {
+                    ctx.typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .cloned()
+                        .map(|reps| (name.as_str(), reps))
+                });
                 let typed_i1_direct = typed_i1_direct_name.as_ref().and_then(|name| {
                     ctx.typed_i1_method_param_reps
                         .get(&typed_method_key)
                         .cloned()
                         .map(|reps| (name.as_str(), reps))
                 });
-                let typed_string_direct = typed_string_direct_name
-                    .as_ref()
-                    .map(|name| (name.as_str(), typed_formal_count));
+                let typed_string_direct = typed_string_direct_name.as_ref().and_then(|name| {
+                    ctx.typed_i1_method_param_reps
+                        .get(&typed_method_key)
+                        .cloned()
+                        .map(|reps| (name.as_str(), reps))
+                });
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,

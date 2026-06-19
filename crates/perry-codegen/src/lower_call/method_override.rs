@@ -38,6 +38,15 @@ fn typed_string_method_signature_note(arg_count: usize) -> String {
     }
 }
 
+fn typed_method_signature_note(ret: &str, reps: &[crate::codegen::TypedParamRep]) -> String {
+    let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
+    if reps.len() <= 1 {
+        format!("typed_signature={ret}({first})->{ret}")
+    } else {
+        format!("typed_signature={ret}({first}, ...)->{ret}")
+    }
+}
+
 /// Issue #620: emit a runtime check before the static class-method dispatch.
 /// If the receiver has an own-property override at `property` (set via
 /// `this.method = X`), invoke the stored closure via `js_native_call_value`;
@@ -166,11 +175,11 @@ pub(super) fn emit_guarded_direct_method_call(
     direct_fn: &str,
     direct_arg_slices: &[(crate::types::LlvmType, &str)],
     fallback_user_args: &[String],
-    typed_direct_fn: Option<(&str, usize)>,
+    typed_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     typed_f64_receiver_direct_fn: Option<(&str, usize, &crate::codegen::TypedReceiverMethodInfo)>,
-    typed_i32_direct_fn: Option<(&str, usize)>,
+    typed_i32_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     typed_i1_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
-    typed_string_direct_fn: Option<(&str, usize)>,
+    typed_string_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     shape_only_guard: bool,
 ) -> Option<String> {
     let expected_class_id = *ctx.class_ids.get(receiver_class_name)?;
@@ -369,20 +378,17 @@ pub(super) fn emit_guarded_direct_method_call(
                 ],
             );
             result
-        } else if let Some((typed_fn, typed_formal_count)) = typed_direct_fn {
+        } else if let Some((typed_fn, typed_param_reps)) = typed_direct_fn {
             let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
-                .take(typed_formal_count)
+                .take(typed_param_reps.len())
                 .map(|(_, value)| *value)
                 .collect();
             let mut guard: Option<String> = None;
-            for value in &formal_args {
-                let raw = ctx
-                    .block()
-                    .call(I32, "js_typed_f64_arg_guard", &[(DOUBLE, *value)]);
-                let ok = ctx.block().icmp_ne(I32, &raw, "0");
+            for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
+                let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
                 guard = Some(match guard {
                     Some(prev) => ctx.block().and(I1, &prev, &ok),
                     None => ok,
@@ -403,16 +409,17 @@ pub(super) fn emit_guarded_direct_method_call(
 
             ctx.current_block = typed_idx;
             let mut typed_args_storage: Vec<String> = Vec::with_capacity(formal_args.len());
-            for value in &formal_args {
-                typed_args_storage.push(ctx.block().call(
-                    DOUBLE,
-                    "js_typed_f64_arg_to_raw",
-                    &[(DOUBLE, *value)],
+            for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
+                typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                    ctx.block(),
+                    *rep,
+                    value,
                 ));
             }
             let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
                 .iter()
-                .map(|value| (DOUBLE, value.as_str()))
+                .zip(typed_param_reps.iter())
+                .map(|(value, rep)| (rep.llvm_ty(), value.as_str()))
                 .collect();
             let typed_value = ctx.block().call(DOUBLE, typed_fn, &typed_args);
             let after_typed = ctx.block().label.clone();
@@ -452,23 +459,21 @@ pub(super) fn emit_guarded_direct_method_call(
                     format!("generic_method={generic_body_fn}"),
                     format!("receiver_class={receiver_class_name}"),
                     format!("method={property}"),
+                    typed_method_signature_note("f64", &typed_param_reps),
                 ],
             );
             result
-        } else if let Some((typed_fn, typed_formal_count)) = typed_i32_direct_fn {
+        } else if let Some((typed_fn, typed_param_reps)) = typed_i32_direct_fn {
             let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
-                .take(typed_formal_count)
+                .take(typed_param_reps.len())
                 .map(|(_, value)| *value)
                 .collect();
             let mut guard: Option<String> = None;
-            for value in &formal_args {
-                let raw = ctx
-                    .block()
-                    .call(I32, "js_typed_i32_arg_guard", &[(DOUBLE, *value)]);
-                let ok = ctx.block().icmp_ne(I32, &raw, "0");
+            for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
+                let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
                 guard = Some(match guard {
                     Some(prev) => ctx.block().and(I1, &prev, &ok),
                     None => ok,
@@ -489,16 +494,17 @@ pub(super) fn emit_guarded_direct_method_call(
 
             ctx.current_block = typed_idx;
             let mut typed_args_storage: Vec<String> = Vec::with_capacity(formal_args.len());
-            for value in &formal_args {
-                typed_args_storage.push(ctx.block().call(
-                    I32,
-                    "js_typed_i32_arg_to_raw",
-                    &[(DOUBLE, *value)],
+            for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
+                typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                    ctx.block(),
+                    *rep,
+                    value,
                 ));
             }
             let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
                 .iter()
-                .map(|value| (I32, value.as_str()))
+                .zip(typed_param_reps.iter())
+                .map(|(value, rep)| (rep.llvm_ty(), value.as_str()))
                 .collect();
             let raw_i32 = ctx.block().call(I32, typed_fn, &typed_args);
             let typed_value = i32_to_nanbox(ctx.block(), &raw_i32);
@@ -539,7 +545,7 @@ pub(super) fn emit_guarded_direct_method_call(
                     format!("generic_method={generic_body_fn}"),
                     format!("receiver_class={receiver_class_name}"),
                     format!("method={property}"),
-                    typed_i32_method_signature_note(typed_formal_count),
+                    typed_method_signature_note("i32", &typed_param_reps),
                     "boxed_result_at=direct_call_boundary".to_string(),
                 ],
             );
@@ -644,20 +650,17 @@ pub(super) fn emit_guarded_direct_method_call(
                 ],
             );
             result
-        } else if let Some((typed_fn, typed_formal_count)) = typed_string_direct_fn {
+        } else if let Some((typed_fn, typed_param_reps)) = typed_string_direct_fn {
             let generic_body_fn = crate::codegen::generic_method_body_name(direct_fn);
             let formal_args: Vec<&str> = direct_arg_slices
                 .iter()
                 .skip(1)
-                .take(typed_formal_count)
+                .take(typed_param_reps.len())
                 .map(|(_, value)| *value)
                 .collect();
             let mut guard: Option<String> = None;
-            for value in &formal_args {
-                let raw = ctx
-                    .block()
-                    .call(I32, "js_typed_string_arg_guard", &[(DOUBLE, *value)]);
-                let ok = ctx.block().icmp_ne(I32, &raw, "0");
+            for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
+                let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
                 guard = Some(match guard {
                     Some(prev) => ctx.block().and(I1, &prev, &ok),
                     None => ok,
@@ -678,16 +681,17 @@ pub(super) fn emit_guarded_direct_method_call(
 
             ctx.current_block = typed_idx;
             let mut typed_args_storage: Vec<String> = Vec::with_capacity(formal_args.len());
-            for value in &formal_args {
-                typed_args_storage.push(ctx.block().call(
-                    I64,
-                    "js_typed_string_arg_to_raw",
-                    &[(DOUBLE, *value)],
+            for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
+                typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                    ctx.block(),
+                    *rep,
+                    value,
                 ));
             }
             let typed_args: Vec<(crate::types::LlvmType, &str)> = typed_args_storage
                 .iter()
-                .map(|value| (I64, value.as_str()))
+                .zip(typed_param_reps.iter())
+                .map(|(value, rep)| (rep.llvm_ty(), value.as_str()))
                 .collect();
             let raw_string = ctx.block().call(I64, typed_fn, &typed_args);
             let typed_value = ctx
@@ -730,7 +734,7 @@ pub(super) fn emit_guarded_direct_method_call(
                     format!("generic_method={generic_body_fn}"),
                     format!("receiver_class={receiver_class_name}"),
                     format!("method={property}"),
-                    typed_string_method_signature_note(typed_formal_count),
+                    typed_method_signature_note("string", &typed_param_reps),
                     "boxed_result_at=direct_call_boundary".to_string(),
                 ],
             );

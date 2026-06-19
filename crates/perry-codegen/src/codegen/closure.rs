@@ -16,7 +16,7 @@ use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    lower_typed_f64_body_with_seed_locals, lower_typed_i1_body_with_seed_locals,
+    lower_typed_f64_body_with_seed_locals_and_reps, lower_typed_i1_body_with_seed_locals,
     lower_typed_i32_body_with_seed_locals, lower_typed_string_body_with_seed_locals,
     typed_f64_closure_capture_reps, typed_f64_closure_name, typed_i1_closure_capture_reps,
     typed_i1_closure_name, typed_i32_closure_capture_reps, typed_i32_closure_name,
@@ -33,27 +33,35 @@ fn emit_typed_closure_trampoline_fast_value(
 ) -> String {
     match kind {
         TypedFunctionTrampolineKind::F64 => {
-            let mut raw_args = Vec::with_capacity(arg_names.len());
-            for arg in arg_names {
-                raw_args.push(blk.call(
-                    DOUBLE,
-                    "js_typed_f64_arg_to_raw",
-                    &[(DOUBLE, arg.as_str())],
-                ));
-            }
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
-            typed_args.extend(raw_args.iter().map(|arg| (DOUBLE, arg.as_str())));
+            typed_args.extend(
+                raw_args
+                    .iter()
+                    .zip(arg_reps.iter())
+                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
+            );
             blk.call(DOUBLE, typed_name, &typed_args)
         }
         TypedFunctionTrampolineKind::I32 => {
-            let mut raw_args = Vec::with_capacity(arg_names.len());
-            for arg in arg_names {
-                raw_args.push(blk.call(I32, "js_typed_i32_arg_to_raw", &[(DOUBLE, arg.as_str())]));
-            }
+            let raw_args: Vec<String> = arg_names
+                .iter()
+                .zip(arg_reps.iter())
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
+                .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
-            typed_args.extend(raw_args.iter().map(|arg| (I32, arg.as_str())));
+            typed_args.extend(
+                raw_args
+                    .iter()
+                    .zip(arg_reps.iter())
+                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
+            );
             let raw_i32 = blk.call(I32, typed_name, &typed_args);
             crate::expr::i32_to_nanbox(blk, &raw_i32)
         }
@@ -83,7 +91,12 @@ fn emit_typed_closure_trampoline_fast_value(
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
-            typed_args.extend(raw_args.iter().map(|arg| (I64, arg.as_str())));
+            typed_args.extend(
+                raw_args
+                    .iter()
+                    .zip(arg_reps.iter())
+                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
+            );
             let raw_string = blk.call(I64, typed_name, &typed_args);
             blk.call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)])
         }
@@ -115,11 +128,14 @@ fn emit_public_typed_closure_trampoline(
         TypedFunctionTrampolineKind::StringRef => typed_string_closure_name(&public_name),
     };
     let arg_reps = match kind {
-        TypedFunctionTrampolineKind::F64 => vec![TypedParamRep::F64; params.len()],
-        TypedFunctionTrampolineKind::I32 => vec![TypedParamRep::I32; params.len()],
+        TypedFunctionTrampolineKind::F64 => typed_param_reps_for_params(params)
+            .unwrap_or_else(|| vec![TypedParamRep::F64; params.len()]),
+        TypedFunctionTrampolineKind::I32 => typed_param_reps_for_params(params)
+            .unwrap_or_else(|| vec![TypedParamRep::I32; params.len()]),
         TypedFunctionTrampolineKind::I1 => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::I1; params.len()]),
-        TypedFunctionTrampolineKind::StringRef => vec![TypedParamRep::StringRef; params.len()],
+        TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(params)
+            .unwrap_or_else(|| vec![TypedParamRep::StringRef; params.len()]),
     };
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
@@ -286,7 +302,18 @@ pub(super) fn compile_typed_string_closure(
     let llvm_name = typed_string_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
-    llvm_params.extend(params.iter().map(|p| (I64, format!("%arg{}", p.id))));
+    let param_reps = typed_param_reps_for_params(params).ok_or_else(|| {
+        anyhow!(
+            "typed-string closure '{}' has unsupported parameter",
+            func_id
+        )
+    })?;
+    llvm_params.extend(
+        params
+            .iter()
+            .zip(param_reps.iter())
+            .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id))),
+    );
     let lf = llmod.define_function(&llvm_name, I64, llvm_params);
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
@@ -323,7 +350,14 @@ pub(super) fn compile_typed_f64_closure(
     let llvm_name = typed_f64_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
-    llvm_params.extend(params.iter().map(|p| (DOUBLE, format!("%arg{}", p.id))));
+    let param_reps = typed_param_reps_for_params(params)
+        .ok_or_else(|| anyhow!("typed-f64 closure '{}' has unsupported parameter", func_id))?;
+    llvm_params.extend(
+        params
+            .iter()
+            .zip(param_reps.iter())
+            .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id))),
+    );
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
@@ -332,12 +366,14 @@ pub(super) fn compile_typed_f64_closure(
     let value = {
         let blk = lf.block_mut(0).unwrap();
         let mut seed_locals = HashMap::new();
+        let mut seed_reps = HashMap::new();
         if let Some(captures) = typed_f64_closure_capture_reps(closure_expr, module_local_types) {
             for (idx, (id, rep)) in captures.iter().enumerate() {
                 seed_locals.insert(*id, load_typed_capture(blk, idx, *rep));
+                seed_reps.insert(*id, *rep);
             }
         }
-        lower_typed_f64_body_with_seed_locals(blk, params, body, seed_locals)?
+        lower_typed_f64_body_with_seed_locals_and_reps(blk, params, body, seed_locals, seed_reps)?
     };
     lf.block_mut(0).unwrap().ret(DOUBLE, &value);
     Ok(())
@@ -404,7 +440,14 @@ pub(super) fn compile_typed_i32_closure(
     let llvm_name = typed_i32_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
-    llvm_params.extend(params.iter().map(|p| (I32, format!("%arg{}", p.id))));
+    let param_reps = typed_param_reps_for_params(params)
+        .ok_or_else(|| anyhow!("typed-i32 closure '{}' has unsupported parameter", func_id))?;
+    llvm_params.extend(
+        params
+            .iter()
+            .zip(param_reps.iter())
+            .map(|(p, rep)| (rep.llvm_ty(), format!("%arg{}", p.id))),
+    );
     let lf = llmod.define_function(&llvm_name, I32, llvm_params);
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
