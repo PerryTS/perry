@@ -432,11 +432,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     let new_bits = blk.bitcast_double_to_i64(&new_box);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                    // Gen-GC Phase C2: the realloc'd array head is a (possibly
+                    // young) heap pointer stored into an existing box — barrier
+                    // the box parent so a minor GC can't miss it.
+                    emit_write_barrier(ctx, &box_ptr, &new_bits);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
                     let new_bits = blk.bitcast_double_to_i64(&new_box);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                    // Gen-GC Phase C2: barrier the box parent (see capture path).
+                    emit_write_barrier(ctx, &box_ptr, &new_bits);
                 }
                 // #5459: `array_id` is in `boxed_vars` but has no box location in
                 // THIS context — it's a module-level global accessed directly from
@@ -458,6 +464,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_closure_set_capture_bits",
                     &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
+                // Gen-GC Phase C2: the realloc'd array head stored into the
+                // closure capture is a (possibly young) heap pointer — barrier
+                // the closure parent.
+                emit_write_barrier(ctx, &closure_ptr, &new_bits);
             } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                 ctx.block().store(DOUBLE, &new_box, &slot);
             } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {
@@ -505,11 +515,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     let new_bits = blk.bitcast_double_to_i64(&new_box);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                    // Gen-GC Phase C2: the realloc'd array head is a (possibly
+                    // young) heap pointer stored into an existing box — barrier
+                    // the box parent so a minor GC can't miss it.
+                    emit_write_barrier(ctx, &box_ptr, &new_bits);
                 } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                     let blk = ctx.block();
                     let box_ptr = blk.load(I64, &slot);
                     let new_bits = blk.bitcast_double_to_i64(&new_box);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                    // Gen-GC Phase C2: barrier the box parent (see capture path).
+                    emit_write_barrier(ctx, &box_ptr, &new_bits);
                 }
                 // #5459: in `boxed_vars` but no box location here — a module-level
                 // global accessed directly from a nested function. Fall through to
@@ -526,6 +542,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_closure_set_capture_bits",
                     &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
+                // Gen-GC Phase C2: the realloc'd array head stored into the
+                // closure capture is a (possibly young) heap pointer — barrier
+                // the closure parent.
+                emit_write_barrier(ctx, &closure_ptr, &new_bits);
             } else if let Some(slot) = ctx.locals.get(array_id).cloned() {
                 ctx.block().store(DOUBLE, &new_box, &slot);
             } else if let Some(global_name) = ctx.module_globals.get(array_id).cloned() {

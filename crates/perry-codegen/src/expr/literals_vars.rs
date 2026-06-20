@@ -611,6 +611,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let box_ptr = blk.load(I64, &slot);
                     let v_bits = blk.bitcast_double_to_i64(&v);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &v_bits)]);
+                    // Gen-GC Phase C2: barrier — box is the parent (mirror the
+                    // captured-box path above; an old box can else miss a young
+                    // object/string/array value).
+                    emit_write_barrier(ctx, &box_ptr, &v_bits);
                 }
             } else if let Some(slot) = ctx.locals.get(id).cloned() {
                 ctx.block().store(DOUBLE, &v, &slot);
@@ -712,6 +716,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let new = step_new(blk, &old);
                     let new_bits = blk.bitcast_double_to_i64(&new);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                    // Gen-GC Phase C2: `++`/`--` on a BigInt yields a heap
+                    // pointer via js_numeric_step — barrier the box parent.
+                    emit_write_barrier(ctx, &box_ptr, &new_bits);
                     return Ok(if *prefix { new } else { old });
                 }
                 let old_bits = ctx.block().call(
@@ -728,6 +735,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_closure_set_capture_bits",
                     &[(I64, &closure_ptr), (I32, &idx_str), (I64, &new_bits)],
                 );
+                // Gen-GC Phase C2: barrier — closure is the parent (BigInt
+                // `++`/`--` can store a young heap pointer).
+                emit_write_barrier(ctx, &closure_ptr, &new_bits);
                 return Ok(if *prefix { new } else { old });
             }
             // Boxed enclosing-scope var: load slot (box ptr), deref,
@@ -743,6 +753,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let new = step_new(blk, &old);
                     let new_bits = blk.bitcast_double_to_i64(&new);
                     blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                    // Gen-GC Phase C2: barrier — box is the parent (BigInt
+                    // `++`/`--` can store a young heap pointer).
+                    emit_write_barrier(ctx, &box_ptr, &new_bits);
                     return Ok(if *prefix { new } else { old });
                 }
             }

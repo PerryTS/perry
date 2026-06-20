@@ -2249,9 +2249,20 @@ fn lower_bitwise_binary_value(
         BinaryOp::BitAnd => ctx.block().and(I32, &left_i32, &right_i32),
         BinaryOp::BitOr => ctx.block().or(I32, &left_i32, &right_i32),
         BinaryOp::BitXor => ctx.block().xor(I32, &left_i32, &right_i32),
-        BinaryOp::Shl => ctx.block().shl(I32, &left_i32, &right_i32),
-        BinaryOp::Shr => ctx.block().ashr(I32, &left_i32, &right_i32),
-        BinaryOp::UShr => ctx.block().lshr(I32, &left_i32, &right_i32),
+        // JS masks shift counts to 5 bits (`count & 31`); an LLVM i32 shift
+        // with a count >= 32 is UB, so `x << 40` etc. must mask first.
+        BinaryOp::Shl => {
+            let shift = ctx.block().and(I32, &right_i32, "31");
+            ctx.block().shl(I32, &left_i32, &shift)
+        }
+        BinaryOp::Shr => {
+            let shift = ctx.block().and(I32, &right_i32, "31");
+            ctx.block().ashr(I32, &left_i32, &shift)
+        }
+        BinaryOp::UShr => {
+            let shift = ctx.block().and(I32, &right_i32, "31");
+            ctx.block().lshr(I32, &left_i32, &shift)
+        }
         _ => unreachable!("non-bitwise op filtered above"),
     };
     let lowered = if matches!(op, BinaryOp::UShr) {

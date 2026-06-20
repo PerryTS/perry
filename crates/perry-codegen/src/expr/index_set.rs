@@ -763,17 +763,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (object.as_ref(), index.as_ref())
                 {
                     if let Some(fact) = packed_f64_loop_fact(ctx, *arr_id, *idx_id) {
-                        if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
-                            let idx_i32 = ctx.block().load(I32, &i32_slot);
-                            return lower_packed_numeric_loop_index_set(
-                                ctx,
-                                *arr_id,
-                                &idx_i32,
-                                value.as_ref(),
-                                &fact.guard_id,
-                                &fact.store_side_exit_label,
-                                fact.array_kind,
-                            );
+                        // Packed-U32 typed-slot stores are not implemented; rather
+                        // than abort codegen, let U32 facts fall through to the
+                        // generic/bounded array-store path below (correct, just
+                        // not the packed fast path).
+                        if !matches!(fact.array_kind, PackedNumericLoopKind::U32) {
+                            if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
+                                let idx_i32 = ctx.block().load(I32, &i32_slot);
+                                return lower_packed_numeric_loop_index_set(
+                                    ctx,
+                                    *arr_id,
+                                    &idx_i32,
+                                    value.as_ref(),
+                                    &fact.guard_id,
+                                    &fact.store_side_exit_label,
+                                    fact.array_kind,
+                                );
+                            }
                         }
                     }
                     if ctx.bounded_index_pairs.iter().any(|fact| {

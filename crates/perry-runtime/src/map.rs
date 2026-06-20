@@ -446,6 +446,13 @@ unsafe fn entries_ptr_mut(map: *mut MapHeader) -> *mut f64 {
 fn normalize_zero(key: f64) -> f64 {
     if key == 0.0 {
         0.0
+    } else if key.is_nan() && crate::value::JSValue::from_bits(key.to_bits()).is_number() {
+        // SameValueZero treats every NaN as the same key (23.1.3.x). The
+        // bits-keyed side-table and the bit-equality fast path in `jsvalue_eq`
+        // would otherwise bucket distinct NaN payloads separately. Canonicalize
+        // genuine number NaNs only — `is_number()` excludes NaN-boxed tagged
+        // values (objects/strings/bigints), whose payloads must be preserved.
+        f64::NAN
     } else {
         key
     }

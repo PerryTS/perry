@@ -355,6 +355,11 @@ pub(crate) unsafe fn gc_element_slot_range(
 fn normalize_zero(value: f64) -> f64 {
     if value == 0.0 {
         0.0
+    } else if value.is_nan() && crate::value::JSValue::from_bits(value.to_bits()).is_number() {
+        // SameValueZero treats every NaN as the same value (23.2.3.x).
+        // Canonicalize genuine number NaNs only — `is_number()` excludes
+        // NaN-boxed tagged values (objects/strings/bigints).
+        f64::NAN
     } else {
         value
     }

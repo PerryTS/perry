@@ -71,13 +71,16 @@ fn lower_runtime_property_get_by_name(
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(&recv_box);
+    // The helper takes a raw `*const ObjectHeader`, so strip the NaN-box
+    // POINTER_TAG to a canonical pointer (mirrors the property_id masking).
+    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
     let key_box = blk.load(DOUBLE, &key_handle_global);
     let key_bits = blk.bitcast_double_to_i64(&key_box);
     let property_id = blk.and(I64, &key_bits, POINTER_MASK_I64);
     Ok(blk.call(
         DOUBLE,
         "js_object_get_field_by_property_id_f64",
-        &[(I64, &obj_bits), (I64, &property_id)],
+        &[(I64, &obj_handle), (I64, &property_id)],
     ))
 }
 
