@@ -21,13 +21,20 @@
 //! every phase (keeping e.g. a stored array and its elements alive) and rewrites
 //! the stored bits when a copying collection moves the value.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 
-static HANDLE_EXPANDO_PROPS: OnceLock<Mutex<HashMap<i64, HashMap<String, u64>>>> = OnceLock::new();
-
-fn table() -> &'static Mutex<HashMap<i64, HashMap<String, u64>>> {
-    HANDLE_EXPANDO_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
+// Per-thread storage: each runtime thread has its own arena + GC, and the
+// stored values are NaN-boxed references into THAT thread's arena. A
+// process-global table would let one thread's GC scanner trace/rewrite another
+// thread's values across arena boundaries (cross-thread values are deep-copied,
+// so a handle id never legitimately escapes its owning thread). Thread-local
+// keeps the side-table aligned with the per-thread GC, matching the documented
+// threading model. The mutable root scanner is registered once but reads the
+// CURRENT thread's table on each GC, so each thread traces only its own values.
+thread_local! {
+    static HANDLE_EXPANDO_PROPS: RefCell<HashMap<i64, HashMap<String, u64>>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Store an arbitrary own property `name = value` on the handle `handle`.
@@ -38,11 +45,12 @@ pub fn handle_expando_set(handle: i64, name: &str, value: f64) {
         return;
     }
     let bits = value.to_bits();
-    if let Ok(mut map) = table().lock() {
-        map.entry(handle)
+    HANDLE_EXPANDO_PROPS.with(|cell| {
+        cell.borrow_mut()
+            .entry(handle)
             .or_default()
             .insert(name.to_string(), bits);
-    }
+    });
     // Parent is the (non-heap) handle id, so pass 0 as the parent address — the
     // scanner traces the value unconditionally, and the barrier only needs to
     // mark the freshly stored child for an in-progress collection.
@@ -56,10 +64,12 @@ pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
     if handle == 0 {
         return None;
     }
-    table()
-        .lock()
-        .ok()
-        .and_then(|map| map.get(&handle).and_then(|p| p.get(name).copied()))
+    HANDLE_EXPANDO_PROPS
+        .with(|cell| {
+            cell.borrow()
+                .get(&handle)
+                .and_then(|p| p.get(name).copied())
+        })
         .map(f64::from_bits)
 }
 
@@ -70,28 +80,29 @@ pub fn handle_expando_has_any(handle: i64) -> bool {
     if handle == 0 {
         return false;
     }
-    table()
-        .lock()
-        .ok()
-        .map(|map| map.get(&handle).map(|p| !p.is_empty()).unwrap_or(false))
-        .unwrap_or(false)
+    HANDLE_EXPANDO_PROPS.with(|cell| {
+        cell.borrow()
+            .get(&handle)
+            .map(|p| !p.is_empty())
+            .unwrap_or(false)
+    })
 }
 
 /// Mutable GC root scanner for the handle expando side-table.
 ///
 /// Keys are stable small handle ids (never heap-moved), so this only traces the
 /// stored VALUES — exactly the value half of
-/// `scan_closure_dynamic_props_roots_mut`. Registered in `gc/mod.rs`. The lock
-/// is released before invoking the visitor on each value (the visitor may move
-/// objects and re-enter the runtime), matching the closure scanner's contract.
+/// `scan_closure_dynamic_props_roots_mut`. Registered in `gc/mod.rs`. The
+/// per-owner entry is removed (borrow dropped) before invoking the visitor on
+/// each value, because the visitor may move objects and re-enter the runtime
+/// (e.g. a `handle_expando_set` on this same thread) — matching the closure
+/// scanner's contract.
 pub fn scan_handle_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let owners = table()
-        .lock()
-        .ok()
-        .map(|map| map.keys().copied().collect::<Vec<_>>())
-        .unwrap_or_default();
+    let owners: Vec<i64> =
+        HANDLE_EXPANDO_PROPS.with(|cell| cell.borrow().keys().copied().collect());
     for owner in owners {
-        let Some(mut props) = table().lock().ok().and_then(|mut map| map.remove(&owner)) else {
+        let Some(mut props) = HANDLE_EXPANDO_PROPS.with(|cell| cell.borrow_mut().remove(&owner))
+        else {
             continue;
         };
         for bits in props.values_mut() {
@@ -99,18 +110,22 @@ pub fn scan_handle_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             visitor.visit_nanbox_f64_slot(&mut v);
             *bits = v.to_bits();
         }
-        if let Ok(mut map) = table().lock() {
-            match map.entry(owner) {
+        HANDLE_EXPANDO_PROPS.with(|cell| {
+            match cell.borrow_mut().entry(owner) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {
-                    // A concurrent set added entries while we held no lock; keep
-                    // both (scanned values + any new ones).
-                    e.get_mut().extend(props);
+                    // A re-entrant set added/updated entries while we held no
+                    // borrow; those newer writes must win. Only restore scanned
+                    // keys that were not concurrently re-written.
+                    let dst = e.get_mut();
+                    for (k, v) in props {
+                        dst.entry(k).or_insert(v);
+                    }
                 }
                 std::collections::hash_map::Entry::Vacant(e) => {
                     e.insert(props);
                 }
             }
-        }
+        });
     }
 }
 
@@ -130,9 +145,9 @@ mod tests {
         );
         assert!(handle_expando_has_any(h));
         // cleanup
-        if let Ok(mut map) = table().lock() {
-            map.remove(&h);
-        }
+        HANDLE_EXPANDO_PROPS.with(|cell| {
+            cell.borrow_mut().remove(&h);
+        });
     }
 
     #[test]
@@ -150,8 +165,8 @@ mod tests {
             seen.contains(&v_bits),
             "scanner must trace stored value, seen={seen:x?}"
         );
-        if let Ok(mut map) = table().lock() {
-            map.remove(&h);
-        }
+        HANDLE_EXPANDO_PROPS.with(|cell| {
+            cell.borrow_mut().remove(&h);
+        });
     }
 }

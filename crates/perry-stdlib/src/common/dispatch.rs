@@ -2875,6 +2875,9 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
         if property_name == "user" {
             crate::fastify::js_fastify_req_set_user_data(handle, value);
+            // Claimed by the typed setter — must not also fall through to the
+            // generic expando store below.
+            return;
         }
     }
 
@@ -2902,6 +2905,8 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
                     value,
                 );
             }
+            // Claimed by the typed setter — don't also write a stale expando copy.
+            return;
         }
     }
 
