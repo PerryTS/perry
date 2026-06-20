@@ -551,6 +551,28 @@ pub(crate) fn ensure_function_prototype_object(
         unsafe { mirror_prototype_method_on_object(proto, &name, value_bits) };
     }
 
+    // #5477: the bound `events.EventEmitter` / `EventEmitterAsyncResource` export's
+    // synthetic prototype must carry the EventEmitter methods (`emit`/`on`/`once`/
+    // …) so the `Object.setPrototypeOf(x, EventEmitter.prototype)` mixin pattern
+    // (pino's logger prototype) gives `x` a working `emit`/`on`. The installed
+    // closures read IMPLICIT_THIS, so a plain object that merely inherits this
+    // prototype dispatches against ITSELF (listener state is keyed by the receiver
+    // object, not a captured instance). Mirrors what `Stream.prototype` already
+    // does. This proto is cached (`class_prototype_object_root_store` above), so
+    // the install runs once.
+    if let Some((module, method)) =
+        unsafe { super::native_module::bound_native_callable_module_and_method(func_value) }
+    {
+        if module.trim_start_matches("node:") == "events"
+            && matches!(
+                method.as_str(),
+                "EventEmitter" | "EventEmitterAsyncResource"
+            )
+        {
+            crate::node_stream::install_event_emitter_prototype_methods(proto);
+        }
+    }
+
     let func_bits = func_value.to_bits();
     if (func_bits >> 48) == 0x7FFD {
         let func_ptr = (func_bits & crate::value::POINTER_MASK) as usize;
