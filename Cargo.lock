@@ -5970,7 +5970,7 @@ dependencies = [
 
 [[package]]
 name = "perry-runtime-static"
-version = "0.5.1197"
+version = "0.5.1198"
 dependencies = [
  "perry-runtime",
 ]
@@ -6069,7 +6069,7 @@ dependencies = [
 
 [[package]]
 name = "perry-stdlib-static"
-version = "0.5.1197"
+version = "0.5.1198"
 dependencies = [
  "perry-stdlib",
 ]

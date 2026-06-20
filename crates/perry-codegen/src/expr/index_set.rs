@@ -4,7 +4,7 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 #[allow(unused_imports)]
 use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp, UpdateOp};
 #[allow(unused_imports)]
@@ -314,7 +314,18 @@ fn lower_packed_numeric_loop_store_value(
                 vec!["rhs_i32_store=sitofp_i32_to_raw_f64_slot".to_string()],
             ))
         }
-        PackedNumericLoopKind::U32 => bail!("packed-u32 loop stores are not implemented"),
+        PackedNumericLoopKind::U32 => {
+            // No packed-U32 store fast path exists yet, and the IndexSet caller
+            // already routes U32 facts to the generic array-store path (see the
+            // `!matches!(.., U32)` guard below). This arm is therefore
+            // unreachable in practice; rather than `bail!` (a whole-compile
+            // failure) if a future change ever routes a U32 store here, degrade
+            // to the F64 full-value store. A uint32 is representable exactly in
+            // f64, so storing the full value is always correct — just not the
+            // (nonexistent) packed-U32 fast path. See #5464.
+            let (value, notes) = lower_packed_f64_loop_store_value(ctx, arr_id, value)?;
+            Ok((value.clone(), value, notes))
+        }
     }
 }
 
