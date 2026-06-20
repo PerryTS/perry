@@ -372,7 +372,41 @@ pub(crate) fn lower_pattern_binding_into(
                     }
                     id
                 }
-                None => ctx.define_local(name.clone(), ty.clone()),
+                None => {
+                    // Reuse a pre-hoisted (boxed) FUNCTION-scoped `var` slot
+                    // for a destructured leaf. The esbuild semver shape
+                    //   const consumer = ((nCO, nSq) => {
+                    //     class _T8 { parse() { … QSq[dSq.COMPARATOR] … } }
+                    //     nSq.exports = _T8;
+                    //     var { safeRe: QSq, t: dSq } = bV6();   // ← declared AFTER
+                    //   });
+                    // hoists `dSq`/`QSq` (predefined + boxed at function entry by
+                    // `predefine_var_bindings_in_function_body` /
+                    // `pre_register_forward_captured_lets`). The class method
+                    // captures the boxed slot. Without reusing that id here the
+                    // destructuring leaf allocated a FRESH local, so the `=bV6()`
+                    // assignment landed in a different slot than the box the
+                    // method captured — the method then read the never-written
+                    // box (undefined) and threw `Cannot read properties of
+                    // undefined`. Mirror the `Pat::Ident` var-decl reuse in
+                    // `destructuring/var_decl.rs`: only a `var`-hoisted binding of
+                    // this exact name qualifies, so a shadowing `let`/`const` or
+                    // catch param (never in `var_hoisted_ids`) still gets a fresh
+                    // binding.
+                    let reuse = {
+                        let hoisted = &ctx.var_hoisted_ids;
+                        ctx.locals
+                            .iter_named(&name)
+                            .find(|(_, (_, lid, _))| hoisted.contains(lid))
+                            .map(|(pos, (_, lid, _))| (pos, *lid))
+                    };
+                    if let Some((reuse_pos, lid)) = reuse {
+                        *ctx.locals.type_mut_at(reuse_pos) = ty.clone();
+                        lid
+                    } else {
+                        ctx.define_local(name.clone(), ty.clone())
+                    }
+                }
             };
             if !mutable {
                 ctx.mark_local_immutable(id);

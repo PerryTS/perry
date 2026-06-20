@@ -1,11 +1,15 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use perry_types::{LocalId, Type};
 use swc_ecma_ast as ast;
 
 use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
-use crate::lower::LoweringContext;
+use crate::lower::{
+    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, lower_expr, LoweringContext,
+};
+use crate::lower_patterns::*;
+use crate::lower_types::*;
 
 use super::*;
 
@@ -268,8 +272,10 @@ fn cic_class(c: &ast::Class, in_cl: bool, out: &mut std::collections::HashSet<St
 fn cic_expr(e: &ast::Expr, in_cl: bool, out: &mut std::collections::HashSet<String>) {
     use ast::Expr::*;
     match e {
-        Ident(i) if in_cl => {
-            out.insert(i.sym.to_string());
+        Ident(i) => {
+            if in_cl {
+                out.insert(i.sym.to_string());
+            }
         }
         Arrow(a) => {
             for p in &a.params {
@@ -434,8 +440,10 @@ fn cic_assign_target(
 ) {
     if let ast::AssignTarget::Simple(s) = t {
         match s {
-            ast::SimpleAssignTarget::Ident(i) if in_cl => {
-                out.insert(i.id.sym.to_string());
+            ast::SimpleAssignTarget::Ident(i) => {
+                if in_cl {
+                    out.insert(i.id.sym.to_string());
+                }
             }
             ast::SimpleAssignTarget::Member(m) => {
                 cic_expr(&m.obj, in_cl, out);
@@ -449,7 +457,7 @@ fn cic_assign_target(
     }
 }
 
-fn collect_var_binding_names_from_pat(pat: &ast::Pat, out: &mut Vec<String>) {
+pub(crate) fn collect_var_binding_names_from_pat(pat: &ast::Pat, out: &mut Vec<String>) {
     match pat {
         ast::Pat::Ident(ident) => out.push(ident.id.sym.to_string()),
         ast::Pat::Array(arr) => {
