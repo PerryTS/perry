@@ -7511,9 +7511,22 @@ fn compiler_private_async_iter_result_f64_slot_uses_typed_handoff() {
         ir.contains("call double @js_iter_result_set_f64"),
         "numeric async iter-result payload should use the raw f64 setter:\n{ir}"
     );
+    // The CONSUMER reads through the representation-agnostic getter, NOT the
+    // raw `js_iter_result_get_value_f64`. The typed getter was previously
+    // applied speculatively (via `lower_expr_value`) to every
+    // `IterResultGetValue`, but that getter coerces a non-raw-f64 slot with
+    // `js_number_coerce` — so any `await`/`for await` of a non-numeric value
+    // (object/string/array, or the promise threaded by `AsyncStepChain`) was
+    // turned into a number. The generic getter still reads the raw-f64 slot
+    // correctly (the value is unchanged), so the numeric payload stays exact
+    // while non-numeric awaits are no longer corrupted.
     assert!(
-        ir.contains("call double @js_iter_result_get_value_f64"),
-        "numeric async iter-result consumer should use the raw f64 getter:\n{ir}"
+        ir.contains("call double @js_iter_result_get_value("),
+        "async iter-result consumer should use the representation-agnostic getter:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_iter_result_get_value_f64"),
+        "async iter-result consumer must not speculatively use the coercing f64 getter:\n{ir}"
     );
     assert!(
         !ir.contains("call double @js_iter_result_set("),
@@ -7671,19 +7684,26 @@ fn artifact_records_compiler_private_async_iter_result_f64_handoff() {
         compiler_private_async_iter_result_f64_body(),
     );
     let records = artifact["records"].as_array().unwrap();
-    for consumer in [
-        "compiler_private_async_iter_result_set_f64",
-        "compiler_private_async_iter_result_get_f64",
-    ] {
-        assert!(
-            records.iter().any(|record| {
-                record["consumer"] == consumer
-                    && record["native_rep_name"] == "f64"
-                    && record["llvm_ty"] == "double"
-            }),
-            "expected async iter-result f64 artifact record {consumer}:\n{artifact:#}"
-        );
-    }
+    // Only the SETTER side records a raw-f64 handoff: a proven-numeric payload
+    // is stored via `js_iter_result_set_f64`. The CONSUMER reads through the
+    // representation-agnostic getter (no typed record) — the previously-recorded
+    // `compiler_private_async_iter_result_get_f64` typed getter was unsound when
+    // applied speculatively (it coerced non-raw-f64 slots, corrupting
+    // `await`/`for await` of non-numeric values), so it is no longer emitted.
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "compiler_private_async_iter_result_set_f64"
+                && record["native_rep_name"] == "f64"
+                && record["llvm_ty"] == "double"
+        }),
+        "expected async iter-result f64 setter artifact record:\n{artifact:#}"
+    );
+    assert!(
+        !records
+            .iter()
+            .any(|record| { record["consumer"] == "compiler_private_async_iter_result_get_f64" }),
+        "async iter-result consumer must not record a speculative f64 getter:\n{artifact:#}"
+    );
 }
 
 #[test]
