@@ -980,17 +980,19 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // stream's read loop spawns next.
                             push_event(PendingNetEvent::ServerConnection(server_id, socket_id));
 
-                            // Spawn the per-socket read/write loop
-                            // on the same runtime as the accept
-                            // loop. We use a fresh `tokio::spawn`
-                            // rather than `spawn_socket_runner` to
-                            // avoid the nested `spawn_blocking_with_reactor`
-                            // wrap — we're already inside a tokio
-                            // task, so direct `tokio::spawn` is fine
-                            // (the LTO black_box workaround only
-                            // matters at the FFI entry point where
-                            // we cross back into Rust-from-C
-                            // territory).
+                            // Spawn the per-socket read/write loop on
+                            // the same shared runtime as this accept
+                            // loop. A direct `tokio::spawn` (not
+                            // `spawn_socket_runner`, which routes
+                            // through the `perry_ffi::spawn_async` FFI
+                            // shim) is correct here because we're
+                            // already inside a task on the shared
+                            // runtime — `tokio::spawn` lands on it
+                            // directly, skipping the round-trip back
+                            // out through C. The shim only matters at
+                            // the FFI entry points that cross into
+                            // Rust-from-C, where no ambient runtime
+                            // task exists yet.
                             tokio::spawn(async move {
                                 let mut rx = rx;
                                 run_socket_task(
