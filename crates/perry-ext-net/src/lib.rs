@@ -11,11 +11,13 @@
 //!
 //! # Differences from the perry-stdlib version
 //!
-//! - Uses `perry_ffi::spawn_blocking` plus an explicit current-thread Tokio
-//!   runtime instead of `crate::common::async_bridge::spawn` (cooperative async
-//!   over the shared runtime). Each socket reader task ties up one
-//!   blocking-pool thread for the socket's lifetime — fine for v0.5.x (default
-//!   blocking pool is 512); cooperative `spawn_async` is a v0.6.0 optimization.
+//! - Uses `perry_ffi::spawn_async` to drive each socket reader / server accept
+//!   loop cooperatively on Perry's shared multi-thread runtime (the same
+//!   reactor `crate::common::async_bridge` drives), rather than spinning a
+//!   throwaway current-thread runtime on a blocking-pool thread per socket.
+//!   Keepalive comes from `js_ext_net_has_active_handles` (the socket/server is
+//!   registered synchronously before the spawn), not the blocking-pool
+//!   active-handle counter.
 //! - Uses `perry_ffi::JsClosure` instead of raw `js_closure_call*` extern fns.
 //! - Uses `perry_ffi::alloc_buffer` / `BufferHeader` instead of
 //!   `perry-runtime::buffer::*` directly.
@@ -620,16 +622,16 @@ fn spawn_socket_runner<F>(fut_factory: F)
 where
     F: FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + 'static,
 {
-    // Run each socket future on an explicit current-thread runtime. Relying on
-    // the FFI callback's ambient Handle has proven brittle under release/LTO
-    // builds, while the socket task already occupies one blocking-pool thread
-    // for its lifetime.
-    perry_ffi::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create net socket runtime");
-        rt.block_on(fut_factory());
+    // Run each socket future cooperatively on Perry's shared multi-thread
+    // runtime via `spawn_async`, instead of tying up one blocking-pool thread
+    // plus a throwaway current-thread runtime for the socket's whole lifetime.
+    // The shared runtime carries the I/O reactor, so `TcpStream` / TLS work
+    // without relying on the FFI callback's ambient `Handle` (the brittleness
+    // under release/LTO that the per-socket runtime worked around). The socket
+    // is registered in `sockets()` synchronously before this spawn, so
+    // `js_ext_net_has_active_handles` keeps the event loop alive for its life.
+    perry_ffi::spawn_async(async move {
+        fut_factory().await;
     });
 }
 
@@ -873,159 +875,156 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
     let host_for_spawn = host.clone();
     let server_id = handle;
 
-    // Run the accept loop inside a current-thread runtime on a blocking-pool
-    // thread. This avoids relying on an ambient Handle in the FFI callback,
-    // which can be absent under some release/LTO builds.
-    perry_ffi::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create net server runtime");
-        rt.block_on(async move {
-            let bind_str = format!("{}:{}", host_for_spawn, port_u16);
-            let listener = match TcpListener::bind(&bind_str).await {
-                Ok(l) => l,
-                Err(e) => {
-                    push_event(PendingNetEvent::ServerError(
-                        server_id,
-                        format!("bind {}: {}", bind_str, e),
-                    ));
-                    push_event(PendingNetEvent::ServerClose(server_id));
-                    if let Ok(mut servers) = statics::servers().lock() {
-                        if let Some(s) = servers.get_mut(&server_id) {
-                            s.listening = false;
-                        }
-                    }
-                    return;
-                }
-            };
-            // Issue #1852 — record the *actual* bound address. The
-            // dominant Node test pattern is `server.listen(0, () =>
-            // client.connect(server.address().port))`: port 0 asks the OS
-            // for an ephemeral port, so the requested `port_u16` (0) is
-            // never what we end up listening on. Read `local_addr()` and
-            // overwrite the stashed port/host BEFORE firing `'listening'`,
-            // so `server.address()` inside the listen callback reports the
-            // real port (pre-fix it returned 0 and every client connected
-            // to port 0 → connection refused → hang).
-            if let Ok(local) = listener.local_addr() {
+    // Run the accept loop cooperatively on Perry's shared multi-thread runtime
+    // via `spawn_async` — no throwaway current-thread runtime, no blocking-pool
+    // thread held for the server's life. The shared runtime owns the I/O
+    // reactor, so `TcpListener::bind` / `accept` work without an ambient
+    // `Handle`. The server is marked `listening` synchronously above, so
+    // `js_ext_net_has_active_handles` keeps the loop alive until `close()`.
+    perry_ffi::spawn_async(async move {
+        let bind_str = format!("{}:{}", host_for_spawn, port_u16);
+        let listener = match TcpListener::bind(&bind_str).await {
+            Ok(l) => l,
+            Err(e) => {
+                push_event(PendingNetEvent::ServerError(
+                    server_id,
+                    format!("bind {}: {}", bind_str, e),
+                ));
+                push_event(PendingNetEvent::ServerClose(server_id));
                 if let Ok(mut servers) = statics::servers().lock() {
                     if let Some(s) = servers.get_mut(&server_id) {
-                        s.bound_port = local.port();
-                        s.bound_host = local.ip().to_string();
+                        s.listening = false;
                     }
                 }
+                return;
             }
-            // bind succeeded — fire `'listening'`.
-            push_event(PendingNetEvent::ServerListening(server_id));
-
-            loop {
-                tokio::select! {
-                    accepted = listener.accept() => {
-                        match accepted {
-                            Ok((stream, _peer)) => {
-                                if let Some(info) =
-                                    server_state::should_drop_connection(server_id, &stream)
-                                {
-                                    push_event(PendingNetEvent::ServerDrop(server_id, info));
-                                    continue;
-                                }
-                                // Allocate a fresh Socket handle that
-                                // shares the existing socket machinery
-                                // (run_socket_task, command channel,
-                                // 'data'/'end'/'close'/'error' pump
-                                // dispatch). The accept side doesn't
-                                // need a tokio TcpStream::connect — we
-                                // already have the stream — so we
-                                // bypass `spawn_socket_task` (which
-                                // calls TcpStream::connect inside) and
-                                // call `run_socket_task` directly with
-                                // the accepted stream.
-                                let socket_id = next_id();
-                                let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
-                                // Issue #2131 — record the accepted
-                                // stream's local address so `sock.address()`
-                                // on the server-side socket reports the
-                                // bound port/family instead of returning
-                                // undefined.
-                                let accepted_local = stream.local_addr().ok();
-                                statics::sockets().lock().unwrap().insert(
-                                    socket_id,
-                                    SocketState {
-                                        cmd_tx: tx,
-                                        pending_rx: None,
-                                        is_open: true,
-                                        local_addr: accepted_local,
-                                        raw: None,
-                                        destroyed: false,
-                                        bytes_read: 0,
-                                        bytes_written: 0,
-                                        timeout: None,
-                                        type_of_service: 0,
-                                        server_id: Some(server_id),
-                                    },
-                                );
-                                statics::listeners()
-                                    .lock()
-                                    .unwrap()
-                                    .insert(socket_id, HashMap::new());
-
-                                // Surface the new socket to the user's
-                                // `'connection'` listener on the main
-                                // thread *before* spawning the read
-                                // loop — the listener typically registers
-                                // its own `.on('data', ...)` handlers
-                                // and we want those in place before
-                                // bytes start arriving. The accepted
-                                // stream's read loop spawns next.
-                                push_event(PendingNetEvent::ServerConnection(server_id, socket_id));
-
-                                // Spawn the per-socket read/write loop
-                                // on the same runtime as the accept
-                                // loop. We use a fresh `tokio::spawn`
-                                // rather than `spawn_socket_runner` to
-                                // avoid the nested `spawn_blocking_with_reactor`
-                                // wrap — we're already inside a tokio
-                                // task, so direct `tokio::spawn` is fine
-                                // (the LTO black_box workaround only
-                                // matters at the FFI entry point where
-                                // we cross back into Rust-from-C
-                                // territory).
-                                tokio::spawn(async move {
-                                    let mut rx = rx;
-                                    run_socket_task(
-                                        socket_id,
-                                        Transport::Plain(stream),
-                                        &mut rx,
-                                    )
-                                    .await;
-                                });
-                            }
-                            Err(e) => {
-                                push_event(PendingNetEvent::ServerError(
-                                    server_id,
-                                    format!("accept: {}", e),
-                                ));
-                                // Don't break the loop on a transient
-                                // accept error — Node doesn't.
-                            }
-                        }
-                    }
-                    _ = &mut shutdown_rx => {
-                        break;
-                    }
-                }
-            }
-            // Loop exited (close() called or fatal error) — emit
-            // a final 'close' event so user code can see the
-            // server stopped.
-            push_event(PendingNetEvent::ServerClose(server_id));
+        };
+        // Issue #1852 — record the *actual* bound address. The
+        // dominant Node test pattern is `server.listen(0, () =>
+        // client.connect(server.address().port))`: port 0 asks the OS
+        // for an ephemeral port, so the requested `port_u16` (0) is
+        // never what we end up listening on. Read `local_addr()` and
+        // overwrite the stashed port/host BEFORE firing `'listening'`,
+        // so `server.address()` inside the listen callback reports the
+        // real port (pre-fix it returned 0 and every client connected
+        // to port 0 → connection refused → hang).
+        if let Ok(local) = listener.local_addr() {
             if let Ok(mut servers) = statics::servers().lock() {
                 if let Some(s) = servers.get_mut(&server_id) {
-                    s.listening = false;
+                    s.bound_port = local.port();
+                    s.bound_host = local.ip().to_string();
                 }
             }
-        });
+        }
+        // bind succeeded — fire `'listening'`.
+        push_event(PendingNetEvent::ServerListening(server_id));
+
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((stream, _peer)) => {
+                            if let Some(info) =
+                                server_state::should_drop_connection(server_id, &stream)
+                            {
+                                push_event(PendingNetEvent::ServerDrop(server_id, info));
+                                continue;
+                            }
+                            // Allocate a fresh Socket handle that
+                            // shares the existing socket machinery
+                            // (run_socket_task, command channel,
+                            // 'data'/'end'/'close'/'error' pump
+                            // dispatch). The accept side doesn't
+                            // need a tokio TcpStream::connect — we
+                            // already have the stream — so we
+                            // bypass `spawn_socket_task` (which
+                            // calls TcpStream::connect inside) and
+                            // call `run_socket_task` directly with
+                            // the accepted stream.
+                            let socket_id = next_id();
+                            let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+                            // Issue #2131 — record the accepted
+                            // stream's local address so `sock.address()`
+                            // on the server-side socket reports the
+                            // bound port/family instead of returning
+                            // undefined.
+                            let accepted_local = stream.local_addr().ok();
+                            statics::sockets().lock().unwrap().insert(
+                                socket_id,
+                                SocketState {
+                                    cmd_tx: tx,
+                                    pending_rx: None,
+                                    is_open: true,
+                                    local_addr: accepted_local,
+                                    raw: None,
+                                    destroyed: false,
+                                    bytes_read: 0,
+                                    bytes_written: 0,
+                                    timeout: None,
+                                    type_of_service: 0,
+                                    server_id: Some(server_id),
+                                },
+                            );
+                            statics::listeners()
+                                .lock()
+                                .unwrap()
+                                .insert(socket_id, HashMap::new());
+
+                            // Surface the new socket to the user's
+                            // `'connection'` listener on the main
+                            // thread *before* spawning the read
+                            // loop — the listener typically registers
+                            // its own `.on('data', ...)` handlers
+                            // and we want those in place before
+                            // bytes start arriving. The accepted
+                            // stream's read loop spawns next.
+                            push_event(PendingNetEvent::ServerConnection(server_id, socket_id));
+
+                            // Spawn the per-socket read/write loop
+                            // on the same runtime as the accept
+                            // loop. We use a fresh `tokio::spawn`
+                            // rather than `spawn_socket_runner` to
+                            // avoid the nested `spawn_blocking_with_reactor`
+                            // wrap — we're already inside a tokio
+                            // task, so direct `tokio::spawn` is fine
+                            // (the LTO black_box workaround only
+                            // matters at the FFI entry point where
+                            // we cross back into Rust-from-C
+                            // territory).
+                            tokio::spawn(async move {
+                                let mut rx = rx;
+                                run_socket_task(
+                                    socket_id,
+                                    Transport::Plain(stream),
+                                    &mut rx,
+                                )
+                                .await;
+                            });
+                        }
+                        Err(e) => {
+                            push_event(PendingNetEvent::ServerError(
+                                server_id,
+                                format!("accept: {}", e),
+                            ));
+                            // Don't break the loop on a transient
+                            // accept error — Node doesn't.
+                        }
+                    }
+                }
+                _ = &mut shutdown_rx => {
+                    break;
+                }
+            }
+        }
+        // Loop exited (close() called or fatal error) — emit
+        // a final 'close' event so user code can see the
+        // server stopped.
+        push_event(PendingNetEvent::ServerClose(server_id));
+        if let Ok(mut servers) = statics::servers().lock() {
+            if let Some(s) = servers.get_mut(&server_id) {
+                s.listening = false;
+            }
+        }
     });
 }
 

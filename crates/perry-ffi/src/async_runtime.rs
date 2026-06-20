@@ -63,6 +63,7 @@ extern "C" {
     ) -> i32;
     fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
     fn perry_ffi_spawn_blocking_with_reactor(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void));
+    fn perry_ffi_spawn_async(ctx: *mut c_void);
 }
 
 // NaN-box tags. These values are part of perry-runtime's stable
@@ -399,6 +400,43 @@ where
     }
 
     unsafe { perry_ffi_spawn_blocking_with_reactor(ctx, invoke) };
+}
+
+/// Spawn a future cooperatively on Perry's shared multi-thread tokio
+/// runtime (the same runtime + I/O reactor perry-stdlib drives),
+/// instead of tying up a blocking-pool thread for the task's whole
+/// lifetime.
+///
+/// Use this for long-lived async I/O — a `net.Socket` reader loop, a
+/// `server.listen` accept loop, a WebSocket connection — where the
+/// future spends almost all its time awaiting I/O. The shared runtime
+/// owns the reactor, so `TcpStream::connect` / `TcpListener::bind` /
+/// TLS handshakes work without the throwaway `current_thread` runtime
+/// the blocking-pool pattern needed (and without depending on an
+/// ambient `Handle`, which proved brittle under release/LTO builds).
+///
+/// Unlike [`spawn_blocking`], this does NOT bump the event-loop
+/// active-handle counter — a cooperative task can outlive any single
+/// resolution. Callers must own an active-handle gate of their own
+/// (e.g. perry-ext-net's `js_ext_net_has_active_handles`) so the
+/// runtime's event loop stays alive while the task runs.
+///
+/// Detaches — the caller does not observe completion.
+pub fn spawn_async<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    // Box the future to a thin pointer so it crosses the FFI boundary,
+    // mirroring `spawn_blocking`'s double-box of `FnOnce`. The inner
+    // `Pin<Box<dyn Future>>` is a fat pointer; the outer `Box` makes a
+    // thin `*mut c_void`. perry-stdlib's `perry_ffi_spawn_async`
+    // reconstructs the same type and drives it on the shared runtime.
+    let boxed: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(future);
+    let thin: Box<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
+        Box::new(boxed);
+    let ctx = Box::into_raw(thin) as *mut c_void;
+
+    unsafe { perry_ffi_spawn_async(ctx) };
 }
 
 #[cfg(test)]

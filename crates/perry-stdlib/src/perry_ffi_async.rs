@@ -280,26 +280,39 @@ pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
     });
 }
 
-/// `perry_ffi_spawn_async(ctx, invoke)` — schedule `invoke(ctx)` to
-/// run on the multi-thread runtime's worker pool. Used by wrappers
-/// whose work is pure async I/O (TcpStream / WebSocket / hyper) and
+/// `perry_ffi_spawn_async(ctx)` — drive a future cooperatively on the
+/// shared multi-thread runtime's worker pool. Used by wrappers whose
+/// work is pure async I/O (TcpStream / WebSocket / hyper) and
 /// shouldn't tie up a blocking-pool thread for the whole
-/// connection's lifetime. Closes #421 / regression batch 2 from the
-/// v0.5.571 net + ws + http port.
+/// connection's lifetime, unlike `perry_ffi_spawn_blocking*`.
 ///
-/// The trampoline pattern matches `spawn_blocking` — perry-ffi
-/// boxes the user's `Pin<Box<dyn Future>>` into `ctx` and writes a
-/// trampoline that decodes + spawns it.
+/// `ctx` is a thin pointer to the `Pin<Box<dyn Future<Output = ()> +
+/// Send>>` that perry-ffi's safe `spawn_async` boxed (the same
+/// double-box trick `spawn_blocking` uses for `FnOnce`). perry-ffi has
+/// no tokio dependency, so the spawn happens here on the perry-stdlib
+/// side. The shared runtime carries the I/O reactor, so the future's
+/// `TcpStream` / TLS / hyper work needs no ambient `Handle`.
 ///
-/// `invoke` must take ownership of `ctx`.
+/// Unlike the blocking shims, this does NOT bump
+/// `EXT_BLOCKING_TASKS_INFLIGHT`: a cooperative task can outlive any
+/// single resolution, so its caller must own an active-handle gate
+/// (e.g. perry-ext-net's `js_ext_net_has_active_handles`) to keep the
+/// event loop alive. The pump registration is preserved so events the
+/// future queues still drain on the main thread.
+///
+/// # Safety
+/// `ctx` must be a pointer produced by perry-ffi's `spawn_async` (i.e.
+/// `Box::into_raw` of a `Box<Pin<Box<dyn Future<Output = ()> +
+/// Send>>>`) and not already consumed.
 #[no_mangle]
-pub extern "C" fn perry_ffi_spawn_async(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void)) {
-    let ctx_addr = ctx as usize;
-    async_bridge::runtime().spawn(async move {
-        // The user-supplied trampoline receives the raw `ctx`,
-        // reconstructs the boxed future, and `.await`s it inline.
-        // This block runs on a worker thread with full reactor
-        // access (TcpStream::connect / TLS handshakes / etc.).
-        invoke(ctx_addr as *mut c_void);
-    });
+pub unsafe extern "C" fn perry_ffi_spawn_async(ctx: *mut c_void) {
+    // Register the main-thread pump exactly like the blocking variants
+    // do (see `perry_ffi_spawn_blocking`), so resolutions the spawned
+    // future queues get drained.
+    async_bridge::ensure_pump_registered();
+    type BoxFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+    // SAFETY: `ctx` came from perry-ffi's `spawn_async` (Box::into_raw
+    // of `Box<BoxFuture>`); reconstruct + own it once.
+    let future: BoxFuture = *unsafe { Box::from_raw(ctx as *mut BoxFuture) };
+    async_bridge::runtime().spawn(future);
 }
