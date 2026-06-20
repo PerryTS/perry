@@ -1221,7 +1221,16 @@ pub(super) fn try_native_module_methods(
                             // Special case: `Reflect.construct(ClassName, [args...])`
                             // where ClassName is a known class — fold to a direct
                             // `new ClassName(...args)` expression.
-                            if call.args.len() >= 2 {
+                            //
+                            // #2768: only fold the two-argument form. With an
+                            // explicit `newTarget` (3rd arg) the result's prototype
+                            // comes from `newTarget` and `newTarget` must be
+                            // validated as a constructor — a plain `new ClassName`
+                            // would silently drop both. Fall through to
+                            // `ReflectConstruct` (runtime `js_reflect_construct`,
+                            // which runs `js_new_function_construct_with_new_target`
+                            // and the non-constructor `newTarget` TypeError check).
+                            if call.args.len() == 2 {
                                 if let ast::Expr::Ident(cls_ident) = call.args[0].expr.as_ref() {
                                     let cls_name = cls_ident.sym.to_string();
                                     if ctx.lookup_class(&cls_name).is_some() {

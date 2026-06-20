@@ -1676,7 +1676,34 @@ fn is_callable_function(value: f64) -> bool {
 }
 
 fn is_constructor_function(value: f64) -> bool {
-    is_callable_function(value) && !crate::object::builtin_closure_is_non_constructable_value(value)
+    if !is_callable_function(value) {
+        return false;
+    }
+    if crate::object::builtin_closure_is_non_constructable_value(value) {
+        return false;
+    }
+    // #2768: arrow functions have no [[Construct]]. The deep construct path
+    // already rejects an arrow *target* ("Arrow function is not a
+    // constructor"), but `Reflect.construct`'s up-front constructor checks —
+    // for both the target and the `newTarget` operand — must reject them too.
+    // Without this, `Reflect.construct(C, args, arrowFn)` silently proceeded
+    // instead of throwing the spec TypeError (newTarget is never itself
+    // constructed, so the deep path never fires for it).
+    // A POINTER_TAG value is only a closure if `is_closure_ptr` confirms it —
+    // a callable Proxy is also POINTER_TAG but its lower 48 bits are a proxy
+    // id, not a `ClosureHeader*`, so `closure_is_arrow` (which dereferences the
+    // header via `get_valid_func_ptr`) must not run on it. Mirror the guard in
+    // `is_callable_function`.
+    let bits = value.to_bits();
+    if (bits & !POINTER_MASK) == POINTER_TAG {
+        let raw = (bits & POINTER_MASK) as usize;
+        if crate::closure::is_closure_ptr(raw)
+            && crate::closure::closure_is_arrow(raw as *const crate::closure::ClosureHeader)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Forward a `[[Call]]` to `target` (the default behavior when a proxy has no
