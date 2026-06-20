@@ -1120,7 +1120,10 @@ fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> HeadersStore
 struct RequestRecord {
     url: String,
     method: String,
-    body: Option<String>,
+    /// Raw body bytes, stored verbatim so a binary (Buffer/Uint8Array) body
+    /// survives byte-for-byte through `arrayBuffer()`/`text()` (#5483). `text()`
+    /// / `json()` still decode lossily via `from_utf8_lossy`, matching Node.
+    body: Option<Vec<u8>>,
     body_used: bool,
     headers: HeadersStore,
     destination: String,
@@ -1849,7 +1852,7 @@ fn consume_request_body(handle: f64) -> Result<Vec<u8>, &'static str> {
         return Err(BODY_ALREADY_USED_MESSAGE);
     }
     req.body_used = true;
-    Ok(body.into_bytes())
+    Ok(body)
 }
 
 /// request.text() -> Promise<string>. Mirrors `js_fetch_response_text`: the

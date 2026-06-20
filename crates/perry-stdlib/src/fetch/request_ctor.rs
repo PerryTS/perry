@@ -37,7 +37,18 @@ pub unsafe extern "C" fn js_request_new(
         throw_fetch_type_error(&format!("'{raw_method}' HTTP method is unsupported."));
     }
     let method = normalize_method(&raw_method);
-    let body = string_from_header(body_ptr);
+    // A Buffer / Uint8Array / typed-array / ArrayBuffer body reaches us as a
+    // BufferHeader/TypedArrayHeader pointer (codegen ran the value through
+    // `js_get_string_pointer_unified`), NOT a StringHeader — the same for both
+    // the static-literal path and `js_request_new_from_init`. Reading it via
+    // `string_from_header` took the byte length off the right field but the data
+    // off the StringHeader data offset (20) instead of the buffer data offset
+    // (8), shifting every binary body left by 12 bytes (#5483). Probe the
+    // typed-array/buffer registries first and copy the real bytes verbatim; a
+    // genuine string body falls through to the lossless StringHeader read so its
+    // UTF-8 bytes are preserved.
+    let body: Option<Vec<u8>> = dispatch::body_addr_buffer_bytes(body_ptr as usize)
+        .or_else(|| dispatch::body_bytes_from_header(body_ptr));
     // GET/HEAD requests may not carry a body (WHATWG fetch). Refs #2643.
     if body.is_some() && (method == "GET" || method == "HEAD") {
         throw_fetch_type_error("Request with GET/HEAD method cannot have body.");

@@ -116,6 +116,20 @@ pub(crate) unsafe fn body_value_buffer_bytes(value: f64) -> Option<Vec<u8>> {
             return None;
         }
     };
+    body_addr_buffer_bytes(addr)
+}
+
+/// Registry-probe core shared by `body_value_buffer_bytes` (which first decodes
+/// a NaN-boxed body *value* to an address) and `js_request_new` (whose body
+/// argument codegen already decoded to a raw heap address via
+/// `js_get_string_pointer_unified`). Returns a copy of the raw bytes when `addr`
+/// is a registered typed array / Buffer / ArrayBuffer, else `None` so the caller
+/// falls back to a StringHeader read. A Buffer/Uint8Array body fed straight to
+/// `string_from_header` read its byte length off the right field but its data
+/// off the StringHeader data offset (20) instead of the buffer data offset (8),
+/// shifting every binary body left by 12 bytes (#5483, the Request-side twin of
+/// #5435's zero-fill).
+pub(crate) unsafe fn body_addr_buffer_bytes(addr: usize) -> Option<Vec<u8>> {
     if addr < 0x1000 {
         return None;
     }
