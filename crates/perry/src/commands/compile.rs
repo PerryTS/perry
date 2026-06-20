@@ -109,12 +109,12 @@ use targets::{
 // backend was built out.
 #[cfg(feature = "backend-glance")]
 use targets::compile_for_android_widget;
-#[cfg(feature = "backend-swiftui")]
-use targets::{compile_for_ios_widget, compile_for_watchos_widget};
 #[cfg(feature = "backend-wasm")]
 use targets::compile_for_wasm;
 #[cfg(feature = "backend-wear-tiles")]
 use targets::compile_for_wearos_tile;
+#[cfg(feature = "backend-swiftui")]
+use targets::{compile_for_ios_widget, compile_for_watchos_widget};
 
 use super::progress::{ProgressSnapshot, VerboseProgress};
 
