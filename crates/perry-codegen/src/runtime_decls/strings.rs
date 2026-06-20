@@ -911,6 +911,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_inline_arena_state", PTR, &[]);
     module.declare_function("js_inline_arena_slow_alloc", PTR, &[PTR, I64, I64]);
     module.declare_function("js_object_delete_field", I32, &[I64, I64]);
+    // Primitive-safe `delete` wrappers: take the RAW NaN-boxed receiver (DOUBLE)
+    // so `delete (number).x` / `delete (number)[k]` no-op to `true` instead of
+    // unboxing the primitive's bits as a garbage ObjectHeader* (EXC_BAD_ACCESS).
+    module.declare_function("js_object_delete_field_value", I32, &[DOUBLE, I64]);
+    module.declare_function("js_object_delete_dynamic_value", I32, &[DOUBLE, DOUBLE]);
     // Box a `delete` success bit into a JS boolean, throwing TypeError in
     // strict mode when the delete was refused (non-configurable property).
     module.declare_function("js_delete_result", DOUBLE, &[I32, I32]);
