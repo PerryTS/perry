@@ -8621,8 +8621,12 @@ unsafe fn vt_get_own_field(
 
 /// `Object.keys(namespace)` — fresh array of the module's enumerable
 /// keys. `None` when the module is unknown; caller falls back to the
-/// generic keys_array path.
-unsafe fn vt_own_keys_array(obj: *const ObjectHeader) -> Option<*mut crate::array::ArrayHeader> {
+/// generic keys_array path. Also reused by `Object.getOwnPropertyNames`
+/// (#5268): a native-module object must enumerate its export surface there
+/// too, not the internal `__module__` sentinel.
+pub(crate) unsafe fn vt_own_keys_array(
+    obj: *const ObjectHeader,
+) -> Option<*mut crate::array::ArrayHeader> {
     let module_name = read_native_module_name(obj)?;
     let keys = native_module_enumerable_keys(&module_name)?;
     let include_permission = matches!(

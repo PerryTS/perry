@@ -1,51 +1,26 @@
-## v0.5.1197 — build: #5422 — dev/release/dist build taxonomy, rlib-only runtime/stdlib, slim CLI
+## v0.5.1197 — feat(runtime): #2656 — make WeakMap/WeakSet actually weak
 
-Reworks Perry's build surface so local development is light while official release artifacts
-stay explicit and optimized. Four parts (issue #5422):
+WeakMap/WeakSet previously stored entries as plain `[key, value]` pair arrays that the
+GC traced strongly, so keys were never collected — weak in API only. Entries are now
+`CLASS_ID_WEAK_ENTRY` objects whose field-0 key is a weak GC slot (skipped by the
+strong-edge scanners, exactly like a WeakRef target / finalization-record target), with
+the value in field 1 (strong; `undefined` for a WeakSet, so the member isn't pinned
+through the value slot). The post-mark weak pass tombstones entries whose key was
+collected — nulling both slots so the value is released — and lookups treat a
+tombstoned (undefined-key) entry as empty. `set` reuses tombstone slots and `delete`
+compacts them, bounding growth. This directly reuses the existing WeakRef/
+FinalizationRegistry weak-slot machinery (`is_weak_target_trace_slot`,
+`weak_target_should_clear`, the post-mark walk) — no new GC phase.
 
-**1. Fast `perry-dev` profile.** New `[profile.perry-dev]` inherits `release` but drops the
-distribution-grade settings (`lto = false`, `codegen-units = 16`, `opt-level = 1`,
-`incremental = true`, no strip). Local loop: `cargo check -p perry` for correctness,
-`cargo build --profile perry-dev -p perry` for an optimized dev binary (`target/perry-dev/perry`).
+A key/value reachable only through the collection is now collectible; live entries are
+retained and values released when their key dies. Verified under the default GC and the
+auto-evacuation policy. Regression test:
+`crates/perry/tests/issue_2656_weak_collections_actually_weak.rs`.
 
-**2. Staticlib split.** `perry-runtime` and `perry-stdlib` are now `crate-type = ["rlib"]` only,
-so a plain `cargo build` no longer emits the heavy `libperry_runtime.a` / `libperry_stdlib.a` as
-a side effect. The archives are produced by two new wrapper crates, `perry-runtime-static` and
-`perry-stdlib-static` (each `[lib] name = "perry_runtime"` / `"perry_stdlib"`, `crate-type =
-["staticlib"]`), so every consumer's `.a` basename is unchanged — only the cargo *package* name
-(`-p perry-runtime-static`) changes. The wrappers carry `strip = false` + `codegen-units = 16`
-profile overrides (mirroring perry-ext-events #5140) so ThinLTO doesn't internalize and drop the
-exported C API. The auto-optimize rebuild path (`optimized_libs.rs`), the geisterhand build
-(`library_search.rs`), `stage-npm.sh`'s symbol guard, and every workflow / script that produced
-the archives now build the `-static` crates. The wrappers are deliberately **not** in
-`default-members`. Validated locally: sentinel symbols present (`check_runtime_symbols.sh`),
-prebuilt-link, and auto-optimize-rebuild paths all compile + link + run a hello-world.
-
-**3. Slim developer CLI.** `crates/perry/Cargo.toml` gains a feature taxonomy: `default =
-["full-cli"]` (unchanged shipped CLI) decomposes into `dev-cli` (compile/run/check/types/cache +
-watch), `publish-cli`, `mobile-cli`, `updater-cli`, `native-cli`, `audit-cli`, and per-backend
-`backend-{js,swiftui,arkts,glance,wear-tiles,wasm}` / `all-codegen-backends`. `cargo build -p
-perry --no-default-features --features dev-cli` builds a slimmer compiler CLI: gated commands
-drop out of `--help` and disabled `--target` backends return a clear "built without the
-`<feature>` feature" error. The publish/setup/audit *modules* stay compiled (their config/audit
-helpers are used by core paths); only their commands are gated. The 6 codegen-backend crates plus
-`notify`, `ed25519-dalek`, `rand` became optional deps. Default / `dev-cli` / bare
-`--no-default-features` all compile.
-
-**4. Explicit `dist` profile.** New `[profile.dist]` mirrors `release` exactly (ThinLTO,
-`codegen-units = 1`, `opt-level = 3`, strip) including all per-package overrides, and
-`release-packages.yml` now builds official artifacts with `--profile dist`
-(`CARGO_PROFILE_DIST_PANIC` for the panic=abort variant; cargo-output paths moved
-`target/.../release/` → `target/.../dist/`, while the staging package layout and the
-build-from-source Homebrew formula stay on `--release`). `scripts/cargo_timing_summary.py`
-parses `cargo --timings` output to surface the slowest build units so regressions are visible.
-
-Docs: `docs/src/contributing/building.md` documents the three-tier taxonomy, the `-static`
-crates, and the slim CLI.
-
-> **Release validation note:** the `--profile dist` cutover and the `-static` additions across
-> `release-packages.yml` could not be exercised by the local build; they need a tag/CI run to
-> confirm the full release matrix.
+Out of scope: the `PERRY_GC_FORCE_EVACUATE` full-evacuation debug-stress mode
+over-collects weak targets in general (FinalizationRegistry has the same limitation) and
+is also subject to the separate strong-array-in-closure bug #5467 — no production GC mode
+(default, auto-evacuation) is affected.
 
 ## v0.5.1196 — fix(codegen): #5431 — cross-module call to a `$`-named exported function returned `undefined`
 
