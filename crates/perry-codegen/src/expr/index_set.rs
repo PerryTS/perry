@@ -275,14 +275,20 @@ fn lower_packed_f64_loop_store_value(
     value: &Expr,
 ) -> Result<(String, Vec<String>)> {
     if let Expr::MathAbs(operand) = value {
-        if matches!(
-            operand.as_ref(),
-            Expr::IndexGet { object, .. }
-                if matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id)
-        ) {
-            let raw = lower_expr(ctx, operand)?;
-            let abs = ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &raw)]);
-            return Ok((abs, vec!["rhs_unary_math=llvm.fabs.f64".to_string()]));
+        // Only fold to `llvm.fabs.f64` when the inner read is a PROVEN packed-f64
+        // load (same array, index is the packed-loop counter). A general
+        // `arr[key]` can lower through the boxed/runtime fallback to a NaN-boxed
+        // JS value, and `fabs` (a bare sign-bit clear) would skip `Math.abs`'s
+        // ToNumber coercion on it.
+        if let Expr::IndexGet { object, index } = operand.as_ref() {
+            let proven_packed_load = matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id)
+                && matches!(index.as_ref(), Expr::LocalGet(idx_id)
+                    if packed_f64_loop_fact(ctx, arr_id, *idx_id).is_some());
+            if proven_packed_load {
+                let raw = lower_expr(ctx, operand)?;
+                let abs = ctx.block().call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, &raw)]);
+                return Ok((abs, vec!["rhs_unary_math=llvm.fabs.f64".to_string()]));
+            }
         }
     }
     Ok((lower_expr(ctx, value)?, Vec::new()))
