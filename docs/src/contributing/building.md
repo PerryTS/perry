@@ -52,7 +52,7 @@ cargo build --release -p perry-runtime -p perry-stdlib
 cargo build --release -p perry-runtime-static -p perry-stdlib-static
 
 # Codegen only
-cargo build --release -p perry-codegen-llvm
+cargo build --release -p perry-codegen
 ```
 
 > **Important**: When rebuilding `perry-runtime`, you must also rebuild `perry-stdlib` because `libperry_stdlib.a` embeds perry-runtime as a static dependency.

@@ -44,7 +44,10 @@ def extract_units(html: str) -> list[dict]:
     m = re.search(r"UNIT_DATA\s*=\s*(\[.*?\]);", html, re.DOTALL)
     if not m:
         raise ValueError("could not find UNIT_DATA in the timing report")
-    return json.loads(m.group(1))
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"malformed UNIT_DATA in timing report: {e}") from e
 
 
 def main() -> int:
