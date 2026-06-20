@@ -305,7 +305,18 @@ pub(crate) fn lower_module_decl(
                                 source.clone(),
                                 native_method,
                             );
-                            if source == "process" {
+                            // #5257: a CJS-style Node builtin's default import
+                            // binds the whole module namespace — `const cp =
+                            // require('child_process')` is adopted as `import cp
+                            // from 'child_process'`, and member calls like
+                            // `cp.spawnSync(...)` must resolve through the
+                            // builtin-module alias. The `import * as cp` form
+                            // already registers it (Namespace branch below); the
+                            // default form only did so for `process`, so
+                            // `cp.spawnSync` lowered to nothing and returned
+                            // `undefined` — breaking cross-spawn / execa / which
+                            // (via isexe) under the require() adoption rewrite.
+                            if source == "process" || is_cjs_style_native_default_import(&source) {
                                 ctx.register_builtin_module_alias(local.clone(), source.clone());
                             }
                         } else if node_submodule_default_export_key(&source).is_some() {
