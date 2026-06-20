@@ -285,12 +285,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_typed_feedback_plain_array_index_get_guard",
         I32,
-        &[I64, DOUBLE, DOUBLE, I32, I32],
+        &[I64, DOUBLE, I32, I32],
     );
     module.declare_function(
         "js_typed_feedback_numeric_array_index_get_guard",
         I32,
-        &[I64, DOUBLE, DOUBLE, I32, I32],
+        &[I64, DOUBLE, I32, I32],
     );
     module.declare_function(
         "js_typed_feedback_packed_f64_array_loop_guard",

@@ -1358,16 +1358,27 @@ pub extern "C" fn js_typed_feedback_array_get_f64(
 }
 
 #[no_mangle]
+// i32-index guard (see `js_typed_feedback_numeric_array_index_get_guard`).
 pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
     site_id: u64,
     receiver: f64,
-    index_value: f64,
+    index: i32,
+    require_in_bounds: i32,
+) -> i32 {
+    plain_array_index_get_guard_impl(site_id, receiver, true, index, require_in_bounds)
+}
+
+#[inline]
+fn plain_array_index_get_guard_impl(
+    site_id: u64,
+    receiver: f64,
+    index_is_plain: bool,
     index: i32,
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if !typed_feedback_enabled() {
-        return (is_plain_number_bits(index_value.to_bits())
+        return (index_is_plain
             && index >= 0
             && plain_array_index_guard(
                 raw_addr as *const ArrayHeader,
@@ -1387,7 +1398,7 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
         aux,
         value_tag: element_kind,
     };
-    let contract_valid = is_plain_number_bits(index_value.to_bits())
+    let contract_valid = index_is_plain
         && index >= 0
         && plain_array_index_guard(
             raw_addr as *const ArrayHeader,
@@ -1408,16 +1419,32 @@ pub extern "C" fn js_typed_feedback_plain_array_index_get_guard(
 }
 
 #[no_mangle]
+// The index is always statically proven to be a non-negative `i32` at every
+// emit site (see `lower_guarded_array_index_get`), so the guard takes the i32
+// index directly — no `f64` index and no `is_plain_number` check (it would be
+// tautological) — keeping the int→fp conversion out of the numeric loop's hot
+// region. The boxed fallback materializes the `f64` index lazily in its cold
+// block.
 pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
     site_id: u64,
     receiver: f64,
-    index_value: f64,
+    index: i32,
+    require_in_bounds: i32,
+) -> i32 {
+    numeric_array_index_get_guard_impl(site_id, receiver, true, index, require_in_bounds)
+}
+
+#[inline]
+fn numeric_array_index_get_guard_impl(
+    site_id: u64,
+    receiver: f64,
+    index_is_plain: bool,
     index: i32,
     require_in_bounds: i32,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if !typed_feedback_enabled() {
-        return (is_plain_number_bits(index_value.to_bits())
+        return (index_is_plain
             && index >= 0
             && numeric_array_index_guard(
                 raw_addr as *const ArrayHeader,
@@ -1437,7 +1464,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_index_get_guard(
         aux,
         value_tag: element_kind,
     };
-    let contract_valid = is_plain_number_bits(index_value.to_bits())
+    let contract_valid = index_is_plain
         && index >= 0
         && numeric_array_index_guard(
             raw_addr as *const ArrayHeader,

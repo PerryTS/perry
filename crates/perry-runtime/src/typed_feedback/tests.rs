@@ -442,7 +442,7 @@ fn typed_feedback_array_get_guard_failure_uses_jsvalue_object_fallback() {
     // Models an array-typed compiled read whose receiver was replaced by
     // a dynamic object at a JS boundary. The guard must reject it before
     // codegen reads ArrayHeader fields; fallback then performs obj["0"].
-    let guard = js_typed_feedback_plain_array_index_get_guard(25, obj_box, 0.0, 0, 1);
+    let guard = js_typed_feedback_plain_array_index_get_guard(25, obj_box, 0, 1);
     assert_eq!(guard, 0);
 
     let actual = js_typed_feedback_array_index_get_fallback_boxed(25, obj_box, 0.0);
@@ -760,7 +760,7 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
     let arr_box = crate::value::js_nanbox_pointer(arr as i64);
 
-    let first = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0.0, 0, 1);
+    let first = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0, 1);
     assert_eq!(first, 1);
 
     let payload = crate::string::js_string_from_bytes(b"downgraded".as_ptr(), 10);
@@ -768,7 +768,7 @@ fn typed_feedback_numeric_array_get_guard_requires_numeric_layout() {
     crate::array::js_array_set_f64(arr, 0, payload_value);
     assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
 
-    let second = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0.0, 0, 1);
+    let second = js_typed_feedback_numeric_array_index_get_guard(26, arr_box, 0, 1);
     assert_eq!(second, 0);
 
     let site = &typed_feedback_snapshot().sites[0];

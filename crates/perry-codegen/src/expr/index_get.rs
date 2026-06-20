@@ -274,10 +274,14 @@ fn lower_class_method_bind(
     ))
 }
 
+// Callers always supply an index that is statically a non-negative `i32`
+// (proven via `numeric_index_has_integer_array_index_proof` / a bounded loop
+// counter), so the guard takes only `idx_i32` (no `f64` index) — keeping the
+// int→fp conversion out of the hot region. The boxed fallback still needs the
+// `f64` index, so it is materialized lazily inside the (cold) fallback block.
 fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
-    idx_box: &str,
     idx_i32: &str,
     block_prefix: &str,
     require_numeric_layout: bool,
@@ -314,7 +318,6 @@ fn lower_guarded_array_index_get(
             &[
                 (I64, &feedback_site_id),
                 (DOUBLE, arr_box),
-                (DOUBLE, idx_box),
                 (I32, idx_i32),
                 (I32, "1"),
             ],
@@ -324,13 +327,16 @@ fn lower_guarded_array_index_get(
     ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
 
     ctx.current_block = fallback_idx;
+    // Materialize the f64 index only here (cold path) so the int→fp conversion
+    // stays out of the numeric loop's hot region.
+    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
     let fallback_boxed = ctx.block().call(
         DOUBLE,
         "js_typed_feedback_array_index_get_fallback_boxed",
         &[
             (I64, &feedback_site_id),
             (DOUBLE, arr_box),
-            (DOUBLE, idx_box),
+            (DOUBLE, &idx_box),
         ],
     );
     let fallback_val = if require_numeric_layout && coerce_numeric_fallback {
@@ -553,15 +559,8 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
             if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_i32 = ctx.block().load(I32, &i32_slot);
-                let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
                 return lower_guarded_array_index_get(
-                    ctx,
-                    &arr_box,
-                    &idx_double,
-                    &idx_i32,
-                    "bidx.num",
-                    true,
-                    true,
+                    ctx, &arr_box, &idx_i32, "bidx.num", true, true,
                 )
                 .map(Some);
             }
@@ -569,8 +568,8 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     }
 
     let arr_box = lower_expr(ctx, object)?;
-    let idx_double = lower_expr(ctx, index)?;
     if !numeric_index_has_integer_array_index_proof(ctx, index) {
+        let idx_double = lower_expr(ctx, index)?;
         return Ok(Some(lower_array_index_get_via_runtime_key(
             ctx,
             &arr_box,
@@ -578,8 +577,8 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
             true,
         )));
     }
-    let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
-    lower_guarded_array_index_get(ctx, &arr_box, &idx_double, &idx_i32, "arr", true, true).map(Some)
+    let idx_i32 = lower_expr_as_i32(ctx, index)?;
+    lower_guarded_array_index_get(ctx, &arr_box, &idx_i32, "arr", true, true).map(Some)
 }
 
 fn lower_bounded_array_index_get(
@@ -1097,15 +1096,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let arr_box = lower_expr(ctx, object)?;
                             let idx_i32 = ctx.block().load(I32, &i32_slot);
                             if require_numeric_layout {
-                                let idx_double = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
                                 return lower_guarded_array_index_get(
-                                    ctx,
-                                    &arr_box,
-                                    &idx_double,
-                                    &idx_i32,
-                                    "bidx.num",
-                                    true,
-                                    false,
+                                    ctx, &arr_box, &idx_i32, "bidx.num", true, false,
                                 );
                             }
                             return lower_bounded_array_index_get(ctx, &arr_box, &idx_i32);
@@ -1114,8 +1106,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 let arr_box = lower_expr(ctx, object)?;
-                let idx_double = lower_expr(ctx, index)?;
                 if !numeric_index_has_integer_array_index_proof(ctx, index) {
+                    let idx_double = lower_expr(ctx, index)?;
                     return Ok(lower_array_index_get_via_runtime_key(
                         ctx,
                         &arr_box,
@@ -1123,7 +1115,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         false,
                     ));
                 }
-                let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
+                let idx_i32 = lower_expr_as_i32(ctx, index)?;
                 if !require_numeric_layout
                     && !matches!(index.as_ref(), Expr::Integer(_) | Expr::Number(_))
                 {
@@ -1132,7 +1124,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return lower_guarded_array_index_get(
                     ctx,
                     &arr_box,
-                    &idx_double,
                     &idx_i32,
                     "arr",
                     require_numeric_layout,

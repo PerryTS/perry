@@ -380,8 +380,8 @@ mod keep_typed_feedback {
     #[used] static K09: unsafe extern "C" fn(u64, f64, *const i8, usize, *const f64, usize) -> f64 = js_typed_feedback_native_call_method;
     #[used] static K10: unsafe extern "C" fn(u64, f64, *const i8, usize, i64) -> f64 = js_typed_feedback_native_call_method_apply;
     #[used] static K11: extern "C" fn(u64, *const ArrayHeader, u32) -> f64 = js_typed_feedback_array_get_f64;
-    #[used] static K12: extern "C" fn(u64, f64, f64, i32, i32) -> i32 = js_typed_feedback_plain_array_index_get_guard;
-    #[used] static K13: extern "C" fn(u64, f64, f64, i32, i32) -> i32 = js_typed_feedback_numeric_array_index_get_guard;
+    #[used] static K12: extern "C" fn(u64, f64, i32, i32) -> i32 = js_typed_feedback_plain_array_index_get_guard;
+    #[used] static K13: extern "C" fn(u64, f64, i32, i32) -> i32 = js_typed_feedback_numeric_array_index_get_guard;
     #[used] static K14: extern "C" fn(u64, f64) -> i32 = js_typed_feedback_packed_f64_array_loop_guard;
     #[used] static K15: extern "C" fn(u64, f64) -> i32 = js_typed_feedback_packed_u32_array_loop_guard;
     #[used] static K16: extern "C" fn(u64, f64, f64) -> f64 = js_typed_feedback_array_index_get_fallback_boxed;
