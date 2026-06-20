@@ -580,7 +580,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                             anyhow!("Destructuring requires an initializer")
                                         })?;
                                     let stmts = crate::destructuring::lower_pattern_binding(
-                                        ctx, &decl.name, init_expr, true,
+                                        ctx, &decl.name, init_expr, true, true,
                                     )?;
                                     for stmt in &stmts {
                                         if let Stmt::Let { id, .. } = stmt {
@@ -624,7 +624,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                             anyhow!("Destructuring requires an initializer")
                                         })?;
                                     let stmts = crate::destructuring::lower_pattern_binding(
-                                        ctx, &decl.name, init_expr, true,
+                                        ctx, &decl.name, init_expr, true, false,
                                     )?;
                                     result.extend(stmts);
                                     continue;
@@ -662,7 +662,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                             anyhow!("Destructuring requires an initializer")
                                         })?;
                                     let stmts = crate::destructuring::lower_pattern_binding(
-                                        ctx, &decl.name, init_expr, true,
+                                        ctx, &decl.name, init_expr, true, false,
                                     )?;
                                     result.extend(stmts);
                                     None

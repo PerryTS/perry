@@ -163,6 +163,7 @@ fn lower_array_pattern_binding(
     arr_pat: &ast::ArrayPat,
     source: Expr,
     mutable: bool,
+    is_var_decl: bool,
     result: &mut Vec<Stmt>,
 ) -> Result<()> {
     let (iter_id, iter_name) = fresh_destruct_local(ctx, Type::Any);
@@ -220,6 +221,7 @@ fn lower_array_pattern_binding(
                     &rest_pat.arg,
                     Expr::LocalGet(rest_id),
                     mutable,
+                    is_var_decl,
                     &mut body,
                 )?;
                 break;
@@ -253,6 +255,7 @@ fn lower_array_pattern_binding(
                         &assign_pat.left,
                         with_default,
                         mutable,
+                        is_var_decl,
                         &mut body,
                     )?;
                 } else {
@@ -261,6 +264,7 @@ fn lower_array_pattern_binding(
                         elem_pat,
                         Expr::LocalGet(value_id),
                         mutable,
+                        is_var_decl,
                         &mut body,
                     )?;
                 }
@@ -318,9 +322,10 @@ pub(crate) fn lower_pattern_binding(
     pat: &ast::Pat,
     source: Expr,
     mutable: bool,
+    is_var_decl: bool,
 ) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
-    lower_pattern_binding_into(ctx, pat, source, mutable, &mut result)?;
+    lower_pattern_binding_into(ctx, pat, source, mutable, is_var_decl, &mut result)?;
     Ok(result)
 }
 
@@ -329,6 +334,12 @@ pub(crate) fn lower_pattern_binding_into(
     pat: &ast::Pat,
     source: Expr,
     mutable: bool,
+    // Only a `var` declaration may reuse a function-scoped hoisted slot for a
+    // destructured leaf (see the `Pat::Ident` `None` arm). A `let`/`const`
+    // destructuring leaf must always allocate a fresh lexical binding, even when
+    // an outer hoisted `var` of the same name is in scope, or it would alias the
+    // outer slot and break shadowing.
+    is_var_decl: bool,
     result: &mut Vec<Stmt>,
 ) -> Result<()> {
     match pat {
@@ -372,7 +383,7 @@ pub(crate) fn lower_pattern_binding_into(
                     }
                     id
                 }
-                None => {
+                None if is_var_decl => {
                     // Reuse a pre-hoisted (boxed) FUNCTION-scoped `var` slot
                     // for a destructured leaf. The esbuild semver shape
                     //   const consumer = ((nCO, nSq) => {
@@ -407,6 +418,9 @@ pub(crate) fn lower_pattern_binding_into(
                         ctx.define_local(name.clone(), ty.clone())
                     }
                 }
+                // `let`/`const` destructuring leaf: always a fresh lexical
+                // binding so it shadows (never aliases) an outer hoisted `var`.
+                None => ctx.define_local(name.clone(), ty.clone()),
             };
             if !mutable {
                 ctx.mark_local_immutable(id);
@@ -447,13 +461,20 @@ pub(crate) fn lower_pattern_binding_into(
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
             };
-            lower_pattern_binding_into(ctx, &assign_pat.left, with_default, mutable, result)
+            lower_pattern_binding_into(
+                ctx,
+                &assign_pat.left,
+                with_default,
+                mutable,
+                is_var_decl,
+                result,
+            )
         }
         ast::Pat::Array(arr_pat) => {
             // Array binding patterns use the iterator protocol (GetIterator /
             // IteratorStep / IteratorValue / IteratorClose), per spec — not raw
             // index reads. See `lower_array_pattern_binding`.
-            lower_array_pattern_binding(ctx, arr_pat, source, mutable, result)
+            lower_array_pattern_binding(ctx, arr_pat, source, mutable, is_var_decl, result)
         }
         ast::Pat::Object(obj_pat) => {
             // Materialize source into a temp
@@ -561,7 +582,14 @@ pub(crate) fn lower_pattern_binding_into(
                             }
                             ast::PropName::BigInt(_) => continue,
                         };
-                        lower_pattern_binding_into(ctx, &kv.value, key_source, mutable, result)?;
+                        lower_pattern_binding_into(
+                            ctx,
+                            &kv.value,
+                            key_source,
+                            mutable,
+                            is_var_decl,
+                            result,
+                        )?;
                     }
                     ast::ObjectPatProp::Assign(assign) => {
                         // Shorthand { key } or { key = default }
@@ -672,7 +700,14 @@ pub(crate) fn lower_pattern_binding_into(
                             object: Box::new(Expr::LocalGet(tmp_id)),
                             exclude_keys: static_keys.clone(),
                         };
-                        lower_pattern_binding_into(ctx, &rest.arg, rest_source, mutable, result)?;
+                        lower_pattern_binding_into(
+                            ctx,
+                            &rest.arg,
+                            rest_source,
+                            mutable,
+                            is_var_decl,
+                            result,
+                        )?;
                         break; // Rest must be last
                     }
                 }
