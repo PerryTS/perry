@@ -43,7 +43,7 @@ function closureCapture(): number {
   let total = read(0) | 0;
   closure_capture:
   for (let i = 0; i < owned.length; i++) {
-    total = (total + read(i)) | 0;
+    total = (total + owned[i]) | 0;
   }
   return total;
 }
