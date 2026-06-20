@@ -932,6 +932,22 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 return f64::from_bits((empty as u64) | 0x7FFD_0000_0000_0000);
             }
         }
+        // #5268: a native-module namespace/default object (`fs`, `path`, …)
+        // must enumerate its export surface here, not the internal
+        // `__module__` sentinel that the generic field walk would return.
+        // graceful-fs's `clone.js` does
+        // `getOwnPropertyNames(fs).forEach(k => defineProperty(copy, k,
+        // getOwnPropertyDescriptor(fs, k)))`; with only `__module__` listed,
+        // the clone dropped every fs method (`readFileSync` → undefined).
+        // Mirror `Object.keys` (vt_own_keys_array → native_module_enumerable_keys).
+        if obj_jv.is_pointer() {
+            let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as *const ObjectHeader;
+            if !obj_ptr.is_null() {
+                if let Some(arr) = super::native_module::vt_own_keys_array(obj_ptr) {
+                    return f64::from_bits((arr as u64) | 0x7FFD_0000_0000_0000);
+                }
+            }
+        }
         if let Some(str_value) = boxed_string_payload(obj_value) {
             return boxed_string_own_property_names(obj_value, str_value);
         }
