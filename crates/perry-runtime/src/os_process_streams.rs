@@ -177,7 +177,7 @@ fn build_stream_object_with_write(
     // stdin shapes. The TTY *write* stream keeps its existing shape; generic
     // non-TTY streams keep `main`'s no-op teardown surface.
     const STDIN_TEARDOWN_KEYS: &[u8] =
-        b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0ref\0destroy\0";
+        b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0ref\0destroy\0setEncoding\0";
     const GENERIC_TEARDOWN_KEYS: &[u8] =
         b"addListener\0removeListener\0off\0removeAllListeners\0pause\0resume\0unref\0destroy\0";
     let is_stdin = fd_i == 0;
@@ -192,7 +192,7 @@ fn build_stream_object_with_write(
                     0
                 },
                 keys,
-                21,
+                22,
                 Some(12),
             )
         } else if is_tty {
@@ -312,6 +312,11 @@ fn build_stream_object_with_write(
         if is_stdin {
             set_field_with_stub(start + 7, process_stream_on_once_stub); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
+            // `process.stdin.setEncoding(enc)` — a Readable returns the stream
+            // for chaining; callers (e.g. raw-mode TUI setup) discard the
+            // return, so a no-op stub is sufficient and avoids a "setEncoding is
+            // not a function" throw. Encoding-aware reads remain future work.
+            set_field_with_stub(start + 9, process_stream_on_once_stub); // setEncoding
         } else {
             set_field_with_stub(start + 7, lifecycle); // destroy
         }
