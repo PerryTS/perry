@@ -2461,23 +2461,17 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             Ok(Some(lowered))
         }
         Expr::IterResultGetValue => {
-            let value = ctx
-                .block()
-                .call(DOUBLE, "js_iter_result_get_value_f64", &[]);
-            let lowered = LoweredValue::f64(value);
-            ctx.record_lowered_value(
-                "IterResultGetValue",
-                None,
-                "compiler_private_async_iter_result_get_f64",
-                &lowered,
-                None,
-                None,
-                None,
-                false,
-                false,
-                vec!["slot_kind=raw_f64_or_coerced_jsvalue".to_string()],
-            );
-            Ok(Some(lowered))
+            // Do NOT speculatively lower to the coercing `_f64` variant here.
+            // `lower_expr` tries `lower_expr_value` first for every expression,
+            // so an unconditional f64 lowering would numerically coerce EVERY
+            // await/yield result (the value carried by `AsyncStepChain` /
+            // `AsyncStepDone` and read back into the next step) — turning an
+            // awaited object/string/array into `NaN`. The value is an arbitrary
+            // JSValue, so fall through to the boxed `js_iter_result_get_value`
+            // (misc_methods). Genuinely-numeric consumers (bitwise operands,
+            // `i32_fast_path`) request a native rep explicitly via
+            // `lower_expr_native`, which keeps its own raw-f64/i32/i1 reads.
+            Ok(None)
         }
         Expr::LocalGet(id) if is_compiler_private_async_i32_control_local(ctx, *id) => {
             let Some(ptr) = load_boxed_local_pointer(ctx, *id)? else {
