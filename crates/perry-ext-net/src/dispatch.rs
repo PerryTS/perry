@@ -398,7 +398,11 @@ unsafe fn block_list_method(handle: i64, method: &str, args: &[f64]) -> Option<f
             // as a non-numeric value so it throws `ERR_INVALID_ARG_TYPE`, matching
             // Node (the parameter is required). Defaulting to a real number here
             // would silently accept the call as a `/0` subnet.
-            let prefix = args.get(1).copied().map(unbox_to_f64).unwrap_or_else(undefined);
+            let prefix = args
+                .get(1)
+                .copied()
+                .map(unbox_to_f64)
+                .unwrap_or_else(undefined);
             let family = args.get(2).copied().map(unbox_to_i64).unwrap_or(0);
             crate::js_net_block_list_add_subnet(handle, address, prefix, family)
         }
