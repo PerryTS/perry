@@ -22,7 +22,7 @@ cd "$REPO_ROOT"
 # letting PERRY_NO_AUTO_OPTIMIZE=1 below short-circuit the per-test
 # specialized rebuild (~30-200s saved per test).
 cargo build --release \
-    -p perry -p perry-runtime -p perry-stdlib -p perry-doc-tests
+    -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-doc-tests
 
 # Disable per-test auto-optimize for HOST runs only. With this set,
 # `perry compile` short-circuits the cargo-rebuild step in

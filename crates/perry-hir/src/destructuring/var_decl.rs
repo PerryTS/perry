@@ -2029,7 +2029,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         .transpose()?
                         .ok_or_else(|| anyhow!("Destructuring requires an initializer"))?
                 };
-            let stmts = lower_pattern_binding(ctx, pattern, init_expr, mutable)?;
+            let stmts = lower_pattern_binding(ctx, pattern, init_expr, mutable, is_var_decl)?;
             result.extend(stmts);
         }
         _ => {

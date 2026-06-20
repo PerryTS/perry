@@ -1090,8 +1090,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                                 } else {
                                     None
                                 }
+                            } else if let Some(func_id) = ctx.lookup_func(&fn_name) {
+                                Some(Expr::FuncRef(func_id))
                             } else {
-                                ctx.lookup_func(&fn_name).map(Expr::FuncRef)
+                                None
                             };
                             if let Some(func_expr) = func_expr {
                                 return Ok(Expr::GetFunctionPrototypeMethod {
@@ -1191,8 +1193,54 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         | "writable_stream_writer"
                 ) && !is_stream_api_member(&module_name, &property_name)
                 {
-                    // Fall through — let the regular member access path
-                    // below handle the user-declared subclass field.
+                    // Issue #562 + #wall (debug `_.colors`): a Web-Streams
+                    // instance / subclass carries the bare-stream tag for
+                    // inherited-method dispatch but ALSO holds user-declared
+                    // own fields (`w.seenLengths`, `x.colors = [...]`). A bare
+                    // read of any name that is NOT a known Web-Streams API
+                    // method/getter must be a plain own-property GET — NOT the
+                    // 0-arg NativeMethodCall fallback (which would *invoke* the
+                    // stored value). The matching write lowers to a generic
+                    // PropertySet that the runtime routes to the per-handle
+                    // expando side-table (`object/handle_expando.rs`), so the
+                    // value persists and reads back. Real stream methods/getters
+                    // (handled by `is_stream_api_member` above) keep dispatching.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "blob" && !is_blob_getter_name(&property_name) {
+                    // #wall (debug `_.colors`): a Blob/File instance is a real
+                    // heap object that also carries user-assigned OWN properties
+                    // (library bookkeeping fields, `x.colors = [...]`, etc.). A
+                    // bare read of any name that is NOT a known native data
+                    // getter (`size`/`type`/`name`/`lastModified`, handled by the
+                    // generic fallback's 0-arg NativeMethodCall → FFI dispatch)
+                    // must be a plain own-property GET — NOT the invoking
+                    // fallback, which lowers to `js_native_call_method_nullsafe(
+                    // inst, "<name>", 0 args)` and *calls* the stored value (an
+                    // array → `TypeError: value is not a function`). Real Blob
+                    // *methods* (`x.text()`, `x.slice()`, `x.arrayBuffer()`)
+                    // arrive through the call-expression path, not this bare
+                    // read, so they still dispatch.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if module_name == "fetch" && !is_fetch_response_getter_name(&property_name) {
+                    // Same heap-object rule for fetch `Response` instances: an
+                    // arbitrary property read that is not a known Response data
+                    // getter (`status`/`ok`/`headers`/…) must be a plain
+                    // own-property GET, not an invoking 0-arg native call. Body
+                    // methods (`res.json()`/`res.text()`/`res.clone()`) come in
+                    // via the call path and keep dispatching.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
                 } else if matches!(module_name.as_str(), "util" | "sys")
                     && matches!(class_name.as_str(), "MIMEType" | "MIMEParams")
                 {
@@ -1236,6 +1284,30 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // stream object. A bare method read (`r.read`, `r.on`)
                     // must return that callable value, not invoke the native
                     // receiver method with no args.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
+                    });
+                } else if matches!(module_name.as_str(), "stream" | "node:stream")
+                    && !is_classic_stream_getter_name(&property_name)
+                {
+                    // #wall (debug `_.colors`): a classic Node stream instance
+                    // is a heap object that also carries user-assigned OWN
+                    // properties (`_.colors = [...]`, library bookkeeping fields,
+                    // etc.). A bare read of any name that is NOT a known stream
+                    // method (handled by the arm above) and NOT a known stream
+                    // property getter (the allowlist below) must be a plain
+                    // own-property GET — NOT the 0-arg NativeMethodCall fallback,
+                    // which lowers to `js_native_call_method_nullsafe(inst,
+                    // "<name>", 0 args)` and *invokes* the stored value
+                    // (`_.colors` is an array → `TypeError: value is not a
+                    // function`). Node just returns the property. The matching
+                    // write (`_.colors = v`) already lowers to a generic
+                    // PropertySet on the heap object, so the value persists and
+                    // reads back. Known getters (`destroyed`, `readableLength`,
+                    // …) still keep the NativeMethodCall fallback below so the
+                    // codegen NativeModSig table dispatches them to their FFI.
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         object: Box::new(object_expr),
@@ -1609,7 +1681,27 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Box::new(object_expr),
                         property: property_name,
                     });
-                } else {
+                } else if is_native_dispatch_member(&module_name, &class_name, &property_name) {
+                    // #wall (debug `_.colors` / `_.init`): INVERTED DEFAULT.
+                    // A bare native-instance member READ now defaults to a
+                    // plain `PropertyGet` (the final `else` below). It only
+                    // reaches this INVOKING `NativeMethodCall { args: [] }`
+                    // dispatch path when the property is a *known* native
+                    // method/getter that must dispatch through the codegen
+                    // NATIVE_MODULE_TABLE / per-class FFI
+                    // (`is_native_dispatch_member`). Previously this arm was
+                    // the unconditional catch-all `else`, so any value the
+                    // HIR mis-tagged native under a module NOT covered by the
+                    // per-module arms above (the bundled `debug` package's
+                    // `createDebug` value) had EVERY non-method property read
+                    // lowered to a 0-arg native call that *invoked* the
+                    // stored value — `_.colors` (an array) →
+                    // `value is not a function`; `_.init` (a function) called
+                    // with 0 args → `Cannot set properties of null`. Real
+                    // native method calls `x.method(args)` arrive via the
+                    // call-expression path (local_natives.rs / lower_call),
+                    // NOT this bare-read block, so they are unaffected.
+                    //
                     // Issue #577 — `req.method` / `res.statusCode` etc.
                     // get rewritten to `__get_<name>` so the property
                     // read dispatches through NATIVE_MODULE_TABLE entries
@@ -1706,6 +1798,24 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         object: Some(Box::new(object_expr)),
                         method: property_name,
                         args: Vec::new(),
+                    });
+                } else {
+                    // INVERTED DEFAULT (#wall debug `_.colors` / `_.init`): a
+                    // bare native-instance member read that is NOT a known
+                    // native dispatch member is a plain own-property GET — it
+                    // READS the stored value instead of INVOKING it as a 0-arg
+                    // native method call. This is what makes a value the HIR
+                    // mis-tagged native under an uncovered module (the bundled
+                    // `debug` package's `createDebug`) read `_.colors` / `_.init`
+                    // as ordinary properties (Node's behaviour) rather than
+                    // calling them. Writes to native handles already lower to a
+                    // generic PropertySet routed through the per-handle expando
+                    // side-table (`object/handle_expando.rs`), so the value
+                    // persists and reads back here.
+                    let object_expr = lower_expr(ctx, &member.obj)?;
+                    return Ok(Expr::PropertyGet {
+                        object: Box::new(object_expr),
+                        property: property_name,
                     });
                 }
             }
@@ -2801,6 +2911,140 @@ pub(super) fn stdlib_namespace_receiver(
 /// property access. Mirrors the methods + accessors hardcoded in
 /// `crates/perry-codegen/src/lower_call.rs`'s
 /// `module == "<stream_kind>"` arms.
+/// Native data-property getters exposed by `blob`-module instances (Blob /
+/// File). A bare read of one of these must keep the 0-arg NativeMethodCall
+/// dispatch so codegen routes it to the FFI getter (`js_blob_size`, …).
+/// Everything else read off a Blob instance is a user-assigned own property
+/// and must lower to a plain PropertyGet (see the heap-object guard in
+/// `lower_member`).
+/// #wall (debug `_.colors` / `_.init`): the inverted-default predicate for the
+/// native-instance bare-member-READ block in `lower_member`. Returns `true` only
+/// when `(module, class, property)` is a *known* native method/getter that must
+/// dispatch through the codegen NATIVE_MODULE_TABLE / per-class FFI as a 0-arg
+/// `NativeMethodCall`. Everything else (own properties, library bookkeeping
+/// fields, and — critically — any value the HIR mis-tagged native under a module
+/// NOT covered by the per-module arms, like the bundled `debug` package's
+/// `createDebug`) falls through to a plain `PropertyGet` that READS the stored
+/// value instead of INVOKING it.
+///
+/// This is the consolidated set of the genuine native members that legitimately
+/// reach the dispatching arm: the data getters whose values come from FFI
+/// (`blob.size`, `res.status`, classic/web-stream state getters), the HTTP
+/// per-class FFI getters / methods that are rewritten to `__get_<name>` or
+/// dispatched by class_filter, and the events/net method sets. Method-VALUE
+/// reads that the per-module arms above already lower to `PropertyGet` are NOT
+/// listed here — they keep reading as bound-method values, and the call form
+/// `x.method(args)` goes through the call-expression path, unaffected.
+fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -> bool {
+    match module {
+        // Data getters resolved by FFI.
+        "blob" => is_blob_getter_name(prop),
+        "fetch" => is_fetch_response_getter_name(prop),
+        // Web Streams: only the getter list reaches dispatch (methods are
+        // PropertyGet bound-method reads).
+        "readable_stream"
+        | "writable_stream"
+        | "transform_stream"
+        | "readable_stream_reader"
+        | "writable_stream_writer" => {
+            is_stream_api_member(module, prop)
+                && matches!(
+                    prop,
+                    "locked"
+                        | "desiredSize"
+                        | "closed"
+                        | "ready"
+                        | "readable"
+                        | "writable"
+                        | "byobRequest"
+                )
+        }
+        // Classic Node streams: state getters dispatch; methods read as values.
+        "stream" | "node:stream" => is_classic_stream_getter_name(prop),
+        // HTTP / HTTPS: the per-class FFI getters (rewritten to `__get_<name>`)
+        // and the runtime/method property sets that dispatch through the
+        // NATIVE_MODULE_TABLE class_filter path.
+        "http" | "https" => match class {
+            "IncomingMessage" => {
+                is_http_incoming_message_runtime_property_name(prop)
+                    || is_http_incoming_message_method_name(prop)
+                    || matches!(prop, "statusCode" | "statusMessage" | "headers")
+            }
+            "ServerResponse" => {
+                is_http_server_response_runtime_property_name(prop)
+                    || is_http_server_response_method_name(prop)
+            }
+            "ClientRequest" => {
+                is_http_client_request_method_name(prop)
+                    || matches!(
+                        prop,
+                        "method"
+                            | "protocol"
+                            | "host"
+                            | "path"
+                            | "aborted"
+                            | "connection"
+                            | "destroyed"
+                            | "finished"
+                            | "maxHeadersCount"
+                            | "reusedSocket"
+                            | "socket"
+                            | "writableEnded"
+                            | "writableFinished"
+                    )
+            }
+            "HttpServer" | "HttpsServer" => matches!(
+                prop,
+                "listening"
+                    | "headersTimeout"
+                    | "keepAliveTimeout"
+                    | "keepAliveTimeoutBuffer"
+                    | "requestTimeout"
+                    | "timeout"
+                    | "maxHeadersCount"
+                    | "maxRequestsPerSocket"
+            ),
+            "Agent" => matches!(prop, "createConnection" | "createSocket"),
+            _ => true,
+        },
+        // events / net instances dispatch their EventEmitter / socket methods
+        // and getters through the class_filter table. These modules expose no
+        // user own-property surface in the bundle walls, so keep dispatching
+        // for any member to preserve existing behaviour.
+        "events" | "net" => true,
+        // Other native modules historically routed every uncovered member to
+        // the dispatching fallback. They have no observed user-own-property
+        // surface, so preserve that: dispatch any member not handled by the
+        // PropertyGet arms above.
+        "dns" | "dns/promises" | "dgram" | "inspector" | "inspector/promises" | "sqlite"
+        | "url" | "worker_threads" | "util" | "sys" | "console" | "Headers" => true,
+        // Any other module (e.g. a mis-tagged `debug` createDebug value): a bare
+        // member read is an own-property GET, never an invoking dispatch.
+        _ => false,
+    }
+}
+
+fn is_blob_getter_name(prop: &str) -> bool {
+    matches!(prop, "size" | "type" | "name" | "lastModified")
+}
+
+/// Native data-property getters exposed by `fetch`-module Response instances.
+/// Mirrors the property arms in `perry-codegen` `lower_call/options/fetch.rs`.
+fn is_fetch_response_getter_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "status"
+            | "statusText"
+            | "ok"
+            | "type"
+            | "url"
+            | "redirected"
+            | "bodyUsed"
+            | "headers"
+            | "body"
+    )
+}
+
 fn is_stream_api_member(module: &str, prop: &str) -> bool {
     match module {
         "readable_stream" => matches!(
@@ -2875,6 +3119,41 @@ fn is_classic_stream_method_name(prop: &str) -> bool {
             | "removeAllListeners"
             | "setMaxListeners"
             | "getMaxListeners"
+    )
+}
+
+/// Classic Node stream (`stream` / `node:stream`) PROPERTY GETTER names —
+/// the no-arg state getters that dispatch through the codegen `NativeModSig`
+/// table to their `js_node_stream_method_*` FFI (mirrors the `module: "stream"`
+/// getter entries in `lower_call/native_table/net_events.rs`). A bare read of
+/// any name NOT in this set and NOT a `is_classic_stream_method_name` method is
+/// a plain own-property GET on the heap stream object, so user-assigned fields
+/// (`_.colors`, library bookkeeping) read back the stored value instead of
+/// being invoked as a 0-arg native call.
+fn is_classic_stream_getter_name(prop: &str) -> bool {
+    matches!(
+        prop,
+        "readableHighWaterMark"
+            | "readableLength"
+            | "readableObjectMode"
+            | "readable"
+            | "readableFlowing"
+            | "readableEnded"
+            | "readableEncoding"
+            | "readableAborted"
+            | "readableDidRead"
+            | "writableHighWaterMark"
+            | "writableLength"
+            | "writableNeedDrain"
+            | "writableObjectMode"
+            | "writable"
+            | "writableCorked"
+            | "writableEnded"
+            | "writableFinished"
+            | "closed"
+            | "errored"
+            | "allowHalfOpen"
+            | "destroyed"
     )
 }
 

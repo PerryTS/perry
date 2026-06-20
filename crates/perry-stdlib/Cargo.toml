@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Standard library implementations: fs, http, crypto, mysql, postgres"
 
+# rlib-only (#5422): the staticlib (libperry_stdlib.a) is emitted by the
+# perry-stdlib-static wrapper crate so a plain `cargo build` of the workspace
+# no longer produces the heavy archive as a side effect. Build the archive
+# explicitly with `cargo build -p perry-stdlib-static`.
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
 
 [features]
 # Default: include everything for backwards compatibility

@@ -77,6 +77,22 @@ fn unbox_to_i64(v: f64) -> i64 {
     (v.to_bits() & POINTER_MASK) as i64
 }
 
+/// Coerce a nanboxed JS number to a plain `f64`. perry stores small integers as
+/// a tagged int32 (`0x7FFE` high bits), not a raw double, so passing the raw
+/// nanboxed value where a real number is expected (e.g. `BlockList.addSubnet`'s
+/// `prefix: f64`) yields garbage bits. A non-int-tagged value is already an
+/// IEEE double and passes through unchanged.
+fn unbox_to_f64(v: f64) -> f64 {
+    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+    const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
+    let bits = v.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) == INT32_TAG {
+        ((bits & INT32_MASK) as u32 as i32) as f64
+    } else {
+        v
+    }
+}
+
 fn property_name<'a>(ptr: *const u8, len: usize) -> &'a str {
     if ptr.is_null() || len == 0 {
         ""
@@ -378,7 +394,15 @@ unsafe fn block_list_method(handle: i64, method: &str, args: &[f64]) -> Option<f
         }
         "addSubnet" => {
             let address = args.first().copied().map(unbox_to_i64).unwrap_or(0);
-            let prefix = args.get(1).copied().unwrap_or_else(undefined);
+            // A missing `prefix` must reach `js_net_validate_block_list_prefix`
+            // as a non-numeric value so it throws `ERR_INVALID_ARG_TYPE`, matching
+            // Node (the parameter is required). Defaulting to a real number here
+            // would silently accept the call as a `/0` subnet.
+            let prefix = args
+                .get(1)
+                .copied()
+                .map(unbox_to_f64)
+                .unwrap_or_else(undefined);
             let family = args.get(2).copied().map(unbox_to_i64).unwrap_or(0);
             crate::js_net_block_list_add_subnet(handle, address, prefix, family)
         }

@@ -799,10 +799,15 @@ pub(super) fn build_optimized_libs(
         .env("CARGO_TARGET_DIR", &cargo_env_dir)
         .arg("build")
         .arg("--release")
+        // #5422 — the staticlib (.a) is now emitted by the perry-runtime-static
+        // / perry-stdlib-static wrapper crates, not perry-runtime/perry-stdlib
+        // themselves (which are rlib-only). The `perry-runtime/<feat>` strings in
+        // `cross_features` still resolve because perry-runtime is in each
+        // wrapper's dependency graph (cargo accepts the `dep/feature` form).
         .arg("-p")
-        .arg("perry-runtime")
+        .arg("perry-runtime-static")
         .arg("-p")
-        .arg("perry-stdlib")
+        .arg("perry-stdlib-static")
         .arg("--no-default-features");
     // #507 — rebuild tokio-using ext crates in the same cargo
     // invocation as perry-stdlib so cargo unifies tokio across them.

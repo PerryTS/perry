@@ -63,7 +63,7 @@ jobs:
           node-version: "26"
 
       - name: Build Perry release binary
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
 
       - name: Node-suite regression guard (floor baseline, node 26)
         # Fails (exit 1) if any baselined module drops below its floor;

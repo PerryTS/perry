@@ -49,7 +49,9 @@ PRs from outside contributors should **not** touch `[workspace.package] version`
 
 ```bash
 cargo build --release                          # Build all crates
+cargo build --profile perry-dev -p perry       # Fast local dev build (#5422; perry-dev profile)
 cargo build --release -p perry-runtime -p perry-stdlib  # Rebuild runtime (MUST rebuild stdlib too!)
+cargo build --release -p perry-runtime-static -p perry-stdlib-static  # Emit libperry_{runtime,stdlib}.a (#5422: runtime/stdlib are now rlib-only; the .a comes from these wrapper crates)
 cargo test --release --workspace \
   --exclude perry-ui-ios --exclude perry-ui-tvos --exclude perry-ui-watchos \
   --exclude perry-ui-visionos --exclude perry-ui-android --exclude perry-ui-windows \

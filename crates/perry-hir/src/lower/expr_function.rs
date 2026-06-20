@@ -741,8 +741,24 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             if let ast::Stmt::Decl(ast::Decl::Var(var_decl)) = stmt {
                 if var_decl.kind == ast::VarDeclKind::Var {
                     for decl in &var_decl.decls {
-                        if let ast::Pat::Ident(ident) = &decl.name {
-                            let name = ident.id.sym.to_string();
+                        // Collect every binding name introduced by this
+                        // declarator. Plain `var x` is a single `Pat::Ident`;
+                        // a destructuring `var { t: dSq } = re()` (the esbuild
+                        // semver shape `var {safeRe:QSq,t:dSq}=bV6()`) binds
+                        // `dSq` via a `Pat::Object` — which the old
+                        // `Pat::Ident`-only arm skipped, so the destructured
+                        // binding was never pre-registered/hoisted. A class
+                        // method or sibling function created BEFORE the
+                        // destructuring decl then snapshot-captured the
+                        // not-yet-defined slot and read `undefined`
+                        // (`Cannot read properties of undefined`). Walk the
+                        // whole pattern so destructured `var` bindings get the
+                        // same forward-capture box as plain-ident ones.
+                        let mut names = Vec::new();
+                        crate::lower_decl::collect_var_binding_names_from_pat(
+                            &decl.name, &mut names,
+                        );
+                        for name in names {
                             let already_in_scope = ctx
                                 .locals
                                 .lookup_index_in_scope(&name, outer_locals_len)

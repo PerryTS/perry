@@ -44,6 +44,13 @@ cargo test --workspace \
   --exclude perry-ui-gtk4 --exclude perry-ui-android --exclude perry-ui-windows
 ```
 
+For a faster inner loop, `cargo check -p perry` (correctness only) or
+`cargo build --profile perry-dev -p perry` (optimized local dev build). The
+`.a` static archives now come from dedicated wrapper crates — build them with
+`cargo build --release -p perry-runtime-static -p perry-stdlib-static` when you
+need `libperry_{runtime,stdlib}.a`. See `docs/src/contributing/building.md` for
+the full dev/release/dist taxonomy and the slim `--features dev-cli` CLI (#5422).
+
 The full README [Development](README.md#development) section has more `cargo run` recipes (HIR dumps, per-crate rebuilds).
 
 ## Making changes

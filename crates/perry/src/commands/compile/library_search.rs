@@ -1353,7 +1353,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
             "Cannot auto-build geisterhand libraries: Perry workspace not found.\n\
             Build manually from the Perry source directory:\n  \
             CARGO_TARGET_DIR=target/geisterhand cargo build --release \\\n    \
-            -p perry-runtime --features geisterhand \\\n    \
+            -p perry-runtime-static --features perry-runtime/geisterhand \\\n    \
             -p {} --features geisterhand \\\n    \
             -p perry-ui-geisterhand",
             ui_crate
@@ -1369,8 +1369,11 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         )
         .arg("build")
         .arg("--release")
+        // #5422 — staticlib (.a) now comes from the *-static wrapper crates;
+        // perry-runtime/perry-stdlib are rlib-only. The `perry-runtime/<feat>`
+        // selector still resolves via the wrapper's dependency graph.
         .arg("-p")
-        .arg("perry-runtime")
+        .arg("perry-runtime-static")
         .arg("--features")
         .arg("perry-runtime/geisterhand")
         .arg("-p")
@@ -1388,7 +1391,7 @@ pub(super) fn build_geisterhand_libs(target: Option<&str>, format: OutputFormat)
         // perry-stdlib's async surface (`perry_ffi_promise_*`) had no
         // consistent stdlib to link against under --enable-geisterhand (#1383).
         .arg("-p")
-        .arg("perry-stdlib");
+        .arg("perry-stdlib-static");
 
     // Add cross-compilation target if needed
     if let Some(triple) = rust_target_triple(target) {

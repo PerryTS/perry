@@ -1,0 +1,29 @@
+[package]
+name = "perry-runtime-static"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Staticlib wrapper (#5422): emits libperry_runtime.a from the rlib-only perry-runtime crate"
+
+# Emits the C-ABI static archive consumed by `perry compile`'s linker. The
+# output name stays `perry_runtime` so the produced archive is the canonical
+# `libperry_runtime.a` / `perry_runtime.lib` every consumer already looks for —
+# only the cargo PACKAGE name (`-p perry-runtime-static`) changes.
+[lib]
+name = "perry_runtime"
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[features]
+# A plain `cargo build -p perry-runtime-static` reproduces today's full
+# `cargo build -p perry-runtime` archive. The auto-optimize path instead builds
+# with `--no-default-features --features perry-runtime/<subset>` (cargo accepts
+# the `dep/feature` form because perry-runtime is in this crate's dependency
+# graph), so no per-feature forwarding is needed here.
+default = ["perry-runtime/default"]
+
+[dependencies]
+# default-features = false so `--no-default-features` on this wrapper actually
+# strips perry-runtime down to the auto-optimize subset; without it the dep edge
+# would drag perry-runtime's defaults back on (cf. the root Cargo.toml note).
+perry-runtime = { path = "../perry-runtime", default-features = false }

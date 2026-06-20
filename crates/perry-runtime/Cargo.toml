@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 description = "Runtime library: GC, JSValue, builtins"
 
+# rlib-only (#5422): the staticlib (libperry_runtime.a) is emitted by the
+# perry-runtime-static wrapper crate so a plain `cargo build` of the workspace
+# no longer produces the heavy archive as a side effect. Build the archive
+# explicitly with `cargo build -p perry-runtime-static`.
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib"]
 
 [features]
 # `default` keeps the shipped prebuilt libperry_runtime.a and plain

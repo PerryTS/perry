@@ -257,6 +257,49 @@ pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock
 /// `C.prototype.isPrototypeOf(instance)` without perturbing those paths.
 pub static CLASS_DECL_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 
+/// #5024 followup: prototype methods registered via `Object.defineProperty(
+/// Class.prototype, name, desc)` WITHOUT an explicit `enumerable: true` are
+/// non-enumerable (spec default for defineProperty). The plain
+/// `Class.prototype.m = fn` assignment path makes them enumerable. Both funnel
+/// into `CLASS_PROTOTYPE_METHODS`, which stores only the value — so the
+/// enumerability is tracked here, keyed by `(class_id, name)`. Absence means
+/// "enumerable" (the assignment default). Consulted when mirroring a method
+/// onto a prototype OBJECT so reflective `Object.keys`/`for-in` see the
+/// correct attribute.
+pub static CLASS_PROTOTYPE_METHOD_NONENUM: RwLock<
+    Option<std::collections::HashSet<(u32, String)>>,
+> = RwLock::new(None);
+
+/// Record the enumerability of the prototype method `(class_id, name)`.
+/// `enumerable == false` (a `defineProperty` data descriptor without an
+/// explicit `enumerable: true`) inserts the key into the non-enumerable set;
+/// `enumerable == true` removes it again, so a later redefine that flips the
+/// flag back on isn't left shadowed by a stale marker.
+pub(crate) fn class_prototype_method_set_enumerable(class_id: u32, name: &str, enumerable: bool) {
+    let mut guard = CLASS_PROTOTYPE_METHOD_NONENUM.write().unwrap();
+    if enumerable {
+        if let Some(set) = guard.as_mut() {
+            set.remove(&(class_id, name.to_string()));
+        }
+        return;
+    }
+    if guard.is_none() {
+        *guard = Some(std::collections::HashSet::new());
+    }
+    guard.as_mut().unwrap().insert((class_id, name.to_string()));
+}
+
+/// Whether the prototype method `(class_id, name)` should be enumerable when
+/// mirrored onto a prototype object. Defaults to `true` (assignment semantics).
+fn class_prototype_method_is_enumerable(class_id: u32, name: &str) -> bool {
+    if let Ok(read) = CLASS_PROTOTYPE_METHOD_NONENUM.read() {
+        if let Some(set) = read.as_ref() {
+            return !set.contains(&(class_id, name.to_string()));
+        }
+    }
+    true
+}
+
 /// #36 / #321: maps a child class_id to the raw address of a parent CLOSURE
 /// (function value) when `class Child extends <function value> {}`. effect's
 /// `class Svc extends Context.Tag("Svc")<...>() {}` extends the function
@@ -436,6 +479,26 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     );
     install_class_decl_prototype_method_fields(proto, class_id);
 
+    // #5024 followup: backfill assignment-registered prototype methods
+    // (`Class.prototype.m = fn`, stored in CLASS_PROTOTYPE_METHODS) onto the
+    // decl-proto object as ordinary enumerable own properties, so reflective
+    // own-key enumeration sees them. These typically run at module init,
+    // BEFORE any reflective `.prototype` read materialises this object, so the
+    // write-through in `class_prototype_method_root_store` had no decl-proto to
+    // target. Mirrors the existing CLASS_VTABLE_REGISTRY backfill above.
+    let registered: Vec<(String, u64)> = {
+        let guard = CLASS_PROTOTYPE_METHODS.read().unwrap();
+        guard
+            .as_ref()
+            .and_then(|map| map.get(&class_id))
+            .map(|per_class| per_class.iter().map(|(k, &v)| (k.clone(), v)).collect())
+            .unwrap_or_default()
+    };
+    for (name, value_bits) in registered {
+        let enumerable = class_prototype_method_is_enumerable(class_id, &name);
+        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
+    }
+
     let parent_proto_bits = get_parent_class_id(class_id)
         .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
         .and_then(|parent_id| {
@@ -548,7 +611,30 @@ pub(crate) fn ensure_function_prototype_object(
             .unwrap_or_default()
     };
     for (name, value_bits) in registered {
-        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits) };
+        let enumerable = class_prototype_method_is_enumerable(class_id, &name);
+        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
+    }
+
+    // #5477: the bound `events.EventEmitter` / `EventEmitterAsyncResource` export's
+    // synthetic prototype must carry the EventEmitter methods (`emit`/`on`/`once`/
+    // …) so the `Object.setPrototypeOf(x, EventEmitter.prototype)` mixin pattern
+    // (pino's logger prototype) gives `x` a working `emit`/`on`. The installed
+    // closures read IMPLICIT_THIS, so a plain object that merely inherits this
+    // prototype dispatches against ITSELF (listener state is keyed by the receiver
+    // object, not a captured instance). Mirrors what `Stream.prototype` already
+    // does. This proto is cached (`class_prototype_object_root_store` above), so
+    // the install runs once.
+    if let Some((module, method)) =
+        unsafe { super::native_module::bound_native_callable_module_and_method(func_value) }
+    {
+        if module.trim_start_matches("node:") == "events"
+            && matches!(
+                method.as_str(),
+                "EventEmitter" | "EventEmitterAsyncResource"
+            )
+        {
+            crate::node_stream::install_event_emitter_prototype_methods(proto);
+        }
     }
 
     let func_bits = func_value.to_bits();
@@ -1396,23 +1482,57 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
     // nothing, so `isReactComponent` vanished and every `extends PureComponent`
     // class rendered as a function component. Mirror the write onto the
     // materialized prototype object as an ordinary enumerable own property.
+    let enumerable = class_prototype_method_is_enumerable(class_id, &name);
     let proto = class_prototype_object(class_id);
     if !proto.is_null() {
-        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits) };
+        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
+    }
+    // #5024 followup: reflective `ClassName.prototype` enumeration
+    // (`Object.keys` / `getOwnPropertyNames` / `in` / `hasOwnProperty` /
+    // `for-in`) reads the DECL-prototype object (CLASS_DECL_PROTOTYPE_OBJECTS),
+    // which is a DIFFERENT object than the #711/#809 synthetic prototype cache
+    // (CLASS_PROTOTYPE_OBJECTS) the mirror above targets. Without mirroring
+    // here too, an assignment-registered method (`Class.prototype.m = fn`) was
+    // dispatchable (side table) but invisible to own-key enumeration on the
+    // reflective prototype — zod's `b1` trait factory copies base methods onto
+    // instances via `for (let H in O.prototype) ...`, which enumerated nothing,
+    // so `z.number().optional()` threw "Cannot read properties of undefined".
+    // When the decl-proto isn't materialised yet, `class_decl_prototype_value`
+    // backfills CLASS_PROTOTYPE_METHODS at materialisation time, so we only
+    // need to write through to an already-live decl-proto here.
+    let decl_proto = class_decl_prototype_object(class_id);
+    if !decl_proto.is_null() && decl_proto != proto {
+        unsafe { mirror_prototype_method_on_object(decl_proto, &name, value_bits, enumerable) };
     }
 }
 
 /// #5024: write a side-table-registered prototype method onto the
-/// materialized prototype object so the key lands in its `keys_array`
-/// (assignment semantics: enumerable data property). Values keep their
-/// full NaN-boxed bits; dispatch paths that find the property on the
-/// object see the same value the side table holds.
-unsafe fn mirror_prototype_method_on_object(proto: *mut ObjectHeader, name: &str, value_bits: u64) {
+/// materialized prototype object so the key lands in its `keys_array`.
+/// `enumerable` carries assignment semantics (`Class.prototype.m = fn` →
+/// enumerable) vs `Object.defineProperty` default (non-enumerable). Values
+/// keep their full NaN-boxed bits; dispatch paths that find the property on
+/// the object see the same value the side table holds.
+unsafe fn mirror_prototype_method_on_object(
+    proto: *mut ObjectHeader,
+    name: &str,
+    value_bits: u64,
+    enumerable: bool,
+) {
     if proto.is_null() || name.is_empty() {
         return;
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     js_object_set_field_by_name(proto, key, f64::from_bits(value_bits));
+    if !enumerable {
+        // `js_object_set_field_by_name` records the default (enumerable) attrs;
+        // override so reflective own-key enumeration skips a defineProperty-
+        // registered non-enumerable method.
+        set_builtin_property_attrs(
+            proto as usize,
+            name.to_string(),
+            PropertyAttrs::new(true, false, true),
+        );
+    }
 }
 
 /// Register a JS-classic prototype-method assignment on a class.

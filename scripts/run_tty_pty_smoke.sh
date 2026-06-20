@@ -16,7 +16,7 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-cargo build --release --quiet -p perry -p perry-runtime -p perry-stdlib >"$BUILD_LOG" 2>&1 || {
+cargo build --release --quiet -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static >"$BUILD_LOG" 2>&1 || {
   cat "$BUILD_LOG"
   exit 1
 }

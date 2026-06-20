@@ -350,7 +350,7 @@ echo ""
 TARGET_DIR="${CARGO_TARGET_DIR:-$SCRIPT_DIR/target}"
 PERRY_BIN="$TARGET_DIR/release/perry"
 echo "Building compiler (release)..."
-BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib)
+BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
 needs_wasm_host=0
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
@@ -418,7 +418,7 @@ if [[ "$needs_wasm_host" -eq 1 ]]; then
     # feature while building the `perry` binary would make the CLI link against
     # unresolved perry_wasm_host_* symbols.
     echo "Building WebAssembly host runtime (release)..."
-    if ! cargo build --release --quiet -p perry-runtime -p perry-wasm-host --features perry-runtime/wasm-host 2>/dev/null; then
+    if ! cargo build --release --quiet -p perry-runtime-static -p perry-wasm-host --features perry-runtime/wasm-host 2>/dev/null; then
         echo -e "${RED}Failed to build WebAssembly host runtime archives${NC}"
         exit 1
     fi

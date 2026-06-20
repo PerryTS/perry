@@ -370,7 +370,14 @@ pub(crate) fn generate_param_destructuring_stmts(
             // destructured param (`([a, b]) => { b -= 1 }`). Passing `false`
             // here marked them `const` and made any such reassignment throw
             // "Assignment to constant variable" (hit by Hono's RegExpRouter).
-            crate::destructuring::lower_pattern_binding(ctx, pat, Expr::LocalGet(param_id), true)
+            crate::destructuring::lower_pattern_binding(
+                ctx,
+                pat,
+                Expr::LocalGet(param_id),
+                true,
+                // Function params are lexical bindings, not `var` declarations.
+                false,
+            )
         }
         ast::Pat::Rest(rest) if is_destructuring_pattern(&rest.arg) => {
             crate::destructuring::lower_pattern_binding(
@@ -378,6 +385,7 @@ pub(crate) fn generate_param_destructuring_stmts(
                 &rest.arg,
                 Expr::LocalGet(param_id),
                 true,
+                false,
             )
         }
         _ => Ok(Vec::new()),

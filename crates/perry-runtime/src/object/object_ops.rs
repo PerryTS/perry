@@ -217,6 +217,16 @@ pub(crate) unsafe fn desc_read_field(descriptor_value: f64, name: &[u8]) -> crat
     crate::value::JSValue::from_bits(v.to_bits())
 }
 
+/// Whether a property descriptor is enumerable. Mirrors the spec default for
+/// `Object.defineProperty` (and `defineProperties`): a descriptor that omits
+/// `enumerable` defines a NON-enumerable property, so the default is `false`.
+pub(crate) unsafe fn descriptor_enumerable(descriptor_value: f64) -> bool {
+    desc_has_field(descriptor_value, b"enumerable")
+        && crate::value::js_is_truthy(f64::from_bits(
+            desc_read_field(descriptor_value, b"enumerable").bits(),
+        )) != 0
+}
+
 /// Validate a property descriptor object per ES `ToPropertyDescriptor`
 /// invariants that Node surfaces as `TypeError`s (#2817). Assumes
 /// `descriptor_value` is already known to be an object. Throws on:
@@ -1471,6 +1481,17 @@ pub extern "C" fn js_object_define_property(
                     let value_field =
                         js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
                     if !value_field.is_undefined() {
+                        // #5024 followup: a `defineProperty` data descriptor is
+                        // non-enumerable unless it explicitly sets
+                        // `enumerable: true`. Record that so the prototype-object
+                        // mirror (reflective `Object.keys`/`for-in`) doesn't
+                        // surface it — `Class.prototype.m = fn` assignment, which
+                        // routes through the same side table, stays enumerable.
+                        super::class_registry::class_prototype_method_set_enumerable(
+                            target_cid,
+                            &name,
+                            descriptor_enumerable(descriptor_value),
+                        );
                         define_class_prototype_method(target_cid, &name, value_field.bits());
                     }
                 }
@@ -1802,6 +1823,16 @@ pub extern "C" fn js_object_define_property(
                 if desc_has_field(descriptor_value, b"value") {
                     let value_field = desc_read_field(descriptor_value, b"value");
                     if !value_field.is_undefined() {
+                        // #5024 followup: defineProperty data descriptor is
+                        // non-enumerable unless it sets `enumerable: true`. Mark
+                        // it so the prototype-method enumeration mirror honours
+                        // the descriptor instead of defaulting to enumerable
+                        // (the `Class.prototype.m = fn` assignment default).
+                        super::class_registry::class_prototype_method_set_enumerable(
+                            target_cid,
+                            name,
+                            descriptor_enumerable(descriptor_value),
+                        );
                         define_class_prototype_method(target_cid, name, value_field.bits());
                     }
                 }

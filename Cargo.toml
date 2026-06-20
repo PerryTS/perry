@@ -75,6 +75,8 @@ members = [
     "crates/perry-ui-testkit",
     "crates/perry-doc-tests",
     "crates/perry-updater",
+    "crates/perry-runtime-static",
+    "crates/perry-stdlib-static",
     "docs/examples/_fixtures/native-libraries/my-bindings",
 ]
 # Only build platform-independent crates by default.
@@ -211,6 +213,90 @@ opt-level = "s"       # Optimize for size in stdlib
 # export #[no_mangle] extern "C" symbols for the same reason): more codegen
 # units + no strip keeps the exported C API in the staticlib.
 [profile.release.package.perry-ext-events]
+strip = false
+codegen-units = 16
+
+# Staticlib wrapper crates (#5422). perry-runtime / perry-stdlib are now
+# rlib-only; these wrappers re-export their #[no_mangle] C API into
+# libperry_runtime.a / libperry_stdlib.a. Thin-LTO would otherwise internalize
+# and drop the whole exported C surface (same failure as perry-ext-events,
+# #5140), so mirror its settings: more codegen units + no strip keep the C API
+# in the archive.
+[profile.release.package.perry-runtime-static]
+strip = false
+codegen-units = 16
+[profile.release.package.perry-stdlib-static]
+strip = false
+codegen-units = 16
+
+# Fast developer profile (#5422). Optimized enough for realistic local runs but
+# without the distribution-grade settings that dominate compile time, so the
+# edit/build loop stays short. Intended local loop:
+#   cargo check -p perry                       # fastest correctness feedback
+#   cargo build --profile perry-dev -p perry   # optimized local development
+[profile.perry-dev]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+strip = false
+opt-level = 1
+
+# Official distribution profile (#5422). The explicit, named home for the
+# release-grade optimization Perry ships. Mirrors [profile.release] exactly —
+# including every per-package override below — so official artifacts stay
+# equivalent while being selected via `--profile dist`. Keep these blocks in
+# sync with their [profile.release.*] counterparts above.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = true
+opt-level = 3
+
+[profile.dist.package.perry-runtime]
+opt-level = 3
+strip = false
+[profile.dist.package.perry-ui-macos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-gtk4]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-windows]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-windows-winui]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-geisterhand]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-ios]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-visionos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-tvos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-android]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-watchos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-stdlib]
+opt-level = "s"
+[profile.dist.package.perry-ext-events]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-runtime-static]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-stdlib-static]
 strip = false
 codegen-units = 16
 

@@ -1052,6 +1052,7 @@ pub(super) fn run_native_instance_fixups(ctx: &mut CompilationContext) {
 /// Also flips `ctx.needs_ui` back to false so the link path skips the
 /// perry-ui-* lib check (which would fail on the OHOS target since no
 /// such lib exists).
+#[cfg(feature = "backend-arkts")]
 pub(super) fn harvest_harmonyos_index_ets(
     args: &CompileArgs,
     ctx: &mut CompilationContext,

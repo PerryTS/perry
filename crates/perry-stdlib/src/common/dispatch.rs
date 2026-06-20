@@ -2655,6 +2655,19 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::crypto::dispatch_cipher_property(handle, property_name);
     }
 
+    // Generic per-handle expando read: an arbitrary user-assigned own property
+    // (`handle.colors = [...]`) stored by the set-dispatch fallback below. This
+    // is the read half that makes native HANDLE values (Blob / fetch Response /
+    // Web-Streams readers) freely extensible like Node's, so the `debug`
+    // package's `createDebug.colors[...]` reads back the array it assigned
+    // instead of `undefined`. Specific typed properties were all tried above, so
+    // a hit here is always a genuine user expando.
+    if let Some(v) =
+        perry_runtime::object::handle_expando::handle_expando_get(handle, property_name)
+    {
+        return v;
+    }
+
     // Unknown handle type - return undefined
     f64::from_bits(0x7FFC_0000_0000_0001)
 }
@@ -2862,6 +2875,9 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
         if property_name == "user" {
             crate::fastify::js_fastify_req_set_user_data(handle, value);
+            // Claimed by the typed setter — must not also fall through to the
+            // generic expando store below.
+            return;
         }
     }
 
@@ -2889,6 +2905,8 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
                     value,
                 );
             }
+            // Claimed by the typed setter — don't also write a stale expando copy.
+            return;
         }
     }
 
@@ -2954,7 +2972,22 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
                     value,
                 );
             }
+            return;
         }
+    }
+
+    // Generic per-handle expando store: an ARBITRARY user-assigned own property
+    // (`handle.colors = [...]`) that none of the typed setters above claimed.
+    // Native HANDLE values are ordinary, extensible objects in Node; this gives
+    // them the same string-keyed own-property storage closures get from
+    // `CLOSURE_PROPS`. The read half (`js_handle_property_dispatch`) consults
+    // every typed property FIRST and only falls back to this expando table, so a
+    // typed property name can never be shadowed by an expando copy. This is what
+    // makes `debug`'s `createDebug.colors = [...]` persist and read back (the
+    // wall: a Blob/Response-tagged `_` whose `.colors` write was silently
+    // dropped, so `selectColor` read `undefined`).
+    if !property_name.is_empty() {
+        perry_runtime::object::handle_expando::handle_expando_set(handle, property_name, value);
     }
 }
 

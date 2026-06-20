@@ -17,17 +17,60 @@ cargo build --release
 
 The binary is at `target/release/perry`.
 
+## Build taxonomy (dev / release / dist)
+
+Perry has three build profiles, each tuned for a different job (#5422):
+
+| Goal | Command | Profile |
+|------|---------|---------|
+| Fastest correctness feedback | `cargo check -p perry` | — |
+| Optimized **local** development | `cargo build --profile perry-dev -p perry` | `perry-dev` |
+| Release-compatible build | `cargo build --release` | `release` |
+| Official distribution artifacts | `cargo build --profile dist ...` | `dist` |
+
+- **`perry-dev`** inherits `release` but disables the expensive distribution
+  settings (`lto = false`, `codegen-units = 16`, `opt-level = 1`,
+  `incremental = true`, no strip) so the edit/build loop stays short. Output is
+  at `target/perry-dev/perry`.
+- **`dist`** mirrors `release` exactly (ThinLTO, `codegen-units = 1`,
+  `opt-level = 3`, strip) and is the explicit, named profile the release
+  workflows use for shipped artifacts. Output is at `target/dist/`.
+
+After a `--timings` build, `scripts/cargo_timing_summary.py` prints the slowest
+units so build-time regressions are visible.
+
 ## Build Specific Crates
 
 ```bash
 # Runtime only (must rebuild stdlib too!)
 cargo build --release -p perry-runtime -p perry-stdlib
 
+# The .a static archives are emitted by separate wrapper crates (#5422), so a
+# plain `cargo build` no longer produces them as a side effect. Build them
+# explicitly when you need libperry_runtime.a / libperry_stdlib.a (e.g. to link
+# compiled programs without the auto-optimize rebuild):
+cargo build --release -p perry-runtime-static -p perry-stdlib-static
+
 # Codegen only
-cargo build --release -p perry-codegen-llvm
+cargo build --release -p perry-codegen
 ```
 
 > **Important**: When rebuilding `perry-runtime`, you must also rebuild `perry-stdlib` because `libperry_stdlib.a` embeds perry-runtime as a static dependency.
+
+## Slim developer CLI
+
+The default build is the full official CLI. For compiler work you can build a
+slimmer CLI that omits the publish / mobile / updater / native / audit commands
+and the non-native codegen backends (#5422):
+
+```bash
+cargo build -p perry --no-default-features --features dev-cli
+```
+
+`dev-cli` keeps `compile` / `run` / `check` / `types` / `cache` / `dev`. Disabled
+commands drop out of `--help`, and disabled `--target` backends report a clear
+"built without the `<feature>` feature" error. See `crates/perry/Cargo.toml` for
+the full feature list (`full-cli`, `publish-cli`, `backend-wasm`, …).
 
 ## Run Tests
 

@@ -206,8 +206,8 @@ jobs:
         run: |
           set -euo pipefail
           while IFS= read -r pkg; do
-            rm -rf target/release/.fingerprint/"$pkg"-* \
-                   target/*/release/.fingerprint/"$pkg"-*
+            rm -rf target/dist/.fingerprint/"$pkg"-* \
+                   target/*/dist/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
@@ -263,12 +263,12 @@ jobs:
         # the next step. (Perry is V8-free — the former perry-jsruntime
         # crate, which downloaded a prebuilt V8 that 404'd on musl, was
         # removed.)
-        run: cargo build --release --target ${{ matrix.target }} -p perry
+        run: cargo build --profile dist --target ${{ matrix.target }} -p perry
 
       - name: Build runtime libraries
         run: |
-          cargo build --release --target ${{ matrix.target }} -p perry-runtime
-          cargo build --release --target ${{ matrix.target }} -p perry-stdlib
+          cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          cargo build --profile dist --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
 
       - name: Build panic=abort runtime variant (Unix)
         # Out-of-tree installs can't rebuild the runtime, so ship the
@@ -280,10 +280,10 @@ jobs:
         # invalidate the main build's incremental cache.
         if: runner.os != 'Windows'
         run: |
-          CARGO_TARGET_DIR=target-abort CARGO_PROFILE_RELEASE_PANIC=abort \
-            cargo build --release --target ${{ matrix.target }} -p perry-runtime
-          cp "target-abort/${{ matrix.target }}/release/libperry_runtime.a" \
-             "target/${{ matrix.target }}/release/libperry_runtime_abort.a"
+          CARGO_TARGET_DIR=target-abort CARGO_PROFILE_DIST_PANIC=abort \
+            cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          cp "target-abort/${{ matrix.target }}/dist/libperry_runtime.a" \
+             "target/${{ matrix.target }}/dist/libperry_runtime_abort.a"
 
       - name: Build native ext libraries (Unix)
         # #2532 — the perry-ext-* wrapper crates ship the host functions for
@@ -302,14 +302,14 @@ jobs:
             [ -d "$d" ] || continue
             name=$(basename "$d")
             echo "::group::build $name"
-            cargo build --release --target ${{ matrix.target }} -p "$name" \
+            cargo build --profile dist --target ${{ matrix.target }} -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
           done
 
       - name: Build UI library (macOS)
         if: runner.os == 'macOS'
-        run: cargo build --release --target ${{ matrix.target }} -p perry-ui-macos
+        run: cargo build --profile dist --target ${{ matrix.target }} -p perry-ui-macos
 
       # Closes #394: cross-compile the runtime + stdlib + UI for both the
       # iOS device and simulator triples (both Tier-2 stable). Library
@@ -327,9 +327,9 @@ jobs:
         if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
         run: |
           for triple in aarch64-apple-ios aarch64-apple-ios-sim; do
-            cargo build --release --target "$triple" -p perry-runtime
-            cargo build --release --target "$triple" -p perry-stdlib
-            cargo build --release --target "$triple" -p perry-ui-ios
+            cargo build --profile dist --target "$triple" -p perry-runtime -p perry-runtime-static
+            cargo build --profile dist --target "$triple" -p perry-stdlib -p perry-stdlib-static
+            cargo build --profile dist --target "$triple" -p perry-ui-ios
           done
 
       # Closes #396 / #397 / #398: cross-compile runtime + stdlib + UI for the
@@ -363,21 +363,21 @@ jobs:
             sim="${rest#*:}"
             for triple in "$dev" "$sim"; do
               echo "::group::$plat $triple"
-              cargo +nightly build --release \
+              cargo +nightly build --profile dist \
                 -Z build-std=core,std,panic_abort \
                 --target "$triple" \
-                -p perry-runtime -p perry-stdlib "-p" "perry-ui-${plat}"
+                -p perry-runtime -p perry-runtime-static -p perry-stdlib -p perry-stdlib-static "-p" "perry-ui-${plat}"
               echo "::endgroup::"
             done
           done
 
       - name: Build UI library (Linux glibc)
         if: runner.os == 'Linux' && !endsWith(matrix.target, '-musl')
-        run: cargo build --release --target ${{ matrix.target }} -p perry-ui-gtk4
+        run: cargo build --profile dist --target ${{ matrix.target }} -p perry-ui-gtk4
 
       - name: Build UI library (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --release --target ${{ matrix.target }} -p perry-ui-windows
+        run: cargo build --profile dist --target ${{ matrix.target }} -p perry-ui-windows
 
       # Closes #872: cross-compile the Android runtime libs on the Windows
       # leg so the WinGet zip includes `libperry_runtime.a` /
@@ -419,8 +419,8 @@ jobs:
           $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = $linker
           $env:CC_aarch64_linux_android = $linker
           $env:AR_aarch64_linux_android = Join-Path $toolchain "llvm-ar.exe"
-          cargo build --release --target aarch64-linux-android -p perry-runtime
-          cargo build --release --target aarch64-linux-android -p perry-stdlib
+          cargo build --profile dist --target aarch64-linux-android -p perry-runtime -p perry-runtime-static
+          cargo build --profile dist --target aarch64-linux-android -p perry-stdlib -p perry-stdlib-static
 
       # #4856 — defense in depth behind the cache eviction above: assert
       # every runtime archive this leg built (host triple + any Apple/
@@ -431,7 +431,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          libs=$(find target -path "*/release/libperry_runtime.a" -o -path "*/release/perry_runtime.lib")
+          libs=$(find target -path "*/dist/libperry_runtime.a" -o -path "*/dist/perry_runtime.lib")
           if [ -z "$libs" ]; then
             echo "::error::no built runtime archives found under target/ — nothing to verify"
             exit 1
@@ -443,11 +443,11 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p staging
-          cp target/${{ matrix.target }}/release/perry staging/
+          cp target/${{ matrix.target }}/dist/perry staging/
           # Include static libraries for linking (runtime, stdlib, UI)
           for lib in libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
-            if [ -f "target/${{ matrix.target }}/release/$lib" ]; then
-              cp "target/${{ matrix.target }}/release/$lib" staging/
+            if [ -f "target/${{ matrix.target }}/dist/$lib" ]; then
+              cp "target/${{ matrix.target }}/dist/$lib" staging/
             fi
           done
           # #2532 — ship the perry-ext-* staticlibs so an out-of-tree install
@@ -455,7 +455,7 @@ jobs:
           # drivers without the workspace source. `perry compile` finds them
           # via the same exe-dir / PERRY_LIB_DIR search as the runtime/stdlib
           # libs (optimized_libs.rs::resolve_prebuilt_ext_libs).
-          for lib in target/${{ matrix.target }}/release/libperry_ext_*.a; do
+          for lib in target/${{ matrix.target }}/dist/libperry_ext_*.a; do
             [ -f "$lib" ] && cp "$lib" staging/
           done
           # Closes #394: macOS legs also ship iOS-cross-compiled libs.
@@ -464,7 +464,7 @@ jobs:
           # bottle's flat lib dir. library_search.rs's cross-compile
           # branch composes the right name based on --target.
           if [ "${{ runner.os }}" = "macOS" ]; then
-            dev_dir="target/aarch64-apple-ios/release"
+            dev_dir="target/aarch64-apple-ios/dist"
             if [ -f "$dev_dir/libperry_runtime.a" ]; then
               cp "$dev_dir/libperry_runtime.a" "staging/libperry_runtime_ios.a"
             fi
@@ -474,7 +474,7 @@ jobs:
             if [ -f "$dev_dir/libperry_ui_ios.a" ]; then
               cp "$dev_dir/libperry_ui_ios.a" "staging/libperry_ui_ios.a"
             fi
-            sim_dir="target/aarch64-apple-ios-sim/release"
+            sim_dir="target/aarch64-apple-ios-sim/dist"
             if [ -f "$sim_dir/libperry_runtime.a" ]; then
               cp "$sim_dir/libperry_runtime.a" "staging/libperry_runtime_ios_sim.a"
             fi
@@ -495,8 +495,8 @@ jobs:
               rest="${entry#*:}"
               dev_triple="${rest%%:*}"
               sim_triple="${rest#*:}"
-              dev_dir="target/${dev_triple}/release"
-              sim_dir="target/${sim_triple}/release"
+              dev_dir="target/${dev_triple}/dist"
+              sim_dir="target/${sim_triple}/dist"
               if [ -f "$dev_dir/libperry_runtime.a" ]; then
                 cp "$dev_dir/libperry_runtime.a" "staging/libperry_runtime_${plat}.a"
               fi
@@ -535,12 +535,12 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path staging
-          Copy-Item "target/${{ matrix.target }}/release/perry.exe" staging/
+          Copy-Item "target/${{ matrix.target }}/dist/perry.exe" staging/
           Copy-Item "xwin-install/bin/xwin.exe" staging/
           # Include static libraries for linking (runtime, stdlib, UI)
           $libs = @("perry_runtime.lib", "perry_stdlib.lib", "perry_ui_windows.lib")
           foreach ($lib in $libs) {
-            $path = "target/${{ matrix.target }}/release/$lib"
+            $path = "target/${{ matrix.target }}/dist/$lib"
             if (Test-Path $path) {
               Copy-Item $path staging/
             }
@@ -554,7 +554,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $androidLibDir | Out-Null
           $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a")
           foreach ($lib in $androidLibs) {
-            $src = "target/aarch64-linux-android/release/$lib"
+            $src = "target/aarch64-linux-android/dist/$lib"
             if (Test-Path $src) {
               Copy-Item $src $androidLibDir
             }
@@ -788,8 +788,8 @@ jobs:
         run: |
           set -euo pipefail
           while IFS= read -r pkg; do
-            rm -rf target/release/.fingerprint/"$pkg"-* \
-                   target/*/release/.fingerprint/"$pkg"-*
+            rm -rf target/dist/.fingerprint/"$pkg"-* \
+                   target/*/dist/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 
       # --- Per-runner toolchain wiring --------------------------------------
@@ -853,22 +853,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --target ${{ matrix.target }} -p perry-runtime
-          cargo build --release --target ${{ matrix.target }} -p perry-stdlib
+          cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          cargo build --profile dist --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
           # UI crate is matrix-driven. perry-ui-android needs the NDK env
           # we wired above; perry-ui-windows builds against the MSVC SDK
           # already on windows-latest. Both go through plain `cargo build`.
-          cargo build --release --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
+          cargo build --profile dist --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
 
       - name: Build runtime + stdlib + UI (nightly + build-std, Tier-3)
         if: matrix.tier3
         shell: bash
         run: |
           set -euo pipefail
-          cargo +nightly build --release \
+          cargo +nightly build --profile dist \
             -Z build-std=core,std,panic_abort \
             --target ${{ matrix.target }} \
-            -p perry-runtime -p perry-stdlib -p ${{ matrix.ui_crate }}
+            -p perry-runtime -p perry-runtime-static -p perry-stdlib -p perry-stdlib-static -p ${{ matrix.ui_crate }}
 
       # #4856 — defense in depth behind the cache eviction above: a stale
       # cached runtime archive fails the release here instead of breaking
@@ -877,9 +877,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          lib="target/${{ matrix.target }}/release/libperry_runtime.a"
+          lib="target/${{ matrix.target }}/dist/libperry_runtime.a"
           # Windows MSVC emits perry_runtime.lib (no `lib` prefix).
-          [ -f "$lib" ] || lib="target/${{ matrix.target }}/release/perry_runtime.lib"
+          [ -f "$lib" ] || lib="target/${{ matrix.target }}/dist/perry_runtime.lib"
           ./scripts/check_runtime_symbols.sh "$lib"
 
       # --- Package + manifest ----------------------------------------------
@@ -903,7 +903,7 @@ jobs:
           mkdir -p "$STAGING"
           # Required runtime + stdlib (always present on a successful build).
           for lib in libperry_runtime.a libperry_stdlib.a; do
-            src="target/${TARGET}/release/${lib}"
+            src="target/${TARGET}/dist/${lib}"
             if [ ! -f "$src" ]; then
               echo "::error::Expected $src after build but it's missing — aborting bundle."
               exit 1
@@ -914,7 +914,7 @@ jobs:
           # principle, but we built it above so this should exist; we hard-fail
           # if it's missing so the worker doesn't see a silently-degraded
           # bundle).
-          UI_SRC="target/${TARGET}/release/${UI_LIB}"
+          UI_SRC="target/${TARGET}/dist/${UI_LIB}"
           if [ ! -f "$UI_SRC" ]; then
             echo "::error::UI lib $UI_SRC missing after build — aborting bundle."
             exit 1
@@ -967,7 +967,7 @@ jobs:
           # behavior at line ~448 above.
           $libs = @("perry_runtime.lib", "perry_stdlib.lib", $uiLib)
           foreach ($lib in $libs) {
-            $src = "target/$target/release/$lib"
+            $src = "target/$target/dist/$lib"
             if (-not (Test-Path $src)) {
               Write-Error "Expected $src after build but it's missing — aborting bundle."
               exit 1
@@ -1143,7 +1143,7 @@ jobs:
                 lib.install Dir["libperry_*.a"]
               else
                 system "cargo", "build", "--release"
-                system "cargo", "build", "--release", "-p", "perry-runtime", "-p", "perry-stdlib"
+                system "cargo", "build", "--release", "-p", "perry-runtime", "-p", "perry-stdlib", "-p", "perry-runtime-static", "-p", "perry-stdlib-static"
                 bin.install "target/release/perry"
                 lib.install Dir["target/release/libperry_*.a"]
               end

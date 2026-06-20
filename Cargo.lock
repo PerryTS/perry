@@ -5969,6 +5969,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-runtime-static"
+version = "0.5.1197"
+dependencies = [
+ "perry-runtime",
+]
+
+[[package]]
 name = "perry-stdlib"
 version = "0.5.1198"
 dependencies = [
@@ -6058,6 +6065,13 @@ dependencies = [
  "x448",
  "x509-cert",
  "zstd",
+]
+
+[[package]]
+name = "perry-stdlib-static"
+version = "0.5.1197"
+dependencies = [
+ "perry-stdlib",
 ]
 
 [[package]]

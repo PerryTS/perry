@@ -40,6 +40,7 @@ mod field_get_set;
 mod field_set_by_name;
 mod global_fetch;
 mod global_this;
+pub mod handle_expando;
 pub(crate) use global_this::{default_prepare_stack_trace_func_ptr, ERROR_CONSTRUCTOR_PTR};
 mod global_this_tables;
 mod groupby;
@@ -800,8 +801,7 @@ pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
         let mut keys = m
             .borrow()
             .keys()
-            .filter(|&(owner, _key)| *owner == obj)
-            .map(|(_owner, key)| key.clone())
+            .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
             .collect::<Vec<_>>();
         keys.sort();
         keys

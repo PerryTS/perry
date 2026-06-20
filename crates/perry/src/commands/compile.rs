@@ -52,10 +52,12 @@ use app_metadata::rust_target_triple;
 // compile.rs anymore now that the iOS bundle code moved out).
 pub(crate) use audit_manifest::allowlist_matches;
 use bootstrap::{
-    apply_i18n_pass, bundle_extensions_into_ctx, dump_hir_for_debug, harvest_harmonyos_index_ets,
-    maybe_init_type_checker, rerun_collect_with_class_field_types, run_native_instance_fixups,
-    run_post_collect_preflight,
+    apply_i18n_pass, bundle_extensions_into_ctx, dump_hir_for_debug, maybe_init_type_checker,
+    rerun_collect_with_class_field_types, run_native_instance_fixups, run_post_collect_preflight,
 };
+// HarmonyOS ArkTS harvest only exists when the arkts backend is compiled in.
+#[cfg(feature = "backend-arkts")]
+use bootstrap::harvest_harmonyos_index_ets;
 use build_cache::BuildCacheProbe;
 use bundle_apple::{bundle_for_tvos, bundle_for_visionos, bundle_for_watchos};
 use bundle_ios::build_ios_app_bundle;
@@ -100,15 +102,37 @@ use strip_dedup::{
     strip_duplicate_objects_from_well_known_lib,
 };
 use targets::{
-    apple_sdk_version, compile_for_android_widget, compile_for_ios_widget, compile_for_wasm,
-    compile_for_watchos_widget, compile_for_wearos_tile, find_visionos_swift_runtime,
-    find_watchos_swift_runtime, generate_embedded_js_object, generate_js_bundle,
+    apple_sdk_version, find_visionos_swift_runtime, find_watchos_swift_runtime,
+    generate_embedded_js_object, generate_js_bundle,
 };
+// Codegen-backend entrypoints (#5422) — only present when their backend feature
+// is compiled in. The matching `--target` routing below errors cleanly when a
+// backend was built out.
+#[cfg(feature = "backend-glance")]
+use targets::compile_for_android_widget;
+#[cfg(feature = "backend-wasm")]
+use targets::compile_for_wasm;
+#[cfg(feature = "backend-wear-tiles")]
+use targets::compile_for_wearos_tile;
+#[cfg(feature = "backend-swiftui")]
+use targets::{compile_for_ios_widget, compile_for_watchos_widget};
 
 use super::progress::{ProgressSnapshot, VerboseProgress};
 
 mod types;
 pub use types::*;
+
+/// Error text for a `--target` whose codegen backend was compiled out (#5422).
+/// Always defined so the `#[cfg(not(...))]` routing arms can call it; unused in
+/// a full-cli build, hence the allow.
+#[allow(dead_code)]
+fn backend_disabled_msg(target: &str, feature: &str) -> String {
+    format!(
+        "target '{target}' needs the '{feature}' codegen backend, but this perry \
+         was built without it. Rebuild with `--features {feature}` (or the default \
+         `full-cli` / `all-codegen-backends`)."
+    )
+}
 
 struct NativeObjectArtifact {
     path: PathBuf,
@@ -588,7 +612,17 @@ pub fn run_with_parse_cache(
 
     // --- Web/WASM target: emit WASM binary + JS runtime bridge ---
     if matches!(args.target.as_deref(), Some("web") | Some("wasm")) {
-        return compile_for_wasm(&ctx, &args, format);
+        #[cfg(feature = "backend-wasm")]
+        {
+            return compile_for_wasm(&ctx, &args, format);
+        }
+        #[cfg(not(feature = "backend-wasm"))]
+        {
+            anyhow::bail!(backend_disabled_msg(
+                args.target.as_deref().unwrap_or("wasm"),
+                "backend-wasm",
+            ));
+        }
     }
 
     // --- Widget targets: emit platform-specific source + optional native provider ---
@@ -596,22 +630,51 @@ pub fn run_with_parse_cache(
         args.target.as_deref(),
         Some("ios-widget") | Some("ios-widget-simulator")
     ) {
-        return compile_for_ios_widget(&ctx, &args, format);
+        #[cfg(feature = "backend-swiftui")]
+        {
+            return compile_for_ios_widget(&ctx, &args, format);
+        }
+        #[cfg(not(feature = "backend-swiftui"))]
+        {
+            anyhow::bail!(backend_disabled_msg("ios-widget", "backend-swiftui"));
+        }
     }
     if matches!(
         args.target.as_deref(),
         Some("watchos-widget") | Some("watchos-widget-simulator")
     ) {
-        return compile_for_watchos_widget(&ctx, &args, format);
+        #[cfg(feature = "backend-swiftui")]
+        {
+            return compile_for_watchos_widget(&ctx, &args, format);
+        }
+        #[cfg(not(feature = "backend-swiftui"))]
+        {
+            anyhow::bail!(backend_disabled_msg("watchos-widget", "backend-swiftui"));
+        }
     }
     if args.target.as_deref() == Some("android-widget") {
-        return compile_for_android_widget(&ctx, &args, format);
+        #[cfg(feature = "backend-glance")]
+        {
+            return compile_for_android_widget(&ctx, &args, format);
+        }
+        #[cfg(not(feature = "backend-glance"))]
+        {
+            anyhow::bail!(backend_disabled_msg("android-widget", "backend-glance"));
+        }
     }
     if args.target.as_deref() == Some("wearos-tile") {
-        return compile_for_wearos_tile(&ctx, &args, format);
+        #[cfg(feature = "backend-wear-tiles")]
+        {
+            return compile_for_wearos_tile(&ctx, &args, format);
+        }
+        #[cfg(not(feature = "backend-wear-tiles"))]
+        {
+            anyhow::bail!(backend_disabled_msg("wearos-tile", "backend-wear-tiles"));
+        }
     }
 
     run_native_instance_fixups(&mut ctx);
+    #[cfg(feature = "backend-arkts")]
     harvest_harmonyos_index_ets(&args, &mut ctx, format);
 
     let i18n_table = apply_i18n_pass(&mut ctx, i18n_config.as_ref(), &i18n_translations, format);

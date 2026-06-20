@@ -219,6 +219,7 @@ fn c_string_literal(s: &str) -> String {
 /// Compile for iOS widget target: emit SwiftUI source for WidgetKit extension.
 /// Auto-invokes `swiftc` to produce a built `WidgetExtension.appex/` directory
 /// unless `--skip-swift-build` is passed.
+#[cfg(feature = "backend-swiftui")]
 pub(super) fn compile_for_ios_widget(
     ctx: &CompilationContext,
     args: &CompileArgs,
@@ -400,6 +401,7 @@ pub(super) fn compile_for_ios_widget(
 /// widgets declare a *different* app group we warn rather than silently routing
 /// them all through the first suite (validation is otherwise out of scope; the
 /// common case is a single bundle-wide app group).
+#[cfg(feature = "backend-swiftui")]
 fn write_shared_widget_runtime(
     output_dir: &Path,
     widgets: &[&perry_hir::ir::WidgetDecl],
@@ -534,6 +536,7 @@ fn build_widget_appex(
 }
 
 /// Compile for watchOS widget target: emit SwiftUI + native timeline (accessory families)
+#[cfg(feature = "backend-swiftui")]
 pub(super) fn compile_for_watchos_widget(
     ctx: &CompilationContext,
     args: &CompileArgs,
@@ -928,6 +931,7 @@ pub(super) fn compile_metallib_for_bundle(
 }
 
 /// Compile for Android widget target: emit Kotlin/Glance source + JNI bridge
+#[cfg(feature = "backend-glance")]
 pub(super) fn compile_for_android_widget(
     ctx: &CompilationContext,
     args: &CompileArgs,
@@ -1193,6 +1197,7 @@ mod native_shader_tool_tests {
 }
 
 /// Compile for Wear OS tile target: emit Kotlin Tiles source + JNI bridge
+#[cfg(feature = "backend-wear-tiles")]
 pub(super) fn compile_for_wearos_tile(
     ctx: &CompilationContext,
     args: &CompileArgs,
@@ -1292,6 +1297,7 @@ pub(super) fn compile_for_wearos_tile(
 // #854: web-target compile path; currently unreferenced from the dispatch
 // but kept as the JS+HTML emission entry point for `--target web`.
 #[allow(dead_code)]
+#[cfg(feature = "backend-js")]
 pub(super) fn compile_for_web(
     ctx: &CompilationContext,
     args: &CompileArgs,
@@ -1449,6 +1455,7 @@ pub(super) fn compile_for_web(
 }
 
 /// Compile for WebAssembly target: emit WASM binary + JS runtime bridge
+#[cfg(feature = "backend-wasm")]
 pub(super) fn compile_for_wasm(
     ctx: &CompilationContext,
     args: &CompileArgs,
