@@ -259,13 +259,13 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                     // the inner settles; install fulfill/reject thunks
                     // that will queue the right Task when called.
                     bump(&MT_STEP_CHAIN_REUSE_MISS);
-                    let (fulfill, reject) = build_async_step_thunks(step_closure);
+                    let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
                     return js_promise_then(inner, fulfill, reject);
                 }
             }
         } else {
             bump(&MT_STEP_CHAIN_REUSE_MISS);
-            let (fulfill, reject) = build_async_step_thunks(step_closure);
+            let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
             let p = js_promise_resolved(value);
             return js_promise_then(p, fulfill, reject);
         }
@@ -273,7 +273,7 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
         // Pointer-tagged but not a Promise (thenable etc.). Take the
         // fully-general path so assimilation runs.
         bump(&MT_STEP_CHAIN_REUSE_MISS);
-        let (fulfill, reject) = build_async_step_thunks(step_closure);
+        let (fulfill, reject) = build_async_step_thunks(step_closure, trap_next);
         let p = js_promise_resolved(value);
         return js_promise_then(p, fulfill, reject);
     };
@@ -485,17 +485,28 @@ pub fn scan_async_step_thunk_cache_mut(visitor: &mut crate::gc::RuntimeRootVisit
 /// awaits) while degrading gracefully (no cache overhead beyond the
 /// cell read/write) when many distinct step closures interleave (the
 /// Promise.all-of-N shape).
-fn build_async_step_thunks(step_closure: ClosurePtr) -> (ClosurePtr, ClosurePtr) {
+fn build_async_step_thunks(
+    step_closure: ClosurePtr,
+    trap_next: *mut Promise,
+) -> (ClosurePtr, ClosurePtr) {
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
     let key = step_closure as usize;
     let cached = LAST_ASYNC_STEP_THUNKS.with(|c| c.get());
     if cached.0 == key && !cached.1.is_null() && !cached.2.is_null() {
+        // #5485: refresh the captured activation `trap_next`. The step
+        // closure (cache key) is per-activation, so this is normally the
+        // same pointer; refreshing keeps us correct if the slot is reused.
+        js_closure_set_capture_ptr(cached.1, 1, trap_next as i64);
+        js_closure_set_capture_ptr(cached.2, 1, trap_next as i64);
         return (cached.1 as ClosurePtr, cached.2 as ClosurePtr);
     }
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
-    let fulfill = js_closure_alloc(async_step_fulfill_thunk as *const u8, 1);
+    // Capture layout: [step_closure_ptr, activation_trap_next_ptr] (#5485).
+    let fulfill = js_closure_alloc(async_step_fulfill_thunk as *const u8, 2);
     js_closure_set_capture_ptr(fulfill, 0, step_closure as i64);
-    let reject = js_closure_alloc(async_step_reject_thunk as *const u8, 1);
+    js_closure_set_capture_ptr(fulfill, 1, trap_next as i64);
+    let reject = js_closure_alloc(async_step_reject_thunk as *const u8, 2);
     js_closure_set_capture_ptr(reject, 0, step_closure as i64);
+    js_closure_set_capture_ptr(reject, 1, trap_next as i64);
     LAST_ASYNC_STEP_THUNKS.with(|c| c.set((key, fulfill, reject)));
     (fulfill as ClosurePtr, reject as ClosurePtr)
 }
@@ -508,6 +519,15 @@ extern "C" fn async_step_fulfill_thunk(
 ) -> f64 {
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
         as *const crate::closure::ClosureHeader;
+    // #5485: the activation's own trap_next, captured when this thunk was
+    // built (at the `await`), not the ambient INLINE_TRAP.trap_next at
+    // resume time — which may belong to an UNRELATED outer activation and,
+    // preserved here, let this resumed step's js_async_step_done reuse-gate
+    // settle that outer activation's result promise prematurely with this
+    // (intermediate await) value. Restoring the captured per-activation
+    // value keeps same-activation settlement working while preventing the
+    // cross-activation leak.
+    let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
     let false_bits = f64::from_bits(0x7FFC_0000_0000_0003);
     // #691 Phase 2: when this thunk is invoked from the pending-Promise
     // fallback in js_async_step_chain (await of a still-pending inner),
@@ -518,7 +538,7 @@ extern "C" fn async_step_fulfill_thunk(
     let prev = INLINE_TRAP.with(|c| {
         let old = c.get();
         c.set(InlineTrap {
-            trap_next: old.trap_next,
+            trap_next: captured_trap_next,
             current_step: step as usize,
         });
         old
@@ -534,13 +554,16 @@ extern "C" fn async_step_reject_thunk(
 ) -> f64 {
     let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
         as *const crate::closure::ClosureHeader;
+    // #5485: restore the captured per-activation trap_next (see
+    // async_step_fulfill_thunk for the full rationale).
+    let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
     let true_bits = f64::from_bits(0x7FFC_0000_0000_0004);
     // #691 Phase 2: see async_step_fulfill_thunk — same TLS-setup
     // requirement on the rejection path.
     let prev = INLINE_TRAP.with(|c| {
         let old = c.get();
         c.set(InlineTrap {
-            trap_next: old.trap_next,
+            trap_next: captured_trap_next,
             current_step: step as usize,
         });
         old
