@@ -92,6 +92,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 TEST262_DIR = REPO_ROOT / "test-compat" / "test262"
 PREAMBLE = TEST262_DIR / "preamble.js"
+# Node host shim: runs an assembled case as a *global script* (via
+# vm.runInThisContext) rather than a CommonJS module, matching a real Test262
+# host and Perry. Without it, module-scoped harness intrinsics are invisible to
+# global-scope indirect eval, so Node spuriously rejects Annex B eval cases
+# (#5346).
+HOST_RUNNER = TEST262_DIR / "host-run.cjs"
 # Feature tags Perry implements but the Node oracle cannot run (e.g. Temporal).
 # Cases tagged with one of these are judged in self-validating mode (#4792):
 # Perry-only, scored on whether the case's own `assert.*` self-checks throw.
@@ -473,7 +479,8 @@ def main() -> int:
                           else "ran clean; expected a thrown error (negative)")
                 return (rel, cat, "runtime-fail", reason, False, True)
             # 1) Node is the oracle (negative cases legitimately exit != 0).
-            n_exit, n_out = run(["node", str(staged)], base_env, args.timeout)
+            n_exit, n_out = run(["node", str(HOST_RUNNER), str(staged)],
+                                base_env, args.timeout)
             node_clean = n_exit == 0
             # 2) Perry compile (permissive — unimplemented surfaces as a gap).
             out_bin = workdir / "case.out"

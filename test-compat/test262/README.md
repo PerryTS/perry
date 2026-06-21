@@ -78,6 +78,17 @@ no harness. Because both runtimes load the *same* assembled script, the
 differential compares the two runtimes' **builtins**, never their
 harnesses.
 
+The Node oracle runs the assembled script through `host-run.cjs`
+(`vm.runInThisContext`) rather than `node case.js` directly. `node file.js`
+evaluates a file as a **CommonJS module**, scoping its top-level
+`var`/`function` declarations to the module wrapper instead of the global
+object — which diverges from both a conforming Test262 host and Perry, and
+breaks any case whose harness intrinsics must be reachable from global
+scope (notably the Annex B `eval-code/indirect` family, where an indirect
+`(0,eval)(...)` runs in global scope and otherwise can't see a
+module-scoped `assert`). `runInThisContext` restores true global-script
+semantics so the oracle agrees with a conforming host (#5346).
+
 Raw CommonJS/JS runs under Perry because Perry feeds user `.js` through
 the native AOT pipeline (the same path `compilePackages` uses; see #668).
 
@@ -116,6 +127,8 @@ the negative-rejection signal stay legible.
 - `pinned-sha.txt` — the Test262 SHA the corpus is pulled from.
 - `preamble.js` — host shims (`print`, `$DONOTEVALUATE`) prepended to
   every non-`raw` assembled case under both runtimes.
+- `host-run.cjs` — Node oracle entry point; runs an assembled case as a
+  global script via `vm.runInThisContext` (see the harness note above, #5346).
 - `report.json` — written by the runner (a generated artifact; not
   committed).
 
