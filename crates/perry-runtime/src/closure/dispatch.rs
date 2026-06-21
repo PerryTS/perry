@@ -1347,7 +1347,10 @@ pub unsafe extern "C" fn js_native_call_value(
         unsafe { crate::object::bound_native_callable_module_and_method(func_value) }
     {
         if module.trim_start_matches("node:") == "events"
-            && matches!(method.as_str(), "EventEmitter" | "EventEmitterAsyncResource")
+            && matches!(
+                method.as_str(),
+                "EventEmitter" | "EventEmitterAsyncResource"
+            )
         {
             let this_val = crate::object::js_implicit_this_get();
             if JSValue::from_bits(this_val.to_bits()).is_pointer() {
