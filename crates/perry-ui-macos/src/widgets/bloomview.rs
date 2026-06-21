@@ -14,7 +14,11 @@ use objc2_foundation::MainThreadMarker;
 /// sizes the view. Returns the widget handle.
 pub fn create(width: f64, height: f64) -> i64 {
     let _ = (width, height);
-    let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    // Public C ABI entry — don't panic across the FFI boundary if called off
+    // the main thread; return an invalid (0) handle instead.
+    let Some(mtm) = MainThreadMarker::new() else {
+        return 0;
+    };
     let view = NSView::new(mtm);
     super::register_widget(view)
 }

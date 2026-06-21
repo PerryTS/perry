@@ -14,8 +14,12 @@ use gtk4::prelude::*;
 pub fn create(width: f64, height: f64) -> i64 {
     crate::app::ensure_gtk_init();
     let area = gtk4::DrawingArea::new();
-    if width > 0.0 && height > 0.0 {
-        area.set_size_request(width as i32, height as i32);
+    // Only honor finite, sensibly-bounded sizes — NaN/inf or sub-pixel
+    // fractions would produce a bogus GTK size request. Otherwise expand.
+    if width.is_finite() && height.is_finite() && width >= 1.0 && height >= 1.0 {
+        let w = (width as i32).clamp(1, 16384);
+        let h = (height as i32).clamp(1, 16384);
+        area.set_size_request(w, h);
     } else {
         area.set_hexpand(true);
         area.set_vexpand(true);

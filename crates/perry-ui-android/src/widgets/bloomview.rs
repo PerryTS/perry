@@ -47,8 +47,11 @@ pub fn create(_width: f64, _height: f64) -> i64 {
 }
 
 /// Android has no HWND; echo the registry handle as a stable token for the
-/// caller. (A real native-surface address would only be valid on the JNI
-/// thread and is not a durable handle.)
+/// caller — but validate it first (return 0 for an unknown/stale handle), so
+/// downstream renderers never treat a bogus handle as attachable.
 pub fn get_native_handle(handle: i64) -> i64 {
-    handle
+    match super::get_widget(handle) {
+        Some(_) => handle,
+        None => 0,
+    }
 }
