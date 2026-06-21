@@ -182,6 +182,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_async_generator_function", VOID, &[PTR]);
+    // #5504: tag-checking unbox for dynamic call callees — throws
+    // `TypeError: value is not a function` instead of masking a
+    // non-pointer value's low 48 bits into a wild closure pointer.
+    module.declare_function("js_closure_unbox_callee_checked", I64, &[DOUBLE]);
     module.declare_function("js_closure_call0", DOUBLE, &[I64]);
     module.declare_function("js_closure_call1", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_closure_call2", DOUBLE, &[I64, DOUBLE, DOUBLE]);

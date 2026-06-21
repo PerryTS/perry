@@ -9,6 +9,7 @@ mod alloc;
 mod dispatch;
 mod dynamic_props;
 mod registry;
+mod unbox;
 mod v8_stubs;
 
 #[cfg(test)]
@@ -50,6 +51,7 @@ pub(crate) use dispatch::{
     coerce_call_this, reify_function_method_value, reset_throw_not_callable_counter,
     resolve_call2_direct,
 };
+pub use unbox::js_closure_unbox_callee_checked;
 
 #[cfg(test)]
 pub(crate) use dynamic_props::test_clear_closure_side_tables;

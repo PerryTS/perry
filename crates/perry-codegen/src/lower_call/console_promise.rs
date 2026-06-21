@@ -14,7 +14,7 @@ use perry_hir::Expr;
 use perry_types::Type as HirType;
 
 use crate::expr::{
-    emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
+    emit_typed_feedback_register_site, lower_expr, nanbox_pointer_inline, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
 };
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -1008,7 +1008,17 @@ pub fn try_lower_closure_call_fallthrough(
 
     let result = if lowered_args.len() <= 16 {
         let blk = ctx.block();
-        let closure_handle = unbox_to_i64(blk, &recv_box);
+        // #5504: tag-check the callee before masking to a closure pointer.
+        // A non-callable value (number/string/bool/null/undefined) whose
+        // low-48 bits form an in-range address would otherwise be handed to
+        // `js_closure_callN` as a wild `*const ClosureHeader` and SIGSEGV on
+        // the header read. The checked unbox throws `TypeError: value is not
+        // a function` for any non-`POINTER_TAG` value.
+        let closure_handle = blk.call(
+            I64,
+            "js_closure_unbox_callee_checked",
+            &[(DOUBLE, &recv_box)],
+        );
         let runtime_fn = format!("js_closure_call{}", lowered_args.len());
         let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
         for v in &lowered_args {
@@ -1028,7 +1038,17 @@ pub fn try_lower_closure_call_fallthrough(
             let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
             blk.store(DOUBLE, v, &slot);
         }
-        let closure_handle = unbox_to_i64(blk, &recv_box);
+        // #5504: tag-check the callee before masking to a closure pointer.
+        // A non-callable value (number/string/bool/null/undefined) whose
+        // low-48 bits form an in-range address would otherwise be handed to
+        // `js_closure_callN` as a wild `*const ClosureHeader` and SIGSEGV on
+        // the header read. The checked unbox throws `TypeError: value is not
+        // a function` for any non-`POINTER_TAG` value.
+        let closure_handle = blk.call(
+            I64,
+            "js_closure_unbox_callee_checked",
+            &[(DOUBLE, &recv_box)],
+        );
         let argc = n.to_string();
         blk.call(
             DOUBLE,
