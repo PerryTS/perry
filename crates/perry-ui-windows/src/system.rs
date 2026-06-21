@@ -283,9 +283,7 @@ pub fn notification_send(title_ptr: *const u8, body_ptr: *const u8) {
         // registration failed). A blocking MessageBox at least surfaces the
         // message rather than silently dropping it.
         use windows::core::PCWSTR;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            MessageBoxW, MB_ICONINFORMATION, MB_OK,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
         let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let body_wide: Vec<u16> = body.encode_utf16().chain(std::iter::once(0)).collect();
         MessageBoxW(
@@ -310,8 +308,6 @@ pub fn notification_send(title_ptr: *const u8, body_ptr: *const u8) {
 /// the shell to hand it to the Action Center, then tear everything down.
 #[cfg(target_os = "windows")]
 mod win_notify {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -322,9 +318,10 @@ mod win_notify {
         NOTIFYICONDATAW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, LoadIconW, PeekMessageW,
-        RegisterClassW, TranslateMessage, CW_USEDEFAULT, HICON, IDI_APPLICATION, MSG, PM_REMOVE,
-        WINDOW_EX_STYLE, WM_USER, WNDCLASSW, WS_OVERLAPPED,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindowLongPtrW,
+        LoadIconW, PeekMessageW, RegisterClassW, SetWindowLongPtrW, TranslateMessage,
+        CW_USEDEFAULT, GWLP_USERDATA, HICON, IDI_APPLICATION, MSG, PM_REMOVE, WINDOW_EX_STYLE,
+        WM_USER, WNDCLASSW, WS_OVERLAPPED,
     };
 
     /// Per-window callback message for the transient notification icon. Offset
@@ -332,10 +329,15 @@ mod win_notify {
     /// distinct from `tray.rs`'s `WM_USER + 200` for clarity (different window).
     const WM_PERRY_NOTIF: u32 = WM_USER + 201;
 
-    /// Balloon lifecycle, written by `wnd_proc`, polled by the pump loop:
-    /// 0 = pending, 1 = shown (now queued into the Action Center and surviving
-    /// icon removal), 2 = dismissed/timed-out.
-    static BALLOON_STATE: AtomicU32 = AtomicU32::new(0);
+    /// Balloon lifecycle, stored per-window in `GWLP_USERDATA` (written by
+    /// `wnd_proc`, polled by the pump loop): 0 = pending, 1 = shown (now queued
+    /// into the Action Center and surviving icon removal), 2 = dismissed/timed-
+    /// out. Keeping the state on the window — rather than in a process-global —
+    /// means two concurrent `show_toast` calls (e.g. one from a `perry/thread`
+    /// worker) each own a separate window and can't stomp each other's state.
+    /// `GWLP_USERDATA` defaults to 0 (pending) on a fresh window.
+    const STATE_SHOWN: isize = 1;
+    const STATE_DISMISSED: isize = 2;
 
     /// Notification-area balloon events. `windows` 0.62 doesn't surface the
     /// `NIN_BALLOON*` constants under our enabled features, so we spell them
@@ -369,12 +371,16 @@ mod win_notify {
             // Legacy v0 semantics (we never call NIM_SETVERSION): the low word
             // of lParam carries the notification event. Mirrors tray.rs.
             let event = (lparam.0 & 0xFFFF) as u32;
-            match event {
-                NIN_BALLOONSHOW => BALLOON_STATE.store(1, Ordering::SeqCst),
-                NIN_BALLOONTIMEOUT | NIN_BALLOONHIDE | NIN_BALLOONUSERCLICK => {
-                    BALLOON_STATE.store(2, Ordering::SeqCst)
-                }
-                _ => {}
+            let new_state = match event {
+                NIN_BALLOONSHOW => STATE_SHOWN,
+                NIN_BALLOONTIMEOUT | NIN_BALLOONHIDE | NIN_BALLOONUSERCLICK => STATE_DISMISSED,
+                _ => return LRESULT(0),
+            };
+            // Monotonic: never let a stray late event downgrade dismissed back
+            // to shown. The window proc runs on the same thread that created
+            // the window, so this read-modify-write needs no synchronization.
+            if new_state > GetWindowLongPtrW(hwnd, GWLP_USERDATA) {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, new_state);
             }
             return LRESULT(0);
         }
@@ -423,8 +429,7 @@ mod win_notify {
         if hwnd.is_invalid() {
             return false;
         }
-
-        BALLOON_STATE.store(0, Ordering::SeqCst);
+        // GWLP_USERDATA defaults to 0 (STATE_PENDING) on a fresh window.
 
         // IDI_APPLICATION is a shared system icon — we intentionally never
         // DestroyIcon it (a documented no-op on shared icons anyway).
@@ -454,7 +459,7 @@ mod win_notify {
         // notifications disabled and no event ever arrives.
         let deadline = GetTickCount64() + 4000;
         loop {
-            if BALLOON_STATE.load(Ordering::SeqCst) == 2 {
+            if GetWindowLongPtrW(hwnd, GWLP_USERDATA) == STATE_DISMISSED {
                 break;
             }
             let mut msg = MSG::default();
@@ -462,7 +467,7 @@ mod win_notify {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            if BALLOON_STATE.load(Ordering::SeqCst) >= 1 {
+            if GetWindowLongPtrW(hwnd, GWLP_USERDATA) >= STATE_SHOWN {
                 // Shown — give the shell a brief moment to finish handing the
                 // toast to the Action Center before we tear the icon down.
                 Sleep(250);
