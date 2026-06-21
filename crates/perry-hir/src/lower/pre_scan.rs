@@ -334,69 +334,384 @@ pub(crate) fn pre_scan_cross_fn_native_params(ast_module: &ast::Module, ctx: &mu
     let mut server_idents: HashSet<String> = HashSet::new();
     collect_server_idents_in_module(ast_module, &mut server_idents);
 
-    // Seed work items from each gated upgrade handler.
-    let mut work: Vec<(Vec<&ast::CallExpr>, HashMap<String, (String, String)>)> = Vec::new();
+    // Walk each gated upgrade handler's body with the `wsId` handle tainted,
+    // recording a hint for every top-level user function the handle flows into.
+    // The walk is scope-aware (`walk_taint_*`): descending into a nested
+    // function/arrow drops any name that scope rebinds as a parameter, so a
+    // shadowing `function later(wsId) {…}` cannot inherit the outer handle —
+    // while legitimate captures (`wsId.on('message', m => helper(req, wsId))`)
+    // still propagate. Hints are keyed by callee identity (span) and applied
+    // after the walk so the immutable `fn_*` tables can stay borrowed throughout.
+    let tcx = TaintCtx {
+        fn_params: &fn_params,
+        fn_bodies: &fn_bodies,
+        fn_spans: &fn_spans,
+    };
+    let mut applied: HashSet<(u32, usize, String, String)> = HashSet::new();
+    let mut hints: Vec<((u32, usize), (String, String))> = Vec::new();
+    let mut guard = 0usize;
     let mut all_calls: Vec<&ast::CallExpr> = Vec::new();
     collect_calls_in_module(ast_module, &mut all_calls);
     for call in &all_calls {
         if let Some((ws_id, handler)) = upgrade_handler_ws_id(call, &server_idents) {
-            let mut calls = Vec::new();
-            collect_calls_in_callback_body(handler, &mut calls);
-            let mut tainted = HashMap::new();
-            tainted.insert(ws_id, ("ws".to_string(), "Client".to_string()));
-            work.push((calls, tainted));
+            let mut taint: HashMap<String, (String, String)> = HashMap::new();
+            taint.insert(ws_id, ("ws".to_string(), "Client".to_string()));
+            walk_taint_callback_body(handler, &taint, &tcx, &mut applied, &mut hints, &mut guard);
         }
     }
+    for (key, val) in hints {
+        ctx.param_native_hints.insert(key, val);
+    }
+}
 
-    // Fixpoint propagation. `applied` dedups (callee, param, module, class) so
-    // mutual recursion / repeated call sites terminate.
-    let mut applied: HashSet<(String, usize, String, String)> = HashSet::new();
-    let mut guard = 0usize;
-    while let Some((calls, tainted)) = work.pop() {
-        guard += 1;
-        if guard > 50_000 {
-            break; // pathological-input backstop
+/// Immutable top-level-function tables shared by the scope-aware taint walk.
+struct TaintCtx<'a> {
+    fn_params: &'a HashMap<String, Vec<Option<String>>>,
+    fn_bodies: &'a HashMap<String, &'a ast::BlockStmt>,
+    fn_spans: &'a HashMap<String, u32>,
+}
+
+type Taint = HashMap<String, (String, String)>;
+type Applied = HashSet<(u32, usize, String, String)>;
+type Hints = Vec<((u32, usize), (String, String))>;
+
+/// Clone `taint`, dropping any name the arrow rebinds as a parameter (shadowing).
+fn prune_for_arrow(taint: &Taint, arrow: &ast::ArrowExpr) -> Taint {
+    let mut t = taint.clone();
+    for p in &arrow.params {
+        if let Some(n) = cross_fn_pat_name(p) {
+            t.remove(&n);
         }
-        for call in calls {
-            let Some(callee) = cross_fn_call_ident(call) else {
-                continue;
-            };
-            let Some(params) = fn_params.get(&callee) else {
-                continue;
-            };
-            for (i, arg) in call.args.iter().enumerate() {
-                if arg.spread.is_some() {
-                    continue;
-                }
-                let ast::Expr::Ident(id) = arg.expr.as_ref() else {
-                    continue;
-                };
-                let Some((module, class)) = tainted.get(id.sym.as_ref()) else {
-                    continue;
-                };
-                let Some(Some(param_name)) = params.get(i) else {
-                    continue;
-                };
-                let key = (callee.clone(), i, module.clone(), class.clone());
-                if !applied.insert(key) {
-                    continue;
-                }
-                // Key by the callee declaration's identifier span, not its name,
-                // so a same-named distinct declaration never picks up this hint.
-                if let Some(&callee_span) = fn_spans.get(&callee) {
-                    ctx.param_native_hints
-                        .insert((callee_span, i), (module.clone(), class.clone()));
-                }
-                // Follow the handle into the callee: its param[i] is now tainted.
-                if let Some(body) = fn_bodies.get(&callee) {
-                    let mut next_calls = Vec::new();
-                    collect_calls_in_stmts(&body.stmts, &mut next_calls);
-                    let mut next = HashMap::new();
-                    next.insert(param_name.clone(), (module.clone(), class.clone()));
-                    work.push((next_calls, next));
+    }
+    t
+}
+
+/// Clone `taint`, dropping any name the function rebinds as a parameter.
+fn prune_for_fn(taint: &Taint, func: &ast::Function) -> Taint {
+    let mut t = taint.clone();
+    for p in &func.params {
+        if let Some(n) = cross_fn_pat_name(&p.pat) {
+            t.remove(&n);
+        }
+    }
+    t
+}
+
+/// Walk a callback expression's body (arrow/function) under the seed taint. The
+/// callback's own params already account for the tainted handle, so no pruning.
+fn walk_taint_callback_body(
+    handler: &ast::Expr,
+    taint: &Taint,
+    tcx: &TaintCtx,
+    applied: &mut Applied,
+    hints: &mut Hints,
+    guard: &mut usize,
+) {
+    match handler {
+        ast::Expr::Arrow(a) => match a.body.as_ref() {
+            ast::BlockStmtOrExpr::BlockStmt(b) => {
+                walk_taint_stmts(&b.stmts, taint, tcx, applied, hints, guard)
+            }
+            ast::BlockStmtOrExpr::Expr(e) => walk_taint_expr(e, taint, tcx, applied, hints, guard),
+        },
+        ast::Expr::Fn(f) => {
+            if let Some(b) = &f.function.body {
+                walk_taint_stmts(&b.stmts, taint, tcx, applied, hints, guard);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn walk_taint_stmts(
+    stmts: &[ast::Stmt],
+    taint: &Taint,
+    tcx: &TaintCtx,
+    applied: &mut Applied,
+    hints: &mut Hints,
+    guard: &mut usize,
+) {
+    for s in stmts {
+        walk_taint_stmt(s, taint, tcx, applied, hints, guard);
+    }
+}
+
+fn walk_taint_stmt(
+    stmt: &ast::Stmt,
+    taint: &Taint,
+    tcx: &TaintCtx,
+    applied: &mut Applied,
+    hints: &mut Hints,
+    guard: &mut usize,
+) {
+    macro_rules! e {
+        ($x:expr) => {
+            walk_taint_expr($x, taint, tcx, applied, hints, guard)
+        };
+    }
+    macro_rules! s {
+        ($x:expr) => {
+            walk_taint_stmt($x, taint, tcx, applied, hints, guard)
+        };
+    }
+    match stmt {
+        ast::Stmt::Expr(x) => e!(&x.expr),
+        ast::Stmt::Return(r) => {
+            if let Some(a) = &r.arg {
+                e!(a);
+            }
+        }
+        ast::Stmt::Decl(ast::Decl::Var(v)) => {
+            for d in &v.decls {
+                if let Some(init) = &d.init {
+                    e!(init);
                 }
             }
         }
+        // A nested function declaration is a new scope — prune its params.
+        ast::Stmt::Decl(ast::Decl::Fn(f)) => {
+            if let Some(b) = &f.function.body {
+                let pruned = prune_for_fn(taint, &f.function);
+                walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard);
+            }
+        }
+        ast::Stmt::Block(b) => walk_taint_stmts(&b.stmts, taint, tcx, applied, hints, guard),
+        ast::Stmt::If(i) => {
+            e!(&i.test);
+            s!(&i.cons);
+            if let Some(alt) = &i.alt {
+                s!(alt);
+            }
+        }
+        ast::Stmt::While(w) => {
+            e!(&w.test);
+            s!(&w.body);
+        }
+        ast::Stmt::DoWhile(w) => {
+            s!(&w.body);
+            e!(&w.test);
+        }
+        ast::Stmt::For(f) => {
+            if let Some(ast::VarDeclOrExpr::VarDecl(vd)) = &f.init {
+                for d in &vd.decls {
+                    if let Some(init) = &d.init {
+                        e!(init);
+                    }
+                }
+            } else if let Some(ast::VarDeclOrExpr::Expr(x)) = &f.init {
+                e!(x);
+            }
+            if let Some(t) = &f.test {
+                e!(t);
+            }
+            if let Some(u) = &f.update {
+                e!(u);
+            }
+            s!(&f.body);
+        }
+        ast::Stmt::ForIn(f) => {
+            e!(&f.right);
+            s!(&f.body);
+        }
+        ast::Stmt::ForOf(f) => {
+            e!(&f.right);
+            s!(&f.body);
+        }
+        ast::Stmt::Throw(t) => e!(&t.arg),
+        ast::Stmt::Try(t) => {
+            walk_taint_stmts(&t.block.stmts, taint, tcx, applied, hints, guard);
+            if let Some(h) = &t.handler {
+                walk_taint_stmts(&h.body.stmts, taint, tcx, applied, hints, guard);
+            }
+            if let Some(f) = &t.finalizer {
+                walk_taint_stmts(&f.stmts, taint, tcx, applied, hints, guard);
+            }
+        }
+        ast::Stmt::Switch(sw) => {
+            e!(&sw.discriminant);
+            for c in &sw.cases {
+                if let Some(t) = &c.test {
+                    e!(t);
+                }
+                walk_taint_stmts(&c.cons, taint, tcx, applied, hints, guard);
+            }
+        }
+        ast::Stmt::Labeled(l) => s!(&l.body),
+        _ => {}
+    }
+}
+
+fn walk_taint_expr(
+    expr: &ast::Expr,
+    taint: &Taint,
+    tcx: &TaintCtx,
+    applied: &mut Applied,
+    hints: &mut Hints,
+    guard: &mut usize,
+) {
+    *guard += 1;
+    if *guard > 200_000 {
+        return; // pathological-input backstop
+    }
+    macro_rules! e {
+        ($x:expr) => {
+            walk_taint_expr($x, taint, tcx, applied, hints, guard)
+        };
+    }
+    match expr {
+        ast::Expr::Call(c) => {
+            // Record a cross-fn hint when this is a top-level user-fn call that
+            // receives a currently-tainted ident argument.
+            if let Some(callee) = cross_fn_call_ident(c) {
+                if let (Some(params), Some(&span)) =
+                    (tcx.fn_params.get(&callee), tcx.fn_spans.get(&callee))
+                {
+                    for (i, arg) in c.args.iter().enumerate() {
+                        if arg.spread.is_some() {
+                            continue;
+                        }
+                        let ast::Expr::Ident(id) = arg.expr.as_ref() else {
+                            continue;
+                        };
+                        let Some((module, class)) = taint.get(id.sym.as_ref()) else {
+                            continue;
+                        };
+                        let Some(Some(param_name)) = params.get(i) else {
+                            continue;
+                        };
+                        if !applied.insert((span, i, module.clone(), class.clone())) {
+                            continue;
+                        }
+                        hints.push(((span, i), (module.clone(), class.clone())));
+                        // Follow the handle into the callee body with a FRESH
+                        // scoped taint binding only its receiving parameter.
+                        if let Some(body) = tcx.fn_bodies.get(&callee) {
+                            let mut fresh: Taint = HashMap::new();
+                            fresh.insert(param_name.clone(), (module.clone(), class.clone()));
+                            walk_taint_stmts(&body.stmts, &fresh, tcx, applied, hints, guard);
+                        }
+                    }
+                }
+            }
+            // Descend into the callee + args (this scope; nested closures inside
+            // an arg get pruned by their own arms below).
+            if let ast::Callee::Expr(ce) = &c.callee {
+                e!(ce);
+            }
+            for arg in &c.args {
+                e!(&arg.expr);
+            }
+        }
+        ast::Expr::New(n) => {
+            e!(&n.callee);
+            if let Some(args) = &n.args {
+                for a in args {
+                    e!(&a.expr);
+                }
+            }
+        }
+        ast::Expr::Member(m) => {
+            e!(&m.obj);
+            if let ast::MemberProp::Computed(c) = &m.prop {
+                e!(&c.expr);
+            }
+        }
+        ast::Expr::Bin(b) => {
+            e!(&b.left);
+            e!(&b.right);
+        }
+        ast::Expr::Unary(u) => e!(&u.arg),
+        ast::Expr::Update(u) => e!(&u.arg),
+        ast::Expr::Assign(a) => e!(&a.right),
+        ast::Expr::Cond(c) => {
+            e!(&c.test);
+            e!(&c.cons);
+            e!(&c.alt);
+        }
+        ast::Expr::Paren(p) => e!(&p.expr),
+        ast::Expr::Seq(s) => {
+            for x in &s.exprs {
+                e!(x);
+            }
+        }
+        ast::Expr::Await(a) => e!(&a.arg),
+        ast::Expr::Yield(y) => {
+            if let Some(a) = &y.arg {
+                e!(a);
+            }
+        }
+        ast::Expr::Tpl(t) => {
+            for x in &t.exprs {
+                e!(x);
+            }
+        }
+        ast::Expr::TaggedTpl(t) => {
+            e!(&t.tag);
+            for x in &t.tpl.exprs {
+                e!(x);
+            }
+        }
+        ast::Expr::Array(a) => {
+            for el in a.elems.iter().flatten() {
+                e!(&el.expr);
+            }
+        }
+        ast::Expr::Object(o) => {
+            for prop in &o.props {
+                match prop {
+                    ast::PropOrSpread::Spread(s) => e!(&s.expr),
+                    ast::PropOrSpread::Prop(p) => match p.as_ref() {
+                        ast::Prop::KeyValue(kv) => e!(&kv.value),
+                        // Object methods are new scopes — prune their params.
+                        ast::Prop::Method(m) => {
+                            if let Some(b) = &m.function.body {
+                                let pruned = prune_for_fn(taint, &m.function);
+                                walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard);
+                            }
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        }
+        // New lexical scope — drop any name it rebinds as a parameter.
+        ast::Expr::Arrow(a) => {
+            let pruned = prune_for_arrow(taint, a);
+            match a.body.as_ref() {
+                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                    walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard)
+                }
+                ast::BlockStmtOrExpr::Expr(x) => {
+                    walk_taint_expr(x, &pruned, tcx, applied, hints, guard)
+                }
+            }
+        }
+        ast::Expr::Fn(f) => {
+            if let Some(b) = &f.function.body {
+                let pruned = prune_for_fn(taint, &f.function);
+                walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard);
+            }
+        }
+        ast::Expr::OptChain(o) => match o.base.as_ref() {
+            ast::OptChainBase::Member(m) => {
+                e!(&m.obj);
+                if let ast::MemberProp::Computed(c) = &m.prop {
+                    e!(&c.expr);
+                }
+            }
+            ast::OptChainBase::Call(c) => {
+                e!(&c.callee);
+                for arg in &c.args {
+                    e!(&arg.expr);
+                }
+            }
+        },
+        ast::Expr::TsAs(t) => e!(&t.expr),
+        ast::Expr::TsNonNull(t) => e!(&t.expr),
+        ast::Expr::TsTypeAssertion(t) => e!(&t.expr),
+        ast::Expr::TsConstAssertion(t) => e!(&t.expr),
+        ast::Expr::TsInstantiation(t) => e!(&t.expr),
+        _ => {}
     }
 }
 
@@ -778,22 +1093,6 @@ fn collect_calls_in_module<'a>(ast_module: &'a ast::Module, out: &mut Vec<&'a as
             },
             _ => {}
         }
-    }
-}
-
-/// Collect calls in a callback expression's body (arrow or function).
-fn collect_calls_in_callback_body<'a>(handler: &'a ast::Expr, out: &mut Vec<&'a ast::CallExpr>) {
-    match handler {
-        ast::Expr::Arrow(a) => match a.body.as_ref() {
-            ast::BlockStmtOrExpr::BlockStmt(b) => collect_calls_in_stmts(&b.stmts, out),
-            ast::BlockStmtOrExpr::Expr(e) => collect_calls_in_expr(e, out),
-        },
-        ast::Expr::Fn(f) => {
-            if let Some(b) = &f.function.body {
-                collect_calls_in_stmts(&b.stmts, out);
-            }
-        }
-        _ => {}
     }
 }
 
