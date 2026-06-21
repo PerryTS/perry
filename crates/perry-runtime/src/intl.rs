@@ -17,6 +17,7 @@ use crate::StringHeader;
 #[cfg(feature = "intl-segmenter")]
 use unicode_segmentation::UnicodeSegmentation;
 
+mod display_names;
 mod duration_format;
 mod locale;
 mod locales;
@@ -30,6 +31,7 @@ const KIND_LIST_FORMAT: &str = "ListFormat";
 const KIND_PLURAL_RULES: &str = "PluralRules";
 const KIND_RELATIVE_TIME: &str = "RelativeTimeFormat";
 const KIND_DURATION_FORMAT: &str = "DurationFormat";
+const KIND_DISPLAY_NAMES: &str = "DisplayNames";
 
 const KEY_KIND: &str = "__intlKind";
 const KEY_LOCALE: &str = "__intlLocale";
@@ -1486,6 +1488,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_DURATION_FORMAT => duration_format::configure(obj, options),
+        KIND_DISPLAY_NAMES => display_names::configure(obj, options),
         _ => {}
     }
 
@@ -1655,6 +1658,7 @@ fn install_constructor(
     ns_obj: *mut ObjectHeader,
     name: &str,
     ctor_ptr: *const u8,
+    ctor_length: u32,
     methods: &[(&str, *const u8, u32)],
 ) {
     let ctor = crate::closure::js_closure_alloc(ctor_ptr, 0);
@@ -1663,7 +1667,7 @@ fn install_constructor(
     }
     crate::closure::js_register_closure_rest(ctor_ptr, 0);
     crate::object::set_bound_native_closure_name(ctor, name);
-    crate::object::set_builtin_closure_length(ctor as usize, 0);
+    crate::object::set_builtin_closure_length(ctor as usize, ctor_length);
     crate::object::set_builtin_property_attrs(
         ctor as usize,
         "name".to_string(),
@@ -1732,6 +1736,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "NumberFormat",
         number_format_constructor_thunk as *const u8,
+        0,
         &[
             ("format", number_format_format_thunk as *const u8, 1),
             (
@@ -1750,6 +1755,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "DateTimeFormat",
         date_time_format_constructor_thunk as *const u8,
+        0,
         &[
             ("format", date_time_format_format_thunk as *const u8, 1),
             (
@@ -1768,6 +1774,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "Collator",
         collator_constructor_thunk as *const u8,
+        0,
         &[
             ("compare", collator_compare_thunk as *const u8, 2),
             (
@@ -1781,6 +1788,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "Segmenter",
         segmenter_constructor_thunk as *const u8,
+        0,
         &[
             ("segment", segmenter_segment_thunk as *const u8, 1),
             (
@@ -1794,6 +1802,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "ListFormat",
         list_format_constructor_thunk as *const u8,
+        0,
         &[
             ("format", list_format_format_thunk as *const u8, 1),
             ("formatToParts", list_format_to_parts_thunk as *const u8, 1),
@@ -1808,6 +1817,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "RelativeTimeFormat",
         relative_time_format_constructor_thunk as *const u8,
+        0,
         &[
             ("format", rtf_format_thunk as *const u8, 2),
             ("formatToParts", rtf_to_parts_thunk as *const u8, 2),
@@ -1822,6 +1832,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "PluralRules",
         plural_rules_constructor_thunk as *const u8,
+        0,
         &[
             ("select", plural_rules_select_thunk as *const u8, 1),
             (
@@ -1840,6 +1851,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         ns_obj,
         "DurationFormat",
         duration_format::constructor_thunk as *const u8,
+        0,
         &[
             ("format", duration_format::format_thunk as *const u8, 1),
             (
@@ -1850,6 +1862,20 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
             (
                 "resolvedOptions",
                 duration_format::resolved_options_thunk as *const u8,
+                0,
+            ),
+        ],
+    );
+    install_constructor(
+        ns_obj,
+        "DisplayNames",
+        display_names::constructor_thunk as *const u8,
+        2,
+        &[
+            ("of", display_names::of_thunk as *const u8, 1),
+            (
+                "resolvedOptions",
+                display_names::resolved_options_thunk as *const u8,
                 0,
             ),
         ],
