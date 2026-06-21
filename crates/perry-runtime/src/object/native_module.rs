@@ -8616,7 +8616,20 @@ unsafe fn vt_get_own_field(
             bound_native_callable_export_value(module_name, property_name).to_bits(),
         ));
     }
-    Some(JSValue::undefined())
+    // Object-valued exports (e.g. `perf_hooks.performance` / `.constants`) are
+    // resolved by the shared per-property dispatch but are not covered by the
+    // override / constant / callable checks above. Without delegating, a DYNAMIC
+    // namespace read (`createRequire(...)("perf_hooks").performance`,
+    // `process.getBuiltinModule(...)`) returned undefined for them while the
+    // static codegen path resolved them via `js_native_module_property_by_name`.
+    // Defer to that authoritative resolver so dynamic namespaces match static.
+    let resolved = js_native_module_property_by_name(
+        module_name.as_ptr(),
+        module_name.len(),
+        key_ptr,
+        key_len,
+    );
+    Some(JSValue::from_bits(resolved.to_bits()))
 }
 
 /// `Object.keys(namespace)` — fresh array of the module's enumerable
