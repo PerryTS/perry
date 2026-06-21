@@ -29,9 +29,9 @@ use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
-    notify_main_thread, register_handle, spawn_blocking_with_reactor as spawn_blocking,
-    take_handle, GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader,
-    RawClosureHeader, StringHeader,
+    notify_main_thread, register_handle, spawn_async,
+    spawn_blocking_with_reactor as spawn_blocking, take_handle, GcRootVisitor, Handle, JsClosure,
+    JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -805,106 +805,114 @@ fn drive_server_client_io<S>(
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    // Issue #577 Phase 4 — when called via the upgrade-from-http
-    // path (`register_external_ws_stream`), the caller is already
-    // inside a tokio runtime task, so `Handle::current().block_on(fut)`
-    // would panic with "Cannot start a runtime from within a runtime".
-    // Schedule the IO loop as a sibling task on the existing runtime
-    // instead. (The original standalone `WebSocketServer({port})`
-    // path also called us from inside `spawn_blocking_with_reactor`'s
-    // worker context — block_on worked there because that worker
-    // happened not to be inside a runtime task, but the upgrade
-    // path is. `tokio::spawn` works correctly in BOTH contexts.)
-    spawn_blocking(move || {
-        tokio::spawn(async move {
-            let (mut write, mut read) = ws_stream.split();
-            loop {
-                tokio::select! {
-                    msg_result = read.next() => {
-                        match msg_result {
-                            Some(Ok(Message::Text(text))) => {
-                                // Issue #577 Phase 4 — race between
-                                // `register_external_ws_stream` (which spawns
-                                // this IO loop and starts reading immediately)
-                                // and the main-thread `'upgrade'` event firing
-                                // (which is where user code registers
-                                // `wsId.on('message', cb)`). If the client
-                                // sends a frame fast enough, the IO loop
-                                // pushes it to WS_PENDING_EVENTS before the
-                                // listener exists, then `js_ws_process_pending`
-                                // drops it silently. Mirror the client-side
-                                // logic at line 268: only push as a pending
-                                // event when a listener is already registered;
-                                // otherwise queue on `c.messages` so the
-                                // listener-registration site can drain it
-                                // synchronously.
-                                let text_str = text.to_string();
-                                let client_has_listener = WS_CLIENT_LISTENERS
-                                    .lock()
-                                    .unwrap()
-                                    .get(&ws_id)
-                                    .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
-                                    .unwrap_or(false);
-                                // #746 follow-up: a server-level
-                                // `wss.on('message', (ws, data) => ...)` handler
-                                // (perry-stdlib::ws parity) registers on the parent
-                                // WsServerHandle, not on WS_CLIENT_LISTENERS. The
-                                // original #577 Phase 4 race-guard only checked the
-                                // per-client map, so a server-only message handler
-                                // never produced a PendingWsEvent::Message — the
-                                // frame was parked on c.messages forever.
-                                let server_has_listener = WS_CLIENT_PARENT_SERVER
-                                    .lock()
-                                    .unwrap()
-                                    .get(&ws_id)
-                                    .copied()
-                                    .map(|sh| !listeners_on_server(sh, "message").is_empty())
-                                    .unwrap_or(false);
-                                if client_has_listener || server_has_listener {
-                                    push_ws_event(PendingWsEvent::Message(ws_id, text_str));
-                                } else if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                                    c.messages.push(text_str);
-                                }
+    // Issue #577 (Phase 4 + follow-up): the caller may already be inside a tokio
+    // runtime task (the upgrade-from-http path via `register_external_ws_stream`),
+    // so `Handle::current().block_on(fut)` would panic ("Cannot start a runtime
+    // from within a runtime"). Avoid `spawn_blocking(|| tokio::spawn(...))` too:
+    // the nested spawn depends on an ambient `Handle` on a blocking-pool thread,
+    // which "proved brittle under release/LTO builds" (see `perry_ffi::spawn_async`
+    // docs) — in release the IO loop silently failed to start, so neither inbound
+    // frames were read nor `WsCommand::Send` writes flushed (a dead post-upgrade
+    // channel). Drive the per-connection IO loop on Perry's shared reactor-owned
+    // runtime instead, matching perry-ext-net's socket reader loops.
+    //
+    // Keepalive: unlike the old `spawn_blocking_with_reactor`, `spawn_async` does
+    // NOT bump the event-loop active-handle counter, so this task is not
+    // self-keepalive — the caller must own a gate. It does: every path that
+    // reaches here registers the connection in `WS_CONNECTIONS` with
+    // `is_open = true` BEFORE this call (`register_external_ws_stream` for the
+    // upgrade path; the standalone server also holds `WS_ACTIVE_SERVERS`), and
+    // `js_ws_has_pending` reports the loop live while any connection is open. So
+    // the WS connection itself keeps the shared loop alive for as long as it is
+    // open — independent of the host HTTP listener's own gate.
+    spawn_async(async move {
+        let (mut write, mut read) = ws_stream.split();
+        loop {
+            tokio::select! {
+                msg_result = read.next() => {
+                    match msg_result {
+                        Some(Ok(Message::Text(text))) => {
+                            // Issue #577 Phase 4 — race between
+                            // `register_external_ws_stream` (which spawns
+                            // this IO loop and starts reading immediately)
+                            // and the main-thread `'upgrade'` event firing
+                            // (which is where user code registers
+                            // `wsId.on('message', cb)`). If the client
+                            // sends a frame fast enough, the IO loop
+                            // pushes it to WS_PENDING_EVENTS before the
+                            // listener exists, then `js_ws_process_pending`
+                            // drops it silently. Mirror the client-side
+                            // logic at line 268: only push as a pending
+                            // event when a listener is already registered;
+                            // otherwise queue on `c.messages` so the
+                            // listener-registration site can drain it
+                            // synchronously.
+                            let text_str = text.to_string();
+                            let client_has_listener = WS_CLIENT_LISTENERS
+                                .lock()
+                                .unwrap()
+                                .get(&ws_id)
+                                .map(|l| l.listeners.get("message").map(|v| !v.is_empty()).unwrap_or(false))
+                                .unwrap_or(false);
+                            // #746 follow-up: a server-level
+                            // `wss.on('message', (ws, data) => ...)` handler
+                            // (perry-stdlib::ws parity) registers on the parent
+                            // WsServerHandle, not on WS_CLIENT_LISTENERS. The
+                            // original #577 Phase 4 race-guard only checked the
+                            // per-client map, so a server-only message handler
+                            // never produced a PendingWsEvent::Message — the
+                            // frame was parked on c.messages forever.
+                            let server_has_listener = WS_CLIENT_PARENT_SERVER
+                                .lock()
+                                .unwrap()
+                                .get(&ws_id)
+                                .copied()
+                                .map(|sh| !listeners_on_server(sh, "message").is_empty())
+                                .unwrap_or(false);
+                            if client_has_listener || server_has_listener {
+                                push_ws_event(PendingWsEvent::Message(ws_id, text_str));
+                            } else if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+                                c.messages.push(text_str);
                             }
-                            Some(Ok(Message::Binary(b))) => {
-                                let s = String::from_utf8_lossy(&b).to_string();
-                                push_ws_event(PendingWsEvent::Message(ws_id, s));
-                            }
-                            Some(Ok(Message::Close(frame))) => {
-                                let (code, reason) = frame
-                                    .map(|f| (f.code.into(), f.reason.to_string()))
-                                    .unwrap_or((1000u16, String::new()));
-                                push_ws_event(PendingWsEvent::Close(ws_id, code, reason));
-                                break;
-                            }
-                            Some(Ok(_)) => {}
-                            Some(Err(e)) => {
-                                push_ws_event(PendingWsEvent::Error(ws_id, format!("{}", e)));
-                                break;
-                            }
-                            None => break,
                         }
+                        Some(Ok(Message::Binary(b))) => {
+                            let s = String::from_utf8_lossy(&b).to_string();
+                            push_ws_event(PendingWsEvent::Message(ws_id, s));
+                        }
+                        Some(Ok(Message::Close(frame))) => {
+                            let (code, reason) = frame
+                                .map(|f| (f.code.into(), f.reason.to_string()))
+                                .unwrap_or((1000u16, String::new()));
+                            push_ws_event(PendingWsEvent::Close(ws_id, code, reason));
+                            break;
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => {
+                            push_ws_event(PendingWsEvent::Error(ws_id, format!("{}", e)));
+                            break;
+                        }
+                        None => break,
                     }
-                    cmd = rx.recv() => {
-                        match cmd {
-                            Some(WsCommand::Send(text)) => {
-                                if write.send(Message::Text(text.into())).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Some(WsCommand::Close) => {
-                                let _ = write.send(Message::Close(None)).await;
+                }
+                cmd = rx.recv() => {
+                    match cmd {
+                        Some(WsCommand::Send(text)) => {
+                            if write.send(Message::Text(text.into())).await.is_err() {
                                 break;
                             }
-                            None => break,
                         }
+                        Some(WsCommand::Close) => {
+                            let _ = write.send(Message::Close(None)).await;
+                            break;
+                        }
+                        None => break,
                     }
                 }
             }
-            if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                c.is_open = false;
-            }
-        });
+        }
+        if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+            c.is_open = false;
+        }
     });
 }
 
