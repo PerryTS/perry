@@ -422,15 +422,20 @@ export function Canvas(width: number, height: number): Canvas;
 /**
  * Render-surface host for an external GPU renderer (issue #2395).
  *
- * `BloomView(width, height)` reserves a native child window inside the Perry UI
- * view tree. Perry UI does not draw into it — pass the handle returned by
+ * `BloomView(width, height)` reserves a native render-surface view in the Perry
+ * UI view tree. Perry UI does not draw into it — pass the handle returned by
  * `bloomViewGetHwnd(view)` to a renderer such as the Bloom engine
- * (`attachToHwnd`), which builds its surface on the window and drives frames.
- * Currently implemented on the Windows target.
+ * (`attachToHwnd`), which builds its surface on the view and drives frames.
+ * Available on all native targets (Windows HWND, macOS/iOS/visionOS native
+ * view, GTK4 widget, Android view; tvOS/watchOS link as no-ops).
  */
 export function BloomView(width: number, height: number): Widget;
 
-/** Raw native window handle (HWND) for a `BloomView`, as an integer. */
+/**
+ * The `BloomView`'s native handle as a number — the platform's render-surface
+ * pointer (HWND on Windows, NSView/UIView on Apple, GtkWidget on GTK4). Hand
+ * this to an external renderer's attach call.
+ */
 export function bloomViewGetHwnd(view: Widget): number;
 
 /**

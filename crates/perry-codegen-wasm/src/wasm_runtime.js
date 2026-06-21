@@ -2830,6 +2830,17 @@ function perry_ui_canvas_create(width, height) {
   el._ctx = el.getContext("2d");
   return uiAlloc(el);
 }
+// BloomView (issue #2395) — a <canvas> render-surface host for an external GPU
+// renderer. The web has no HWND; bloomViewGetHwnd returns the handle id (the
+// surrogate the renderer keys off of) or 0 if unknown.
+function perry_ui_bloomview_create(width, height) {
+  const el = document.createElement("canvas");
+  el.width = width || 300; el.height = height || 150;
+  return uiAlloc(el);
+}
+function perry_ui_bloomview_get_hwnd(h) {
+  return uiGet(h) ? h : 0;
+}
 function perry_ui_lazyvstack_create(count, renderClosure) {
   const el = document.createElement("div");
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.overflow = "auto"; el.style.flex = "1 1 0%";
@@ -4632,6 +4643,7 @@ const __perryUiDispatch = {
   perry_ui_toggle_create, perry_ui_toggle_set_state, perry_ui_slider_create, perry_ui_scrollview_create, perry_ui_spacer_create,
   perry_ui_divider_create, perry_ui_progressview_create, perry_ui_image_create, perry_ui_picker_create,
   perry_ui_form_create, perry_ui_section_create, perry_ui_navigationstack_create, perry_ui_canvas_create,
+  perry_ui_bloomview_create, perry_ui_bloomview_get_hwnd,
   perry_ui_lazyvstack_create, perry_ui_lazyvstack_update, perry_ui_table_create,
   perry_ui_table_set_column_header, perry_ui_table_set_column_width,
   perry_ui_table_update_row_count, perry_ui_table_set_on_row_select, perry_ui_table_get_selected_row,
