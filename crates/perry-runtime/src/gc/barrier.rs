@@ -1177,6 +1177,23 @@ pub(crate) fn runtime_store_jsvalue_slot(
     unsafe {
         std::ptr::write(slot_addr as *mut u64, value_bits);
     }
+    // A heap string stored into an object field / array element is now aliased
+    // from the heap, so a later `js_string_append` must NOT mutate its buffer
+    // in place while this slot still references it. Demote it from "uniquely
+    // owned" (refcount==1) to shared (refcount==0). This realizes the
+    // documented `js_string_addref` contract ("stored into an array/object" —
+    // see string/alloc.rs): codegen wires the local-copy alias case (`let y =
+    // x`) but never the heap-store case, so refcount=1 strings leaked into
+    // object/array slots and were corrupted by the in-place append fast path.
+    // Concretely: code that snapshots a string into a heap slot
+    // (`slot = newState`) and later grows the same buffer via `+=` would have
+    // the in-place append silently rewrite the stored slot, so a later equality
+    // check against the snapshot wrongly saw the two as identical. Every dynamic
+    // object-field and array-element write funnels through here, so this is the
+    // single complete choke point.
+    if value_bits & TAG_MASK == STRING_TAG {
+        crate::string::js_string_addref((value_bits & POINTER_MASK) as *mut crate::StringHeader);
+    }
     layout_note_slot(parent_user, slot_index, value_bits);
     runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
 }

@@ -1072,6 +1072,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // local failed clang with "use of undefined value
     // @js_string_addref" — pure linker-visible declaration fix.
     module.declare_function("js_string_addref", VOID, &[I64]);
+    // Tag-checked addref taking a NaN-boxed value (DOUBLE): the scalar-replaced
+    // object-field / array-element stores demote a possibly-unique string source
+    // without materializing SSO strings. Same declaration rationale as above.
+    module.declare_function("js_string_addref_if_heap_string", VOID, &[DOUBLE]);
     module.declare_function("js_bigint_from_string", I64, &[PTR, I32]);
     module.declare_function("js_bigint_from_f64", I64, &[DOUBLE]);
     module.declare_function("js_bigint_cmp", I32, &[I64, I64]);

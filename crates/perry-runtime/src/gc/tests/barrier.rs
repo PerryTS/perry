@@ -1225,6 +1225,111 @@ fn test_incremental_barrier_marks_array_element_store() {
     remembered_set_clear();
 }
 
+/// Regression: a uniquely-owned (refcount==1) string stored into an object
+/// field or array element must be demoted to shared (refcount==0) by the
+/// write-barrier choke point, so a later `js_string_append` on the original
+/// local allocates fresh instead of mutating the buffer in place and
+/// corrupting the stored alias. The manifesting shape is a heap-stored snapshot
+/// (`slot = s`) whose source is then grown (`s += chunk`): without the demote,
+/// the append rewrites the slot the snapshot still points at, so a later
+/// equality check against the snapshot wrongly sees the two as identical.
+#[test]
+fn test_store_demotes_unique_string_to_shared() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    clear_marks();
+
+    // Build a uniquely-owned string via append (refcount becomes 1).
+    let a = crate::string::js_string_from_bytes(b"john".as_ptr(), 4);
+    let b = crate::string::js_string_from_bytes(b".".as_ptr(), 1);
+    let unique = crate::string::js_string_append(a, b);
+    assert_eq!(
+        unsafe { (*unique).refcount },
+        1,
+        "js_string_append yields a uniquely-owned string"
+    );
+
+    // Store it into an object field slot via the choke point under test.
+    let (obj, fields) = unsafe { alloc_old_test_object(1) };
+    mark_user_ptr(obj as usize);
+    runtime_store_jsvalue_slot(
+        obj as usize,
+        fields as usize,
+        0,
+        string_bits(unique as usize),
+    );
+
+    // The fix demotes the stored string to shared (refcount==0).
+    assert_eq!(
+        unsafe { (*unique).refcount },
+        0,
+        "string stored into an object field is demoted to shared"
+    );
+
+    // A subsequent append must allocate fresh and leave the stored buffer intact.
+    let c = crate::string::js_string_from_bytes(b"doe".as_ptr(), 3);
+    let grown = crate::string::js_string_append(unique, c);
+    assert_ne!(
+        grown, unique,
+        "append after store allocates fresh — no in-place mutation of the aliased buffer"
+    );
+    assert_eq!(
+        unsafe { (*unique).byte_len },
+        5,
+        "the stored buffer ('john.') was not grown in place"
+    );
+    let slot_bits = unsafe { std::ptr::read(fields as *const u64) };
+    assert_eq!(
+        slot_bits,
+        string_bits(unique as usize),
+        "the object field still references the original, unmutated string"
+    );
+
+    // Same guarantee for an array element store (shares the choke point).
+    let unique2 = crate::string::js_string_append(
+        crate::string::js_string_from_bytes(b"a".as_ptr(), 1),
+        crate::string::js_string_from_bytes(b"b".as_ptr(), 1),
+    );
+    assert_eq!(unsafe { (*unique2).refcount }, 1);
+    let (arr, elements) = unsafe { alloc_old_test_array(1) };
+    mark_user_ptr(arr as usize);
+    runtime_store_jsvalue_slot(
+        arr as usize,
+        elements as usize,
+        0,
+        string_bits(unique2 as usize),
+    );
+    assert_eq!(
+        unsafe { (*unique2).refcount },
+        0,
+        "string stored into an array element is demoted to shared"
+    );
+
+    // ...and the same in-place-mutation guarantee as the object case above.
+    let d = crate::string::js_string_from_bytes(b"c".as_ptr(), 1);
+    let grown2 = crate::string::js_string_append(unique2, d);
+    assert_ne!(
+        grown2, unique2,
+        "append after array-element store allocates fresh — no in-place mutation of the aliased buffer"
+    );
+    assert_eq!(
+        unsafe { (*unique2).byte_len },
+        2,
+        "the stored array-element buffer ('ab') was not grown in place"
+    );
+    let elem_bits = unsafe { std::ptr::read(elements as *const u64) };
+    assert_eq!(
+        elem_bits,
+        string_bits(unique2 as usize),
+        "the array element still references the original, unmutated string"
+    );
+
+    clear_mark_user_ptr(obj as usize);
+    clear_mark_user_ptr(arr as usize);
+    clear_marks();
+    remembered_set_clear();
+}
+
 #[test]
 fn test_incremental_barrier_marks_closure_capture_store() {
     let _guard = GcTestIsolationGuard::new();

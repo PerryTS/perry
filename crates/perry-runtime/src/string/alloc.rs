@@ -153,6 +153,22 @@ pub extern "C" fn js_string_addref(s: *mut StringHeader) {
     }
 }
 
+/// Tag-checked [`js_string_addref`] taking a NaN-boxed value: marks the string
+/// shared ONLY when `value` is a heap `STRING_TAG` string. Small-string-optimized
+/// (`SHORT_STRING_TAG`) and non-string values are a no-op — inline strings have
+/// no refcount to demote, and there is no point materializing one to a fresh
+/// heap allocation just to addref-and-discard it. Mirrors the tag gate in
+/// `runtime_store_jsvalue_slot`, so codegen scalar-replaced field / array-element
+/// stores can demote a possibly-unique string source without forcing an SSO heap
+/// allocation for the (common) short-string case.
+#[no_mangle]
+pub extern "C" fn js_string_addref_if_heap_string(value: f64) {
+    let bits = value.to_bits();
+    if bits & crate::value::TAG_MASK == crate::value::STRING_TAG {
+        js_string_addref((bits & crate::value::POINTER_MASK) as *mut StringHeader);
+    }
+}
+
 /// Get string length in UTF-16 code units (JS `.length` semantics)
 #[no_mangle]
 pub extern "C" fn js_string_length(s: *const StringHeader) -> u32 {

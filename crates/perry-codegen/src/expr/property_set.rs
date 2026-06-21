@@ -220,6 +220,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         val_double.clone()
                     };
                     ctx.block().store(DOUBLE, &stored_value, &slot);
+                    // String-alias fix (mirror of `let y = x` in stmt/let_stmt.rs):
+                    // a string-typed local stored into a scalar-replaced field's
+                    // alloca slot aliases the same heap buffer. The runtime
+                    // write-barrier choke point (runtime_store_jsvalue_slot) can't
+                    // see this store because scalar replacement elides the real
+                    // heap object, so mark the buffer shared here. Otherwise a
+                    // later `s = s + suffix` mutates it in-place via
+                    // js_string_append's refcount==1 fast path and corrupts this
+                    // field. Only a `LocalGet` of a string-typed local can carry a
+                    // uniquely-owned buffer (concat/literal results are shared).
+                    if let Expr::LocalGet(src_id) = &**value {
+                        if matches!(ctx.local_types.get(src_id), Some(HirType::String)) {
+                            ctx.block().call_void(
+                                "js_string_addref_if_heap_string",
+                                &[(DOUBLE, &val_double)],
+                            );
+                        }
+                    }
                     let lowered_js = LoweredValue {
                         semantic: SemanticKind::JsValue,
                         rep: NativeRep::JsValue,
@@ -284,6 +302,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             val_double.clone()
                         };
                         ctx.block().store(DOUBLE, &stored_value, &slot);
+                        // String-alias fix: see the ScalarObjectFieldSet path
+                        // above. `this.field = s` into a scalar-replaced ctor slot
+                        // aliases the string buffer; mark it shared so a later
+                        // self-append doesn't mutate it in-place and corrupt the
+                        // field.
+                        if let Expr::LocalGet(src_id) = &**value {
+                            if matches!(ctx.local_types.get(src_id), Some(HirType::String)) {
+                                ctx.block().call_void(
+                                    "js_string_addref_if_heap_string",
+                                    &[(DOUBLE, &val_double)],
+                                );
+                            }
+                        }
                         let lowered_js = LoweredValue {
                             semantic: SemanticKind::JsValue,
                             rep: NativeRep::JsValue,
