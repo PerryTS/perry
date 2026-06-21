@@ -312,6 +312,11 @@ pub(crate) fn pre_scan_cross_fn_native_params(ast_module: &ast::Module, ctx: &mu
             .params
             .iter()
             .map(|p| cross_fn_pat_name(&p.pat))
+            // Drop the TypeScript `this:` type-only param exactly as
+            // `lower_fn_decl` does before enumerating real params. Call sites
+            // never pass `this` positionally, so keeping it would shift every
+            // hint/param index by one for `function f(this: T, req, wsId)`.
+            .filter(|name| name.as_deref() != Some("this"))
             .collect();
         fn_params.insert(name.clone(), names);
         fn_bodies.insert(name, body);
