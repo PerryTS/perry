@@ -1859,6 +1859,18 @@ pub(crate) fn invalidate_method_change(class_id: u32) {
     }
 }
 
+/// Upper bound on the cumulative `O(sites)` scan work spent across all
+/// [`invalidate_representation_change`] calls. A large object/array built
+/// incrementally (a startup spread that sets thousands of properties) triggers
+/// a representation-invalidation scan on *every* layout transition; with a big
+/// feedback registry that becomes `O(N²)` and effectively hangs the process.
+/// The scan only updates per-site deopt counters, and every speculative site
+/// re-guards its representation at runtime (`js_typed_feedback_record_guard_*`),
+/// so once the estimated total scan work exceeds this budget the scan can be
+/// skipped without affecting correctness — churny sites simply deopt less
+/// eagerly while their runtime guards still catch any representation mismatch.
+const REPRESENTATION_INVALIDATION_SCAN_BUDGET: u64 = 50_000_000;
+
 pub(crate) fn invalidate_representation_change(obj_addr: usize) {
     if obj_addr == 0 {
         return;
@@ -1866,6 +1878,15 @@ pub(crate) fn invalidate_representation_change(obj_addr: usize) {
     let (shape_addr, class_id, heap_type) = object_shape(obj_addr);
     let mut reg = registry();
     reg.representation_invalidations = reg.representation_invalidations.saturating_add(1);
+    // `representation_invalidations * sites` upper-bounds the cumulative scan
+    // work; past the budget, skip the scan (see the const docs above).
+    if reg
+        .representation_invalidations
+        .saturating_mul(reg.sites.len() as u64)
+        > REPRESENTATION_INVALIDATION_SCAN_BUDGET
+    {
+        return;
+    }
     for site in reg.sites.values_mut() {
         if site.observations.iter().any(|obs| {
             obs.affected_by_representation_change(obj_addr, shape_addr, class_id, heap_type)
