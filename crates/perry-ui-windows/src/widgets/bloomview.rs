@@ -55,7 +55,12 @@ fn ensure_class_registered() {
             return;
         }
         unsafe {
-            let hinstance = GetModuleHandleW(None).unwrap();
+            // Don't unwrap across the FFI boundary — bail and retry on the next
+            // create() if the module handle is somehow unavailable.
+            let hinstance = match GetModuleHandleW(None) {
+                Ok(h) => h,
+                Err(_) => return,
+            };
             let class_name = to_wide("PerryBloomView");
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -67,6 +72,8 @@ fn ensure_class_registered() {
                 hbrBackground: HBRUSH(std::ptr::null_mut()),
                 ..Default::default()
             };
+            // Returns 0 if the class already exists (e.g. registered from another
+            // thread) — harmless, the class is usable either way.
             RegisterClassExW(&wc);
         }
         r.set(true);
@@ -82,8 +89,13 @@ pub fn create(width: f64, height: f64) -> i64 {
         let class_name = to_wide("PerryBloomView");
         let window_text = to_wide("");
         unsafe {
-            let hinstance = GetModuleHandleW(None).unwrap();
-            let hwnd = CreateWindowExW(
+            // Avoid panicking across the FFI boundary; return an invalid (0)
+            // handle if the OS refuses the module handle or the window.
+            let hinstance = match GetModuleHandleW(None) {
+                Ok(h) => h,
+                Err(_) => return 0,
+            };
+            let hwnd = match CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(window_text.as_ptr()),
@@ -96,8 +108,10 @@ pub fn create(width: f64, height: f64) -> i64 {
                 None,
                 Some(HINSTANCE::from(hinstance)),
                 None,
-            )
-            .unwrap();
+            ) {
+                Ok(h) => h,
+                Err(_) => return 0,
+            };
 
             let handle =
                 register_widget_with_layout(hwnd, WidgetKind::Image, 0.0, (0.0, 0.0, 0.0, 0.0));

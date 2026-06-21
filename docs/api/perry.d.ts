@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1943 entries across 113 modules
+// Coverage: 1945 entries across 113 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2780,6 +2780,8 @@ declare module "perry/ui" {
   /** stdlib */
   export function AttributedText(...args: any[]): any;
   /** stdlib */
+  export function BloomView(...args: any[]): any;
+  /** stdlib */
   export function BottomNavigation(...args: any[]): any;
   /** stdlib */
   export function Button(...args: any[]): any;
@@ -2863,6 +2865,8 @@ declare module "perry/ui" {
   export function attributedTextAppend(...args: any[]): any;
   /** stdlib */
   export function attributedTextClear(...args: any[]): any;
+  /** stdlib */
+  export function bloomViewGetHwnd(...args: any[]): any;
   /** stdlib */
   export function blur(...args: any[]): any;
   /** stdlib */
