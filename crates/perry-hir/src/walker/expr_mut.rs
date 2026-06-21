@@ -861,7 +861,7 @@ where
                 }
             }
         }
-        Expr::SuperCallSpread(args) => {
+        Expr::SuperCallSpread(args) | Expr::SuperMethodCallSpread { args, .. } => {
             for a in args {
                 match a {
                     CallArg::Expr(e) | CallArg::Spread(e) => f(e),

@@ -16,13 +16,23 @@ use crate::types::{DOUBLE, I32, I64};
 /// `this.method = X`), invoke the stored closure via `js_native_call_value`;
 /// otherwise call the static method body directly. Returns the LLVM register
 /// holding the unified result (phi over the two branches).
+/// `override_user_args` are the FLAT (un-rest-bundled) user arguments — i.e.
+/// the source-level call arguments WITHOUT the leading `this` and WITHOUT the
+/// trailing rest array the static ABI bundles. The override branch dispatches a
+/// dynamic value (an arrow / bound function / native method) via
+/// `js_native_call_value`, which performs its own arity/rest handling from a
+/// flat positional buffer — so it must receive the spread-out args, not the
+/// rest array as one positional. (`super.emit(event, ...args)` forwarding to a
+/// native EventEmitter override otherwise delivered `[payload]` to listeners.)
+/// The static branch keeps `fallback_arg_slices` (rest-bundled) unchanged.
 pub(super) fn emit_own_method_override_check(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
     property: &str,
     fallback_fn: &str,
     fallback_arg_slices: &[(crate::types::LlvmType, &str)],
-    lowered_args: &[String],
+    this_box: &str,
+    override_user_args: &[String],
 ) -> String {
     // Intern the property name so we can pass (ptr, len) directly to the
     // override probe — saves an allocation vs synthesizing a StringHeader.
@@ -66,12 +76,12 @@ pub(super) fn emit_own_method_override_check(
     // `IMPLICIT_THIS` to the receiver around the call so non-arrow
     // function bodies see the right `this` (issue #632 / #519 pattern).
     ctx.current_block = override_idx;
-    let user_arg_count = lowered_args.len().saturating_sub(1);
+    let user_arg_count = override_user_args.len();
     let (args_ptr, args_len) = if user_arg_count == 0 {
         ("null".to_string(), "0".to_string())
     } else {
         let buf_reg = ctx.func.alloca_entry_array(DOUBLE, user_arg_count);
-        for (i, a_val) in lowered_args.iter().skip(1).enumerate() {
+        for (i, a_val) in override_user_args.iter().enumerate() {
             let slot = ctx
                 .block()
                 .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
@@ -84,10 +94,11 @@ pub(super) fn emit_own_method_override_check(
         ));
         (ptr_reg, user_arg_count.to_string())
     };
-    let recv_for_this = lowered_args
-        .first()
-        .cloned()
-        .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+    let recv_for_this = if this_box.is_empty() {
+        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+    } else {
+        this_box.to_string()
+    };
     let prev_this = ctx
         .block()
         .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &recv_for_this)]);

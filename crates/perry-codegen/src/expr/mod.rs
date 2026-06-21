@@ -1551,6 +1551,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SetNewFromArray(..) => logical_collections::lower(ctx, expr),
         Expr::StaticMethodCall { .. } => static_method::lower(ctx, expr),
         Expr::SuperMethodCall { .. }
+        | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertyGet { .. }
         | Expr::SuperPropertySet { .. }
         | Expr::ObjectSuperPropertyGet { .. }

@@ -11,6 +11,7 @@ pub(crate) fn uses_this_expr(expr: &Expr) -> bool {
         Expr::SuperCall(_)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
+        | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertyGet { .. }
         | Expr::SuperPropertySet { .. }
         | Expr::ObjectSuperPropertyGet { .. }

@@ -350,6 +350,62 @@ static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC: unsafe extern "C" fn(
     usize,
 ) -> f64 = js_super_method_call_dynamic;
 
+/// `super.method(...spread)` dispatch where the argument count is dynamic.
+/// Codegen flattens every argument (regular args plus every spread-expanded
+/// element) into a single JS array `args_array`, then routes here. We
+/// materialise that array into a contiguous flat `f64` buffer and forward to
+/// `js_super_method_call_dynamic`, so a `super.emit(event, ...args)` forwarding
+/// a rest param to a native base (EventEmitter) delivers the spread elements as
+/// individual arguments instead of one array. Without this the plain
+/// `SuperMethodCall` lowering passed the spread operand as ONE positional arg.
+///
+/// # Safety
+/// `name_ptr` must be valid for `name_len` bytes. `args_array` is a NaN-boxed
+/// array pointer (or any non-array value, treated as zero args).
+#[no_mangle]
+pub unsafe extern "C" fn js_super_method_call_dynamic_apply(
+    child_class_id: u32,
+    name_ptr: *const u8,
+    name_len: usize,
+    this_value: f64,
+    args_array: f64,
+) -> f64 {
+    let arr =
+        (args_array.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    let n = if arr.is_null() {
+        0usize
+    } else {
+        crate::array::js_array_length(arr) as usize
+    };
+    let mut flat: Vec<f64> = Vec::with_capacity(n);
+    for i in 0..n {
+        flat.push(crate::array::js_array_get_f64(arr, i as u32));
+    }
+    let (args_ptr, args_len) = if flat.is_empty() {
+        (std::ptr::null(), 0usize)
+    } else {
+        (flat.as_ptr(), flat.len())
+    };
+    js_super_method_call_dynamic(
+        child_class_id,
+        name_ptr,
+        name_len,
+        this_value,
+        args_ptr,
+        args_len,
+    )
+}
+
+/// Keepalive anchor (generated-code-only callee).
+#[used]
+static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC_APPLY: unsafe extern "C" fn(
+    u32,
+    *const u8,
+    usize,
+    f64,
+    f64,
+) -> f64 = js_super_method_call_dynamic_apply;
+
 /// Run the constructor of class `parent_cid` (or its nearest ctor-bearing
 /// ancestor) on the EXISTING `this`, taking arguments from a flat f64 buffer —
 /// the codegen `super()` ABI. Returns `true` when a constructor was found and

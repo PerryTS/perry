@@ -2058,13 +2058,22 @@ pub fn try_lower_property_get_method_call(
                 // class). Hono's SmartRouter rebinds `this.match` on the
                 // first call so subsequent calls go through the bound
                 // fast-path closure instead of the original method.
+                // The override branch dispatches a dynamic value (arrow / bound
+                // / native method) via `js_native_call_value`, which does its
+                // own arity/rest handling from a FLAT positional buffer. Pass
+                // the un-rest-bundled user args (`fallback_user_args`) — not the
+                // rest-bundled `lowered_args[1..]`, which would deliver the rest
+                // array as one positional argument and break a native override
+                // such as `super.emit(event, ...args)` forwarding to
+                // EventEmitter (#620 / rest-spread-to-native-override).
                 return Ok(Some(emit_own_method_override_check(
                     ctx,
                     &recv_box,
                     property,
                     &fallback_fn,
                     &arg_slices,
-                    &lowered_args,
+                    &recv_box,
+                    &fallback_user_args,
                 )));
             }
 

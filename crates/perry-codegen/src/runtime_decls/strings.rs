@@ -1167,6 +1167,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[I32, PTR, I64, DOUBLE, PTR, I64],
     );
+    // `super.method(...spread)` — flatten the (codegen-built) args array into a
+    // flat f64 buffer and forward to `js_super_method_call_dynamic`.
+    module.declare_function(
+        "js_super_method_call_dynamic_apply",
+        DOUBLE,
+        &[I32, PTR, I64, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
     // Issue #711 part 2: prototype-based class declaration via
     // `<func>.prototype = <obj>`. Binds an object as the function's

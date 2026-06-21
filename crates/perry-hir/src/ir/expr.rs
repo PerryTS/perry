@@ -573,6 +573,19 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// `super.method(...spread)` with one or more spread arguments. Mirrors
+    /// `SuperCallSpread` for the method-call shape: the plain `SuperMethodCall`
+    /// drops the spread marker and would pass the spread operand (an array) as
+    /// ONE positional argument, so a `super.emit(event, ...args)` forwarding a
+    /// rest param to a native base (EventEmitter) delivered `[payload]` instead
+    /// of `payload`. Codegen flattens every arg (regular + spread-expanded)
+    /// into a single args array and dispatches through the runtime super
+    /// helper, which already takes an args buffer.
+    SuperMethodCallSpread {
+        method: String,
+        args: Vec<CallArg>,
+    },
+
     // Super property read (value form). super.<prop>. Resolved at
     // codegen by walking the parent class's method table (issue #774).
     SuperPropertyGet {
