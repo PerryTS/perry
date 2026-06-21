@@ -342,16 +342,23 @@ fn looks_like_es_module(source: &str) -> bool {
         b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
     }
 
-    fn prev_allows_module_item(bytes: &[u8], mut i: usize) -> bool {
-        while i > 0 {
-            i -= 1;
-            match bytes[i] {
-                b' ' | b'\t' | b'\r' | b'\n' => continue,
-                b';' | b'{' | b'}' => return true,
-                _ => return false,
-            }
-        }
-        true
+    // Whether a top-level `import`/`export` keyword found here can begin a
+    // module item, given `last_sig` — the last significant *code* byte seen so
+    // far (0 = start of input). A module item starts at input start or right
+    // after a statement boundary (`;`, `{`, `}`); anything else (an operator, an
+    // identifier byte, a string/regex terminator) means the keyword is part of a
+    // larger expression and not a real `import`/`export` statement.
+    //
+    // `last_sig` is tracked during the forward scan rather than recovered by
+    // walking the raw bytes backward, because a backward walk cannot tell that
+    // the preceding bytes were inside a comment. Bundler chunks almost always
+    // open with a banner comment (`// chunk-….js`) immediately followed by a
+    // top-level `export`/`import`; a raw backward walk would see the comment's
+    // last character (e.g. the `)` of "(cross-chunk re-export)") and wrongly
+    // conclude the keyword can't start a module item, so the `.js` chunk parsed
+    // as a Script and SWC raised `ImportExportInScript` (issue #5207).
+    fn allows_module_item(last_sig: u8) -> bool {
+        matches!(last_sig, 0 | b';' | b'{' | b'}')
     }
 
     fn next_after_keyword(bytes: &[u8], i: usize, keyword: &[u8]) -> Option<usize> {
@@ -438,6 +445,12 @@ fn looks_like_es_module(source: &str) -> bool {
     let bytes = source.as_bytes();
     let mut i = 0;
     let mut state = State::Code;
+    // Last significant code byte seen (0 = start of input). Comments are
+    // transparent — they never update this — so a banner comment before a
+    // top-level `import`/`export` no longer hides the keyword. Strings and
+    // regex literals leave their terminator (`"`/`'`/`` ` ``/`/`) as the last
+    // significant byte, matching the old backward walk's behavior.
+    let mut last_sig: u8 = 0;
     while i < bytes.len() {
         match state {
             State::Code => {
@@ -455,8 +468,12 @@ fn looks_like_es_module(source: &str) -> bool {
                         Some(end) => i = end,
                         None => i += 1,
                     }
+                    // A regex literal (or a `/` division operator) is an
+                    // expression token — a following keyword can't begin a
+                    // module item.
+                    last_sig = b'/';
                 } else {
-                    if prev_allows_module_item(bytes, i) {
+                    if allows_module_item(last_sig) {
                         if let Some(end) = next_after_keyword(bytes, i, b"export") {
                             if matches!(
                                 bytes.get(end),
@@ -475,6 +492,9 @@ fn looks_like_es_module(source: &str) -> bool {
                             }
                         }
                     }
+                    if !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+                        last_sig = bytes[i];
+                    }
                     i += 1;
                 }
             }
@@ -484,6 +504,7 @@ fn looks_like_es_module(source: &str) -> bool {
                 } else {
                     if bytes[i] == quote {
                         state = State::Code;
+                        last_sig = quote;
                     }
                     i += 1;
                 }
@@ -803,6 +824,45 @@ mod tests {
         let source = "const re = /(^[*!]|[/()[\\]{}\"])/;\nconst x = \"ok\";\nexport default x;\n";
         let module = parse_typescript(source, "vendored.js").unwrap();
         assert_eq!(module.body.len(), 3);
+    }
+
+    #[test]
+    fn test_banner_comment_before_top_level_export_is_module() {
+        // Regression for #5207: a bundler code-split chunk almost always opens
+        // with a banner comment immediately followed by a top-level `export`
+        // (or `import`). The module-detection scan must look through the comment
+        // — its last character (here the `)` of "(cross-chunk re-export)") must
+        // not be mistaken for a preceding code token that bars a module item, or
+        // the `.js` chunk parses as a Script and SWC raises ImportExportInScript.
+        let cases = [
+            "// runtime chunk (cross-chunk re-export)\nexport function rt(x) { return x; }\n",
+            "// banner foo\nexport const V = 1;\n",
+            "/* block banner */\nimport { x } from \"./chunk-shared.js\";\n",
+            "// a\n// b\n// c\nexport { y } from \"./other.js\";\n",
+        ];
+        for src in cases {
+            assert!(
+                looks_like_es_module(src),
+                "expected ESM classification for chunk:\n{src}"
+            );
+            // And it must actually parse as a module rather than a Script.
+            parse_typescript(src, "chunk-abc.js")
+                .unwrap_or_else(|e| panic!("chunk failed to parse as a module {src:?}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn test_comment_does_not_create_false_module_classification() {
+        // The transparency fix must not flip a genuinely CommonJS chunk to ESM:
+        // a comment ending in `;`/`{`/`}` followed by a non-keyword leaves the
+        // file a Script, and `exportFoo`/`importMap`-style identifiers after a
+        // comment still don't match the `export`/`import` keywords.
+        assert!(!looks_like_es_module(
+            "// helper;\nconst exportFoo = 1;\nmodule.exports = exportFoo;\n"
+        ));
+        assert!(!looks_like_es_module(
+            "// note\nconst importMap = {};\nmodule.exports = importMap;\n"
+        ));
     }
 
     #[test]
