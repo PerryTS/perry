@@ -35,7 +35,7 @@ static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 static OBJECT_PROTO_ADDR: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OBJECT_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
 
-fn object_prototype_addr() -> usize {
+pub(crate) fn object_prototype_addr() -> usize {
     let cached = OBJECT_PROTO_ADDR.load(Ordering::Relaxed);
     if cached != usize::MAX {
         return cached;

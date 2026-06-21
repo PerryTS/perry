@@ -731,6 +731,30 @@ pub(crate) fn object_proto_descriptors_in_use() -> bool {
     OBJECT_PROTO_DESCRIPTORS.load(Ordering::Relaxed)
 }
 
+/// True when a write of `key` to a plain object whose prototype is the canonical
+/// `Object.prototype` might be intercepted there (inherited setter / non-writable
+/// data) and must therefore take the slow [[Set]] walk.
+///
+/// `OBJECT_PROTO_DESCRIPTORS` only records that *some* descriptor exists on
+/// `Object.prototype`; using it directly forced EVERY dynamic write onto the
+/// O(own-key-count) slow path, so a single userland `Object.prototype` accessor
+/// made any wide-object build O(n²) (a 20k-property build went 16ms → 42s). The
+/// fast plain-data write actually only needs the slow path when `Object.prototype`
+/// has an own property for THIS key; an absent key cannot be intercepted, so the
+/// fast path stays safe even while unrelated descriptors exist on the prototype.
+pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
+    if !object_proto_descriptors_in_use() {
+        return false;
+    }
+    let proto_addr = crate::array::object_prototype_addr();
+    if proto_addr == 0 {
+        return false;
+    }
+    let proto_value =
+        f64::from_bits(crate::value::JSValue::pointer(proto_addr as *const u8).bits());
+    reflect_support::obj_value_has_own_key(proto_value, key)
+}
+
 /// #5054: record descriptor installation on the target object itself —
 /// `OBJ_FLAG_HAS_DESCRIPTORS` in its GcHeader (travels with the object on
 /// evacuation), plus the `Object.prototype` process-global above. Unlike

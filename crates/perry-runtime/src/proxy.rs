@@ -1249,7 +1249,10 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         // POINTER_TAG'd heap object, or a module-level slot's raw I64 pointer
         // (top 16 bits zero).
         && (target_top16 == 0x7FFD || target_top16 == 0)
-        && !crate::object::object_proto_descriptors_in_use()
+        // Per-key, not the coarse process-wide flag: an unrelated descriptor on
+        // Object.prototype must not force every write of an *absent* key onto the
+        // O(n) slow walk (that made wide-object builds O(n²)).
+        && !crate::object::object_proto_may_intercept_key(key)
         && unsafe { crate::symbol::js_is_symbol(key) } == 0
     {
         let addr = extract_pointer(target.to_bits()) as usize;
