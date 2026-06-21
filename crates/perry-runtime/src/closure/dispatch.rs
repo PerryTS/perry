@@ -106,14 +106,14 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
 /// elsewhere), as do existing objects.
 pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(this_arg.to_bits());
-    if jv.is_undefined() || jv.is_null() || jv.is_pointer() {
-        return this_arg;
-    }
-    // #5515: a class reference reaches the call site as an INT32-tagged class id
-    // but is conceptually the class constructor OBJECT. `f.call(C)` must bind
-    // `this` to C itself — boxing it as a Number here makes a sloppy callee
-    // observe `this !== C` and lose the static chain. Leave it unchanged.
-    if crate::object::class_ref_id(this_arg).is_some() {
+    // A class ref (#5515) is an INT32-tagged class id but is the constructor
+    // OBJECT, not a primitive — `f.call(C)` binds `this` to C, so leave it
+    // unchanged rather than boxing it as a Number alongside undefined/null/ptr.
+    if jv.is_undefined()
+        || jv.is_null()
+        || jv.is_pointer()
+        || crate::object::class_ref_id(this_arg).is_some()
+    {
         return this_arg;
     }
     let tj = crate::value::JSValue::from_bits(target.to_bits());

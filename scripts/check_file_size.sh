@@ -329,6 +329,12 @@ crates/perry/src/commands/compile/optimized_libs.rs
 crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs
 crates/perry-hir/src/destructuring/var_decl.rs
 crates/perry-hir/src/lower/expr_new.rs
+# Closure call/apply/bind dispatch tower. Sat at 1998 LOC on main and crossed
+# the gate by the few-line class-ref `this`-coercion hook in #5515 (a class ref
+# must bind as `this` unboxed in `coerce_call_this`). Splitting the bound-
+# function / call-apply / name-resolution helpers into sibling modules is
+# tracked under #1435.
+crates/perry-runtime/src/closure/dispatch.rs
 EOF
 )
 
