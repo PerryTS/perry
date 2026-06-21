@@ -470,6 +470,15 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
     if jv.is_any_string() {
         return crate::builtins::js_boxed_string_new(value);
     }
+    // #5515: a class reference is an INT32-tagged class id, but it is
+    // conceptually the class constructor OBJECT, not a primitive number.
+    // `C.viaFn()` / `f.call(C)` bind `this` to the class ref; boxing it as a
+    // Number here (the `is_int32()` arm below) makes a regular-function static
+    // data property observe `this !== C` and lose access to the static chain.
+    // Return the class ref unchanged so `this === C` and `this.staticData` work.
+    if class_ref_id(value).is_some() {
+        return value;
+    }
     let bits = value.to_bits();
     if jv.is_int32()
         || (jv.is_number() && ((bits >> 48) != 0 || bits <= crate::gc::GC_HEADER_SIZE as u64))

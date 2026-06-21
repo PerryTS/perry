@@ -109,6 +109,13 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
     if jv.is_undefined() || jv.is_null() || jv.is_pointer() {
         return this_arg;
     }
+    // #5515: a class reference reaches the call site as an INT32-tagged class id
+    // but is conceptually the class constructor OBJECT. `f.call(C)` must bind
+    // `this` to C itself — boxing it as a Number here makes a sloppy callee
+    // observe `this !== C` and lose the static chain. Leave it unchanged.
+    if crate::object::class_ref_id(this_arg).is_some() {
+        return this_arg;
+    }
     let tj = crate::value::JSValue::from_bits(target.to_bits());
     if !tj.is_pointer() {
         return this_arg;
