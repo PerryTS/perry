@@ -441,6 +441,56 @@ pub extern "C" fn js_event_emitter_subclass_init(this: f64) -> f64 {
     this
 }
 
+/// `super(n)` for a source-compiled `class X extends Array` (e.g. lru-cache's
+/// `ZeroArray`: `class ZeroArray extends Array { constructor(n){ super(n);
+/// this.fill(0) } }`). Perry models the subclass instance as a plain object,
+/// not a real exotic Array, so `super(n)` otherwise left it length-less with no
+/// Array methods. Size it (`length = ToLength(n)`, a visible own property the
+/// generic array-like helpers read) and install the Array surface the instance
+/// relies on — currently `fill`, which delegates to `js_array_fill_generic`
+/// (it operates on the receiver's own `length` + indexed properties, exactly
+/// what an array-like object exposes). Indexed get/set already work as ordinary
+/// object properties. Mirrors `js_event_emitter_subclass_init` (#5494); the
+/// codegen `super()` lowering for an `Array` parent calls this. Additional
+/// Array methods can be added to `array_subclass_methods` as bundles need them.
+#[no_mangle]
+pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
+    let raw = raw_ptr_from_value(this);
+    if raw == 0 {
+        return this;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return this;
+    }
+    let obj = raw as *mut ObjectHeader;
+    // ToLength(n): undefined / NaN / <= 0 → 0; +Infinity (and any value past the
+    // max array length) clamps to 2^53 - 1; otherwise floor(n).
+    let len = {
+        const MAX_SAFE_INTEGER: f64 = 9007199254740991.0; // 2^53 - 1
+        let nv = JSValue::from_bits(n.to_bits());
+        if nv.is_undefined() || n.is_nan() || n <= 0.0 {
+            0.0
+        } else if n.is_infinite() {
+            MAX_SAFE_INTEGER
+        } else {
+            n.floor().min(MAX_SAFE_INTEGER)
+        }
+    };
+    let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    js_object_set_field_by_name(obj, length_key, len);
+    crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 1);
+    let methods: [(&str, StubFn); 1] = [("fill", super::cast1(ns_array_fill))];
+    install_methods_on_existing_object(obj, this, &methods, &[]);
+    this
+}
+
+/// `Array.prototype.fill`-equivalent installed on an Array-subclass instance:
+/// fills the receiver's own indexed slots `0..length` with `value`. Delegates
+/// to the generic array-like fill (which reads `length` off the receiver).
+pub(super) extern "C" fn ns_array_fill(closure: *const ClosureHeader, value: f64) -> f64 {
+    crate::array::js_array_fill_generic(super::this_value(closure), value, 0, 0.0, 0, 0.0)
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
     let methods = writable_methods();

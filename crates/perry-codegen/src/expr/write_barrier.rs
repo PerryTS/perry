@@ -406,6 +406,35 @@ pub(crate) fn lower_node_stream_super_init(
     Ok(undef_lit)
 }
 
+/// `super(n)` for a source-compiled `class X extends Array` (lru-cache's
+/// `ZeroArray` etc.): perry models the instance as a plain object, so size it
+/// and install the Array surface via the runtime `js_array_subclass_init`
+/// (mirrors `lower_node_stream_super_init` / the EventEmitter subclass init).
+pub(crate) fn lower_array_super_init(ctx: &mut FnCtx<'_>, super_args: &[Expr]) -> Result<String> {
+    let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let n = if let Some(first) = super_args.first() {
+        lower_expr(ctx, first)?
+    } else {
+        undef_lit.clone()
+    };
+    for arg in super_args.iter().skip(1) {
+        let _ = lower_expr(ctx, arg)?;
+    }
+
+    let this_box = match ctx.this_stack.last().cloned() {
+        Some(slot) => ctx.block().load(DOUBLE, &slot),
+        None => undef_lit.clone(),
+    };
+
+    ctx.block().call(
+        DOUBLE,
+        "js_array_subclass_init",
+        &[(DOUBLE, &this_box), (DOUBLE, &n)],
+    );
+
+    Ok(undef_lit)
+}
+
 /// #5137: install the bare EventEmitter listener/emit surface onto `this_box`
 /// for a source-compiled `class X extends EventEmitter` (node:events). Shared
 /// by the explicit-`super()` arm (`expr/this_super_call.rs`) and the

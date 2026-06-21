@@ -1262,6 +1262,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
 
     // ========== node:stream stubs (issue #631) ==========
     module.declare_function("js_event_emitter_subclass_init", DOUBLE, &[DOUBLE]); // #5137 EE subclass init
+    module.declare_function("js_array_subclass_init", DOUBLE, &[DOUBLE, DOUBLE]); // class extends Array
     module.declare_function("js_node_stream_readable_new", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_node_stream_readable_subclass_init",
