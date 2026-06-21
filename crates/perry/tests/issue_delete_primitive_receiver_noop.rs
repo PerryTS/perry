@@ -79,12 +79,33 @@ console.log("DONE");
         ok,
         "compiled binary did not exit cleanly (delete-on-primitive crash regressed)\nstdout:\n{out}"
     );
-    assert!(out.contains("num.static: true"), "delete num.field → true\n{out}");
-    assert!(out.contains("num.dynamic: true"), "delete num[k] → true\n{out}");
-    assert!(out.contains("bool.static: true"), "delete bool.field → true\n{out}");
-    assert!(out.contains("str.static: true"), "delete str.field → true\n{out}");
-    assert!(out.contains("obj.dynamic: true"), "delete obj.dynProp → true\n{out}");
+    assert!(
+        out.contains("num.static: true"),
+        "delete num.field → true\n{out}"
+    );
+    assert!(
+        out.contains("num.dynamic: true"),
+        "delete num[k] → true\n{out}"
+    );
+    assert!(
+        out.contains("bool.static: true"),
+        "delete bool.field → true\n{out}"
+    );
+    assert!(
+        out.contains("str.static: true"),
+        "delete str.field → true\n{out}"
+    );
+    assert!(
+        out.contains("obj.dynamic: true"),
+        "delete obj.dynProp → true\n{out}"
+    );
     assert!(out.contains("Fq(5): ok"), "Fq(5) must not crash\n{out}");
-    assert!(out.contains("Fq(obj): err"), "Fq(object) still reads error\n{out}");
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("Fq(obj): err"),
+        "Fq(object) still reads error\n{out}"
+    );
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
