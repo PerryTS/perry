@@ -197,6 +197,23 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         }
     }
 
+    // Cross-function native-handle propagation: a parameter that receives a
+    // known native handle across a call boundary (e.g. the `("ws","Client")`
+    // upgrade `wsId` passed as `handleConnection(req, wsId)`) is untyped here,
+    // so the type-annotation loop above can't tag it. `pre_scan_cross_fn_native_params`
+    // recorded a `(fn_name, param_index) -> (module, class)` hint before any
+    // body lowered; apply it now (before the body lowers) so `wsId.send(...)`
+    // inside this function dispatches to `js_ws_send_client_i64` like the inline
+    // call. Only registers when the param isn't already a native instance, so an
+    // explicit annotation always wins.
+    for (idx, param) in params.iter().enumerate() {
+        if let Some((module, class)) = ctx.param_native_hints.get(&(name.clone(), idx)).cloned() {
+            if ctx.lookup_native_instance(&param.name).is_none() {
+                ctx.register_native_instance(param.name.clone(), module, class);
+            }
+        }
+    }
+
     // #1483: perry/ui widget parameters (e.g. `canvas: Canvas` or, via a
     // type-only import alias, `canvas: CanvasType`) must dispatch instance
     // methods through perry/ui `NativeMethodCall` exactly like a local

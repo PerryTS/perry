@@ -193,6 +193,15 @@ pub struct LoweringContext {
     /// Native class instances: local_name -> (module_name, class_name)
     /// Tracks variables that hold instances of native module classes (e.g., EventEmitter)
     pub(crate) native_instances: Vec<(String, String, String)>,
+    /// Cross-function native-instance hints: (function_name, param_index) ->
+    /// (module_name, class_name). Populated by `pre_scan_cross_fn_native_params`
+    /// BEFORE any function body is lowered, so `lower_fn_decl` can tag an
+    /// otherwise-untyped parameter as a native instance when a known native
+    /// handle (e.g. the `("ws","Client")` upgrade `wsId`) is passed across the
+    /// call boundary into it. Without this, `wsId.send(...)` inside a helper
+    /// reached as `handleConnection(req, wsId)` lowers to a generic (silent
+    /// no-op) dispatch instead of `js_ws_send_client_i64`.
+    pub(crate) param_native_hints: HashMap<(String, usize), (String, String)>,
     /// True while lowering code governed by ECMAScript strict mode.
     pub(crate) current_strict: bool,
     /// #1483: type-only perry/ui widget import aliases — local_name ->

@@ -376,6 +376,13 @@ pub fn lower_module_full(
     // the member instead of silently lowering to 0.
     pre_register_module_enums(ast_module, &mut ctx);
 
+    // Propagate a native host-handle's class across direct function-call
+    // boundaries (the `("ws","Client")` upgrade `wsId` handed to a helper) so
+    // `wsId.send(...)` inside the callee dispatches to the Client runtime
+    // instead of a silent generic no-op. Must run before any function body is
+    // lowered so `lower_fn_decl` can tag the receiving parameter.
+    pre_scan_cross_fn_native_params(ast_module, &mut ctx);
+
     // JSX expressions lower directly to the built-in `jsx`/`jsxs` externs in
     // `jsx.rs`. Do not synthesize a `react/jsx-runtime` import here: codegen
     // routes those extern names to Perry's runtime adapter, and making the
