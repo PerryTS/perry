@@ -1084,10 +1084,13 @@ pub(crate) fn build_and_run_link(
             } else if is_android {
                 (
                     "libperry_ui_android.a",
-                    // #1529 — TLS model must be global-dynamic for the dlopen'd cdylib.
-                    // `tls-model` is `-Z`-gated on the toolchains we ship against, so
-                    // RUSTC_BOOTSTRAP=1 lets the gated flag through on a stable rustc.
-                    "RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
+                    // Two audiences here: a binary-install user (WinGet/Scoop/npm,
+                    // no source tree) can't run cargo, so point them at the
+                    // prebuilt cross bundle first; the from-source build follows
+                    // for workspace users. #1529 — the dlopen'd cdylib needs the
+                    // global-dynamic TLS model, and `tls-model` is `-Z`-gated, so
+                    // RUSTC_BOOTSTRAP=1 lets it through on a stable rustc.
+                    "either (a) drop libperry_ui_android.a next to perry under aarch64-linux-android/release/ from the prebuilt perry-cross-aarch64-linux-android.tar.gz release asset, or (b) from a perry checkout: RUSTC_BOOTSTRAP=1 RUSTFLAGS=\"-Z tls-model=global-dynamic\" cargo build --release -p perry-ui-android --target aarch64-linux-android",
                 )
             } else if is_linux {
                 (

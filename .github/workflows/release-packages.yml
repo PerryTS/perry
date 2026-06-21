@@ -379,11 +379,14 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --profile dist --target ${{ matrix.target }} -p perry-ui-windows
 
-      # Closes #872: cross-compile the Android runtime libs on the Windows
-      # leg so the WinGet zip includes `libperry_runtime.a` /
-      # `libperry_stdlib.a` for `aarch64-linux-android`. Without these,
-      # `perry compile --target android` from a WinGet-installed perry
-      # bails at link time with "Could not find libperry_runtime.a".
+      # Closes #872 / #4823: cross-compile the Android runtime libs (and the
+      # perry-ui-android UI backend) on the Windows leg so the WinGet zip
+      # includes `libperry_runtime.a` / `libperry_stdlib.a` /
+      # `libperry_ui_android.a` for `aarch64-linux-android`. Without the
+      # runtime libs, `perry compile --target android` from a WinGet-installed
+      # perry bails with "Could not find libperry_runtime.a"; without the UI
+      # lib, any app importing `perry/ui` bails with "libperry_ui_android.a
+      # not found" (#4823).
       # GitHub-hosted Windows runners pre-install the Android NDK at
       # `%ANDROID_NDK_HOME%`; we point cargo at its `aarch64-linux-android-*`
       # clang as the cross-linker.
@@ -416,11 +419,41 @@ jobs:
             Write-Error "Android NDK linker not found at $linker — NDK layout drifted; update the version-suffixed path."
             exit 1
           }
+          # perry-ui-android pulls in perry-audio-miniaudio (C) and aws-lc-rs
+          # (via tungstenite/rustls), so the C++ wrapper must be wired too.
+          $linkerxx = Join-Path $toolchain "aarch64-linux-android$($env:ANDROID_API_LEVEL)-clang++.cmd"
+          if (-not (Test-Path $linkerxx)) {
+            $linkerxx = Join-Path $toolchain "aarch64-linux-android$($env:ANDROID_API_LEVEL)-clang++.exe"
+          }
           $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = $linker
           $env:CC_aarch64_linux_android = $linker
+          $env:CXX_aarch64_linux_android = $linkerxx
           $env:AR_aarch64_linux_android = Join-Path $toolchain "llvm-ar.exe"
+          # pwsh has no `set -e`; these two are mandatory, so fail the step on a
+          # non-zero exit (otherwise the best-effort UI build below, which resets
+          # $LASTEXITCODE, could mask a runtime/stdlib failure).
           cargo build --profile dist --target aarch64-linux-android -p perry-runtime -p perry-runtime-static
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --profile dist --target aarch64-linux-android -p perry-stdlib -p perry-stdlib-static
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # #4823 (option 1): the Android UI backend so a WinGet/Scoop-installed
+          # perry can link `perry/ui` apps for android without a source tree.
+          # Best-effort: aws-lc-rs cross-from-Windows can be finicky; a failure
+          # here must not sink the whole release, because the npm path backfills
+          # libperry_ui_android.a from the ubuntu `perry-cross-*` bundle and the
+          # zip still ships runtime+stdlib. The UI staging below is guarded on
+          # the lib actually existing.
+          # Mirrors the ubuntu cross-bundle leg: `--profile dist` build for the
+          # staticlib (UI crates are already staticlib — no -static wrapper); the
+          # global-dynamic TLS rustflag only matters at the consumer's final
+          # cdylib link, not here.
+          # A native non-zero exit isn't a terminating error in pwsh, so guard
+          # on $LASTEXITCODE explicitly and reset it so the step stays green.
+          cargo build --profile dist --target aarch64-linux-android -p perry-ui-android
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "perry-ui-android android cross-build failed (exit $LASTEXITCODE) — zip will omit the UI lib; npm backfills it from perry-cross-aarch64-linux-android."
+            $global:LASTEXITCODE = 0
+          }
 
       # #4856 — defense in depth behind the cache eviction above: assert
       # every runtime archive this leg built (host triple + any Apple/
@@ -552,7 +585,9 @@ jobs:
           # subdir lives alongside `perry.exe`.
           $androidLibDir = "staging/aarch64-linux-android/release"
           New-Item -ItemType Directory -Force -Path $androidLibDir | Out-Null
-          $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a")
+          # #4823: libperry_ui_android.a is best-effort (the cross-build above
+          # may have skipped it) — Test-Path guards it just like the others.
+          $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a", "libperry_ui_android.a")
           foreach ($lib in $androidLibs) {
             $src = "target/aarch64-linux-android/dist/$lib"
             if (Test-Path $src) {

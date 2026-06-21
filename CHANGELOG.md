@@ -1,3 +1,53 @@
+## v0.5.1198 — fix(packaging): ship `libperry_ui_android.a` to Windows installs so `perry/ui` android apps link (#4823)
+
+A Windows user (discussion #4823) with the NDK/SDK and Rust android targets
+installed could not build a `perry/ui` app for android — `perry --target
+android` got through the "runtime-only" link step and then failed with:
+
+```
+Error: perry/ui imported but libperry_ui_android.a not found. Build with:
+RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Z tls-model=global-dynamic" cargo build --release -p perry-ui-android --target aarch64-linux-android
+```
+
+Root cause was a packaging gap, not user error. Two distinct holes:
+
+- **WinGet/Scoop zip** — the Windows release leg cross-compiled and staged
+  only `libperry_runtime.a` / `libperry_stdlib.a` for `aarch64-linux-android`
+  (#872), never `libperry_ui_android.a`. So the runtime-only link succeeded
+  but any app importing `perry/ui` couldn't resolve the UI backend. The UI lib
+  *was* built — but only inside the standalone `perry-cross-aarch64-linux-android`
+  bundle (#1083), which a binary-install user has no reason to know about.
+- **npm** — `stage-npm.sh` flattened libs into `lib/` and dropped the
+  `aarch64-linux-android/release/` subdir entirely, so npm packages shipped
+  *no* android cross-libs at all; android builds from an npm install were
+  wholly unsupported.
+
+Fixes (the two options the maintainer approved):
+
+1. **(`release-packages.yml`)** The Windows `build:` leg now also cross-builds
+   `perry-ui-android` (`cargo build --profile dist` for the staticlib — the
+   global-dynamic TLS rustflag only matters at the consumer's final cdylib
+   link, mirroring the ubuntu cross-bundle leg; the UI crate is already a
+   staticlib so it needs no `-static` wrapper) and stages
+   `libperry_ui_android.a` into the zip's `aarch64-linux-android/release/`.
+   It is **best-effort**: a native non-zero exit is caught via `$LASTEXITCODE`
+   (pwsh native failures aren't terminating errors) so a finicky aws-lc-rs
+   cross-build can't sink the release; the staging is `Test-Path`-guarded.
+2. **(`stage-npm.sh`)** A new `stage_android_cross_libs` helper stages all
+   three android archives into the Windows npm package under
+   `bin/aarch64-linux-android/release/` (the layout `library_search.rs` probes,
+   already inside the `files` allowlist), compressed to `.a.zst` like the rest.
+   Each lib is sourced from the Windows build artifact first, falling back to
+   the `perry-cross-aarch64-linux-android` bundle the npm-publish job already
+   downloads — so the UI lib is backfilled from the authoritative ubuntu build
+   even if the best-effort Windows cross-build was skipped. This also enables
+   npm-installed android builds for the first time.
+
+Also improved the link-time error message (`link/mod.rs`) for android: it now
+points binary-install users (no source tree) at dropping the prebuilt
+`libperry_ui_android.a` from `perry-cross-aarch64-linux-android.tar.gz` before
+falling back to the from-source `cargo build` instruction.
+
 ## v0.5.1197 — feat(runtime): #2656 — make WeakMap/WeakSet actually weak
 
 WeakMap/WeakSet previously stored entries as plain `[key, value]` pair arrays that the
