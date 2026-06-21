@@ -846,6 +846,21 @@ pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f6
     js_object_coerce(target_f64)
 }
 
+/// Parse a property name as a canonical array index (ECMA-262 CanonicalNumeric
+/// IndexString restricted to non-negative integers `< 2^32-1`): no leading
+/// zeros, round-trips through `to_string`. Used to recognise the in-range code-
+/// unit indices of a boxed-String `Object.assign` target.
+fn assign_canonical_index(name: &str) -> Option<u32> {
+    if name.is_empty() || (name.len() > 1 && name.as_bytes()[0] == b'0') {
+        return None;
+    }
+    let value = name.parse::<u32>().ok()?;
+    if value == u32::MAX || value.to_string() != name {
+        return None;
+    }
+    Some(value)
+}
+
 /// Spec `Set(to, key, value, true)` inside `Object.assign` uses the strict
 /// receiver, so a write that the ordinary `[[Set]]` would reject throws a
 /// `TypeError`. Perry's `js_object_set_field_by_name` silently no-ops those
@@ -859,6 +874,33 @@ unsafe fn object_assign_throw_if_set_rejected(
 ) {
     if target.is_null() || (target as usize) <= 0x10000 {
         return;
+    }
+    // A boxed String primitive target — `Object.assign('abc', src)` does
+    // `ToObject('abc')` — exposes its code units as non-writable, non-
+    // configurable own index properties ("0".."len-1"), which aren't stored in
+    // `keys_array`. A strict `Set` to an in-range index must throw, so detect it
+    // before the keys_array-based checks treat the index as a writable new
+    // property (test262 Object/assign/assignment-to-readonly-property-of-target
+    // -must-throw-a-typeerror-exception).
+    if let Some(idx) = assign_canonical_index(name) {
+        let target_f64 = f64::from_bits(JSValue::pointer(target as *mut u8).bits());
+        if crate::builtins::boxed_primitive_to_string_tag(target_f64) == Some("String") {
+            if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(target_f64) {
+                let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some((ptr, blen)) =
+                    crate::string::str_bytes_from_jsvalue(payload, &mut scratch)
+                {
+                    let len = if ptr.is_null() {
+                        0
+                    } else {
+                        crate::string::compute_utf16_len(ptr, blen)
+                    };
+                    if idx < len {
+                        throw_object_assign_readonly(name);
+                    }
+                }
+            }
+        }
     }
     // Accessor own property: a setter must exist, else the write fails. Check
     // this BEFORE `own_key_present`: an accessor-only property (`{ set foo(){} }`)
@@ -1040,41 +1082,87 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
 
     let src = src_raw as *const ObjectHeader;
 
+    // An array source (`Object.assign(t, [1,2])`, `{ ...[1,2] }`) stores its
+    // indexed elements in the `ArrayHeader` element buffer, NOT in an
+    // `ObjectHeader.keys_array`. ArrayHeader has no such field, so the
+    // keys_array read below would deref a garbage pointer and crash (the prior
+    // behavior — a hard SIGSEGV on a common operation). Enumerate the dense
+    // index range directly through the array API instead. (#5347 Object/assign)
+    let source_is_array = {
+        let gc_header =
+            (src_raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+    };
+
     // 1) Copy own string-keyed enumerable properties from source to target,
     //    in source insertion order. Mirrors `js_object_copy_own_fields`.
-    let src_keys = (*src).keys_array;
-    if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
-        let key_count = crate::array::js_array_length(src_keys) as usize;
-        // Use the public [[Get]] path, not raw field slots, so accessors run
-        // and abrupt completions propagate the way Object.assign requires.
-        for i in 0..key_count {
-            let key_val = crate::array::js_array_get(src_keys, i as u32);
-            if !key_val.is_any_string() {
-                continue;
-            }
-            // Private elements (`#x`) live in a class instance's keys_array but
-            // are never copied by Object.assign / object spread.
-            if crate::object::instance_private_key_hidden(src, key_val) {
-                continue;
-            }
-            let key_f64 = f64::from_bits(key_val.bits());
-            let key_ptr =
-                crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
-            if key_ptr.is_null() {
-                continue;
-            }
-            let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            if let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
-                if let Ok(name) = std::str::from_utf8(name_bytes) {
-                    if let Some(attrs) = get_property_attrs(src_raw, name) {
-                        if !attrs.enumerable() {
-                            continue;
+    if source_is_array {
+        let arr = src_raw as *const crate::array::ArrayHeader;
+        let n = crate::array::js_array_length(arr);
+        // Snapshot string expandos (`arr.foo = …`, kept in the named-property
+        // side table) BEFORE the index loop: that loop allocates, which can
+        // trigger a GC that rekeys the side table to the moved array's new
+        // address — after which a lookup by this (stale) address would miss
+        // them. They sort AFTER the integer indices in [[OwnPropertyKeys]] order.
+        let expandos: Vec<(String, f64)> = crate::array::array_named_property_names(arr, true)
+            .into_iter()
+            .filter_map(|name| {
+                crate::array::array_named_property_get_by_name(arr, &name).map(|v| (name, v))
+            })
+            .collect();
+        for i in 0..n {
+            // js_array_get yields `undefined` for a hole; array literals and
+            // pushed arrays are dense, matching Node for the common case.
+            let value = crate::array::js_array_get(arr, i);
+            let key = i.to_string();
+            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            object_assign_set_string_key(
+                target,
+                target_is_array,
+                key_ptr,
+                f64::from_bits(value.bits()),
+            );
+        }
+        for (name, value) in expandos {
+            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            object_assign_set_string_key(target, target_is_array, key_ptr, value);
+        }
+    } else {
+        let src_keys = (*src).keys_array;
+        if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
+            let key_count = crate::array::js_array_length(src_keys) as usize;
+            // Use the public [[Get]] path, not raw field slots, so accessors run
+            // and abrupt completions propagate the way Object.assign requires.
+            for i in 0..key_count {
+                let key_val = crate::array::js_array_get(src_keys, i as u32);
+                if !key_val.is_any_string() {
+                    continue;
+                }
+                // Private elements (`#x`) live in a class instance's keys_array
+                // but are never copied by Object.assign / object spread.
+                if crate::object::instance_private_key_hidden(src, key_val) {
+                    continue;
+                }
+                let key_f64 = f64::from_bits(key_val.bits());
+                let key_ptr = crate::value::js_get_string_pointer_unified(key_f64)
+                    as *const crate::StringHeader;
+                if key_ptr.is_null() {
+                    continue;
+                }
+                let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                if let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
+                {
+                    if let Ok(name) = std::str::from_utf8(name_bytes) {
+                        if let Some(attrs) = get_property_attrs(src_raw, name) {
+                            if !attrs.enumerable() {
+                                continue;
+                            }
                         }
                     }
                 }
+                let field_f64 = f64::from_bits(js_object_get_field_by_name(src, key_ptr).bits());
+                object_assign_set_string_key(target, target_is_array, key_ptr, field_f64);
             }
-            let field_f64 = f64::from_bits(js_object_get_field_by_name(src, key_ptr).bits());
-            object_assign_set_string_key(target, target_is_array, key_ptr, field_f64);
         }
     }
 
