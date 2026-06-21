@@ -70,6 +70,18 @@ extern "C" fn process_stream_on_once_stub(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+/// `setEncoding` impl for `process.stdin`. A Readable's `setEncoding(enc)`
+/// returns the stream itself so callers can chain
+/// (`process.stdin.setEncoding("utf8").on("data", …)`). The receiver is the
+/// `IMPLICIT_THIS` bound by the method-dispatch path, so returning it mirrors
+/// Node's `this`-returning contract. Encoding-aware reads remain future work.
+extern "C" fn process_stream_set_encoding_stub(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    crate::object::js_implicit_this_get()
+}
+
 /// #3962: set when a TUI tears down stdin via `process.stdin.destroy()`,
 /// `.pause()`, or `.unref()`. `perry-stdlib`'s readline `has_active` consults
 /// `stdin_is_detached()` so the runtime stops holding the event loop open for
@@ -312,11 +324,7 @@ fn build_stream_object_with_write(
         if is_stdin {
             set_field_with_stub(start + 7, process_stream_on_once_stub); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
-                                                       // `process.stdin.setEncoding(enc)` — a Readable returns the stream
-                                                       // for chaining; callers (e.g. raw-mode TUI setup) discard the
-                                                       // return, so a no-op stub is sufficient and avoids a "setEncoding is
-                                                       // not a function" throw. Encoding-aware reads remain future work.
-            set_field_with_stub(start + 9, process_stream_on_once_stub); // setEncoding
+            set_field_with_stub(start + 9, process_stream_set_encoding_stub); // setEncoding
         } else {
             set_field_with_stub(start + 7, lifecycle); // destroy
         }
