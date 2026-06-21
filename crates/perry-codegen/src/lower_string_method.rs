@@ -946,9 +946,10 @@ pub(crate) fn lower_string_method(
         "substr" => {
             // Legacy substr(start, length) — distinct from substring/slice:
             // negative start counts from the end, the 2nd arg is a LENGTH, and
-            // a non-positive length yields "". Routed to the dedicated runtime
-            // helper `js_string_substr` (#2897). The length sentinel i32::MIN
-            // signals "argument omitted" (take rest of string).
+            // a non-positive length yields "" while an `undefined` length takes
+            // the rest of the string. Routed to the dedicated runtime helper
+            // `js_string_substr`, which coerces both args via ToIntegerOrInfinity
+            // (#2897).
             if args.is_empty() || args.len() > 2 {
                 bail!(
                     "perry-codegen: String.substr expects 1 or 2 args, got {}",
@@ -963,16 +964,20 @@ pub(crate) fn lower_string_method(
             };
             let blk = ctx.block();
             let recv_handle = unbox_str_handle(blk, &recv_box);
-            let start_i32 = blk.fptosi(DOUBLE, &start_d, I32);
-            let length_i32 = match len_d {
-                Some(len_d) => blk.fptosi(DOUBLE, &len_d, I32),
-                // i32::MIN sentinel = "length omitted".
-                None => i32::MIN.to_string(),
+            // Pass the raw NaN-boxed args straight through: `js_string_substr`
+            // runs `ToIntegerOrInfinity` on both (spec order, start first) so a
+            // boolean / `{ valueOf }` / `Symbol` coerces or throws like Node,
+            // and decides "rest of string" from an `undefined` length itself —
+            // a raw `fptosi` here would mis-truncate NaN and lose that signal.
+            // An omitted length is the explicit `undefined` value.
+            let length_d = match len_d {
+                Some(len_d) => len_d,
+                None => blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
             };
             let result = blk.call(
                 I64,
                 "js_string_substr",
-                &[(I64, &recv_handle), (I32, &start_i32), (I32, &length_i32)],
+                &[(I64, &recv_handle), (DOUBLE, &start_d), (DOUBLE, &length_d)],
             );
             Ok(nanbox_string_inline(blk, &result))
         }

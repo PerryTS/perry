@@ -61,8 +61,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_string_position_to_index", I32, &[DOUBLE]);
     module.declare_function("js_string_slice", I64, &[I64, I32, I32]);
     module.declare_function("js_string_substring", I64, &[I64, I32, I32]);
-    // Legacy substr(start, length); length sentinel i32::MIN = omitted (#2897).
-    module.declare_function("js_string_substr", I64, &[I64, I32, I32]);
+    // Legacy substr(start, length); raw NaN-boxed JS values, ToIntegerOrInfinity
+    // applied in the runtime helper. An `undefined` length means "rest" (#2897).
+    module.declare_function("js_string_substr", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_string_split", I64, &[I64, I64]);
     module.declare_function("js_string_split_n", I64, &[I64, I64, I32]);
     // Boxed separator + boxed limit; full ToUint32(limit)/ToString(separator)

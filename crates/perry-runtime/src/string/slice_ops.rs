@@ -101,52 +101,63 @@ pub extern "C" fn js_string_substring(
     )
 }
 
-/// Legacy `String.prototype.substr(start, length)`.
+/// Legacy `String.prototype.substr(start, length)` (ECMA-262 Annex B.2.3.1).
 ///
 /// Differs from `substring`/`slice`:
 ///   * a negative `start` counts from the END of the string
-///     (`max(len + start, 0)`),
-///   * the second argument is a LENGTH, not an end index, and a missing /
-///     non-positive length yields the empty string vs. "rest of string" for an
-///     omitted length.
+///     (`max(size + start, 0)`),
+///   * the second argument is a LENGTH, not an end index, and an `undefined`
+///     length (omitted OR explicitly `undefined`) means "to the end of the
+///     string" — distinct from a `0`/non-positive length, which yields `""`.
 ///
-/// `start` and `length` arrive already integer-coerced from codegen. `length`
-/// uses the i32 sentinel `i32::MIN` to mean "argument omitted" — Node treats an
-/// omitted length as "to the end of the string", which a real call site can
-/// never reach with a finite numeric arg (`substr(0, undefined)` coerces the
-/// length to 0, matching JS). Closes #2897.
+/// `start` and `length` arrive as raw NaN-boxed JS values (`f64`). Both are run
+/// through `ToIntegerOrInfinity` *here*, in spec order (start first, then
+/// length), so a boolean / numeric string / `{ valueOf }` object coerces
+/// correctly and a throwing `valueOf` or a `Symbol` propagates its exception —
+/// matching `substring`/`slice`. Doing the coercion in the runtime (rather than
+/// a codegen `fptosi`, which is UB on a NaN) also avoids a sentinel collision: a
+/// `-Infinity` length must clamp to `0` (→ `""`), not be mistaken for "omitted".
+/// `s` is a live argument, so it stays pinned by the conservative stack scan
+/// across the inner `valueOf`. Closes #2897; fixes the substr tail of #5347.
 #[no_mangle]
 pub extern "C" fn js_string_substr(
     s: *const StringHeader,
-    start: i32,
-    length: i32,
+    start_val: f64,
+    length_val: f64,
 ) -> *mut StringHeader {
     if !is_valid_string_ptr(s) {
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    let len = unsafe { (*s).utf16_len } as i32;
+    let size = unsafe { (*s).utf16_len } as i64;
 
-    // Negative start counts from the end; clamp into [0, len].
-    let start = if start < 0 {
-        (len + start).max(0)
+    // Step 4: ToIntegerOrInfinity(start), observed FIRST. ±Infinity clamps to
+    // the i32 bounds; widen to i64 so `size + i32::MIN` can't overflow below.
+    let int_start = crate::string::js_string_index_to_i32(start_val) as i64;
+    // Steps 5-7: -Infinity / large-negative → max(size + start, 0); else clamp
+    // into [0, size]. (`size + i32::MIN` for -Infinity yields ≤ 0 → 0.)
+    let start = if int_start < 0 {
+        (size + int_start).max(0)
     } else {
-        start.min(len)
+        int_start.min(size)
     };
 
-    // i32::MIN is the "length omitted" sentinel → take the rest of the string.
-    let end = if length == i32::MIN {
-        len
-    } else if length <= 0 {
-        // Non-positive length yields the empty string.
-        return js_string_from_bytes(ptr::null(), 0);
+    // Step 8: an `undefined` length means the rest of the string (`size`);
+    // otherwise ToIntegerOrInfinity(length), observed AFTER start.
+    let int_length = if crate::value::JSValue::from_bits(length_val.to_bits()).is_undefined() {
+        size
     } else {
-        (start as i64 + length as i64).min(len as i64) as i32
+        crate::string::js_string_index_to_i32(length_val) as i64
     };
+    // Step 9: clamp the length into [0, size]. Step 10: end = min(start+len, size).
+    let length = int_length.clamp(0, size);
+    let end = (start + length).min(size);
 
     if start >= end {
         return js_string_from_bytes(ptr::null(), 0);
     }
+    let start = start as i32;
+    let end = end as i32;
 
     // ASCII fast path: byte offsets == UTF-16 offsets.
     // Copy GC-safely: the destination allocation can move/sweep `s` (#5062).
@@ -171,7 +182,7 @@ pub extern "C" fn js_string_substr(
 // so the whole-program auto-optimize bitcode rebuild would dead-strip it
 // without an anchor (see project_auto_optimize_keepalive_3320).
 #[used]
-static KEEP_SUBSTR: extern "C" fn(*const StringHeader, i32, i32) -> *mut StringHeader =
+static KEEP_SUBSTR: extern "C" fn(*const StringHeader, f64, f64) -> *mut StringHeader =
     js_string_substr;
 
 /// JS `TrimString` whitespace set (ECMA-262 §22.1.3.32, `WhiteSpace` +

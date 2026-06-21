@@ -17,6 +17,20 @@ const dyn: any = "hello world";
 console.log(dyn.substr(6, 3)); // "wor"
 console.log(dyn.substr(-5)); // "world"
 
+// ---- #5347: substr argument ToIntegerOrInfinity coercion (test262
+// annexB/built-ins/String/prototype/substr tail) ----
+const t: any = "abc";
+console.log(t.substr(0, false)); // "" (false -> 0)
+console.log(t.substr(1, NaN)); // "" (NaN -> 0)
+console.log(t.substr(0, "")); // "" ("" -> 0)
+console.log(t.substr(0, null)); // "" (null -> 0)
+console.log(t.substr(2, undefined)); // "c" (undefined length -> rest)
+console.log(t.substr(0, Infinity)); // "abc" (+Infinity length -> size)
+console.log(t.substr(0, -Infinity)); // "" (-Infinity length -> 0, not "omitted")
+console.log(t.substr(-Infinity)); // "abc" (-Infinity start -> 0)
+console.log(t.substr("1", "1")); // "b" (numeric-string coercion)
+console.log(t.substr(0, { valueOf: () => 2 })); // "ab" (object valueOf)
+
 // ---- #2781: Turkic dotted/dotless I casing ----
 console.log("I".toLocaleLowerCase("tr")); // "ı"
 console.log("I".toLocaleLowerCase("en")); // "i"
