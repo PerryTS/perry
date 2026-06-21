@@ -347,111 +347,173 @@ pub(crate) fn pre_scan_cross_fn_native_params(ast_module: &ast::Module, ctx: &mu
         fn_bodies: &fn_bodies,
         fn_spans: &fn_spans,
     };
-    let mut applied: HashSet<(u32, usize, String, String)> = HashSet::new();
-    let mut hints: Vec<((u32, usize), (String, String))> = Vec::new();
-    let mut guard = 0usize;
     let mut all_calls: Vec<&ast::CallExpr> = Vec::new();
     collect_calls_in_module(ast_module, &mut all_calls);
+    let mut acc = TaintAcc {
+        tcx: &tcx,
+        applied: HashSet::new(),
+        hints: Vec::new(),
+        ws_fed: HashSet::new(),
+        deps: HashMap::new(),
+        source: None,
+        guard: 0,
+    };
     for call in &all_calls {
         if let Some((ws_id, handler)) = upgrade_handler_ws_id(call, &server_idents) {
-            let mut taint: HashMap<String, (String, String)> = HashMap::new();
+            let mut taint: Taint = HashMap::new();
             taint.insert(ws_id, ("ws".to_string(), "Client".to_string()));
-            walk_taint_callback_body(handler, &taint, &tcx, &mut applied, &mut hints, &mut guard);
+            walk_taint_callback_body(handler, &taint, &mut acc);
         }
     }
-    for (key, val) in hints {
-        ctx.param_native_hints.insert(key, val);
-    }
-}
 
-/// Immutable top-level-function tables shared by the scope-aware taint walk.
-struct TaintCtx<'a> {
-    fn_params: &'a HashMap<String, Vec<Option<String>>>,
-    fn_bodies: &'a HashMap<String, &'a ast::BlockStmt>,
-    fn_spans: &'a HashMap<String, u32>,
-}
+    // Polymorphism guard. A hint tags a function PARAMETER, which fixes the
+    // dispatch for that parameter across EVERY call site of the function — not
+    // just the upgrade-fed one. So only keep a hint when the function is
+    // provably always handed the ws handle at that parameter. If any caller
+    // passes a non-ws value there (or any caller uses a spread arg, whose
+    // positional mapping is unreliable), tagging the param would silently
+    // re-route that caller's `.send()/.on()/.close()` to the Client runtime and
+    // drop the frame — the exact bug this pass fixes. Detect such functions and
+    // drop their hints. The caller scan is scope-aware so a nested function that
+    // SHADOWS a top-level name is not mistaken for a call to the top-level one.
+    let candidate_keys: HashSet<(u32, usize)> = acc.hints.iter().map(|(k, _)| *k).collect();
+    let mut shadowed_call_ids: HashSet<usize> = HashSet::new();
+    collect_shadowed_callee_calls(ast_module, &fn_spans, &mut shadowed_call_ids);
 
-type Taint = HashMap<String, (String, String)>;
-type Applied = HashSet<(u32, usize, String, String)>;
-type Hints = Vec<((u32, usize), (String, String))>;
-
-/// Clone `taint`, dropping any name the arrow rebinds as a parameter (shadowing).
-fn prune_for_arrow(taint: &Taint, arrow: &ast::ArrowExpr) -> Taint {
-    let mut t = taint.clone();
-    for p in &arrow.params {
-        if let Some(n) = cross_fn_pat_name(p) {
-            t.remove(&n);
+    let mut invalid: HashSet<(u32, usize)> = HashSet::new();
+    for call in &all_calls {
+        let call_id = *call as *const ast::CallExpr as usize;
+        // A call whose callee NAME is shadowed by a nearer binding does not
+        // reach the top-level function — skip it.
+        if shadowed_call_ids.contains(&call_id) {
+            continue;
         }
-    }
-    t
-}
-
-/// Clone `taint`, dropping any name the function rebinds as a parameter.
-fn prune_for_fn(taint: &Taint, func: &ast::Function) -> Taint {
-    let mut t = taint.clone();
-    for p in &func.params {
-        if let Some(n) = cross_fn_pat_name(&p.pat) {
-            t.remove(&n);
-        }
-    }
-    t
-}
-
-/// Walk a callback expression's body (arrow/function) under the seed taint. The
-/// callback's own params already account for the tainted handle, so no pruning.
-fn walk_taint_callback_body(
-    handler: &ast::Expr,
-    taint: &Taint,
-    tcx: &TaintCtx,
-    applied: &mut Applied,
-    hints: &mut Hints,
-    guard: &mut usize,
-) {
-    match handler {
-        ast::Expr::Arrow(a) => match a.body.as_ref() {
-            ast::BlockStmtOrExpr::BlockStmt(b) => {
-                walk_taint_stmts(&b.stmts, taint, tcx, applied, hints, guard)
+        let Some(callee) = cross_fn_call_ident(call) else {
+            continue;
+        };
+        let Some(&span) = fn_spans.get(&callee) else {
+            continue;
+        };
+        if call.args.iter().any(|a| a.spread.is_some()) {
+            // Spread args defeat positional matching — invalidate every
+            // candidate param of this callee.
+            for key in &candidate_keys {
+                if key.0 == span {
+                    invalid.insert(*key);
+                }
             }
-            ast::BlockStmtOrExpr::Expr(e) => walk_taint_expr(e, taint, tcx, applied, hints, guard),
-        },
-        ast::Expr::Fn(f) => {
-            if let Some(b) = &f.function.body {
-                walk_taint_stmts(&b.stmts, taint, tcx, applied, hints, guard);
+            continue;
+        }
+        for i in 0..call.args.len() {
+            if candidate_keys.contains(&(span, i)) && !acc.ws_fed.contains(&(span, i, call_id)) {
+                invalid.insert((span, i));
             }
         }
-        _ => {}
+    }
+
+    // Transitive demotion: a hint reached by following the handle THROUGH an
+    // upstream param P is only as valid as P. Once P is invalid (polymorphic),
+    // P can deliver a non-ws value downstream, so demote everything that
+    // depended on it. Iterate to a fixpoint.
+    loop {
+        let mut changed = false;
+        for (key, deps) in &acc.deps {
+            if !invalid.contains(key) && deps.iter().any(|d| invalid.contains(d)) {
+                invalid.insert(*key);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for (key, val) in acc.hints {
+        if !invalid.contains(&key) {
+            ctx.param_native_hints.insert(key, val);
+        }
     }
 }
 
-fn walk_taint_stmts(
-    stmts: &[ast::Stmt],
-    taint: &Taint,
-    tcx: &TaintCtx,
-    applied: &mut Applied,
-    hints: &mut Hints,
-    guard: &mut usize,
+/// Scope-aware pass that records the AST pointer identity of every bare-ident
+/// call `name(...)` whose callee `name` is a top-level function (`fn_names`) but
+/// is SHADOWED at the call site by a nearer binding (an enclosing
+/// function/arrow/method param, or a function declaration hoisted into the
+/// enclosing function body). Such a call does NOT reach the top-level function,
+/// so the polymorphism guard must not treat it as a caller of it.
+///
+/// Conservative by construction: it only records calls it can prove are
+/// shadowed. A missed shadow leaves the call counted as a real caller, which can
+/// only DROP a hint (safe), never keep an unsound one.
+fn collect_shadowed_callee_calls(
+    ast_module: &ast::Module,
+    fn_names: &HashMap<String, u32>,
+    out: &mut HashSet<usize>,
 ) {
-    for s in stmts {
-        walk_taint_stmt(s, taint, tcx, applied, hints, guard);
+    // Shadowing names introduced by a function/arrow/method body: its params
+    // plus the names of function declarations hoisted to the top of that body.
+    fn body_shadows<'a>(
+        params: impl Iterator<Item = &'a ast::Pat>,
+        stmts: &[ast::Stmt],
+        base: &HashSet<String>,
+    ) -> HashSet<String> {
+        let mut s = base.clone();
+        for p in params {
+            if let Some(n) = cross_fn_pat_name(p) {
+                s.insert(n);
+            }
+        }
+        for st in stmts {
+            if let ast::Stmt::Decl(ast::Decl::Fn(f)) = st {
+                s.insert(f.ident.sym.to_string());
+            }
+        }
+        s
+    }
+    for item in &ast_module.body {
+        match item {
+            ast::ModuleItem::Stmt(s) => shadow_scan_stmt(s, &HashSet::new(), fn_names, out),
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(e)) => match &e.decl {
+                ast::Decl::Var(v) => {
+                    for d in &v.decls {
+                        if let Some(init) = &d.init {
+                            shadow_scan_expr(init, &HashSet::new(), fn_names, out);
+                        }
+                    }
+                }
+                ast::Decl::Fn(f) => {
+                    if let Some(b) = &f.function.body {
+                        let sh = body_shadows(
+                            f.function.params.iter().map(|p| &p.pat),
+                            &b.stmts,
+                            &HashSet::new(),
+                        );
+                        for st in &b.stmts {
+                            shadow_scan_stmt(st, &sh, fn_names, out);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
     }
 }
 
-fn walk_taint_stmt(
+fn shadow_scan_stmt(
     stmt: &ast::Stmt,
-    taint: &Taint,
-    tcx: &TaintCtx,
-    applied: &mut Applied,
-    hints: &mut Hints,
-    guard: &mut usize,
+    shadowed: &HashSet<String>,
+    fn_names: &HashMap<String, u32>,
+    out: &mut HashSet<usize>,
 ) {
     macro_rules! e {
         ($x:expr) => {
-            walk_taint_expr($x, taint, tcx, applied, hints, guard)
+            shadow_scan_expr($x, shadowed, fn_names, out)
         };
     }
     macro_rules! s {
         ($x:expr) => {
-            walk_taint_stmt($x, taint, tcx, applied, hints, guard)
+            shadow_scan_stmt($x, shadowed, fn_names, out)
         };
     }
     match stmt {
@@ -468,14 +530,29 @@ fn walk_taint_stmt(
                 }
             }
         }
-        // A nested function declaration is a new scope — prune its params.
         ast::Stmt::Decl(ast::Decl::Fn(f)) => {
             if let Some(b) = &f.function.body {
-                let pruned = prune_for_fn(taint, &f.function);
-                walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard);
+                let mut sh = shadowed.clone();
+                for p in &f.function.params {
+                    if let Some(n) = cross_fn_pat_name(&p.pat) {
+                        sh.insert(n);
+                    }
+                }
+                for st in &b.stmts {
+                    if let ast::Stmt::Decl(ast::Decl::Fn(inner)) = st {
+                        sh.insert(inner.ident.sym.to_string());
+                    }
+                }
+                for st in &b.stmts {
+                    shadow_scan_stmt(st, &sh, fn_names, out);
+                }
             }
         }
-        ast::Stmt::Block(b) => walk_taint_stmts(&b.stmts, taint, tcx, applied, hints, guard),
+        ast::Stmt::Block(b) => {
+            for st in &b.stmts {
+                s!(st);
+            }
+        }
         ast::Stmt::If(i) => {
             e!(&i.test);
             s!(&i.cons);
@@ -519,12 +596,18 @@ fn walk_taint_stmt(
         }
         ast::Stmt::Throw(t) => e!(&t.arg),
         ast::Stmt::Try(t) => {
-            walk_taint_stmts(&t.block.stmts, taint, tcx, applied, hints, guard);
+            for st in &t.block.stmts {
+                s!(st);
+            }
             if let Some(h) = &t.handler {
-                walk_taint_stmts(&h.body.stmts, taint, tcx, applied, hints, guard);
+                for st in &h.body.stmts {
+                    s!(st);
+                }
             }
             if let Some(f) = &t.finalizer {
-                walk_taint_stmts(&f.stmts, taint, tcx, applied, hints, guard);
+                for st in &f.stmts {
+                    s!(st);
+                }
             }
         }
         ast::Stmt::Switch(sw) => {
@@ -533,7 +616,9 @@ fn walk_taint_stmt(
                 if let Some(t) = &c.test {
                     e!(t);
                 }
-                walk_taint_stmts(&c.cons, taint, tcx, applied, hints, guard);
+                for st in &c.cons {
+                    s!(st);
+                }
             }
         }
         ast::Stmt::Labeled(l) => s!(&l.body),
@@ -541,21 +626,355 @@ fn walk_taint_stmt(
     }
 }
 
-fn walk_taint_expr(
+fn shadow_scan_expr(
     expr: &ast::Expr,
-    taint: &Taint,
-    tcx: &TaintCtx,
-    applied: &mut Applied,
-    hints: &mut Hints,
-    guard: &mut usize,
+    shadowed: &HashSet<String>,
+    fn_names: &HashMap<String, u32>,
+    out: &mut HashSet<usize>,
 ) {
-    *guard += 1;
-    if *guard > 200_000 {
-        return; // pathological-input backstop
-    }
     macro_rules! e {
         ($x:expr) => {
-            walk_taint_expr($x, taint, tcx, applied, hints, guard)
+            shadow_scan_expr($x, shadowed, fn_names, out)
+        };
+    }
+    // Walk into a nested function/arrow/method body with its params (and hoisted
+    // fn-decls) added to the shadow set.
+    macro_rules! into_body {
+        ($params:expr, $stmts:expr) => {{
+            let mut sh = shadowed.clone();
+            for p in $params {
+                if let Some(n) = cross_fn_pat_name(p) {
+                    sh.insert(n);
+                }
+            }
+            for st in $stmts {
+                if let ast::Stmt::Decl(ast::Decl::Fn(inner)) = st {
+                    sh.insert(inner.ident.sym.to_string());
+                }
+            }
+            for st in $stmts {
+                shadow_scan_stmt(st, &sh, fn_names, out);
+            }
+        }};
+    }
+    match expr {
+        ast::Expr::Call(c) => {
+            if let ast::Callee::Expr(ce) = &c.callee {
+                if let ast::Expr::Ident(id) = ce.as_ref() {
+                    let name = id.sym.as_ref();
+                    if fn_names.contains_key(name) && shadowed.contains(name) {
+                        out.insert(c as *const ast::CallExpr as usize);
+                    }
+                }
+                e!(ce);
+            }
+            for a in &c.args {
+                e!(&a.expr);
+            }
+        }
+        ast::Expr::New(n) => {
+            e!(&n.callee);
+            if let Some(args) = &n.args {
+                for a in args {
+                    e!(&a.expr);
+                }
+            }
+        }
+        ast::Expr::Member(m) => {
+            e!(&m.obj);
+            if let ast::MemberProp::Computed(c) = &m.prop {
+                e!(&c.expr);
+            }
+        }
+        ast::Expr::Bin(b) => {
+            e!(&b.left);
+            e!(&b.right);
+        }
+        ast::Expr::Unary(u) => e!(&u.arg),
+        ast::Expr::Update(u) => e!(&u.arg),
+        ast::Expr::Assign(a) => e!(&a.right),
+        ast::Expr::Cond(c) => {
+            e!(&c.test);
+            e!(&c.cons);
+            e!(&c.alt);
+        }
+        ast::Expr::Paren(p) => e!(&p.expr),
+        ast::Expr::Seq(s) => {
+            for x in &s.exprs {
+                e!(x);
+            }
+        }
+        ast::Expr::Await(a) => e!(&a.arg),
+        ast::Expr::Yield(y) => {
+            if let Some(a) = &y.arg {
+                e!(a);
+            }
+        }
+        ast::Expr::Tpl(t) => {
+            for x in &t.exprs {
+                e!(x);
+            }
+        }
+        ast::Expr::TaggedTpl(t) => {
+            e!(&t.tag);
+            for x in &t.tpl.exprs {
+                e!(x);
+            }
+        }
+        ast::Expr::Array(a) => {
+            for el in a.elems.iter().flatten() {
+                e!(&el.expr);
+            }
+        }
+        ast::Expr::Object(o) => {
+            for prop in &o.props {
+                match prop {
+                    ast::PropOrSpread::Spread(s) => e!(&s.expr),
+                    ast::PropOrSpread::Prop(p) => match p.as_ref() {
+                        ast::Prop::KeyValue(kv) => e!(&kv.value),
+                        ast::Prop::Method(m) => {
+                            if let Some(b) = &m.function.body {
+                                into_body!(m.function.params.iter().map(|p| &p.pat), &b.stmts);
+                            }
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        }
+        ast::Expr::Arrow(a) => match a.body.as_ref() {
+            ast::BlockStmtOrExpr::BlockStmt(b) => {
+                into_body!(a.params.iter(), &b.stmts);
+            }
+            ast::BlockStmtOrExpr::Expr(x) => {
+                let mut sh = shadowed.clone();
+                for p in &a.params {
+                    if let Some(n) = cross_fn_pat_name(p) {
+                        sh.insert(n);
+                    }
+                }
+                shadow_scan_expr(x, &sh, fn_names, out);
+            }
+        },
+        ast::Expr::Fn(f) => {
+            if let Some(b) = &f.function.body {
+                into_body!(f.function.params.iter().map(|p| &p.pat), &b.stmts);
+            }
+        }
+        ast::Expr::OptChain(o) => match o.base.as_ref() {
+            ast::OptChainBase::Member(m) => {
+                e!(&m.obj);
+                if let ast::MemberProp::Computed(c) = &m.prop {
+                    e!(&c.expr);
+                }
+            }
+            ast::OptChainBase::Call(c) => {
+                e!(&c.callee);
+                for a in &c.args {
+                    e!(&a.expr);
+                }
+            }
+        },
+        ast::Expr::TsAs(t) => e!(&t.expr),
+        ast::Expr::TsNonNull(t) => e!(&t.expr),
+        ast::Expr::TsTypeAssertion(t) => e!(&t.expr),
+        ast::Expr::TsConstAssertion(t) => e!(&t.expr),
+        ast::Expr::TsInstantiation(t) => e!(&t.expr),
+        _ => {}
+    }
+}
+
+/// Immutable top-level-function tables shared by the scope-aware taint walk.
+struct TaintCtx<'a> {
+    fn_params: &'a HashMap<String, Vec<Option<String>>>,
+    fn_bodies: &'a HashMap<String, &'a ast::BlockStmt>,
+    fn_spans: &'a HashMap<String, u32>,
+}
+
+type Taint = HashMap<String, (String, String)>;
+
+/// Mutable accumulators + the immutable function tables for the scope-aware
+/// taint walk, bundled so the recursive walkers take a single `&mut` and so the
+/// "current upstream source" can be saved/restored around a cross-fn descent
+/// without threading another argument through every arm.
+struct TaintAcc<'a> {
+    tcx: &'a TaintCtx<'a>,
+    /// Dedup: a `(fn_span, param_idx, module, class)` hint is pushed / recursed
+    /// into at most once.
+    applied: HashSet<(u32, usize, String, String)>,
+    /// Recorded hints, validated (polymorphism guard + transitive demotion) by
+    /// the caller after the walk.
+    hints: Vec<((u32, usize), (String, String))>,
+    /// Call sites — by AST pointer identity — that passed a ws-tainted handle at
+    /// `(callee_span, param_idx)`. After the walk, a hinted param whose function
+    /// ALSO has a non-ws-feeding caller is dropped: tagging the param would
+    /// mis-route that other caller's `.send()/.on()/.close()` to the Client
+    /// runtime (a silent no-op for the non-ws value).
+    ws_fed: HashSet<(u32, usize, usize)>,
+    /// Validity dependencies: a hint recorded while following the handle THROUGH
+    /// an upstream param P only holds when P is itself validly tagged. Seed-level
+    /// hints carry no dep. Drives transitive demotion.
+    deps: HashMap<(u32, usize), HashSet<(u32, usize)>>,
+    /// The upstream param the current descent is flowing the handle from (`None`
+    /// at the upgrade-handler seed level). Set when recursing into a callee body.
+    source: Option<(u32, usize)>,
+    guard: usize,
+}
+
+/// Clone `taint`, dropping any name the arrow rebinds as a parameter (shadowing).
+fn prune_for_arrow(taint: &Taint, arrow: &ast::ArrowExpr) -> Taint {
+    let mut t = taint.clone();
+    for p in &arrow.params {
+        if let Some(n) = cross_fn_pat_name(p) {
+            t.remove(&n);
+        }
+    }
+    t
+}
+
+/// Clone `taint`, dropping any name the function rebinds as a parameter.
+fn prune_for_fn(taint: &Taint, func: &ast::Function) -> Taint {
+    let mut t = taint.clone();
+    for p in &func.params {
+        if let Some(n) = cross_fn_pat_name(&p.pat) {
+            t.remove(&n);
+        }
+    }
+    t
+}
+
+/// Walk a callback expression's body (arrow/function) under the seed taint. The
+/// callback's own params already account for the tainted handle, so no pruning.
+fn walk_taint_callback_body(handler: &ast::Expr, taint: &Taint, acc: &mut TaintAcc) {
+    match handler {
+        ast::Expr::Arrow(a) => match a.body.as_ref() {
+            ast::BlockStmtOrExpr::BlockStmt(b) => walk_taint_stmts(&b.stmts, taint, acc),
+            ast::BlockStmtOrExpr::Expr(e) => walk_taint_expr(e, taint, acc),
+        },
+        ast::Expr::Fn(f) => {
+            if let Some(b) = &f.function.body {
+                walk_taint_stmts(&b.stmts, taint, acc);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn walk_taint_stmts(stmts: &[ast::Stmt], taint: &Taint, acc: &mut TaintAcc) {
+    for s in stmts {
+        walk_taint_stmt(s, taint, acc);
+    }
+}
+
+fn walk_taint_stmt(stmt: &ast::Stmt, taint: &Taint, acc: &mut TaintAcc) {
+    macro_rules! e {
+        ($x:expr) => {
+            walk_taint_expr($x, taint, acc)
+        };
+    }
+    macro_rules! s {
+        ($x:expr) => {
+            walk_taint_stmt($x, taint, acc)
+        };
+    }
+    match stmt {
+        ast::Stmt::Expr(x) => e!(&x.expr),
+        ast::Stmt::Return(r) => {
+            if let Some(a) = &r.arg {
+                e!(a);
+            }
+        }
+        ast::Stmt::Decl(ast::Decl::Var(v)) => {
+            for d in &v.decls {
+                if let Some(init) = &d.init {
+                    e!(init);
+                }
+            }
+        }
+        // A nested function declaration is a new scope — prune its params.
+        ast::Stmt::Decl(ast::Decl::Fn(f)) => {
+            if let Some(b) = &f.function.body {
+                let pruned = prune_for_fn(taint, &f.function);
+                walk_taint_stmts(&b.stmts, &pruned, acc);
+            }
+        }
+        ast::Stmt::Block(b) => walk_taint_stmts(&b.stmts, taint, acc),
+        ast::Stmt::If(i) => {
+            e!(&i.test);
+            s!(&i.cons);
+            if let Some(alt) = &i.alt {
+                s!(alt);
+            }
+        }
+        ast::Stmt::While(w) => {
+            e!(&w.test);
+            s!(&w.body);
+        }
+        ast::Stmt::DoWhile(w) => {
+            s!(&w.body);
+            e!(&w.test);
+        }
+        ast::Stmt::For(f) => {
+            if let Some(ast::VarDeclOrExpr::VarDecl(vd)) = &f.init {
+                for d in &vd.decls {
+                    if let Some(init) = &d.init {
+                        e!(init);
+                    }
+                }
+            } else if let Some(ast::VarDeclOrExpr::Expr(x)) = &f.init {
+                e!(x);
+            }
+            if let Some(t) = &f.test {
+                e!(t);
+            }
+            if let Some(u) = &f.update {
+                e!(u);
+            }
+            s!(&f.body);
+        }
+        ast::Stmt::ForIn(f) => {
+            e!(&f.right);
+            s!(&f.body);
+        }
+        ast::Stmt::ForOf(f) => {
+            e!(&f.right);
+            s!(&f.body);
+        }
+        ast::Stmt::Throw(t) => e!(&t.arg),
+        ast::Stmt::Try(t) => {
+            walk_taint_stmts(&t.block.stmts, taint, acc);
+            if let Some(h) = &t.handler {
+                walk_taint_stmts(&h.body.stmts, taint, acc);
+            }
+            if let Some(f) = &t.finalizer {
+                walk_taint_stmts(&f.stmts, taint, acc);
+            }
+        }
+        ast::Stmt::Switch(sw) => {
+            e!(&sw.discriminant);
+            for c in &sw.cases {
+                if let Some(t) = &c.test {
+                    e!(t);
+                }
+                walk_taint_stmts(&c.cons, taint, acc);
+            }
+        }
+        ast::Stmt::Labeled(l) => s!(&l.body),
+        _ => {}
+    }
+}
+
+fn walk_taint_expr(expr: &ast::Expr, taint: &Taint, acc: &mut TaintAcc) {
+    acc.guard += 1;
+    if acc.guard > 200_000 {
+        return; // pathological-input backstop
+    }
+    // Copy the shared function tables out (a `&` is Copy) so reading them below
+    // doesn't conflict with the `&mut acc` mutations in the call arm.
+    let tcx = acc.tcx;
+    macro_rules! e {
+        ($x:expr) => {
+            walk_taint_expr($x, taint, acc)
         };
     }
     match expr {
@@ -579,16 +998,33 @@ fn walk_taint_expr(
                         let Some(Some(param_name)) = params.get(i) else {
                             continue;
                         };
-                        if !applied.insert((span, i, module.clone(), class.clone())) {
+                        let (module, class) = (module.clone(), class.clone());
+                        // Record this ws-feeding call site (by AST pointer
+                        // identity) BEFORE the dedup below, so EVERY ws caller is
+                        // captured for the polymorphism guard even when the hint
+                        // itself was already recorded from another seed.
+                        let call_id = c as *const ast::CallExpr as usize;
+                        acc.ws_fed.insert((span, i, call_id));
+                        // This hint only holds if the upstream param we are
+                        // flowing through is itself validly tagged.
+                        if let Some(src) = acc.source {
+                            acc.deps.entry((span, i)).or_default().insert(src);
+                        }
+                        if !acc.applied.insert((span, i, module.clone(), class.clone())) {
                             continue;
                         }
-                        hints.push(((span, i), (module.clone(), class.clone())));
+                        acc.hints.push(((span, i), (module.clone(), class.clone())));
                         // Follow the handle into the callee body with a FRESH
-                        // scoped taint binding only its receiving parameter.
+                        // scoped taint binding only its receiving parameter, and
+                        // mark this callee param as the upstream source so any
+                        // deeper hint records its dependency on us.
                         if let Some(body) = tcx.fn_bodies.get(&callee) {
                             let mut fresh: Taint = HashMap::new();
-                            fresh.insert(param_name.clone(), (module.clone(), class.clone()));
-                            walk_taint_stmts(&body.stmts, &fresh, tcx, applied, hints, guard);
+                            fresh.insert(param_name.clone(), (module, class));
+                            let prev = acc.source;
+                            acc.source = Some((span, i));
+                            walk_taint_stmts(&body.stmts, &fresh, acc);
+                            acc.source = prev;
                         }
                     }
                 }
@@ -666,7 +1102,7 @@ fn walk_taint_expr(
                         ast::Prop::Method(m) => {
                             if let Some(b) = &m.function.body {
                                 let pruned = prune_for_fn(taint, &m.function);
-                                walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard);
+                                walk_taint_stmts(&b.stmts, &pruned, acc);
                             }
                         }
                         _ => {}
@@ -678,18 +1114,14 @@ fn walk_taint_expr(
         ast::Expr::Arrow(a) => {
             let pruned = prune_for_arrow(taint, a);
             match a.body.as_ref() {
-                ast::BlockStmtOrExpr::BlockStmt(b) => {
-                    walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard)
-                }
-                ast::BlockStmtOrExpr::Expr(x) => {
-                    walk_taint_expr(x, &pruned, tcx, applied, hints, guard)
-                }
+                ast::BlockStmtOrExpr::BlockStmt(b) => walk_taint_stmts(&b.stmts, &pruned, acc),
+                ast::BlockStmtOrExpr::Expr(x) => walk_taint_expr(x, &pruned, acc),
             }
         }
         ast::Expr::Fn(f) => {
             if let Some(b) = &f.function.body {
                 let pruned = prune_for_fn(taint, &f.function);
-                walk_taint_stmts(&b.stmts, &pruned, tcx, applied, hints, guard);
+                walk_taint_stmts(&b.stmts, &pruned, acc);
             }
         }
         ast::Expr::OptChain(o) => match o.base.as_ref() {
@@ -849,7 +1281,7 @@ fn collect_http_create_server_refs(ast_module: &ast::Module) -> HttpCreateRefs {
                 } else if let ast::ObjectPatProp::KeyValue(kv) = prop {
                     if let ast::PropName::Ident(k) = &kv.key {
                         let key = k.sym.as_ref();
-                        if (key == "createServer" || key == "createSecureServer") {
+                        if key == "createServer" || key == "createSecureServer" {
                             if let ast::Pat::Ident(local) = kv.value.as_ref() {
                                 refs.bare.insert(local.id.sym.to_string());
                             }

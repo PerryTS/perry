@@ -380,3 +380,110 @@ server.listen(0, () => {});
          the same-named nested declaration"
     );
 }
+
+// ─── Polymorphism guard — a helper fed BOTH a ws Client and a non-ws value ───
+
+/// A hint tags a function PARAMETER, fixing the dispatch for that param across
+/// EVERY call site. So a helper that is fed the upgrade `wsId` from one caller
+/// AND a plain object from another must NOT be tagged — otherwise the plain
+/// object's `.send(...)` would silently re-route to `js_ws_send_client_i64`
+/// (a no-op handle miss) instead of running the object's own method. The pass
+/// must only tag a param it can prove is ALWAYS the ws handle.
+#[test]
+fn polymorphic_helper_fed_ws_and_nonws_is_not_tagged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = compile_to_ir(
+        dir.path(),
+        r#"
+import { createServer } from "node:http";
+
+// `emit` is reused for BOTH the ws upgrade handle and a plain emitter.
+function emit(target: any, msg: string) {
+  target.send(msg);
+}
+
+const server = createServer((req: any, res: any) => { res.statusCode = 200; res.end("ok"); });
+server.on("upgrade", (req: any, wsId: any, _head: any) => {
+  emit(wsId, "ws-bound");
+});
+
+// A non-ws caller of the same helper — must keep running the value's own method.
+const bus: any = { send(m: string) { console.log("bus:" + m); } };
+emit(bus, "not-ws");
+
+server.listen(0, () => {});
+"#,
+    );
+    assert!(
+        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        "a helper that is ALSO called with a non-ws value must not be tagged as \
+         a ws Client receiver (would silently drop the non-ws caller's frame)"
+    );
+}
+
+/// Transitive demotion: the handle is forwarded `mid` → `inner`, but `mid` is
+/// ALSO called with a non-ws value. `mid` is polymorphic, so on that path it
+/// delivers a non-ws value to `inner` — therefore NEITHER `mid` nor `inner` may
+/// be tagged. Exercises the dependency fixpoint, not just the direct caller.
+#[test]
+fn transitive_through_polymorphic_intermediate_is_not_tagged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = compile_to_ir(
+        dir.path(),
+        r#"
+import { createServer } from "node:http";
+
+function inner(target: any, msg: string) {
+  target.send(msg);
+}
+function mid(target: any, msg: string) {
+  inner(target, msg);
+}
+
+const server = createServer((req: any, res: any) => { res.statusCode = 200; res.end("ok"); });
+server.on("upgrade", (req: any, wsId: any, _head: any) => {
+  mid(wsId, "ws-bound");
+});
+
+// `mid` is also fed a non-ws value — taint through it is unsound.
+const bus: any = { send(m: string) { console.log("bus:" + m); } };
+mid(bus, "not-ws");
+
+server.listen(0, () => {});
+"#,
+    );
+    assert!(
+        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        "a handle forwarded through a polymorphic intermediate must not tag the \
+         downstream helper (transitive demotion)"
+    );
+}
+
+/// Guardrail for over-correction: a helper that is ONLY ever fed the ws handle
+/// (across two distinct upgrade callbacks) must STILL be tagged — the
+/// polymorphism guard must not drop a legitimately ws-exclusive helper.
+#[test]
+fn ws_exclusive_helper_with_multiple_ws_callers_stays_tagged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = compile_to_ir(
+        dir.path(),
+        r#"
+import { createServer } from "node:http";
+
+function push(wsId: any, msg: string) {
+  wsId.send(msg);
+}
+
+const a = createServer((req: any, res: any) => { res.end("a"); });
+const b = createServer((req: any, res: any) => { res.end("b"); });
+a.on("upgrade", (req: any, wsId: any, _h: any) => { push(wsId, "from-a"); });
+b.on("upgrade", (req: any, wsId: any, _h: any) => { push(wsId, "from-b"); });
+a.listen(0, () => {});
+b.listen(0, () => {});
+"#,
+    );
+    assert!(
+        ir_has_call(&ir, "js_ws_send_client_i64"),
+        "a helper fed ONLY ws handles (from multiple upgrade callbacks) must stay tagged"
+    );
+}
