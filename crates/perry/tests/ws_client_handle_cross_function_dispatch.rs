@@ -73,6 +73,14 @@ fn ir_has_call(ir: &str, symbol: &str) -> bool {
         .any(|l| l.contains("call ") && l.contains(&needle))
 }
 
+/// Number of `call` instructions targeting `@<symbol>`.
+fn ir_call_count(ir: &str, symbol: &str) -> usize {
+    let needle = format!("@{symbol}(");
+    ir.lines()
+        .filter(|l| l.contains("call ") && l.contains(&needle))
+        .count()
+}
+
 fn compile_and_run(dir: &Path, source: &str) -> String {
     let entry = dir.join("main.ts");
     let output = dir.join("main_bin");
@@ -243,5 +251,132 @@ deliver(sink, "hi");
     assert!(
         !ir_has_call(&ir, "js_ws_send_client_i64"),
         "a plain object's `.send` must NOT be mis-dispatched to the ws Client runtime"
+    );
+}
+
+// ─── PR #5493 review fixes — edge cases ──────────────────────────────────────
+
+/// Review #2: a leading TypeScript `this:` param must not shift the hint index;
+/// the `wsId` (2nd real param) still dispatches to the Client runtime.
+#[test]
+fn leading_this_param_keeps_hint_index_aligned() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = compile_to_ir(
+        dir.path(),
+        r#"
+import { createServer } from "node:http";
+
+function deliver(this: any, req: any, wsId: any) {
+  wsId.send("hi");
+}
+
+const server = createServer((req: any, res: any) => { res.statusCode = 200; res.end("ok"); });
+server.on("upgrade", (req: any, wsId: any, _head: any) => {
+  deliver(req, wsId);
+});
+server.listen(0, () => {});
+"#,
+    );
+    assert!(
+        ir_has_call(&ir, "js_ws_send_client_i64"),
+        "wsId after a TS `this:` param must still dispatch to the Client runtime"
+    );
+}
+
+/// Review #3: a `createServer` that is NOT a `node:http` import must not seed ws
+/// taint — a user factory of the same name is ignored.
+#[test]
+fn non_http_create_server_does_not_seed_ws_taint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = compile_to_ir(
+        dir.path(),
+        r#"
+// A user-defined factory that happens to be named `createServer`.
+function createServer(): any {
+  return { on(_e: string, _cb: any) {} };
+}
+function deliver(wsId: any) {
+  wsId.send("nope");
+}
+const server: any = createServer();
+server.on("upgrade", (req: any, wsId: any, _head: any) => {
+  deliver(wsId);
+});
+"#,
+    );
+    assert!(
+        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        "a non-http `createServer` must not seed the ws Client dispatch"
+    );
+}
+
+/// Review #4: a nested function that shadows `wsId` must not inherit the outer
+/// handle — its callee stays untagged even though it is reached from the
+/// upgrade callback's lexical scope.
+#[test]
+fn shadowing_nested_param_does_not_inherit_taint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = compile_to_ir(
+        dir.path(),
+        r#"
+import { createServer } from "node:http";
+
+function deliver(ch: any) {
+  ch.send("shadow");
+}
+
+const server = createServer((req: any, res: any) => { res.statusCode = 200; res.end("ok"); });
+server.on("upgrade", (req: any, wsId: any, _head: any) => {
+  // `later` rebinds `wsId`, so the value flowing into `deliver` is NOT the
+  // upgrade handle — `deliver` must not be tagged as a ws Client receiver.
+  function later(wsId: any) {
+    deliver(wsId);
+  }
+  later(req);
+});
+server.listen(0, () => {});
+"#,
+    );
+    assert!(
+        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        "a shadowing nested param must not propagate the outer Client handle"
+    );
+}
+
+/// Review #1: two functions named `pushFrame` — only the upgrade-fed top-level
+/// declaration is tagged; a same-named nested declaration receiving a non-ws
+/// value is keyed by a distinct identity and left untouched (exactly one Client
+/// dispatch in the module).
+#[test]
+fn same_named_function_is_not_cross_tagged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ir = compile_to_ir(
+        dir.path(),
+        r#"
+import { createServer } from "node:http";
+
+function pushFrame(wsId: any, m: string) {
+  wsId.send(m);
+}
+function elsewhere() {
+  function pushFrame(x: any) {
+    x.send("nope");
+  }
+  pushFrame({ send(s: string) { console.log(s); } });
+}
+
+const server = createServer((req: any, res: any) => { res.statusCode = 200; res.end("ok"); });
+server.on("upgrade", (req: any, wsId: any, _head: any) => {
+  pushFrame(wsId, "real");
+  elsewhere();
+});
+server.listen(0, () => {});
+"#,
+    );
+    assert_eq!(
+        ir_call_count(&ir, "js_ws_send_client_i64"),
+        1,
+        "only the upgrade-fed `pushFrame` dispatches to the Client runtime, not \
+         the same-named nested declaration"
     );
 }
