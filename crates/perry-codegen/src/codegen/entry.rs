@@ -94,7 +94,12 @@ fn emit_plugin_abi_shim(llmod: &mut LlModule, hir: &HirModule, module_prefix: &s
         let fn_def = llmod.define_function("plugin_deactivate", VOID, vec![]);
         let _ = fn_def.create_block("entry");
         let blk = fn_def.block_mut(0).unwrap();
-        blk.call_void(&user_deactivate, &[]);
+        // The user's `deactivate` is declared/defined as `double ()` (every
+        // lowered TS function returns a NaN-boxed value), so call it as
+        // `double` and discard the result — mirroring the `activate` path
+        // above. A `call_void` here would emit `call void @<deactivate>()`,
+        // a signature mismatch against the `double` definition.
+        let _ = blk.call(DOUBLE, &user_deactivate, &[]);
         blk.ret_void();
     }
 }
