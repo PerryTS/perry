@@ -465,10 +465,128 @@ fn upgrade_handler_ws_id<'a>(
     Some((ws_id, handler.expr.as_ref()))
 }
 
-/// Record idents bound to a `createServer(...)` / `createSecureServer(...)`
-/// call (bare or `http.`/`https.`/`http2.`-qualified) anywhere in the module.
+/// Node HTTP-family module specifiers whose `createServer`/`createSecureServer`
+/// produce a real `("http","HttpServer")` handle.
+fn is_http_module_specifier(src: &str) -> bool {
+    matches!(
+        src,
+        "http" | "node:http" | "https" | "node:https" | "http2" | "node:http2"
+    )
+}
+
+/// References that resolve to an HTTP-family `createServer`/`createSecureServer`,
+/// gathered from the module's imports and `require(...)`s. `bare` holds local
+/// names that ARE the function (named import / destructured require); `ns` holds
+/// namespace locals so `<ns>.createServer(...)` is recognised.
+#[derive(Default)]
+struct HttpCreateRefs {
+    bare: HashSet<String>,
+    ns: HashSet<String>,
+}
+
+/// Is `expr` a `require("<http-module>")` call? Returns the specifier text.
+fn require_http_specifier(expr: &ast::Expr) -> Option<&str> {
+    let ast::Expr::Call(call) = expr else {
+        return None;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Ident(i) = callee.as_ref() else {
+        return None;
+    };
+    if i.sym.as_ref() != "require" {
+        return None;
+    }
+    let arg = call.args.first()?;
+    let ast::Expr::Lit(ast::Lit::Str(s)) = arg.expr.as_ref() else {
+        return None;
+    };
+    let src = s.value.as_str()?;
+    is_http_module_specifier(src).then_some(src)
+}
+
+/// Build the set of HTTP-imported `createServer`/`createSecureServer` references
+/// (named/default/namespace imports + `require(...)` aliases, top-level scan).
+fn collect_http_create_server_refs(ast_module: &ast::Module) -> HttpCreateRefs {
+    let mut refs = HttpCreateRefs::default();
+    let note_require_binding = |pat: &ast::Pat, refs: &mut HttpCreateRefs| match pat {
+        // `const http = require("node:http")` → namespace binding.
+        ast::Pat::Ident(id) => {
+            refs.ns.insert(id.id.sym.to_string());
+        }
+        // `const { createServer } = require("node:http")` → bare binding.
+        ast::Pat::Object(obj) => {
+            for prop in &obj.props {
+                if let ast::ObjectPatProp::Assign(a) = prop {
+                    let key = a.key.sym.as_ref();
+                    if key == "createServer" || key == "createSecureServer" {
+                        refs.bare.insert(a.key.sym.to_string());
+                    }
+                } else if let ast::ObjectPatProp::KeyValue(kv) = prop {
+                    if let ast::PropName::Ident(k) = &kv.key {
+                        let key = k.sym.as_ref();
+                        if (key == "createServer" || key == "createSecureServer") {
+                            if let ast::Pat::Ident(local) = kv.value.as_ref() {
+                                refs.bare.insert(local.id.sym.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    };
+    for item in &ast_module.body {
+        match item {
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(imp)) => {
+                if !is_http_module_specifier(imp.src.value.as_str().unwrap_or("")) {
+                    continue;
+                }
+                for spec in &imp.specifiers {
+                    match spec {
+                        ast::ImportSpecifier::Named(n) => {
+                            let imported = match &n.imported {
+                                Some(ast::ModuleExportName::Ident(i)) => i.sym.to_string(),
+                                Some(ast::ModuleExportName::Str(s)) => {
+                                    s.value.as_str().unwrap_or("").to_string()
+                                }
+                                None => n.local.sym.to_string(),
+                            };
+                            if imported == "createServer" || imported == "createSecureServer" {
+                                refs.bare.insert(n.local.sym.to_string());
+                            }
+                        }
+                        ast::ImportSpecifier::Default(d) => {
+                            refs.ns.insert(d.local.sym.to_string());
+                        }
+                        ast::ImportSpecifier::Namespace(ns) => {
+                            refs.ns.insert(ns.local.sym.to_string());
+                        }
+                    }
+                }
+            }
+            ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(v))) => {
+                for d in &v.decls {
+                    if let Some(init) = &d.init {
+                        if require_http_specifier(init).is_some() {
+                            note_require_binding(&d.name, &mut refs);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    refs
+}
+
+/// Record idents bound to an HTTP-family `createServer(...)` /
+/// `createSecureServer(...)` call (verified import/require provenance) anywhere
+/// in the module.
 fn collect_server_idents_in_module(ast_module: &ast::Module, out: &mut HashSet<String>) {
-    fn is_create_server_call(expr: &ast::Expr) -> bool {
+    let refs = collect_http_create_server_refs(ast_module);
+    fn is_create_server_call(expr: &ast::Expr, refs: &HttpCreateRefs) -> bool {
         let mut e = expr;
         loop {
             match e {
@@ -487,86 +605,94 @@ fn collect_server_idents_in_module(ast_module: &ast::Module, out: &mut HashSet<S
         let ast::Callee::Expr(callee) = &call.callee else {
             return false;
         };
-        let name = match callee.as_ref() {
-            ast::Expr::Ident(i) => i.sym.to_string(),
-            ast::Expr::Member(m) => match &m.prop {
-                ast::MemberProp::Ident(i) => i.sym.to_string(),
-                _ => return false,
-            },
-            _ => return false,
-        };
-        name == "createServer" || name == "createSecureServer"
+        match callee.as_ref() {
+            // Bare `createServer(...)` — only when the name is an HTTP-imported
+            // binding (named import or destructured require), not a user factory.
+            ast::Expr::Ident(i) => refs.bare.contains(i.sym.as_ref()),
+            // `<ns>.createServer(...)` — `<ns>` must be an HTTP namespace import.
+            ast::Expr::Member(m) => {
+                let ast::MemberProp::Ident(prop) = &m.prop else {
+                    return false;
+                };
+                let prop = prop.sym.as_ref();
+                if prop != "createServer" && prop != "createSecureServer" {
+                    return false;
+                }
+                matches!(m.obj.as_ref(), ast::Expr::Ident(o) if refs.ns.contains(o.sym.as_ref()))
+            }
+            _ => false,
+        }
     }
-    fn record_decl(decl: &ast::VarDeclarator, out: &mut HashSet<String>) {
+    fn record_decl(decl: &ast::VarDeclarator, refs: &HttpCreateRefs, out: &mut HashSet<String>) {
         if let (ast::Pat::Ident(id), Some(init)) = (&decl.name, decl.init.as_ref()) {
-            if is_create_server_call(init) {
+            if is_create_server_call(init, refs) {
                 out.insert(id.id.sym.to_string());
             }
         }
     }
-    fn walk_stmt(stmt: &ast::Stmt, out: &mut HashSet<String>) {
+    fn walk_stmt(stmt: &ast::Stmt, refs: &HttpCreateRefs, out: &mut HashSet<String>) {
         match stmt {
             ast::Stmt::Decl(ast::Decl::Var(v)) => {
                 for d in &v.decls {
-                    record_decl(d, out);
+                    record_decl(d, refs, out);
                 }
             }
             ast::Stmt::Decl(ast::Decl::Fn(f)) => {
                 if let Some(b) = &f.function.body {
                     for s in &b.stmts {
-                        walk_stmt(s, out);
+                        walk_stmt(s, refs, out);
                     }
                 }
             }
-            ast::Stmt::Expr(e) => walk_expr(&e.expr, out),
+            ast::Stmt::Expr(e) => walk_expr(&e.expr, refs, out),
             ast::Stmt::Block(b) => {
                 for s in &b.stmts {
-                    walk_stmt(s, out);
+                    walk_stmt(s, refs, out);
                 }
             }
             ast::Stmt::If(i) => {
-                walk_stmt(&i.cons, out);
+                walk_stmt(&i.cons, refs, out);
                 if let Some(alt) = &i.alt {
-                    walk_stmt(alt, out);
+                    walk_stmt(alt, refs, out);
                 }
             }
-            ast::Stmt::While(w) => walk_stmt(&w.body, out),
-            ast::Stmt::DoWhile(w) => walk_stmt(&w.body, out),
+            ast::Stmt::While(w) => walk_stmt(&w.body, refs, out),
+            ast::Stmt::DoWhile(w) => walk_stmt(&w.body, refs, out),
             ast::Stmt::For(f) => {
                 if let Some(ast::VarDeclOrExpr::VarDecl(vd)) = &f.init {
                     for d in &vd.decls {
-                        record_decl(d, out);
+                        record_decl(d, refs, out);
                     }
                 }
-                walk_stmt(&f.body, out);
+                walk_stmt(&f.body, refs, out);
             }
-            ast::Stmt::ForIn(f) => walk_stmt(&f.body, out),
-            ast::Stmt::ForOf(f) => walk_stmt(&f.body, out),
+            ast::Stmt::ForIn(f) => walk_stmt(&f.body, refs, out),
+            ast::Stmt::ForOf(f) => walk_stmt(&f.body, refs, out),
             ast::Stmt::Try(t) => {
                 for s in &t.block.stmts {
-                    walk_stmt(s, out);
+                    walk_stmt(s, refs, out);
                 }
                 if let Some(h) = &t.handler {
                     for s in &h.body.stmts {
-                        walk_stmt(s, out);
+                        walk_stmt(s, refs, out);
                     }
                 }
                 if let Some(f) = &t.finalizer {
                     for s in &f.stmts {
-                        walk_stmt(s, out);
+                        walk_stmt(s, refs, out);
                     }
                 }
             }
             ast::Stmt::Switch(s) => {
                 for c in &s.cases {
                     for s in &c.cons {
-                        walk_stmt(s, out);
+                        walk_stmt(s, refs, out);
                     }
                 }
             }
             ast::Stmt::Return(r) => {
                 if let Some(a) = &r.arg {
-                    walk_expr(a, out);
+                    walk_expr(a, refs, out);
                 }
             }
             _ => {}
@@ -574,44 +700,44 @@ fn collect_server_idents_in_module(ast_module: &ast::Module, out: &mut HashSet<S
     }
     // Descend into callback bodies (e.g. a server created inside `main()` or a
     // `.listen(0, () => { const server = createServer(...) })`).
-    fn walk_expr(expr: &ast::Expr, out: &mut HashSet<String>) {
+    fn walk_expr(expr: &ast::Expr, refs: &HttpCreateRefs, out: &mut HashSet<String>) {
         match expr {
             ast::Expr::Call(c) => {
                 for a in &c.args {
-                    walk_expr(&a.expr, out);
+                    walk_expr(&a.expr, refs, out);
                 }
             }
             ast::Expr::Arrow(a) => match a.body.as_ref() {
                 ast::BlockStmtOrExpr::BlockStmt(b) => {
                     for s in &b.stmts {
-                        walk_stmt(s, out);
+                        walk_stmt(s, refs, out);
                     }
                 }
-                ast::BlockStmtOrExpr::Expr(e) => walk_expr(e, out),
+                ast::BlockStmtOrExpr::Expr(e) => walk_expr(e, refs, out),
             },
             ast::Expr::Fn(f) => {
                 if let Some(b) = &f.function.body {
                     for s in &b.stmts {
-                        walk_stmt(s, out);
+                        walk_stmt(s, refs, out);
                     }
                 }
             }
-            ast::Expr::Paren(p) => walk_expr(&p.expr, out),
+            ast::Expr::Paren(p) => walk_expr(&p.expr, refs, out),
             _ => {}
         }
     }
     for item in &ast_module.body {
         match item {
-            ast::ModuleItem::Stmt(s) => walk_stmt(s, out),
+            ast::ModuleItem::Stmt(s) => walk_stmt(s, &refs, out),
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(e)) => {
                 if let ast::Decl::Var(v) = &e.decl {
                     for d in &v.decls {
-                        record_decl(d, out);
+                        record_decl(d, &refs, out);
                     }
                 } else if let ast::Decl::Fn(f) = &e.decl {
                     if let Some(b) = &f.function.body {
                         for s in &b.stmts {
-                            walk_stmt(s, out);
+                            walk_stmt(s, &refs, out);
                         }
                     }
                 }
