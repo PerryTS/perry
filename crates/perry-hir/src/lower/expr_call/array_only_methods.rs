@@ -1088,7 +1088,18 @@ pub(super) fn try_array_only_methods(
                                 ctx.lookup_local_type(ident.sym.as_ref())
                                     .map(|ty| {
                                         match ty {
-                                            Type::Named(name) => ctx.lookup_class(name).is_some(),
+                                            // A class instance OR an interface-typed value is the
+                                            // receiver's OWN object and may own a `push` method, so
+                                            // never fold to the array intrinsic. Interfaces aren't
+                                            // classes (`lookup_class` misses them), so the previous
+                                            // `lookup_class(name).is_some()` folded an interface
+                                            // receiver's `push` to the array fast path — reading the
+                                            // object header as an ArrayHeader and dropping the call
+                                            // (follow-up to #5139, which fixed only `any` receivers).
+                                            Type::Named(name) => {
+                                                ctx.lookup_class(name).is_some()
+                                                    || ctx.is_interface_type(name)
+                                            }
                                             Type::Generic { base, .. } => {
                                                 let builtin =
                                                     ["Map", "Set", "WeakMap", "WeakSet", "Promise"];

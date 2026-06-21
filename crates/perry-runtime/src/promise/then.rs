@@ -155,12 +155,31 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
     // everything else via ordinary ToString, matching the synchronous
     // uncaught-throw header.
     let reason = unhandled_reasons[0];
-    let reason_str_ptr = crate::value::js_jsvalue_to_string(reason);
-    let reason_str = unsafe { crate::exception::string_header_to_string(reason_str_ptr) };
-    if reason_str.is_empty() {
-        eprintln!("Uncaught (in promise)");
-    } else {
-        eprintln!("Uncaught (in promise) {reason_str}");
+    // Prefer the rejection Error's `stack` (it begins with `<Name>: <message>`
+    // and carries `at <frame>` file:line lines) so the throw site is visible —
+    // mirrors the synchronous uncaught-throw handler (`exception::print_uncaught`).
+    // Falls back to ToString for non-Error reasons / empty stacks.
+    let mut printed = false;
+    let bits = reason.to_bits();
+    if (bits >> 48) == 0x7FFD {
+        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if ptr >= 0x10000 && unsafe { *(ptr as *const u32) } == crate::error::OBJECT_TYPE_ERROR {
+            let eh = ptr as *const crate::error::ErrorHeader;
+            let stack_str = unsafe { crate::exception::string_header_to_string((*eh).stack) };
+            if !stack_str.is_empty() {
+                eprintln!("Uncaught (in promise) {stack_str}");
+                printed = true;
+            }
+        }
+    }
+    if !printed {
+        let reason_str_ptr = crate::value::js_jsvalue_to_string(reason);
+        let reason_str = unsafe { crate::exception::string_header_to_string(reason_str_ptr) };
+        if reason_str.is_empty() {
+            eprintln!("Uncaught (in promise)");
+        } else {
+            eprintln!("Uncaught (in promise) {reason_str}");
+        }
     }
     // Match Node's unhandled-rejection exit code (1). The event loop has
     // already drained, so there is no pending work to lose.

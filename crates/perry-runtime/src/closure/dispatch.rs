@@ -1332,6 +1332,30 @@ pub unsafe extern "C" fn js_native_call_value(
         return crate::proxy::js_proxy_apply(func_value, this_arg, arr_box);
     }
 
+    // Dynamic `super()` for `class X extends <runtime value holding
+    // events.EventEmitter>` (an import alias `import { EventEmitter as E }` or a
+    // local `const E = EventEmitter`): the parent is a bound-native EventEmitter
+    // export reached through a runtime value, so codegen's compile-time
+    // extends-NAME machinery — which emits `js_event_emitter_subclass_init` for
+    // the direct `class X extends EventEmitter` form (#5137) — never fires, and
+    // `js_register_class_parent_dynamic` early-returns for bound native parents.
+    // The dynamic super lowering (expr/this_super_call.rs) dispatches the parent
+    // VALUE here with IMPLICIT_THIS bound to the fresh subclass instance. Install
+    // the EventEmitter listener/emit methods onto that instance, exactly as the
+    // direct form does, so `this.setMaxListeners(…)`/`.on`/`.emit` resolve.
+    if let Some((module, method)) =
+        unsafe { crate::object::bound_native_callable_module_and_method(func_value) }
+    {
+        if module.trim_start_matches("node:") == "events"
+            && (method == "EventEmitter" || method == "EventEmitterAsyncResource")
+        {
+            let this_val = crate::object::js_implicit_this_get();
+            if JSValue::from_bits(this_val.to_bits()).is_pointer() {
+                return crate::node_stream::js_event_emitter_subclass_init(this_val);
+            }
+        }
+    }
+
     // Get the closure pointer from the value
     // For native compilation, function values are stored as NaN-boxed pointers
     let closure: *const ClosureHeader = if jsval.is_pointer() {

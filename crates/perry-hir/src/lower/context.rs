@@ -417,6 +417,16 @@ impl LoweringContext {
         }
     }
 
+    /// Is `name` a user-declared `interface`? Interfaces are not classes, so
+    /// `lookup_class` returns `None` for them — but an interface-typed value is
+    /// still the object's own type, whose methods must dispatch to its own
+    /// members, never to an Array/builtin fast-path intrinsic. Used by the
+    /// array-only-method fold to recognize interface receivers (follow-up to
+    /// #5139, which covered only `any`-typed receivers).
+    pub(crate) fn is_interface_type(&self, name: &str) -> bool {
+        self.interfaces.iter().any(|(n, _)| n == name)
+    }
+
     /// Issue #562: look up the `(module, class)` tuple from a class's
     /// `native_extends` clause (e.g. `class X extends WritableStream` →
     /// `Some(("writable_stream", "WritableStream"))`). Used by
