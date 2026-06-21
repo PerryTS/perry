@@ -1143,6 +1143,55 @@ fn walk_taint_expr(expr: &ast::Expr, taint: &Taint, acc: &mut TaintAcc) {
         ast::Expr::TsTypeAssertion(t) => e!(&t.expr),
         ast::Expr::TsConstAssertion(t) => e!(&t.expr),
         ast::Expr::TsInstantiation(t) => e!(&t.expr),
+        ast::Expr::TsSatisfies(t) => e!(&t.expr),
+        // A class expression's member bodies are new scopes: prune each
+        // method/constructor's params before recursing (like object methods);
+        // field initializers and static blocks run in the surrounding taint.
+        ast::Expr::Class(c) => {
+            for member in &c.class.body {
+                match member {
+                    ast::ClassMember::Method(m) => {
+                        if let Some(b) = &m.function.body {
+                            let pruned = prune_for_fn(taint, &m.function);
+                            walk_taint_stmts(&b.stmts, &pruned, acc);
+                        }
+                    }
+                    ast::ClassMember::PrivateMethod(m) => {
+                        if let Some(b) = &m.function.body {
+                            let pruned = prune_for_fn(taint, &m.function);
+                            walk_taint_stmts(&b.stmts, &pruned, acc);
+                        }
+                    }
+                    ast::ClassMember::Constructor(ctor) => {
+                        if let Some(b) = &ctor.body {
+                            let mut pruned = taint.clone();
+                            for p in &ctor.params {
+                                if let ast::ParamOrTsParamProp::Param(param) = p {
+                                    if let Some(n) = cross_fn_pat_name(&param.pat) {
+                                        pruned.remove(&n);
+                                    }
+                                }
+                            }
+                            walk_taint_stmts(&b.stmts, &pruned, acc);
+                        }
+                    }
+                    ast::ClassMember::ClassProp(p) => {
+                        if let Some(v) = &p.value {
+                            e!(v);
+                        }
+                    }
+                    ast::ClassMember::PrivateProp(p) => {
+                        if let Some(v) = &p.value {
+                            e!(v);
+                        }
+                    }
+                    ast::ClassMember::StaticBlock(s) => {
+                        walk_taint_stmts(&s.body.stmts, taint, acc);
+                    }
+                    _ => {}
+                }
+            }
+        }
         _ => {}
     }
 }
