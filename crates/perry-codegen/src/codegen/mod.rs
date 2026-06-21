@@ -1619,6 +1619,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // <class>__<field>` initialized to 0.0. The init expression runs
     // in compile_module_entry's main/init function before user code.
     let mut static_field_globals: HashMap<(String, String), String> = HashMap::new();
+    // Track which `@perry_static_*` globals we've already emitted (defining or
+    // external) so a repeated symbol — a duplicate static field name within one
+    // class (#5345), or the same imported class pulled in twice — never emits a
+    // second LLVM global, which clang rejects as a redefinition.
+    let mut external_globals_emitted: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for c in &hir.classes {
         for sf in &c.static_fields {
             // Computed-key static fields (`static [Symbol.for(...)] = init`)
@@ -1642,7 +1648,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // when Sub is in a different file from Base; without external
             // linkage, the importing module's `StaticFieldGet { Base, Symbol }`
             // had no symbol to resolve and silently produced 0.0.
-            llmod.add_global(&name, DOUBLE, "0.0");
+            //
+            // #5345: a class may declare the SAME static field name twice
+            // (`static f = 'a'; static f = this.f + 'b';`) — both initializers
+            // run in declaration order against one shared slot (last write
+            // wins). They mangle to the same global symbol, so emit the
+            // defining global only once; clang rejects a redefined `@…__f`.
+            // The init loop still walks every `c.static_fields` entry, so both
+            // assignments execute against this single slot.
+            if external_globals_emitted.insert(name.clone()) {
+                llmod.add_global(&name, DOUBLE, "0.0");
+            }
             static_field_globals.insert((c.name.clone(), sf.name.clone()), name);
         }
     }
@@ -1650,9 +1666,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // module emits the defining external global (above); the consumer just
     // declares a reference and adds it to its own `static_field_globals` map
     // so `Expr::StaticFieldGet/Set` lowering finds it.
-    // Track which globals we've already emitted to avoid double-declarations.
-    let mut external_globals_emitted: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    // (external_globals_emitted is declared above, shared with the local-class
+    // loop, to avoid double-declarations.)
     for ic in &opts.imported_classes {
         let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
         // Skip imported-class entries whose source matches this module's
