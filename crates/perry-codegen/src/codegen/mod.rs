@@ -67,7 +67,7 @@ use helpers::{
 };
 
 // Collector and boxing-analysis walkers live in dedicated modules.
-use crate::boxed_vars::{collect_boxed_vars, collect_let_types_in_stmts};
+use crate::boxed_vars::{collect_boxed_param_ids, collect_boxed_vars, collect_let_types_in_stmts};
 use crate::collectors::{collect_closures_in_stmts, collect_let_ids, collect_ref_ids_in_stmts};
 
 pub(super) fn spec_function_length(params: &[perry_hir::Param]) -> usize {
@@ -2041,25 +2041,37 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut module_boxed_vars: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for f in &hir.functions {
         module_boxed_vars.extend(collect_boxed_vars(&f.body));
+        // #5521: box captured+mutated params (never in the Stmt::Let
+        // `declared` set, so missed by `collect_boxed_vars`).
+        module_boxed_vars.extend(collect_boxed_param_ids(&f.params, &f.body));
     }
     for c in &hir.classes {
         for m in &c.methods {
             module_boxed_vars.extend(collect_boxed_vars(&m.body));
+            module_boxed_vars.extend(collect_boxed_param_ids(&m.params, &m.body));
         }
         for (_, getter_fn) in &c.getters {
             module_boxed_vars.extend(collect_boxed_vars(&getter_fn.body));
+            module_boxed_vars.extend(collect_boxed_param_ids(&getter_fn.params, &getter_fn.body));
         }
         for (_, setter_fn) in &c.setters {
             module_boxed_vars.extend(collect_boxed_vars(&setter_fn.body));
+            module_boxed_vars.extend(collect_boxed_param_ids(&setter_fn.params, &setter_fn.body));
         }
         for sm in &c.static_methods {
             module_boxed_vars.extend(collect_boxed_vars(&sm.body));
+            module_boxed_vars.extend(collect_boxed_param_ids(&sm.params, &sm.body));
         }
         for member in &c.computed_members {
             module_boxed_vars.extend(collect_boxed_vars(&member.function.body));
+            module_boxed_vars.extend(collect_boxed_param_ids(
+                &member.function.params,
+                &member.function.body,
+            ));
         }
         if let Some(ctor) = &c.constructor {
             module_boxed_vars.extend(collect_boxed_vars(&ctor.body));
+            module_boxed_vars.extend(collect_boxed_param_ids(&ctor.params, &ctor.body));
         }
     }
     module_boxed_vars.extend(collect_boxed_vars(&hir.init));
