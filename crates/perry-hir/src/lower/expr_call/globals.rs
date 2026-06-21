@@ -484,7 +484,13 @@ pub(super) fn try_global_builtins(
         }
 
         // Check if this is a named import from child_process (e.g., execSync, spawnSync)
-        if let Some((module_name, _method)) = ctx.lookup_native_module(func_name) {
+        if let Some((module_name, method)) = ctx.lookup_native_module(func_name) {
+            // Resolve aliased named imports of native-module functions to their
+            // EXPORTED name (`import { join as p } from "path"` → "join") so the
+            // per-module `match func_name` arms below match. Without this, an
+            // aliased local (`p`) matched no arm and fell through to a generic
+            // path that evaluated to `undefined` — e.g. `p(home, ".x").normalize()`.
+            let func_name = method.unwrap_or(func_name);
             if module_name == "child_process" {
                 match func_name {
                     "execSync" if !args.is_empty() => {
