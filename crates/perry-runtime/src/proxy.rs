@@ -1249,10 +1249,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         // POINTER_TAG'd heap object, or a module-level slot's raw I64 pointer
         // (top 16 bits zero).
         && (target_top16 == 0x7FFD || target_top16 == 0)
-        // Per-key, not the coarse process-wide flag: an unrelated descriptor on
-        // Object.prototype must not force every write of an *absent* key onto the
-        // O(n) slow walk (that made wide-object builds O(n²)).
-        && !crate::object::object_proto_may_intercept_key(key)
         && unsafe { crate::symbol::js_is_symbol(key) } == 0
     {
         let addr = extract_pointer(target.to_bits()) as usize;
@@ -1270,11 +1266,28 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
                     if header.obj_type == crate::gc::GC_TYPE_OBJECT
                         && header._reserved & SLOW_FLAGS == 0
-                        && (*(addr as *const crate::ObjectHeader)).class_id == 0
-                        && crate::object::prototype_chain::object_static_prototype(addr).is_none()
                     {
-                        target_set(target, key, value);
-                        return true;
+                        let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
+                        let fast_safe = if class_id == 0 {
+                            // Plain object: prototype is exactly Object.prototype, and
+                            // Object.prototype doesn't intercept this key (per-key, not
+                            // the coarse process-wide descriptor flag — that made wide
+                            // builds O(n²)).
+                            crate::object::prototype_chain::object_static_prototype(addr)
+                                .is_none()
+                                && !crate::object::object_proto_may_intercept_key(key)
+                        } else {
+                            // Class instance: the `class_id == 0` guard previously sent
+                            // EVERY wide class-instance build down the O(own-key) slow
+                            // walk (O(n²)). Safe to fast-path when no inherited accessor /
+                            // non-writable anywhere in the prototype chain could intercept
+                            // this key.
+                            !crate::object::class_instance_set_may_intercept(addr, class_id, key)
+                        };
+                        if fast_safe {
+                            target_set(target, key, value);
+                            return true;
+                        }
                     }
                 }
             }

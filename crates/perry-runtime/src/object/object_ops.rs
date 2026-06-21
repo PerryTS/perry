@@ -2786,6 +2786,34 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     }
                     return function_prototype_or_null();
                 }
+                // Fast [[Prototype]] for a DECLARED-class instance: resolve
+                // directly from the class id instead of the generic
+                // `constructor_dynamic_prototype` probe, which reads the
+                // `constructor` field by name and therefore does a LINEAR scan
+                // over the instance's own keys (O(own-key-count)) before missing
+                // and continuing to the prototype. On a wide build —
+                // `const o = new C(); for (i) o["k"+i] = i` — that scan grows by
+                // one each iteration, making any reflective getPrototypeOf on the
+                // instance O(n²). The class-id table at line ~2810 below already
+                // returns this exact prototype for the same instances; hoisting it
+                // here is semantically identical (same declared-class prototype
+                // object) but O(1). Gated on a REAL declared class id only
+                // (`class_decl_prototype_value_for_instance_class` returns None for
+                // class_id 0 / anonymous-shape / unregistered ids), so synthetic
+                // function-ctor instances and plain objects keep the existing
+                // `constructor`-based resolution unchanged.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && (*obj).class_id != 0
+                    && !is_anon_shape_class_id((*obj).class_id)
+                {
+                    if let Some(proto) =
+                        super::class_registry::class_decl_prototype_value_for_instance_class(
+                            (*obj).class_id,
+                        )
+                    {
+                        return proto;
+                    }
+                }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {
                     return proto;
                 }

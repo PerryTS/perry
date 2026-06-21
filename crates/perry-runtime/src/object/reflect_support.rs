@@ -180,7 +180,7 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
     reflect_bool(true)
 }
 
-unsafe fn key_to_rust_string(value: f64) -> Option<String> {
+pub(crate) unsafe fn key_to_rust_string(value: f64) -> Option<String> {
     let key_str = crate::builtins::js_string_coerce(value);
     if key_str.is_null() {
         return None;

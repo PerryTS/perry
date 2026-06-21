@@ -1076,8 +1076,19 @@ pub extern "C" fn js_object_set_field_by_name(
                 new_keys as usize,
                 new_index as u32,
             );
+            // The sidecar is keyed on the OBJECT pointer (see
+            // `keys_index_lookup`, which probes `obj as usize`), NOT the
+            // keys-array pointer — shape-sharing clones the keys array on
+            // every insert, so a keys-keyed entry would be orphaned each
+            // iteration. Previously this inline-slot append registered
+            // under `new_keys as usize`, so the obj-keyed lookup never
+            // found it and rebuilt the full O(key_count) index on every
+            // write — turning a wide build that stays on the inline-slot
+            // path (e.g. a class instance whose pre-sized inline capacity
+            // keeps appends below the overflow threshold) into O(n²). Use
+            // the object address to match the lookup + the overflow path.
             keys_index_insert(
-                new_keys as usize,
+                obj as usize,
                 (new_index + 1) as u32,
                 key_hash,
                 new_index as u32,

@@ -5497,6 +5497,40 @@ pub(crate) fn class_has_instance_getter(class_id: u32, name: &str) -> bool {
     false
 }
 
+/// Whether the class chain rooted at `class_id` defines an instance getter OR
+/// setter named `name` (on `Class.prototype`, via `js_register_class_getter` /
+/// `js_register_class_setter`). These accessors live in the per-class vtable,
+/// NOT in the address-keyed descriptor tables, so a prototype-object descriptor
+/// scan would miss them — the dynamic-write fast path must consult this before
+/// treating `instance[name] = v` as a plain own-data store (an inherited
+/// accessor must intercept instead). Walks the `extends` chain like
+/// [`class_has_instance_getter`].
+pub(crate) fn class_chain_has_instance_accessor(class_id: u32, name: &str) -> bool {
+    let Ok(guard) = CLASS_VTABLE_REGISTRY.read() else {
+        return false;
+    };
+    let Some(reg) = guard.as_ref() else {
+        return false;
+    };
+    let mut cid = class_id;
+    let mut depth = 0usize;
+    while cid != 0 && depth < 32 {
+        if let Some(vt) = reg.get(&cid) {
+            if vt.getters.contains_key(name) || vt.setters.contains_key(name) {
+                return true;
+            }
+        }
+        match get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
 pub(crate) unsafe fn class_instance_setter_apply(
     class_id: u32,
     name: &str,

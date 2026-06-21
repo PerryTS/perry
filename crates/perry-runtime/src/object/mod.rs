@@ -755,6 +755,81 @@ pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
     reflect_support::obj_value_has_own_key(proto_value, key)
 }
 
+/// Whether a fast plain-data write of `key` to a CLASS INSTANCE (`class_id != 0`)
+/// at `obj_addr` might be intercepted by its prototype chain — i.e. the slow
+/// `[[Set]]` walk is required instead of a direct own-data store. Conservative:
+/// any uncertainty returns `true` (take the slow path).
+///
+/// All interception sources are checked so the fast path stays correct:
+///   1. A class getter/setter named `key` anywhere in the `extends` chain. These
+///      live in the per-class vtable, NOT the address-keyed descriptor tables, so
+///      the prototype-object scan in (2) cannot see them.
+///   2. An address-keyed accessor / non-writable descriptor on any *class*
+///      prototype object (`Object.defineProperty(C.prototype, …)`), detected via
+///      `OBJ_FLAG_HAS_DESCRIPTORS` on that prototype object.
+///   3. `Object.prototype` at the chain tail — delegated per-key to
+///      [`object_proto_may_intercept_key`].
+///
+/// Own-instance descriptors / frozen / sealed are excluded by the caller before
+/// this is reached.
+pub(crate) unsafe fn class_instance_set_may_intercept(
+    obj_addr: usize,
+    class_id: u32,
+    key: f64,
+) -> bool {
+    // Decode the key once — used for both the class-chain and per-prototype
+    // accessor probes below.
+    let name = match reflect_support::key_to_rust_string(key) {
+        Some(n) => n,
+        // Non-decodable / non-string key: do not risk the fast path.
+        None => return true,
+    };
+    // (1) A class getter/setter for this exact key anywhere in the class chain.
+    if class_registry::class_chain_has_instance_accessor(class_id, &name) {
+        return true;
+    }
+    // (2)/(3) Walk the prototype OBJECTS from the instance's [[Prototype]].
+    let mut proto = js_object_get_prototype_of(crate::value::js_nanbox_pointer(obj_addr as i64));
+    let mut depth = 0u32;
+    loop {
+        depth += 1;
+        if depth > 64 {
+            // Pathologically deep / cyclic chain — be safe.
+            return true;
+        }
+        let bits = proto.to_bits();
+        // Not a heap-object pointer → end of chain (null prototype). Nothing
+        // below to intercept.
+        if (bits >> 48) != 0x7FFD {
+            return false;
+        }
+        let p = (bits & crate::value::POINTER_MASK) as usize;
+        if p == 0 {
+            return false;
+        }
+        if crate::array::object_prototype_addr_matches(p) {
+            // Reached the canonical Object.prototype: per-key check, then done.
+            return object_proto_may_intercept_key(key);
+        }
+        // Per-KEY intercepting descriptor on this class prototype. A blanket
+        // `object_has_descriptors(p)` bail is too coarse — every class prototype
+        // carries descriptors (constructor / method install), which would defeat
+        // the fast path entirely. Only an inherited accessor or non-writable data
+        // property *named this key* actually intercepts the write.
+        if object_has_descriptors(p) {
+            if get_accessor_descriptor(p, &name).is_some() {
+                return true;
+            }
+            if let Some(attrs) = get_property_attrs(p, &name) {
+                if !attrs.writable() {
+                    return true;
+                }
+            }
+        }
+        proto = js_object_get_prototype_of(proto);
+    }
+}
+
 /// #5054: record descriptor installation on the target object itself —
 /// `OBJ_FLAG_HAS_DESCRIPTORS` in its GcHeader (travels with the object on
 /// evacuation), plus the `Object.prototype` process-global above. Unlike
