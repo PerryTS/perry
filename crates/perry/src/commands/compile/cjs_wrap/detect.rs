@@ -275,31 +275,88 @@ pub(crate) fn strip_comments_and_strings(source: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Returns true if `source` contains an unindented `import ` / `import{` /
-/// `import"` / `import'` / `export ` / `export{` / `export*` / `export"` /
-/// `export'` / `export=` (TS) statement on any line — a strong signal that
-/// this file is an ES module regardless of any `module.exports`-style
-/// content deeper in nested function bodies. Lines starting with leading
-/// whitespace are treated as nested and ignored, because `import` /
-/// `export` statements MUST be at module-top-level in ECMAScript. Comment
-/// and string-literal contexts are not stripped — a `// import ` line is
-/// already excluded by the leading-whitespace filter when indented; an
-/// inline `/* import x */` followed by a real statement still triggers a
-/// match on the real statement line. Worst case is a false positive on a
-/// pathological file where the only top-level `import`/`export` lives
-/// inside a multi-line string literal at column 0; we accept that risk
-/// since the alternative is `ImportExportInScript` on real Rollup output.
+/// Returns true if `source` contains a top-level (bracket-depth-0) `import` /
+/// `export` statement — a strong signal that this file is an ES module
+/// regardless of any `module.exports`-style content deeper in nested function
+/// bodies. Expects `source` to have already been run through
+/// `strip_comments_and_strings`, so comment and string-literal contexts are
+/// masked to spaces and never trip a false match.
+///
+/// We track bracket depth (`()[]{}`) and statement starts rather than scanning
+/// line-by-line. A line-start scan suffices for pretty-printed bundles but
+/// MISSES minified ones: issue #5498's esbuild ESM bundle (the OpenAI Codex
+/// CLI) joins every top-level statement onto one giant line, so its real
+/// `import{createRequire as NDe}from"module"` lands mid-line as
+/// `…})();import{createRequire…}…` — never at a line start. A minifier still
+/// separates statements with `;`/`}`, so a statement-aware scan at depth 0
+/// finds it while continuing to ignore `import`/`export` tokens nested inside
+/// function bodies (an indented dynamic `import('./x')` stays at depth ≥ 1).
+///
+/// Worst case is a false positive on a pathological file whose only top-level
+/// `import`/`export` lives inside a string literal that `strip_comments_and_strings`
+/// failed to mask (e.g. a desynced regex); we accept that risk since the
+/// alternative is `ImportExportInScript` on real Rollup/esbuild output.
 pub fn has_top_level_esm(source: &str) -> bool {
-    for raw_line in source.lines() {
-        // Skip indented lines — `import`/`export` statements are only
-        // valid at module top-level, so any indented occurrence is
-        // either inside a function body, a comment, or a string.
-        if raw_line.starts_with(' ') || raw_line.starts_with('\t') {
-            continue;
-        }
-        let line = raw_line.trim_start();
-        if starts_with_esm_keyword(line, "import") || starts_with_esm_keyword(line, "export") {
-            return true;
+    fn is_ident_start(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphabetic()
+    }
+    fn is_ident_byte(b: u8) -> bool {
+        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
+    }
+
+    let bytes = source.as_bytes();
+    let mut depth: i32 = 0;
+    // True when the next identifier read begins a statement: at start of
+    // input, or just after `;`, `{`, `}`, or a newline. Whitespace and
+    // comments (already masked to spaces) preserve it.
+    let mut stmt_start = true;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' | b'\t' | b'\r' => i += 1,
+            b'\n' | b';' => {
+                stmt_start = true;
+                i += 1;
+            }
+            b'{' => {
+                depth += 1;
+                stmt_start = true;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                stmt_start = true;
+                i += 1;
+            }
+            b'(' | b'[' => {
+                depth += 1;
+                stmt_start = false;
+                i += 1;
+            }
+            b')' | b']' => {
+                depth -= 1;
+                stmt_start = false;
+                i += 1;
+            }
+            b if is_ident_start(b) => {
+                let start = i;
+                while i < bytes.len() && is_ident_byte(bytes[i]) {
+                    i += 1;
+                }
+                if stmt_start && depth == 0 {
+                    let word = &source[start..i];
+                    if (word == "import" || word == "export")
+                        && starts_with_esm_keyword(&source[start..], word)
+                    {
+                        return true;
+                    }
+                }
+                stmt_start = false;
+            }
+            _ => {
+                stmt_start = false;
+                i += 1;
+            }
         }
     }
     false

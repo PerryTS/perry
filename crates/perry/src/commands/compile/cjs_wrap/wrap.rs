@@ -92,6 +92,19 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
+    // Issue #5498: a genuine CommonJS file may carry a leading shebang
+    // (`#!/usr/bin/env node`) — common for CLI entry points. The wrap splices
+    // the source into the MIDDLE of the wrapper template, so a `#!` left intact
+    // is no longer at byte 0 and SWC rejects it (a shebang is only a valid
+    // token as the file's first bytes). Neutralize it into a line comment in
+    // place: `#!` and `//` are both two bytes, so every downstream byte offset
+    // — including the #5247 body-offset mapping — is preserved exactly.
+    if source_cow.starts_with("#!") {
+        let mut owned = source_cow.into_owned();
+        owned.replace_range(0..2, "//");
+        source_cow = Cow::Owned(owned);
+    }
+
     if is_depd_index_path(source_path) {
         if let Some(rewritten) = rewrite_depd_dynamic_wrapper(source_cow.as_ref()) {
             source_cow = Cow::Owned(rewritten);

@@ -277,6 +277,59 @@ module.exports = inner;
     }
 
     #[test]
+    fn issue_5498_minified_mid_line_import_is_esm() {
+        // esbuild ESM bundles (the OpenAI Codex CLI) are minified: every
+        // top-level statement is joined onto one giant line, so the real
+        // `import{createRequire …}from"module"` lands mid-line, after a `;`
+        // that terminates the prior statement — never at a line start. A
+        // line-based scan misses it and the file was misclassified as CJS.
+        let src = "var a=Object.create;var Ke=(e=>typeof require<\"u\")(function(){});\
+                   import{createRequire as NDe}from\"module\";var b=1;";
+        assert!(
+            !is_commonjs(src),
+            "minified bundle with a mid-line top-level import must be ESM"
+        );
+    }
+
+    #[test]
+    fn issue_5498_esbuild_cjs_shims_do_not_force_cjs() {
+        // The Codex bundle inlines CJS deps, so esbuild emits its
+        // `__commonJS`/`createRequire`/`require(` helper machinery alongside a
+        // genuine top-level `import`. The top-level import must win — the
+        // helper tokens are just identifiers in nested bodies.
+        let src = "#!/usr/bin/env node\n\
+                   import{createRequire as NDe}from\"module\";\
+                   var __require=NDe(import.meta.url);\
+                   var __commonJS=(cb,mod)=>function(){return mod||(0,cb[__getOwnPropNames(cb)[0]])((mod={exports:{}}).exports,mod),mod.exports};\
+                   var x=__commonJS({\"a.js\"(exports,module){module.exports=require(\"fs\")}});";
+        assert!(
+            !is_commonjs(src),
+            "esbuild ESM bundle with CJS helper shims must be classified as ESM"
+        );
+    }
+
+    #[test]
+    fn issue_5498_shebang_cjs_wraps_and_parses() {
+        // A genuine CommonJS file carrying a leading shebang (CLI entry point)
+        // must still wrap cleanly: the `#!` is neutralized to a `//` line
+        // comment in place so it does not land mid-template as an illegal
+        // token. Without the fix SWC errors `ExpectedIdent` on the buried `#`.
+        let src = "#!/usr/bin/env node\nmodule.exports = function greet(n) { return n; };\n";
+        assert!(is_commonjs(src));
+        let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/cli/index.js"));
+        assert!(
+            !wrapped.contains("#!"),
+            "shebang must be neutralized, got:\n{}",
+            wrapped
+        );
+        assert!(
+            perry_parser::parse_typescript(&wrapped, "cli/index.js").is_ok(),
+            "wrapped shebang module must parse, got:\n{}",
+            wrapped
+        );
+    }
+
+    #[test]
     fn extracts_named_exports() {
         let src = "exports.foo = 1; exports.bar = function() {}; exports.__esModule = true;";
         let names = extract_exports_from_source(src);
