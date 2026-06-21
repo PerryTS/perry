@@ -1776,6 +1776,54 @@ pub unsafe extern "C" fn js_native_call_method(
                 args.as_ptr(),
                 args.len(),
             );
+        } else if class_id != 0 && !method_name_ptr.is_null() && method_name_len > 0 {
+            // #5437: `C.viaFn()` where `viaFn` is a static DATA property holding a
+            // callable (`C.viaFn = fn` / `static viaFn = fn`), NOT a registered
+            // static method. A class reference VALUE is an INT32-tagged class id,
+            // not a heap object, so the generic object field-scan below can't deref
+            // it; and these statics live in CLASS_DYNAMIC_PROPS, not the static-
+            // method vtable, so the arm above misses them. The bug surfaced as a
+            // method call on a class returned from / aliased through a function
+            // (`const D = C; D.viaFn()`), where the static analyzer couldn't prove
+            // the receiver is a class object and lowered it to this dynamic path.
+            // Resolve the property exactly as the read-then-call path does
+            // (`js_object_get_field_by_name` walks the class-ref static chain),
+            // then invoke the callable with `this` bound to the class ref —
+            // mirroring `const f = C.viaFn; f()`, which already worked.
+            let key_ptr = crate::string::js_string_from_bytes(
+                method_name_ptr as *const u8,
+                method_name_len as u32,
+            );
+            let prop =
+                js_object_get_field_by_name(object.to_bits() as *const ObjectHeader, key_ptr);
+            let prop_bits = prop.bits();
+            let raw = (prop_bits & crate::value::POINTER_MASK) as usize;
+            if (prop_bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG
+                && crate::closure::is_closure_ptr(raw)
+            {
+                // Rebind the closure's reserved `this` slot to the class ref, as
+                // the prototype/field method-dispatch arms above do. A static
+                // data property holding an object-literal method (`captures_this`)
+                // bakes `this` into a capture slot that `IMPLICIT_THIS` alone
+                // can't override; `clone_closure_rebind_this` is a no-op for
+                // closures that don't capture `this`, so plain functions and
+                // arrows are unaffected.
+                let bound = crate::closure::clone_closure_rebind_this(
+                    prop_bits,
+                    object_handle.get_nanbox_f64(),
+                );
+                let prop_handle = root_scope.root_nanbox_f64(f64::from_bits(bound));
+                let args = refreshed_args();
+                let prev_this =
+                    IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits()));
+                let result = crate::closure::js_native_call_value(
+                    prop_handle.get_nanbox_f64(),
+                    args.as_ptr(),
+                    args.len(),
+                );
+                IMPLICIT_THIS.with(|c| c.set(prev_this));
+                return result;
+            }
         }
     }
 
