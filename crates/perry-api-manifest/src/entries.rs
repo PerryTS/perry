@@ -4935,6 +4935,9 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/ui", "lazyvstackSetScrollEndCallback", false, None),
     method("perry/ui", "Table", false, None),
     method("perry/ui", "Canvas", false, None),
+    // Issue #2395 — BloomView (embed an external GPU renderer / Bloom engine)
+    method("perry/ui", "BloomView", false, None),
+    method("perry/ui", "bloomViewGetHwnd", false, None),
     method("perry/ui", "CameraView", false, None),
     method("perry/ui", "cameraStart", false, None),
     method("perry/ui", "cameraStop", false, None),

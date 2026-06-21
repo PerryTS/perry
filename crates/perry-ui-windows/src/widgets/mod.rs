@@ -2,6 +2,7 @@
 //! Each widget has an HWND (on Windows), a kind, children list, and layout info.
 
 pub mod attributed_text;
+pub mod bloomview;
 pub mod bottom_nav;
 pub mod button;
 pub mod calendar;

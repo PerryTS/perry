@@ -1983,6 +1983,22 @@ pub const PERRY_UI_TABLE: &[MethodRow] = &[
         args: &[ArgKind::F64, ArgKind::F64],
         ret: ReturnKind::Widget,
     },
+    // ---- BloomView (issue #2395) ----
+    // A render-surface host: `BloomView(width, height)` reserves a child window
+    // the Bloom engine draws into. `bloomViewGetHwnd(view)` returns the raw HWND
+    // (as a JS number) so user TS can call `attachToHwnd` on the Bloom package.
+    MethodRow {
+        method: "BloomView",
+        runtime: "perry_ui_bloomview_create",
+        args: &[ArgKind::F64, ArgKind::F64],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "bloomViewGetHwnd",
+        runtime: "perry_ui_bloomview_get_hwnd",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::I64AsF64,
+    },
     // ---- Drag & drop (issue #4773) ----
     // Widget-level setters that attach drag/drop behavior to an existing
     // widget handle. `widgetOnDrop` registers a drop destination; the
