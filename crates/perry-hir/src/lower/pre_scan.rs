@@ -291,6 +291,9 @@ pub(crate) fn pre_scan_cross_fn_native_params(ast_module: &ast::Module, ctx: &mu
     // name -> body block to follow the handle into.
     let mut fn_params: HashMap<String, Vec<Option<String>>> = HashMap::new();
     let mut fn_bodies: HashMap<String, &ast::BlockStmt> = HashMap::new();
+    // name -> identifier span `lo` (stable AST identity) for keying hints, so a
+    // hint never leaks onto an unrelated same-named declaration.
+    let mut fn_spans: HashMap<String, u32> = HashMap::new();
     for item in &ast_module.body {
         let fd = match item {
             ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fd))) => fd,
@@ -318,6 +321,7 @@ pub(crate) fn pre_scan_cross_fn_native_params(ast_module: &ast::Module, ctx: &mu
             // hint/param index by one for `function f(this: T, req, wsId)`.
             .filter(|name| name.as_deref() != Some("this"))
             .collect();
+        fn_spans.insert(name.clone(), fd.ident.span.lo.0);
         fn_params.insert(name.clone(), names);
         fn_bodies.insert(name, body);
     }
@@ -377,8 +381,12 @@ pub(crate) fn pre_scan_cross_fn_native_params(ast_module: &ast::Module, ctx: &mu
                 if !applied.insert(key) {
                     continue;
                 }
-                ctx.param_native_hints
-                    .insert((callee.clone(), i), (module.clone(), class.clone()));
+                // Key by the callee declaration's identifier span, not its name,
+                // so a same-named distinct declaration never picks up this hint.
+                if let Some(&callee_span) = fn_spans.get(&callee) {
+                    ctx.param_native_hints
+                        .insert((callee_span, i), (module.clone(), class.clone()));
+                }
                 // Follow the handle into the callee: its param[i] is now tainted.
                 if let Some(body) = fn_bodies.get(&callee) {
                     let mut next_calls = Vec::new();
