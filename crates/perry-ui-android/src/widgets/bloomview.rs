@@ -12,6 +12,7 @@
 
 use crate::jni_bridge;
 use jni::objects::JValue;
+use std::sync::Mutex;
 
 // NDK libandroid: turn a Java `android.view.Surface` into a native window the
 // GPU backend (wgpu) can build a swapchain on.
@@ -22,6 +23,14 @@ extern "C" {
         surface: jni::sys::jobject,
     ) -> *mut std::ffi::c_void;
 }
+
+// `ANativeWindow_fromSurface` returns a window with a +1 reference, so creating
+// one per `get_native_handle` call (the host polls it every frame until the
+// surface is ready) would leak a reference each time. Cache the first window we
+// build per widget handle and hand the same pointer back on later calls — the
+// single retained reference lives for the BloomView's lifetime. Keyed by the
+// registry handle; a small Vec since an app has at most a handful of BloomViews.
+static BLOOM_WINDOWS: Mutex<Vec<(i64, i64)>> = Mutex::new(Vec::new());
 
 /// Create a BloomView host sized `width` × `height` dp. Returns the widget
 /// handle, or 0 on JNI failure.
@@ -75,10 +84,18 @@ pub fn create(width: f64, height: f64) -> i64 {
 /// handing to an external GPU renderer. Returns 0 if the handle is unknown or
 /// the surface isn't ready yet (not laid out / `surfaceCreated` not fired).
 ///
-/// `ANativeWindow_fromSurface` returns a window with a +1 reference; the caller
-/// (the engine's attach) acquires its own reference, so this one is intentionally
-/// left for the host to manage over the BloomView's lifetime.
+/// The `ANativeWindow*` is created once per BloomView (on the first call that
+/// finds a ready surface) and cached; later calls return the same pointer, so
+/// the host polling this every frame doesn't leak a window reference per call.
+/// The cached reference is released when the engine's attach takes over and on
+/// process teardown.
 pub fn get_native_handle(handle: i64) -> i64 {
+    // Return the window we already built for this view, if any.
+    if let Ok(cache) = BLOOM_WINDOWS.lock() {
+        if let Some(&(_, win)) = cache.iter().find(|&&(h, _)| h == handle) {
+            return win;
+        }
+    }
     let Some(view_ref) = super::get_widget(handle) else {
         return 0;
     };
@@ -124,5 +141,15 @@ pub fn get_native_handle(handle: i64) -> i64 {
     unsafe {
         let _ = env.pop_local_frame(&jni::objects::JObject::null());
     }
-    result.unwrap_or(0)
+    // Cache the window so the next poll reuses this reference instead of
+    // acquiring a fresh one (only on success — keep retrying while not ready).
+    if let Some(win) = result {
+        if let Ok(mut cache) = BLOOM_WINDOWS.lock() {
+            if !cache.iter().any(|&(h, _)| h == handle) {
+                cache.push((handle, win));
+            }
+        }
+        return win;
+    }
+    0
 }

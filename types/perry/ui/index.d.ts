@@ -443,8 +443,9 @@ export function bloomViewGetNativeHandle(view: Widget): number;
 
 /**
  * @deprecated Renamed to {@link bloomViewGetNativeHandle} in #5519 — the handle
- * is no longer Windows-only (it's an NSView*/UIView*/GtkWidget*/ANativeWindow*
- * on the other platforms). This alias still works and returns the same value.
+ * is no longer Windows-only (it's an `NSView*`/`UIView*`/`GtkWidget*`/
+ * `ANativeWindow*` on the other platforms). This alias still works and returns
+ * the same value.
  */
 export function bloomViewGetHwnd(view: Widget): number;
 

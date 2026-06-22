@@ -8,12 +8,18 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyClass;
+use objc2_foundation::MainThreadMarker;
 use objc2_ui_kit::UIView;
 
 /// Create a BloomView host sized `width` × `height` points. The size is pinned
 /// via Auto Layout so the renderer's surface comes up non-zero. Returns the
-/// widget handle.
+/// widget handle (0 if called off the main thread).
 pub fn create(width: f64, height: f64) -> i64 {
+    // UIKit views must be created on the main thread; don't panic across the
+    // FFI boundary if that contract is violated — return an invalid handle.
+    let Some(_mtm) = MainThreadMarker::new() else {
+        return 0;
+    };
     unsafe {
         let view: Retained<UIView> = msg_send![AnyClass::get(c"UIView").unwrap(), new];
         // Auto Layout drives the size (set_width/set_height below).
