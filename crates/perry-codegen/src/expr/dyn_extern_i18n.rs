@@ -633,41 +633,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if ctx.imported_vars.contains(name) {
                     let fname = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                     ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
-                    let getter_val = ctx.block().call(DOUBLE, &fname, &[]);
-                    // #5437 (Next.js W6): for a module-DEFAULT export value
-                    // (`const x = require('S')` adopted as an import, read via
-                    // the default getter), the getter result of a CJS module
-                    // whose exports are built with `Object.defineProperty(
-                    // exports, …)` is a WRAPPER CLOSURE, not the exports object.
-                    // If that wrapper is captured by-value (e.g. into a class
-                    // `__perry_cap_*` field) a later member read off the
-                    // captured snapshot (`x.SharedCacheControls`) hits the
-                    // closure rather than `module.exports` → `undefined` →
-                    // `new undefined()` throws. Thread the getter value through
-                    // a runtime registrar: it records the closure's `func_ptr`
-                    // (when the value IS a closure) so the property-read
-                    // fallback recognizes a captured wrapper, calls it once to
-                    // obtain `module.exports`, and re-reads off that object. The
-                    // value is returned unchanged, so non-closure getter results
-                    // (the common `let v = HONE_VERSION` string/number case) are
-                    // untouched. Gated to a `_lazyreq_` DEFAULT read: a
-                    // function-local `require('S')` adopted as an import, whose
-                    // value is `module.exports` by CJS semantics — never a
-                    // genuine ESM `export default <function>` (which IS a real
-                    // callable and must NOT be auto-called on a property miss).
-                    if origin_suffix == "default" && name.starts_with("_lazyreq_") {
-                        ctx.pending_declares.push((
-                            "js_register_module_default_wrapper_value".to_string(),
-                            DOUBLE,
-                            vec![DOUBLE],
-                        ));
-                        return Ok(ctx.block().call(
-                            DOUBLE,
-                            "js_register_module_default_wrapper_value",
-                            &[(DOUBLE, &getter_val)],
-                        ));
-                    }
-                    return Ok(getter_val);
+                    return Ok(ctx.block().call(DOUBLE, &fname, &[]));
                 }
                 // Drizzle / cross-module IIFE-pattern static-property fix:
                 // route through the SOURCE module's wrapper symbol +
