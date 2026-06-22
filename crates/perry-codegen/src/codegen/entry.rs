@@ -876,7 +876,16 @@ pub(super) fn compile_module_entry(
         let ic_base = llmod.ic_counter;
         let buffer_alias_base = llmod.buffer_alias_counter;
         let init_fn = llmod.define_function(&init_name, VOID, vec![]);
-        init_fn.linkage = "internal".to_string();
+        // `__init_body` is normally only reached through the guarded `__init`
+        // wrapper, so it would be `internal`. But a `worker_threads` Worker
+        // target must re-run its module body ONCE PER worker thread (each
+        // worker has its own thread-local arena), which the process-global
+        // `__perry_init_done_*` guard on `__init` would suppress after the
+        // first worker. Exposing the body with external linkage lets the
+        // worker-spawn codegen call it directly, bypassing the once-guard, so
+        // every spawned worker actually executes its entry. Main-thread import
+        // init is unaffected — it still goes through the guarded wrapper.
+        init_fn.linkage = "external".to_string();
         if is_dylib {
             init_fn.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         }

@@ -252,7 +252,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 bail!("worker_threads Worker target must be a compiled source file: {path}");
             }
-            let init_name = format!("{}__init", target_prefix);
+            // Call the module's unguarded `__init_body`, NOT the guarded
+            // `__init` wrapper. The wrapper's process-global
+            // `__perry_init_done_*` flag is set by the first worker (or by
+            // main-thread import init) and would make every later worker's
+            // entry a no-op — leaving the spawned thread idle and the parent
+            // waiting forever. The body re-runs the module top-level on each
+            // worker thread (each has its own thread-local arena), so every
+            // worker actually executes its entry and posts its result back.
+            let init_name = format!("{}__init_body", target_prefix);
             ctx.pending_declares
                 .push((init_name.clone(), crate::types::VOID, vec![]));
             let entry_ptr = ctx.block().ptrtoint(&format!("@{}", init_name), I64);

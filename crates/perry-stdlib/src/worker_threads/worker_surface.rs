@@ -36,7 +36,7 @@ pub extern "C" fn js_worker_threads_worker_on(receiver: i64, event: f64, callbac
         return js_undefined();
     };
     let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
-    worker_add_listener(worker_id, event, callback_value, false)
+    worker_add_listener(worker_id, event, callback_value, false, false)
 }
 
 #[no_mangle]
@@ -45,7 +45,32 @@ pub extern "C" fn js_worker_threads_worker_once(receiver: i64, event: f64, callb
         return js_undefined();
     };
     let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
-    worker_add_listener(worker_id, event, callback_value, true)
+    worker_add_listener(worker_id, event, callback_value, true, false)
+}
+
+/// `worker.addEventListener(type, listener)` on the main-thread Worker handle.
+/// Web-style: the listener receives a `MessageEvent` for "message".
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_add_event_listener(
+    receiver: i64,
+    event: f64,
+    callback: i64,
+) -> f64 {
+    let Some(worker_id) = worker_id_from_receiver(receiver) else {
+        return js_undefined();
+    };
+    let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
+    worker_add_listener(worker_id, event, callback_value, false, true)
+}
+
+/// `worker.removeEventListener(type, listener)`.
+#[no_mangle]
+pub extern "C" fn js_worker_threads_worker_remove_event_listener(
+    receiver: i64,
+    event: f64,
+    callback: i64,
+) -> f64 {
+    js_worker_threads_worker_off(receiver, event, callback)
 }
 
 #[no_mangle]
@@ -181,6 +206,16 @@ pub(super) fn worker_object(
         obj,
         "off",
         closure_value_with_worker_id(worker_off as *const u8, 2, worker_id),
+    );
+    set_object_field(
+        obj,
+        "addEventListener",
+        closure_value_with_worker_id(worker_add_event_listener as *const u8, 2, worker_id),
+    );
+    set_object_field(
+        obj,
+        "removeEventListener",
+        closure_value_with_worker_id(worker_remove_event_listener as *const u8, 2, worker_id),
     );
     obj
 }

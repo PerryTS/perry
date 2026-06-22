@@ -1,9 +1,9 @@
 use perry_runtime::closure::ClosureHeader;
 
 use super::{
-    closure_value, js_undefined, js_worker_threads_on, js_worker_threads_post_message,
-    set_object_field, string_value_to_string, worker_threads_noop0, CLOSE_CALLBACK,
-    MESSAGE_CALLBACK,
+    closure_value, js_undefined, js_worker_threads_on, js_worker_threads_parent_port_event_add,
+    js_worker_threads_parent_port_event_remove, js_worker_threads_post_message, set_object_field,
+    string_value_to_string, worker_threads_noop0, CLOSE_CALLBACK, MESSAGE_CALLBACK,
 };
 
 pub(super) fn worker_parent_port_object() -> *mut perry_runtime::object::ObjectHeader {
@@ -40,6 +40,16 @@ pub(super) fn worker_parent_port_object() -> *mut perry_runtime::object::ObjectH
     );
     set_object_field(
         obj,
+        "addEventListener",
+        closure_value(worker_parent_port_add_event_listener as *const u8, 2),
+    );
+    set_object_field(
+        obj,
+        "removeEventListener",
+        closure_value(worker_parent_port_remove_event_listener as *const u8, 2),
+    );
+    set_object_field(
+        obj,
         "ref",
         closure_value(worker_threads_noop0 as *const u8, 0),
     );
@@ -49,6 +59,24 @@ pub(super) fn worker_parent_port_object() -> *mut perry_runtime::object::ObjectH
         closure_value(worker_threads_noop0 as *const u8, 0),
     );
     obj
+}
+
+extern "C" fn worker_parent_port_add_event_listener(
+    _closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
+    js_worker_threads_parent_port_event_add(event.to_bits() as i64, callback_ptr)
+}
+
+extern "C" fn worker_parent_port_remove_event_listener(
+    _closure: *const ClosureHeader,
+    event: f64,
+    callback: f64,
+) -> f64 {
+    let callback_ptr = perry_runtime::value::js_nanbox_get_pointer(callback) as i64;
+    js_worker_threads_parent_port_event_remove(event.to_bits() as i64, callback_ptr)
 }
 
 extern "C" fn worker_parent_port_post_message(_closure: *const ClosureHeader, value: f64) -> f64 {

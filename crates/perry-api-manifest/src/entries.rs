@@ -2899,6 +2899,14 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     ),
     internal_method_sig("worker_threads", "query", false, None, &[], TypeSpec::Any),
     internal_method("worker_threads", "postMessage", true, None),
+    // Web-style EventTarget methods on `parentPort` / the `Worker` handle.
+    // Like `postMessage`, these are reached through the value-shaped namespace
+    // member path and dispatch dynamically on the real runtime object (which
+    // installs `addEventListener`/`removeEventListener`); registering them here
+    // keeps the #463 unimplemented-API gate from firing for the value-shaped
+    // `parentPort.addEventListener(...)` form.
+    internal_method("worker_threads", "addEventListener", true, None),
+    internal_method("worker_threads", "removeEventListener", true, None),
     method("worker_threads", "on", true, Some("Worker")),
     method("worker_threads", "once", true, Some("Worker")),
     method("worker_threads", "off", true, Some("Worker")),
