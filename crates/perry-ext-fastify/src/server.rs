@@ -260,9 +260,22 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     let upgrade_tx_for_spawn = upgrade_tx.clone();
     let routes_for_spawn = routes_arc.clone();
 
-    perry_ffi::spawn_blocking(move || {
-        let handle = tokio::runtime::Handle::current();
-        handle.block_on(async move {
+    // The accept loop must run as a cooperative task on the shared
+    // multi-thread runtime. A plain `spawn_blocking` thread does not
+    // reliably carry the runtime's reactor/worker context: with
+    // `Handle::current().block_on(accept_loop)` the listener bound and
+    // accepted connections, but the per-connection
+    // `tokio::spawn(serve_connection)` tasks below were never driven — the
+    // request bytes sat unread and every response hung (the "in release the
+    // IO loop silently failed to start" brittleness the net/ws adapters
+    // hit). `spawn_blocking_with_reactor` runs the closure inside a worker
+    // task (`runtime().spawn(async { … })`), so `tokio::spawn`-ing the
+    // accept loop drives it and its fan-out serve tasks on the worker pool —
+    // mirroring perry-ext-http-server / -net / -ws. (A bare
+    // `Handle::current().block_on` here would panic "Cannot start a runtime
+    // from within a runtime" inside the worker task; spawn instead.)
+    perry_ffi::spawn_blocking_with_reactor(move || {
+        tokio::spawn(async move {
             let addr = SocketAddr::from(([0, 0, 0, 0], port));
             let listener = match TcpListener::bind(addr).await {
                 Ok(l) => l,
