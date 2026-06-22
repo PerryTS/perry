@@ -3530,16 +3530,24 @@ pub fn run_with_parse_cache(
                             // would drop varargs — only the `import * as`
                             // namespace shape uses the submodule.
                             if submod_key != "timers" {
+                                // Register ONLY the local binding. For an
+                                // aliased import (`import { setTimeout as ac5 }
+                                // from "node:timers/promises"`) the in-scope
+                                // name is `ac5`; the imported name `setTimeout`
+                                // is NOT bound here — it still refers to the
+                                // GLOBAL `setTimeout(callback, delay)`. A prior
+                                // version also keyed the map by `imported` when
+                                // `local != imported`, which made the bare
+                                // global `setTimeout(fn, ms)` divert to the
+                                // delay-first promises thunk and reject with
+                                // `The "delay" argument must be of type number.
+                                // Received function`. Keying only by `local`
+                                // keeps the alias routed to the submodule export
+                                // and leaves the unshadowed global intact.
                                 import_function_node_submodule.insert(
                                     local.clone(),
                                     (submod_key.clone(), imported.clone()),
                                 );
-                                if local != imported {
-                                    import_function_node_submodule.insert(
-                                        imported.clone(),
-                                        (submod_key.clone(), imported.clone()),
-                                    );
-                                }
                             }
                         }
                         perry_hir::ImportSpecifier::Default { local } => {
