@@ -910,10 +910,15 @@ fn throw_invalid_weakset_value() -> ! {
 
 #[no_mangle]
 pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
-    // #2772: WeakMap keys must be objects. Validate at runtime so a primitive
-    // arriving through a variable / dynamic expression still throws (not only
-    // the AST-literal fast path in lowering).
-    if !crate::collection_iter::is_entry_object(key) {
+    // #2772: WeakMap keys must be values that "CanBeHeldWeakly" (ES2023):
+    // objects/handles AND non-registered Symbols (a fresh `Symbol()` or a
+    // well-known symbol). Only `Symbol.for(...)` registered symbols, and
+    // primitives, are invalid. Use `is_valid_weak_target` (shared with
+    // WeakRef/FinalizationRegistry) rather than the Map/Set entry-object
+    // predicate, which wrongly rejected every Symbol key. Validate at runtime
+    // so a value arriving through a variable / dynamic expression still throws
+    // (not only the AST-literal fast path in lowering).
+    if !is_valid_weak_target(key) {
         throw_invalid_weakmap_key();
     }
     let map_ptr = js_nanbox_get_pointer(map) as *mut ObjectHeader;
@@ -1104,11 +1109,13 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_add(set: f64, value: f64) -> f64 {
-    // #2772: WeakSet values must be objects — throw the WeakSet-specific
-    // message *before* delegating (js_weakmap_set throws the weak-map-key
-    // message, which is wrong for a Set). Validate at runtime so a primitive
-    // arriving through a variable/dynamic expression still throws.
-    if !crate::collection_iter::is_entry_object(value) {
+    // #2772: WeakSet members must "CanBeHeldWeakly" (ES2023): objects/handles
+    // AND non-registered Symbols. Throw the WeakSet-specific message *before*
+    // delegating (js_weakmap_set throws the weak-map-key message, which is wrong
+    // for a Set). Use `is_valid_weak_target` (not the Map/Set entry-object
+    // predicate, which wrongly rejected every Symbol). Validate at runtime so a
+    // value arriving through a variable/dynamic expression still throws.
+    if !is_valid_weak_target(value) {
         throw_invalid_weakset_value();
     }
     // Store the member as the entry KEY (weak) with an `undefined` value. Using
@@ -1147,6 +1154,49 @@ pub extern "C" fn js_weak_throw_primitive() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weak_key_validity_follows_can_be_held_weakly() {
+        // ES2023 CanBeHeldWeakly: objects and non-registered symbols may be
+        // WeakMap keys / WeakSet members; only primitives and `Symbol.for`
+        // (registered) symbols are rejected. Regression guard for the bug where
+        // WeakMap/WeakSet used the Map/Set entry-object predicate and wrongly
+        // rejected ALL symbol keys with "Invalid value used as weak map key".
+        let obj = crate::object::js_object_alloc(0, 0);
+        let obj_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+        assert!(
+            is_valid_weak_target(obj_val),
+            "object must be weak-holdable"
+        );
+
+        let fresh_sym = unsafe { crate::symbol::js_symbol_new_empty() };
+        assert!(
+            is_valid_weak_target(fresh_sym),
+            "fresh (non-registered) symbol must be weak-holdable"
+        );
+
+        let key = "weakkey";
+        let key_str = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let key_val = f64::from_bits(JSValue::string_ptr(key_str).bits());
+        let reg_sym = unsafe { crate::symbol::js_symbol_for(key_val) };
+        assert!(
+            !is_valid_weak_target(reg_sym),
+            "registered Symbol.for symbol must NOT be weak-holdable"
+        );
+
+        // Positive round-trip: a fresh symbol key stores and reads back the
+        // exact value bits it was given.
+        let wm = js_weakmap_new();
+        let wm_val = f64::from_bits(JSValue::pointer(wm as *const u8).bits());
+        let v = f64::from_bits(JSValue::int32(42).bits());
+        js_weakmap_set(wm_val, fresh_sym, v);
+        let got = js_weakmap_get(wm_val, fresh_sym);
+        assert_eq!(
+            got.to_bits(),
+            v.to_bits(),
+            "symbol-keyed WeakMap entry must round-trip"
+        );
+    }
 
     #[test]
     fn weak_collections_inspect_with_items_unknown() {
