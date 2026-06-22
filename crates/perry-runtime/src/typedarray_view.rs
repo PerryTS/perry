@@ -198,6 +198,10 @@ pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, by
         );
         if prev.is_none() {
             VIEW_META_COUNT.fetch_add(1, Ordering::Relaxed);
+            // #5525 follow-up: this typed array now aliases an ArrayBuffer, so
+            // its element-0 pointer no longer follows the header inline — bar
+            // the codegen inline element fast path until it's gone.
+            crate::typedarray::ta_view_guard_inc();
         }
     });
 }
@@ -228,6 +232,7 @@ pub(crate) fn clear_view_meta(addr: usize) {
     TYPED_ARRAY_VIEW_META.with(|r| {
         if r.borrow_mut().remove(&addr).is_some() {
             VIEW_META_COUNT.fetch_sub(1, Ordering::Relaxed);
+            crate::typedarray::ta_view_guard_dec();
         }
     });
 }

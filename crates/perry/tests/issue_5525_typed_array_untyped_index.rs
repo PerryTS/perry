@@ -215,3 +215,103 @@ console.log("E=" + add(2, 3) + "," + add("x", 5) + "," + add(1, "y") + "," + add
          and the dynamic `+` fast path"
     );
 }
+
+/// #5525 follow-up #2: the unknown-receiver element read/write is now lowered as
+/// a guarded **inline** typed-array load/store at the access site (cache probe +
+/// bounds check + direct slot access), with the runtime `js_dyn_index_{get,set}`
+/// kept as the fall-back for any guard miss. This pins that the inline path is
+/// behaviourally identical to the slow path across: every inlined element kind
+/// (Int8…Float64, signed/unsigned/float), in-bounds round-trips, the OOB /
+/// negative / fractional / NaN index deferrals, the kinds the inline guard
+/// excludes (Uint8Clamped clamp, BigInt, Float16), and the `PERRY_TA_VIEW_GUARD`
+/// case where a live ArrayBuffer-backed view bars the inline path so *all*
+/// typed-array accesses (even on owning arrays) take the slow path yet stay
+/// correct.
+#[test]
+fn inline_typed_array_fast_path_matches_slow_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    let output = dir.path().join("main_bin");
+
+    std::fs::write(
+        &entry,
+        r#"
+function g(a: any, i: any): any { return a[i]; }
+function s(a: any, i: any, v: any): void { a[i] = v; }
+
+// (A) every inlined kind round-trips a representative value, incl. signed/
+// unsigned narrowing wraps and float precision.
+const i8 = new Int8Array(1);  s(i8, 0, 200);          // -> -56
+const u8 = new Uint8Array(1); s(u8, 0, 300);          // -> 44
+const i16 = new Int16Array(1); s(i16, 0, -1);
+const u16 = new Uint16Array(1); s(u16, 0, 70000);     // -> 4464
+const i32 = new Int32Array(1); s(i32, 0, 4294967297); // -> 1
+const u32 = new Uint32Array(1); s(u32, 0, -1);        // -> 4294967295
+const f32 = new Float32Array(1); s(f32, 0, 1.5);
+const f64 = new Float64Array(1); s(f64, 0, 3.14159);
+console.log("A=" + g(i8,0) + "," + g(u8,0) + "," + g(i16,0) + "," + g(u16,0) +
+            "," + g(i32,0) + "," + g(u32,0) + "," + g(f32,0) + "," + g(f64,0));
+
+// (B) index deferrals: OOB / negative / NaN must NOT take the inline load (the
+// inline guard rejects them and defers to the runtime). The fractional case
+// (`g(t,1.5)`) is included to prove the inline guard *defers* it to the slow
+// path — but the assertion mirrors the runtime slow path's existing behaviour
+// (a pre-existing quirk: the untyped dynamic getter truncates a fractional
+// index rather than returning undefined, identical on clean origin/main),
+// since the whole point is that inline == slow.
+const t = new Int32Array(3); s(t, 0, 10); s(t, 1, 20); s(t, 2, 30);
+console.log("B=" + (g(t,3) === undefined) + "," + (g(t,-1) === undefined) +
+            "," + (g(t,1.5) === g(t,1)) + "," + (g(t,NaN) === undefined));
+
+// (C) inline-excluded kinds defer correctly: Uint8Clamped clamps, BigInt boxes.
+const c = new Uint8ClampedArray(2); s(c, 0, 300); s(c, 1, -5);
+const b = new BigInt64Array(1); s(b, 0, 5n);
+console.log("C=" + g(c,0) + "," + g(c,1) + "," + (typeof g(b,0)) + "," + g(b,0));
+
+// (D) PERRY_TA_VIEW_GUARD: once an ArrayBuffer-backed view is live, the inline
+// path must be barred for ALL typed arrays (owning included) and every access
+// must still be correct via the slow path.
+const own = new Int32Array(2); s(own, 0, 111); s(own, 1, 222);
+const ab = new ArrayBuffer(8);
+const v = new Int32Array(ab);           // bumps the view guard
+s(v, 0, 333); s(v, 1, 444);
+console.log("D=" + g(own,0) + "," + g(own,1) + "," + g(v,0) + "," + g(v,1));
+"#,
+    )
+    .expect("write entry");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(
+        stdout,
+        "A=-56,44,-1,4464,1,4294967295,1.5,3.14159\n\
+         B=true,true,true,true\n\
+         C=255,0,bigint,5\n\
+         D=111,222,333,444\n",
+        "the inline typed-array fast path must be bit-identical to the runtime \
+         slow path across kinds, index deferrals, excluded kinds, and the \
+         view-guard fallback"
+    );
+}

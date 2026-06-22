@@ -183,10 +183,45 @@ thread_local! {
 /// (`register`/`unregister`) overwrites/clears the matching slot below — so a
 /// freed-then-reused address can never read back a stale kind or a stale
 /// "not a typed array".
-const TA_KIND_CACHE_SLOTS: usize = 64;
-const TA_CACHE_NEGATIVE: u64 = 0xFF;
-static TA_KIND_CACHE: [AtomicU64; TA_KIND_CACHE_SLOTS] =
+pub const TA_KIND_CACHE_SLOTS: usize = 64;
+pub const TA_CACHE_NEGATIVE: u64 = 0xFF;
+// #5525 follow-up: exported under a stable link name so the codegen can emit a
+// guarded *inline* typed-array element load/store at the access site (it reads a
+// cache slot, checks the address tag + element kind, bounds-checks against the
+// header `length`, and loads/stores the slot directly), bypassing the
+// out-of-line `js_dyn_index_{get,set}` call + `lookup_typed_array_kind` +
+// `js_number_coerce` on bcrypt's ~600M hot `S[i]`/`P[i]` Int32Array accesses.
+// The inline reader observes exactly the same `(addr << 8) | tag` words this
+// module maintains; cache misses / non-typed-array / exotic-key cases fall
+// through to the existing runtime slow path, so semantics are unchanged.
+#[no_mangle]
+pub static PERRY_TA_KIND_CACHE: [AtomicU64; TA_KIND_CACHE_SLOTS] =
     [const { AtomicU64::new(0) }; TA_KIND_CACHE_SLOTS];
+
+/// #5525 follow-up: process-global "any exotic typed-array views exist" guard,
+/// exported under a stable link name for the codegen inline element path. A
+/// non-owning typed array (an `ArrayBuffer`-aliasing view, or a native-arena
+/// view) resolves its element-0 pointer through a side table rather than
+/// `header + size_of::<TypedArrayHeader>()`, so the inline reader — which
+/// assumes inline storage — MUST NOT fire while any such view is live. Both
+/// view-registration paths (`typedarray_view::register_view_meta` and
+/// `native_arena::register_view`) bump this; the matching unregister paths
+/// decrement it. When it reads 0 (the overwhelmingly common case, and always
+/// true for bcryptjs's owning `new Int32Array(P_ORIG)` boxes) the inline load
+/// of `*(header + 16 + idx*elem_size)` is identical to what `data_ptr` + the
+/// per-kind `load_at` slow path computes.
+#[no_mangle]
+pub static PERRY_TA_VIEW_GUARD: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub(crate) fn ta_view_guard_inc() {
+    PERRY_TA_VIEW_GUARD.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub(crate) fn ta_view_guard_dec() {
+    PERRY_TA_VIEW_GUARD.fetch_sub(1, Ordering::Relaxed);
+}
 
 #[inline]
 fn ta_kind_cache_slot(addr: usize) -> usize {
@@ -199,7 +234,8 @@ fn ta_kind_cache_slot(addr: usize) -> usize {
 #[inline]
 fn ta_kind_cache_store_tag(addr: usize, tag: u64) {
     // `addr` is always > 0x10000, so `(addr << 8) | tag` is never 0 (= empty).
-    TA_KIND_CACHE[ta_kind_cache_slot(addr)].store(((addr as u64) << 8) | tag, Ordering::Relaxed);
+    PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)]
+        .store(((addr as u64) << 8) | tag, Ordering::Relaxed);
 }
 
 #[inline]
@@ -210,9 +246,9 @@ fn ta_kind_cache_store(addr: usize, kind: u8) {
 #[inline]
 fn ta_kind_cache_invalidate(addr: usize) {
     let slot = ta_kind_cache_slot(addr);
-    let entry = TA_KIND_CACHE[slot].load(Ordering::Relaxed);
+    let entry = PERRY_TA_KIND_CACHE[slot].load(Ordering::Relaxed);
     if entry != 0 && (entry >> 8) as usize == addr {
-        TA_KIND_CACHE[slot].store(0, Ordering::Relaxed);
+        PERRY_TA_KIND_CACHE[slot].store(0, Ordering::Relaxed);
     }
 }
 
@@ -220,7 +256,7 @@ fn ta_kind_cache_invalidate(addr: usize) {
 /// negative ("not a typed array"), `Some(Some(kind))` = cached typed array.
 #[inline]
 fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
-    let entry = TA_KIND_CACHE[ta_kind_cache_slot(addr)].load(Ordering::Relaxed);
+    let entry = PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)].load(Ordering::Relaxed);
     if entry != 0 && (entry >> 8) as usize == addr {
         let tag = entry & 0xff;
         if tag == TA_CACHE_NEGATIVE {

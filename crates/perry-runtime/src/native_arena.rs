@@ -119,6 +119,9 @@ static NATIVE_VIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn register_view(view: *mut NativeTypedViewHeader) {
     NATIVE_VIEW_COUNT.fetch_add(1, Ordering::Relaxed);
+    // #5525 follow-up: a native-arena view resolves its data pointer through the
+    // arena, not inline storage — bar the codegen inline element fast path.
+    typedarray::ta_view_guard_inc();
     VIEW_REGISTRY.with(|r| {
         r.borrow_mut().insert(view as usize);
     });
@@ -129,6 +132,7 @@ fn unregister_view(view: *mut NativeTypedViewHeader) {
     let removed = VIEW_REGISTRY.with(|r| r.borrow_mut().remove(&(view as usize)));
     if removed {
         NATIVE_VIEW_COUNT.fetch_sub(1, Ordering::Relaxed);
+        typedarray::ta_view_guard_dec();
     }
     typedarray::unregister_typed_array(view as *const TypedArrayHeader);
 }

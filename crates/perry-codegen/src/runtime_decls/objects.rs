@@ -29,6 +29,16 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // when it is non-zero (descriptors / typed-feedback in use). Defined in
     // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
     module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
+    // #5525 follow-up: the process-global typed-array kind cache + the
+    // "any exotic views live" guard, exported from perry-runtime so the codegen
+    // can emit a guarded *inline* typed-array element load at the access site
+    // (cache probe + bounds check + direct slot load) instead of an out-of-line
+    // `js_dyn_index_get` call. The cache is a fixed `[64 x i64]` array of
+    // `(addr << 8) | tag` words; the view guard is a single `i64` counter that
+    // reads 0 whenever every live typed array uses inline storage (so the
+    // inline `header + 16 + idx*elem_size` load matches the runtime `data_ptr`).
+    module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
+    module.add_external_global("PERRY_TA_VIEW_GUARD", I64);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
     // JSValue (DOUBLE): nullish/primitive -> fresh {}, object passes through.
