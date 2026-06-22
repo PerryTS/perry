@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::typedarray::{
     clean_ta_ptr, data_ptr_mut, elem_size_for_kind, js_typed_array_new, name_for_kind,
@@ -167,23 +168,45 @@ pub(crate) struct ViewMeta {
     pub byte_offset: u32,
 }
 
+/// #5525: process-global count of typed arrays that have a `TYPED_ARRAY_VIEW_META`
+/// entry (ArrayBuffer-aliasing or lazily-materialized `.buffer` views). The vast
+/// majority of typed arrays are owning with inline storage and never appear
+/// here, yet `view_backing_data_ptr` is on the hot per-element `data_ptr` path.
+/// `any_view_meta` lets the common case skip the thread-local map probe with one
+/// relaxed atomic load.
+static VIEW_META_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// True if any typed array anywhere currently aliases an ArrayBuffer. When
+/// false, no typed array can be a view, so element access can read inline
+/// storage without consulting the (empty) view-meta side table.
+#[inline]
+pub(crate) fn any_view_meta() -> bool {
+    VIEW_META_COUNT.load(Ordering::Relaxed) != 0
+}
+
 /// Record `ta` as aliasing `backing` at `byte_offset`. After this call
 /// `data_ptr(ta)` resolves into the backing store rather than `ta`'s inline
 /// region, so reads/writes are shared with the buffer and every other view.
 pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, byte_offset: u32) {
     TYPED_ARRAY_VIEW_META.with(|r| {
-        r.borrow_mut().insert(
+        let prev = r.borrow_mut().insert(
             ta as usize,
             ViewMeta {
                 backing,
                 byte_offset,
             },
         );
+        if prev.is_none() {
+            VIEW_META_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
     });
 }
 
 #[inline]
 pub(crate) fn view_meta_of(addr: usize) -> Option<ViewMeta> {
+    if !any_view_meta() {
+        return None;
+    }
     TYPED_ARRAY_VIEW_META.with(|r| r.borrow().get(&addr).copied())
 }
 
@@ -203,7 +226,9 @@ pub(crate) fn view_backing_data_ptr(addr: usize) -> Option<*mut u8> {
 /// `unregister_typed_array` when the typed array is collected).
 pub(crate) fn clear_view_meta(addr: usize) {
     TYPED_ARRAY_VIEW_META.with(|r| {
-        r.borrow_mut().remove(&addr);
+        if r.borrow_mut().remove(&addr).is_some() {
+            VIEW_META_COUNT.fetch_sub(1, Ordering::Relaxed);
+        }
     });
 }
 

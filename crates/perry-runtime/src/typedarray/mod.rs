@@ -12,6 +12,7 @@
 use std::alloc::{alloc, Layout};
 use std::cell::RefCell;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
@@ -150,7 +151,92 @@ thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
+/// Process-global, lock-free fast cache in front of the thread-local
+/// `TYPED_ARRAY_REGISTRY` (#5525). A single untyped `arr[i]` element access on
+/// a value whose static type was erased (e.g. a typed array reaching a function
+/// through an untyped `Array.<number>` parameter — the shape bcryptjs's
+/// Blowfish core uses for its `P`/`S` boxes) funnels through
+/// `lookup_typed_array_kind` ~5 times (`js_dyn_index_get`,
+/// `typed_array_addr_from_value`, `typed_array_get_numeric_index`,
+/// `typed_array_owner_length`, `typed_array_owner_get`). Each call is a
+/// thread-local access (`_tlv_get_addr`) plus a `RefCell` borrow + hash probe.
+/// At ~600M element reads for one cost-12 `bcrypt.compareSync` that dominated
+/// the profile (~45% of samples in `_tlv_get_addr`), turning a ~50ms operation
+/// into ~28s and reading as an infinite-loop hang.
+///
+/// The cache is a small direct-mapped table of `(addr << 8) | tag` words (0 =
+/// empty). The low byte is the element kind for a typed array, or the
+/// [`TA_CACHE_NEGATIVE`] sentinel meaning "this address is *not* a typed array".
+/// Negative entries matter because the same dispatcher serves plain-array
+/// element access too (bcryptjs's `_crypt` reads its `lr`/`cdata`/`b`/`salt`
+/// plain-array boxes through the identical untyped path), and without them
+/// every such read would still fall through to the thread-local registry on a
+/// miss. Both populations are small and stable here, so a 64-entry table keeps
+/// the hot typed *and* plain arrays resident.
+///
+/// A hit returns the same answer the registry would: the cache only records
+/// facts the registry established (positive on a registry hit, negative on a
+/// registry miss). It is process-global (not thread-local) so a hit costs no
+/// `_tlv_get_addr`; that is sound because arenas never hand out the same live
+/// address to two threads, a typed array's address is stable (off-heap raw
+/// alloc or tenured old-gen, never moved), and every registry mutation
+/// (`register`/`unregister`) overwrites/clears the matching slot below — so a
+/// freed-then-reused address can never read back a stale kind or a stale
+/// "not a typed array".
+const TA_KIND_CACHE_SLOTS: usize = 64;
+const TA_CACHE_NEGATIVE: u64 = 0xFF;
+static TA_KIND_CACHE: [AtomicU64; TA_KIND_CACHE_SLOTS] =
+    [const { AtomicU64::new(0) }; TA_KIND_CACHE_SLOTS];
+
+#[inline]
+fn ta_kind_cache_slot(addr: usize) -> usize {
+    // Addresses are 8-byte aligned; the low 3 bits are always 0. Use the bits
+    // above them so distinct live arrays (e.g. `P` and `S`) land in different
+    // slots and both stay resident across an alternating access loop.
+    (addr >> 3) & (TA_KIND_CACHE_SLOTS - 1)
+}
+
+#[inline]
+fn ta_kind_cache_store_tag(addr: usize, tag: u64) {
+    // `addr` is always > 0x10000, so `(addr << 8) | tag` is never 0 (= empty).
+    TA_KIND_CACHE[ta_kind_cache_slot(addr)].store(((addr as u64) << 8) | tag, Ordering::Relaxed);
+}
+
+#[inline]
+fn ta_kind_cache_store(addr: usize, kind: u8) {
+    ta_kind_cache_store_tag(addr, kind as u64);
+}
+
+#[inline]
+fn ta_kind_cache_invalidate(addr: usize) {
+    let slot = ta_kind_cache_slot(addr);
+    let entry = TA_KIND_CACHE[slot].load(Ordering::Relaxed);
+    if entry != 0 && (entry >> 8) as usize == addr {
+        TA_KIND_CACHE[slot].store(0, Ordering::Relaxed);
+    }
+}
+
+/// Cache probe: `None` = miss (consult the registry), `Some(None)` = cached
+/// negative ("not a typed array"), `Some(Some(kind))` = cached typed array.
+#[inline]
+fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
+    let entry = TA_KIND_CACHE[ta_kind_cache_slot(addr)].load(Ordering::Relaxed);
+    if entry != 0 && (entry >> 8) as usize == addr {
+        let tag = entry & 0xff;
+        if tag == TA_CACHE_NEGATIVE {
+            Some(None)
+        } else {
+            Some(Some(tag as u8))
+        }
+    } else {
+        None
+    }
+}
+
 pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
+    // Keep the cache authoritative: overwrite any colliding/stale slot so a
+    // freed-then-reused address never reads back its previous kind.
+    ta_kind_cache_store(ptr as usize, kind);
     TYPED_ARRAY_REGISTRY.with(|r| {
         r.borrow_mut().insert(ptr as usize, kind);
     });
@@ -158,6 +244,7 @@ pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
 
 pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     let owner = ptr as usize;
+    ta_kind_cache_invalidate(owner);
     TYPED_ARRAY_REGISTRY.with(|r| {
         r.borrow_mut().remove(&owner);
     });
@@ -172,7 +259,19 @@ pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
 /// Returns Some(kind) if the (already-stripped) address is a registered
 /// typed array, else None.
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
-    TYPED_ARRAY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
+    // #5525 fast path: the process-global cache resolves the hot,
+    // repeated-same-address lookups without touching the thread-local
+    // registry. A miss (cold address or direct-mapped eviction) falls back to
+    // the registry and re-populates the slot.
+    if let Some(cached) = ta_kind_cache_get(addr) {
+        return cached;
+    }
+    let kind = TYPED_ARRAY_REGISTRY.with(|r| r.borrow().get(&addr).copied());
+    // Record both outcomes: a typed array (positive) or a confirmed non-typed
+    // address (negative), so repeated plain-array element access stops hitting
+    // the thread-local registry too.
+    ta_kind_cache_store_tag(addr, kind.map_or(TA_CACHE_NEGATIVE, |k| k as u64));
+    kind
 }
 
 /// True for off-GC-heap, header-less allocations — small typed arrays and
@@ -759,6 +858,70 @@ unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
             crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(v) as i64)
         }
         _ => 0.0,
+    }
+}
+
+/// #5525 inline fast read for `obj[i]` when `obj` is dynamically an owning
+/// numeric typed array and `i` a canonical non-negative integer index. Lets
+/// `js_dyn_index_get` collapse the multi-call dynamic-dispatch chain
+/// (`js_typed_array_index_get_dynamic` → `typed_array_index_get_dynamic` →
+/// `typed_array_addr_from_value` → `typed_array_get_numeric_index` →
+/// `typed_array_owner_get` → `js_typed_array_get`) into a single bounds check +
+/// `load_at` on the hot path. Returns `Some(undefined)` for an in-range index
+/// past `length` (spec), `Some(value)` for an in-bounds read, and `None` for
+/// the cases the full dispatcher must still own: BigInt element kinds (whose
+/// read allocates a boxed BigInt) and non-canonical / non-numeric keys
+/// (string/symbol expandos, fractional/negative indices). `kind` is the value
+/// the caller already resolved via `lookup_typed_array_kind`.
+#[inline]
+pub fn typed_array_fast_index_get(ptr: usize, kind: u8, index: f64) -> Option<f64> {
+    if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+        return None;
+    }
+    if !(index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64) {
+        return None;
+    }
+    let ta = ptr as *const TypedArrayHeader;
+    // Native arena views need their liveness validated (the slow path's
+    // `validate_view_alive` throws on a disposed owner); defer those. The check
+    // is a cheap global-counter gate when no native views exist.
+    if crate::native_arena::is_native_typed_view(ta) {
+        return None;
+    }
+    let idx = index as u32;
+    unsafe {
+        if idx >= (*ta).length {
+            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+        Some(load_at(ta, idx as usize))
+    }
+}
+
+/// #5525 inline fast write counterpart to [`typed_array_fast_index_get`].
+/// Returns `true` when the write was fully handled here (an in-bounds store, or
+/// a silently-dropped out-of-bounds canonical-index write — both spec-correct
+/// for integer-indexed exotic objects). Returns `false` to defer to the full
+/// dynamic setter for BigInt element kinds (ToBigInt coercion / throw) and
+/// non-canonical / non-numeric keys (string/symbol expando writes).
+#[inline]
+pub fn typed_array_fast_index_set(ptr: usize, kind: u8, index: f64, value: f64) -> bool {
+    if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+        return false;
+    }
+    if !(index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64) {
+        return false;
+    }
+    let ta = ptr as *mut TypedArrayHeader;
+    if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
+        return false;
+    }
+    let idx = index as u32;
+    unsafe {
+        if idx < (*ta).length {
+            store_at(ta, idx as usize, value);
+        }
+        // In-bounds → stored; out-of-bounds canonical index → dropped per spec.
+        true
     }
 }
 

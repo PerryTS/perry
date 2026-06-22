@@ -18,6 +18,21 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
     let jsval = JSValue::from_bits(bits);
+    // #5525 hot fast path: `obj[i]` where `obj` is dynamically an owning numeric
+    // typed array and `i` a canonical index. bcryptjs's Blowfish core reaches
+    // its `Int32Array` P/S boxes through untyped `Array.<number>` params, so
+    // every one of its ~600M element reads lands here. Collapsing the deep
+    // dynamic-dispatch chain into a cached kind lookup + inline `load_at` is the
+    // bulk of the #5525 speedup; non-typed-array and exotic-key cases fall
+    // through to the full dispatch below unchanged.
+    if jsval.is_pointer() {
+        let raw_ptr = (bits & POINTER_MASK) as usize;
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_ptr) {
+            if let Some(v) = crate::typedarray::typed_array_fast_index_get(raw_ptr, kind, index) {
+                return v;
+            }
+        }
+    }
     if jsval.is_string() || jsval.is_short_string() {
         let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
         if s_ptr.is_null() {
@@ -244,6 +259,20 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
+    // #5525 hot fast path mirroring `js_dyn_index_get` — an owning numeric
+    // typed array with a canonical index stores inline, skipping the dynamic
+    // setter chain. Placed before the `note_object_prototype_index_write`
+    // bookkeeping: that flag only governs plain-array hole/OOB reads, and a
+    // typed array is never a plain array, so the fast-path store does not need
+    // it (the slow path still flips it for the cases it owns).
+    if jsval.is_pointer() {
+        let raw_ptr = (bits & POINTER_MASK) as usize;
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_ptr) {
+            if crate::typedarray::typed_array_fast_index_set(raw_ptr, kind, index, value) {
+                return value;
+            }
+        }
+    }
     // `Object.prototype[i] = v` (computed write) makes the index visible
     // through every array's hole/OOB reads — flip the global flag.
     if jsval.is_pointer() {

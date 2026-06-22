@@ -7,6 +7,7 @@
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::cell::RefCell;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::typedarray::{self, TypedArrayHeader};
 
@@ -107,7 +108,17 @@ fn unregister_owner(owner: *mut NativeArenaOwnerHeader) {
     });
 }
 
+/// #5525: process-global count of live native typed views. Native arena views
+/// are an exotic perry/ui feature — an ordinary `Int32Array` is never one — but
+/// `is_native_typed_view` is on the hot per-element read path
+/// (`js_typed_array_get`), where it otherwise pays a thread-local
+/// (`_tlv_get_addr`) `RefCell` borrow + hash probe of an almost-always-empty
+/// set. Gating on this counter lets the common case answer "no" with a single
+/// relaxed atomic load and no thread-local access.
+static NATIVE_VIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 fn register_view(view: *mut NativeTypedViewHeader) {
+    NATIVE_VIEW_COUNT.fetch_add(1, Ordering::Relaxed);
     VIEW_REGISTRY.with(|r| {
         r.borrow_mut().insert(view as usize);
     });
@@ -115,9 +126,10 @@ fn register_view(view: *mut NativeTypedViewHeader) {
 }
 
 fn unregister_view(view: *mut NativeTypedViewHeader) {
-    VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&(view as usize));
-    });
+    let removed = VIEW_REGISTRY.with(|r| r.borrow_mut().remove(&(view as usize)));
+    if removed {
+        NATIVE_VIEW_COUNT.fetch_sub(1, Ordering::Relaxed);
+    }
     typedarray::unregister_typed_array(view as *const TypedArrayHeader);
 }
 
@@ -140,6 +152,11 @@ fn owner_is_registered(owner: *const NativeArenaOwnerHeader) -> bool {
 
 #[inline]
 pub(crate) fn is_native_typed_view(ta: *const TypedArrayHeader) -> bool {
+    // Fast path: no native views exist anywhere → cannot be one, skip the
+    // thread-local set probe entirely (#5525).
+    if NATIVE_VIEW_COUNT.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
     VIEW_REGISTRY.with(|r| r.borrow().contains(&(ta as usize)))
 }
 
