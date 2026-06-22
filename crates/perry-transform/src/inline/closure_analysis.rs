@@ -205,104 +205,38 @@ pub fn method_body_blocks_this_substitution(stmts: &[Stmt]) -> bool {
     stmts.iter().any(check_stmt)
 }
 
-/// Check if statements contain a closure that captures any of the given local IDs
+/// Check if statements contain a closure that captures any of the given local IDs.
+///
+/// Delegates to [`collect_closure_captured_local_ids`], which walks the HIR via
+/// the exhaustive `perry_hir::walker` — so it sees closures nested inside ANY
+/// expression, including array-method callbacks (`xs.filter(t => …)`,
+/// `.map`/`.reduce`/…), which lower to dedicated `Expr::ArrayFilter` /
+/// `Expr::ArrayMap` nodes rather than `Expr::Call`. The previous hand-rolled
+/// walker only matched a fixed set of `Expr` variants (`Call`, `Binary`,
+/// `PropertyGet`, …) and silently returned `false` for those array-method
+/// nodes. That let a function whose ONLY param-capturing closure lived inside a
+/// `.filter(...)` callback pass the `is_inlinable` gate and get inlined — at
+/// which point the closure literal is duplicated with its captures remapped to
+/// the caller's locals while the body is still codegen-compiled ONCE under the
+/// original capture ids. When the caller's local has a different
+/// value-representation (e.g. heap-boxed because it lives across an `await` in
+/// an async caller, vs. the callee's unboxed by-value param), the remapped
+/// creation site forwards a raw box pointer that the shared body reads as a
+/// plain value → the captured object is observed as a `number`. Reusing the
+/// exhaustive collector closes that gap for every Expr variant, present and
+/// future.
 pub fn body_contains_closure_capturing(
     stmts: &[Stmt],
     captured_ids: &std::collections::HashSet<LocalId>,
 ) -> bool {
-    fn check_expr(expr: &Expr, captured_ids: &std::collections::HashSet<LocalId>) -> bool {
-        match expr {
-            Expr::Closure { captures, body, .. } => {
-                // Check if any capture is in the set of IDs we're looking for
-                for capture_id in captures {
-                    if captured_ids.contains(capture_id) {
-                        return true;
-                    }
-                }
-                // Also check the closure body for nested closures
-                body_contains_closure_capturing(body, captured_ids)
-            }
-            Expr::Binary { left, right, .. }
-            | Expr::Logical { left, right, .. }
-            | Expr::Compare { left, right, .. } => {
-                check_expr(left, captured_ids) || check_expr(right, captured_ids)
-            }
-            Expr::Unary { operand, .. } => check_expr(operand, captured_ids),
-            Expr::Conditional {
-                condition,
-                then_expr,
-                else_expr,
-            } => {
-                check_expr(condition, captured_ids)
-                    || check_expr(then_expr, captured_ids)
-                    || check_expr(else_expr, captured_ids)
-            }
-            Expr::Call { callee, args, .. } => {
-                check_expr(callee, captured_ids) || args.iter().any(|a| check_expr(a, captured_ids))
-            }
-            Expr::Array(elements) => elements.iter().any(|e| check_expr(e, captured_ids)),
-            Expr::IndexGet { object, index } => {
-                check_expr(object, captured_ids) || check_expr(index, captured_ids)
-            }
-            Expr::IndexSet {
-                object,
-                index,
-                value,
-            } => {
-                check_expr(object, captured_ids)
-                    || check_expr(index, captured_ids)
-                    || check_expr(value, captured_ids)
-            }
-            Expr::PropertyGet { object, .. } => check_expr(object, captured_ids),
-            Expr::PropertySet { object, value, .. } => {
-                check_expr(object, captured_ids) || check_expr(value, captured_ids)
-            }
-            Expr::LocalSet(_, value) => check_expr(value, captured_ids),
-            _ => false,
-        }
+    if captured_ids.is_empty() {
+        return false;
     }
-
-    fn check_stmt(stmt: &Stmt, captured_ids: &std::collections::HashSet<LocalId>) -> bool {
-        match stmt {
-            Stmt::Let {
-                init: Some(expr), ..
-            } => check_expr(expr, captured_ids),
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-                check_expr(expr, captured_ids)
-            }
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                check_expr(condition, captured_ids)
-                    || then_branch.iter().any(|s| check_stmt(s, captured_ids))
-                    || else_branch
-                        .as_ref()
-                        .is_some_and(|b| b.iter().any(|s| check_stmt(s, captured_ids)))
-            }
-            Stmt::While { condition, body } => {
-                check_expr(condition, captured_ids)
-                    || body.iter().any(|s| check_stmt(s, captured_ids))
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                init.as_ref().is_some_and(|i| check_stmt(i, captured_ids))
-                    || condition
-                        .as_ref()
-                        .is_some_and(|c| check_expr(c, captured_ids))
-                    || update.as_ref().is_some_and(|u| check_expr(u, captured_ids))
-                    || body.iter().any(|s| check_stmt(s, captured_ids))
-            }
-            _ => false,
-        }
-    }
-
-    stmts.iter().any(|s| check_stmt(s, captured_ids))
+    let mut captured_by_closures = std::collections::HashSet::new();
+    collect_closure_captured_local_ids(stmts, &mut captured_by_closures);
+    captured_by_closures
+        .iter()
+        .any(|id| captured_ids.contains(id))
 }
 
 /// Collect every LocalId that appears in some nested closure's `captures` or
@@ -890,4 +824,105 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
     }
 
     max_id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::Param;
+    use perry_types::Type;
+    use std::collections::HashSet;
+
+    fn param(id: LocalId) -> Param {
+        Param {
+            id,
+            name: format!("p{id}"),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }
+    }
+
+    fn capturing_closure(func_id: u32, capture: LocalId, body_param: LocalId) -> Expr {
+        Expr::Closure {
+            func_id,
+            params: vec![param(body_param)],
+            return_type: Type::Any,
+            // Body reads the captured local — what makes it a real capture.
+            body: vec![Stmt::Return(Some(Expr::LocalGet(capture)))],
+            captures: vec![capture],
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+        }
+    }
+
+    // Regression: a closure that captures a param but lives inside an
+    // `Array.filter` callback must be detected, so `is_inlinable` rejects the
+    // enclosing function. The old hand-rolled walker only matched `Expr::Call`
+    // / `Binary` / `PropertyGet` / … and silently returned `false` for the
+    // dedicated `Expr::ArrayFilter` node, letting such a function be inlined —
+    // which duplicated the closure with remapped captures while the single
+    // compiled body kept the original (different-box-state) capture ids, so an
+    // async caller's heap-boxed local was forwarded as a raw box pointer and
+    // read back as a `number`. (caps `can()` 500 on `GET /admin`.)
+    #[test]
+    fn detects_capture_inside_array_filter_callback() {
+        // function f(allCaps) {
+        //   return xs.filter((t) => can({ caps: allCaps }, t));  // captures allCaps
+        // }
+        let body = vec![Stmt::Return(Some(Expr::ArrayFilter {
+            array: Box::new(Expr::LocalGet(99)),
+            callback: Box::new(capturing_closure(7, 1, 2)),
+        }))];
+        let param_ids: HashSet<LocalId> = [1].into_iter().collect();
+        assert!(
+            body_contains_closure_capturing(&body, &param_ids),
+            "closure capturing param inside ArrayFilter callback must be detected"
+        );
+    }
+
+    // Same hazard via the other array-iteration node the old walker missed.
+    #[test]
+    fn detects_capture_inside_array_map_callback() {
+        let body = vec![Stmt::Return(Some(Expr::ArrayMap {
+            array: Box::new(Expr::LocalGet(99)),
+            callback: Box::new(capturing_closure(7, 1, 2)),
+        }))];
+        let param_ids: HashSet<LocalId> = [1].into_iter().collect();
+        assert!(body_contains_closure_capturing(&body, &param_ids));
+    }
+
+    // Sanity: a closure that captures a NON-param local must not trip the
+    // param-capture check (avoids over-rejecting inline candidates).
+    #[test]
+    fn ignores_closure_not_capturing_any_param() {
+        let body = vec![Stmt::Return(Some(Expr::ArrayFilter {
+            array: Box::new(Expr::LocalGet(99)),
+            // Captures id 5, but we only ask about param id 1.
+            callback: Box::new(capturing_closure(7, 5, 2)),
+        }))];
+        let param_ids: HashSet<LocalId> = [1].into_iter().collect();
+        assert!(!body_contains_closure_capturing(&body, &param_ids));
+    }
+
+    // The pre-existing direct-Call path must keep working.
+    #[test]
+    fn detects_capture_inside_plain_call_arg() {
+        let body = vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::LocalGet(50)),
+            args: vec![capturing_closure(7, 1, 2)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))];
+        let param_ids: HashSet<LocalId> = [1].into_iter().collect();
+        assert!(body_contains_closure_capturing(&body, &param_ids));
+    }
 }
