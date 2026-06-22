@@ -179,6 +179,44 @@ fn boxed_promise_value(promise: *mut crate::promise::Promise) -> f64 {
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
+/// PERRY_ITER_BT diagnostic: dump which throw site fired, the offending
+/// value's decoded shape, and a native backtrace. Gated on env var so it has
+/// zero cost in normal builds. Used to localize the bundle's
+/// "Iterator result is not an object" wall.
+pub(crate) fn iter_bt_dump(tag: &str, value: f64) {
+    if std::env::var("PERRY_ITER_BT").is_err() {
+        return;
+    }
+    let bits = value.to_bits();
+    let jv = crate::value::JSValue::from_bits(bits);
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    let kind = if jv.is_number() {
+        "number"
+    } else if jv.is_int32() {
+        "int32"
+    } else if jv.is_bool() {
+        "bool"
+    } else if jv.is_undefined() {
+        "undefined"
+    } else if jv.is_null() {
+        "null"
+    } else if jv.is_any_string() {
+        "string"
+    } else if jv.is_bigint() {
+        "bigint"
+    } else if jv.is_pointer() {
+        "pointer"
+    } else {
+        "other"
+    };
+    let in_handle_band = crate::value::addr_class::is_handle_band(raw);
+    eprintln!(
+        "[PERRY_ITER_BT] site={tag} bits={bits:#018x} kind={kind} raw={raw:#x} handle_band={in_handle_band}",
+    );
+    let bt = std::backtrace::Backtrace::force_capture();
+    eprintln!("{bt}");
+}
+
 fn async_from_sync_type_error(message: &[u8]) -> f64 {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_typeerror_new(msg);
@@ -245,6 +283,7 @@ extern "C" fn async_from_sync_rejected_value(
 fn async_from_sync_continue(iter: f64, step_result: f64, close_on_rejection: bool) -> f64 {
     let ptr = crate::value::js_nanbox_get_pointer(step_result);
     if ptr == 0 {
+        iter_bt_dump("async_from_sync_continue", step_result);
         return async_from_sync_rejected(b"Iterator result is not an object");
     }
 
@@ -795,6 +834,10 @@ fn is_object_like_value(value: f64) -> bool {
 
 #[cold]
 fn throw_iterator_result_not_object() -> ! {
+    iter_bt_dump(
+        "array_throw_iterator_result_not_object",
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
     let msg = b"Iterator result is not an object";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err = crate::error::js_typeerror_new(msg_str);
@@ -812,6 +855,7 @@ pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
     let result = unsafe { crate::closure::js_native_call_value(next, std::ptr::null(), 0) };
     crate::object::js_implicit_this_set(prev_this);
     if !is_object_like_value(result) {
+        iter_bt_dump("js_iterator_next_result", result);
         throw_iterator_result_not_object();
     }
     result

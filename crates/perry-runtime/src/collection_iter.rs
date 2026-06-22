@@ -304,6 +304,7 @@ pub(crate) fn iterator_next_value(iter: f64) -> Option<f64> {
         )
     };
     if !is_entry_object(result) {
+        crate::array::iter_bt_dump("collection_iter_next_value", result);
         throw_type_error("Iterator result is not an object");
     }
     let result_ptr = js_nanbox_get_pointer(result) as *const crate::object::ObjectHeader;

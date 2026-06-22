@@ -2141,6 +2141,7 @@ static KEEP_JS_ITERATOR_RESULT_VALIDATE: extern "C" fn(f64) -> f64 = js_iterator
 #[no_mangle]
 pub extern "C" fn js_iterator_result_validate(result: f64) -> f64 {
     if !is_object_value(result) {
+        crate::array::iter_bt_dump("js_iterator_result_validate", result);
         let msg = b"Iterator result is not an object";
         let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err = crate::error::js_typeerror_new(msg_str);

@@ -1681,7 +1681,14 @@ pub unsafe extern "C" fn js_native_call_method(
             let result = func(object, method_name_ptr, method_name_len, args_ptr, args_len);
             return result;
         }
-        return f64::from_bits(0x7FF8_0000_0000_0001); // undefined
+        // No JS-handle dispatcher: return JS `undefined`. The literal must be
+        // TAG_UNDEFINED (0x7FFC_..._0001); an earlier copy used the bit pattern
+        // 0x7FF8_..._0001, which is a *signaling NaN* (a JS number), not
+        // undefined. A method call that fell through here (e.g. an iterator's
+        // `.next()` whose receiver reached this path) then returned that sNaN,
+        // which the `for…of` lazy-loop's `js_iterator_result_validate` rejected
+        // with "Iterator result is not an object".
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
     // #4661 follow-up: a *fused* method call `proxy.method(args)` on a Proxy
@@ -2308,7 +2315,11 @@ pub unsafe extern "C" fn js_native_call_method(
                 args.len(),
             );
         }
-        return f64::from_bits(0x7FF8_0000_0000_0001); // undefined
+        // No handle dispatcher registered: return JS `undefined`, NOT the
+        // signaling-NaN bit pattern 0x7FF8_..._0001 (a JS *number*) that a prior
+        // copy of this line used. See the JS-handle fallback above for why the
+        // sNaN surfaced as a spurious "Iterator result is not an object".
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
     // #1545: Web Streams handles are returned as `id as f64` (a normal float),
@@ -3021,8 +3032,11 @@ pub unsafe extern "C" fn js_native_call_method(
                     args_len,
                 );
             }
-            // No dispatcher registered, return undefined
-            return f64::from_bits(0x7FF8_0000_0000_0001);
+            // No dispatcher registered, return JS `undefined`. Must be
+            // TAG_UNDEFINED (0x7FFC_..._0001); the bit pattern 0x7FF8_..._0001 a
+            // prior copy used is a signaling NaN (a JS number), which leaks out
+            // as a non-object and trips `js_iterator_result_validate`.
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
 
         // Guard: null pointer (raw_ptr == 0) means null POINTER_TAG (0x7FFD_0000_0000_0000)
@@ -5423,4 +5437,59 @@ pub unsafe extern "C" fn js_native_call_method(
         method_name.as_ptr(),
         method_name.len(),
     );
+}
+
+#[cfg(test)]
+mod undefined_fallback_tests {
+    //! Regression: a method call that falls through to a "no dispatcher →
+    //! return undefined" path must hand back JS `undefined`
+    //! (`TAG_UNDEFINED` = 0x7FFC_..._0001), NOT the bit pattern
+    //! 0x7FF8_..._0001. The latter is a *signaling NaN* — i.e. a JS *number* —
+    //! so it slips past every "is this an object?" check. In a `for…of` loop
+    //! the lazy desugar validates each `iter.next()` result with
+    //! `js_iterator_result_validate`; an sNaN there is reported as the
+    //! confusing `TypeError: Iterator result is not an object`. This bit
+    //! ~9 fallback returns across `native_call_method.rs` and the stdlib handle
+    //! dispatcher; the test pins the JS-handle arm (its dispatcher is null in
+    //! unit tests, so the fallback is taken deterministically).
+
+    #[test]
+    fn js_handle_method_with_no_dispatcher_returns_real_undefined() {
+        // A JS-handle-tagged receiver. `JS_HANDLE_CALL_METHOD` is unset in the
+        // test process, so `js_native_call_method` takes the no-dispatcher
+        // fallback that previously returned an sNaN.
+        let handle = f64::from_bits(crate::value::JS_HANDLE_TAG | 7);
+        let method = b"next";
+        let result = unsafe {
+            super::js_native_call_method(
+                handle,
+                method.as_ptr() as *const i8,
+                method.len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+
+        // Must be exactly JS `undefined`, and crucially must NOT be a number —
+        // an sNaN would pass `is_number()` and masquerade as a value.
+        assert_eq!(
+            result.to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "no-dispatcher handle method call must return TAG_UNDEFINED, got {:#018x}",
+            result.to_bits()
+        );
+        assert!(
+            !crate::value::JSValue::from_bits(result.to_bits()).is_number(),
+            "fallback result must not classify as a JS number (sNaN regression)"
+        );
+
+        // And it must satisfy the iterator-result validator's object check the
+        // same way real `undefined` does (i.e. it is correctly *rejected* as a
+        // non-object, rather than crashing or being misread as a value).
+        assert_ne!(
+            result.to_bits(),
+            0x7FF8_0000_0000_0001,
+            "must not be the signaling-NaN sentinel that tripped for…of"
+        );
+    }
 }

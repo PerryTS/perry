@@ -93,6 +93,7 @@ pub use self::iter_object::{
     ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::is_builtin_iterator_class_id;
+pub(crate) use self::iterator::iter_bt_dump;
 pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
 };

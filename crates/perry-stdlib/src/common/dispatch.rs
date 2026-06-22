@@ -1227,7 +1227,7 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     // Unknown handle type - return undefined
-    f64::from_bits(0x7FF8_0000_0000_0001)
+    TAG_UNDEFINED_F64
 }
 
 /// Dispatch method calls on Fastify app handles
@@ -1371,7 +1371,7 @@ unsafe fn dispatch_fastify_app(handle: i64, method: &str, args: &[f64]) -> f64 {
             let opts = if args.len() >= 2 {
                 args[1]
             } else {
-                f64::from_bits(0x7FF8_0000_0000_0001)
+                TAG_UNDEFINED_F64
             };
             let result = crate::fastify::js_fastify_register(handle, plugin, opts);
             if result {
@@ -1387,7 +1387,7 @@ unsafe fn dispatch_fastify_app(handle: i64, method: &str, args: &[f64]) -> f64 {
                 0
             };
             crate::fastify::js_fastify_listen(handle, args[0], callback);
-            f64::from_bits(0x7FF8_0000_0000_0001) // undefined (void)
+            TAG_UNDEFINED_F64 // undefined (void)
         }
         "close" => {
             // `app.close()` — shut down every server bound to this
@@ -1398,7 +1398,7 @@ unsafe fn dispatch_fastify_app(handle: i64, method: &str, args: &[f64]) -> f64 {
             // routed here — fell through to "unknown method" and was a
             // no-op, so the server kept the loop alive forever.
             crate::fastify::js_fastify_app_close(handle);
-            f64::from_bits(0x7FF8_0000_0000_0001) // undefined (void)
+            TAG_UNDEFINED_F64 // undefined (void)
         }
         "on" if args.len() >= 2 => {
             // #1113: `app.server.on(event, cb)` — see the function-level
@@ -1420,7 +1420,7 @@ unsafe fn dispatch_fastify_app(handle: i64, method: &str, args: &[f64]) -> f64 {
         }
         _ => {
             // Unknown method - return undefined
-            f64::from_bits(0x7FF8_0000_0000_0001)
+            TAG_UNDEFINED_F64
         }
     }
 }
@@ -1482,7 +1482,7 @@ unsafe fn dispatch_fastify_context(handle: i64, method: &str, args: &[f64]) -> f
         }
         _ => {
             // Unknown method - return undefined
-            f64::from_bits(0x7FF8_0000_0000_0001)
+            TAG_UNDEFINED_F64
         }
     }
 }
