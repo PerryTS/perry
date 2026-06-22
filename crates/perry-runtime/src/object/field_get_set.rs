@@ -3833,6 +3833,39 @@ pub extern "C" fn js_object_get_field_by_name(
                 if val.to_bits() != crate::value::TAG_UNDEFINED {
                     return JSValue::from_bits(val.to_bits());
                 }
+                // #5437 (Next.js W6 follow-up): a registered module-default
+                // wrapper whose wrapped CJS `module.exports` IS a plain
+                // function (e.g. `next/dist/compiled/debug` → `createDebug`)
+                // registers the FUNCTION itself as the wrapper. Reading the
+                // CJS-interop `.default` key off it
+                // (`_interop_require_default(require('debug')).default`) must
+                // yield that function value — NOT auto-call it. Calling it
+                // (`createDebug()` with no args) ran `enabled(undefined)` →
+                // `undefined.length` → "Cannot read properties of undefined
+                // (reading 'length')". For a non-ESM module the interop
+                // `default` is `module.exports`, which for the function-export
+                // case is the wrapper closure itself, so return it verbatim.
+                if crate::closure::is_module_default_wrapper(obj as usize) {
+                    // CJS-interop `__esModule` probe
+                    // (`_interop_require_default(require('m'))`): a CJS module
+                    // whose `module.exports` is a function is NOT an ES module,
+                    // so `.__esModule` is `undefined`. Auto-calling the wrapper
+                    // to answer this probe would EXECUTE the exported function
+                    // with no args — e.g. `next/dist/compiled/debug`'s
+                    // `createDebug()` ran `enabled(undefined)` →
+                    // `undefined.length` throw. Short-circuit it to undefined.
+                    if name_str == "__esModule" {
+                        return JSValue::undefined();
+                    }
+                    // The CJS-interop `.default` of such a module is
+                    // `module.exports` itself (the function), so return the
+                    // wrapper closure verbatim rather than auto-calling it.
+                    if name_str == "default" {
+                        return JSValue::from_bits(
+                            crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                        );
+                    }
+                }
                 // #5437 (Next.js W6): the receiver is a REGISTERED
                 // module-default-export wrapper closure (`const uw =
                 // require('S')` materialized + captured by-value). A member
@@ -3842,9 +3875,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 // property off that object. Gated to wrappers codegen
                 // explicitly registered (so an arbitrary user closure is never
                 // auto-called) and to non-function-meta names (`constructor`,
-                // `prototype`, `name`, `length`, `caller`, `arguments`, well-
-                // known symbols) so a genuine function-property read still
-                // takes its dedicated path below.
+                // `prototype`, `name`, `length`, `caller`, `arguments`,
+                // `default`, well-known symbols) so a genuine function-property
+                // read still takes its dedicated path below.
                 if !matches!(
                     name_str,
                     "constructor"
@@ -3856,6 +3889,8 @@ pub extern "C" fn js_object_get_field_by_name(
                         | "apply"
                         | "call"
                         | "bind"
+                        | "default"
+                        | "__esModule"
                 ) && !name_str.starts_with("@@")
                     && !name_str.starts_with("Symbol(")
                 {

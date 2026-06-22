@@ -83,3 +83,52 @@ fn module_default_wrapper_property_read_resolves_exports() {
     let n = js_register_module_default_wrapper_value(number_val);
     assert_eq!(n.to_bits(), number_val.to_bits());
 }
+
+// #5437 (Next.js W6 follow-up) regression: a registered module-default wrapper
+// whose wrapped CJS `module.exports` IS a plain function (e.g.
+// `next/dist/compiled/debug` → `createDebug`) must NOT be auto-called to answer
+// the CJS-interop probes `__esModule` / `default`. Auto-calling it executes the
+// exported function with no args (which threw "Cannot read properties of
+// undefined (reading 'length')" via `createDebug()` → `enabled(undefined)`).
+// `.__esModule` must be `undefined` (a function-export module is not an ES
+// module) and `.default` must be the wrapper closure itself (the CJS-interop
+// default of a non-ESM module is `module.exports`).
+extern "C" fn test_wrapper_must_not_be_called(_closure: *const ClosureHeader) -> f64 {
+    // If the W6 fallback ever auto-calls this for `__esModule` / `default`, the
+    // panic aborts the test — the probe-read must never reach here.
+    panic!("module-default wrapper auto-called for an interop probe key");
+}
+
+#[test]
+fn module_default_wrapper_interop_probe_does_not_call_wrapper() {
+    // A wrapper closure for a function-valued CJS default export. Calling it is
+    // forbidden for the interop probe keys (it would run business logic).
+    let wrapper = js_closure_alloc(test_wrapper_must_not_be_called as *const u8, 0);
+    let wrapper_value: f64 = crate::value::js_nanbox_pointer(wrapper as i64);
+    let returned = js_register_module_default_wrapper_value(wrapper_value);
+    assert_eq!(returned.to_bits(), wrapper_value.to_bits());
+    assert!(is_module_default_wrapper(wrapper as usize));
+
+    // `.__esModule` → undefined, WITHOUT auto-calling the wrapper.
+    let esm_key = crate::string::js_string_from_bytes(b"__esModule".as_ptr(), 10);
+    let esm = crate::object::js_object_get_field_by_name(
+        wrapper as *const crate::object::ObjectHeader,
+        esm_key,
+    );
+    assert!(
+        esm.is_undefined(),
+        "__esModule on a function-export CJS wrapper must be undefined (not auto-called)"
+    );
+
+    // `.default` → the wrapper closure value itself, WITHOUT auto-calling it.
+    let def_key = crate::string::js_string_from_bytes(b"default".as_ptr(), 7);
+    let def = crate::object::js_object_get_field_by_name(
+        wrapper as *const crate::object::ObjectHeader,
+        def_key,
+    );
+    assert_eq!(
+        def.bits(),
+        wrapper_value.to_bits(),
+        ".default of a function-export CJS wrapper must be the wrapper itself"
+    );
+}
