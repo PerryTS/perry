@@ -1329,14 +1329,59 @@ pub extern "C" fn js_error_get_cause(error: *mut ErrorHeader) -> f64 {
     }
 }
 
-/// Get the errors array of an AggregateError (raw ArrayHeader pointer)
+/// Get the errors array of an AggregateError (raw ArrayHeader pointer).
+///
+/// Codegen lowers EVERY `obj.errors` property read (regardless of `obj`'s
+/// static type — frequently `any`) to this accessor and then unconditionally
+/// re-applies `POINTER_TAG` to the result. That is only sound when `obj` is a
+/// genuine native error: the `errors` field lives at a fixed byte offset in
+/// `ErrorHeader`, so applying it to a *regular* user object reads an unrelated
+/// property slot. Observed in the wild: a plain object (`object_type ==
+/// OBJECT_TYPE_REGULAR`) whose `+48` slot held NaN-boxed `undefined`
+/// (`0x7FFC_0000_0000_0001`); codegen OR-ed `POINTER_TAG` onto it to produce
+/// `0x7FFD_0000_0000_0001` — a handle-band id (`raw = 1`), not a heap array —
+/// which `for…of` then mis-iterated ("Iterator result is not an object").
+///
+/// So: only read the fixed `ErrorHeader.errors` slot for an actual native
+/// error. For any other receiver, resolve the `errors` own-property
+/// *generically* and hand back its clean pointer (or null) so the caller's
+/// `POINTER_TAG` re-tag reconstitutes the real array — or a null receiver that
+/// `for…of` rejects as not-iterable, exactly as the dynamic property read
+/// would have.
 #[no_mangle]
 pub extern "C" fn js_error_get_errors(error: *mut ErrorHeader) -> *mut crate::array::ArrayHeader {
     unsafe {
         if error.is_null() {
             return std::ptr::null_mut();
         }
-        (*error).errors
+        // Reject the small-handle band and implausible addresses before any
+        // dereference (these are not heap objects).
+        let addr = error as usize;
+        if !crate::value::addr_class::is_plausible_heap_addr(addr) {
+            return std::ptr::null_mut();
+        }
+        // Native error objects carry `object_type == OBJECT_TYPE_ERROR` in
+        // their first u32; only those have the `errors` field at a fixed
+        // offset. (Matches the validation in `js_error_is_error`.)
+        let object_type = std::ptr::read(error as *const u32);
+        if object_type == OBJECT_TYPE_ERROR {
+            return (*error).errors;
+        }
+        // Not a native error — resolve `.errors` as an ordinary own property
+        // and return its clean (untagged) pointer payload. A non-pointer value
+        // (undefined / number / …) yields null, which the caller's re-tag turns
+        // into a null receiver that `for…of` rejects as not iterable.
+        let key = js_string_from_bytes(b"errors".as_ptr(), 6);
+        let value = crate::object::js_object_get_field_by_name(
+            error as *const crate::object::ObjectHeader,
+            key,
+        );
+        if value.is_pointer() {
+            crate::value::js_nanbox_get_pointer(f64::from_bits(value.bits()))
+                as *mut crate::array::ArrayHeader
+        } else {
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -1569,6 +1614,56 @@ mod tostring_tests {
         let e = js_error_new_with_name_message(b"TypeError", s(b"bad"));
         let out = unsafe { read_string_header_owned(js_error_to_string(e)) };
         assert_eq!(out, "TypeError: bad");
+    }
+
+    #[test]
+    fn get_errors_on_regular_object_reads_real_property_not_fixed_slot() {
+        // Codegen lowers EVERY `obj.errors` read to `js_error_get_errors` and
+        // then OR-s POINTER_TAG onto the result. For a *regular* object (not a
+        // native error), the `ErrorHeader.errors` byte offset (+48) is an
+        // unrelated slot — historically this returned NaN-boxed garbage that
+        // the caller's re-tag turned into a handle-band id (e.g.
+        // `0x7FFD_0000_0000_0001`), crashing `for…of`. The fix resolves the
+        // `errors` property generically for non-errors.
+        let arr = crate::array::js_array_alloc(2);
+        crate::array::js_array_push_f64(arr, 11.0);
+        crate::array::js_array_push_f64(arr, 22.0);
+        let arr_boxed = crate::value::js_nanbox_pointer(arr as i64);
+
+        // Plain object with an own `errors` property pointing at `arr`.
+        let obj = crate::object::js_object_alloc(0, 2);
+        let key = s(b"errors");
+        crate::object::js_object_set_field_by_name(obj, key, arr_boxed);
+
+        // The accessor receives the *cleaned* (untagged) pointer, as codegen
+        // strips the tag before the call.
+        let got = js_error_get_errors(obj as *mut ErrorHeader);
+        assert_eq!(
+            got as usize, arr as usize,
+            "regular object's .errors must resolve to its real array property, \
+             not the +48 ErrorHeader slot"
+        );
+
+        // An object with no `errors` property yields null (→ caller re-tag is a
+        // null receiver that `for…of` rejects as not iterable, matching the
+        // generic property read).
+        let empty = crate::object::js_object_alloc(0, 1);
+        assert!(js_error_get_errors(empty as *mut ErrorHeader).is_null());
+
+        // A small-handle-band "pointer" must never be dereferenced.
+        assert!(js_error_get_errors(1usize as *mut ErrorHeader).is_null());
+    }
+
+    #[test]
+    fn get_errors_on_native_aggregate_error_uses_fixed_slot() {
+        let arr = crate::array::js_array_alloc(1);
+        crate::array::js_array_push_f64(arr, 7.0);
+        let agg = js_aggregateerror_new(arr, s(b"agg"));
+        let got = js_error_get_errors(agg);
+        assert_eq!(
+            got as usize, arr as usize,
+            "native AggregateError must read its fixed errors slot"
+        );
     }
 
     #[test]
