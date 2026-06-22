@@ -2,9 +2,9 @@
 //!
 //! Reserves a `GtkDrawingArea` in the Perry UI view tree for an external GPU
 //! renderer (e.g. the Bloom engine) to draw into. Perry UI only owns the widget
-//! and exposes its `GtkWidget*` via `bloomViewGetHwnd`; user TypeScript hands
-//! that to the renderer, which targets the widget's surface (the issue's MVP
-//! used GTK4 + Vulkan dmabuf). Mirrors the Windows implementation, with the
+//! and exposes its `GtkWidget*` via `bloomViewGetNativeHandle`; user TypeScript
+//! hands that to the renderer, which targets the widget's surface (the issue's
+//! MVP used GTK4 + Vulkan dmabuf). Mirrors the Windows implementation, with the
 //! HWND replaced by the raw `GtkWidget*`.
 
 use gtk4::prelude::*;
@@ -24,6 +24,10 @@ pub fn create(width: f64, height: f64) -> i64 {
         area.set_hexpand(true);
         area.set_vexpand(true);
     }
+    // Let the host widget take keyboard focus + pointer events so the attached
+    // engine can route input (#5519).
+    area.set_focusable(true);
+    area.set_can_target(true);
     super::register_widget(area.upcast())
 }
 

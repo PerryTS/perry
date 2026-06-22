@@ -424,17 +424,27 @@ export function Canvas(width: number, height: number): Canvas;
  *
  * `BloomView(width, height)` reserves a native render-surface view in the Perry
  * UI view tree. Perry UI does not draw into it — pass the handle returned by
- * `bloomViewGetHwnd(view)` to a renderer such as the Bloom engine
- * (`attachToHwnd`), which builds its surface on the view and drives frames.
- * Available on all native targets (Windows HWND, macOS/iOS/visionOS native
- * view, GTK4 widget, Android view; tvOS/watchOS link as no-ops).
+ * `bloomViewGetNativeHandle(view)` to a renderer such as the Bloom engine
+ * (`attachToNSView` / `attachToSurface` / …), which builds its surface on the
+ * view and drives frames. Available on all native targets (Windows HWND,
+ * macOS/iOS/visionOS native view, GTK4 widget, Android SurfaceView; tvOS real
+ * view, watchOS links as a no-op).
  */
 export function BloomView(width: number, height: number): Widget;
 
 /**
- * The `BloomView`'s native handle as a number — the platform's render-surface
- * pointer (HWND on Windows, NSView/UIView on Apple, GtkWidget on GTK4). Hand
- * this to an external renderer's attach call.
+ * The `BloomView`'s native render-surface handle as a number — the platform's
+ * view/window pointer: `HWND` on Windows, `NSView*`/`UIView*` on Apple,
+ * `GtkWidget*` on GTK4, `ANativeWindow*` on Android. Hand this to the Bloom
+ * engine's attach call (`attachToNSView` / `attachToUIView` / `attachToSurface`,
+ * all forwarding to `bloom_attach_native`).
+ */
+export function bloomViewGetNativeHandle(view: Widget): number;
+
+/**
+ * @deprecated Renamed to {@link bloomViewGetNativeHandle} in #5519 — the handle
+ * is no longer Windows-only (it's an NSView*/UIView*/GtkWidget*/ANativeWindow*
+ * on the other platforms). This alias still works and returns the same value.
  */
 export function bloomViewGetHwnd(view: Widget): number;
 

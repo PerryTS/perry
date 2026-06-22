@@ -1,3 +1,40 @@
+## v0.5.1199 — feat(ui): BloomView live-render plumbing on every backend (#5519)
+
+Perry-UI side of #5519 (live `BloomView` rendering on all platforms; the engine
+side landed in Bloom-Engine/engine#71 as the platform-neutral `bloom_attach_native`).
+
+- **Rename** `bloomViewGetHwnd` → `bloomViewGetNativeHandle`, keeping
+  `bloomViewGetHwnd` as a deprecated alias (both dispatch rows route to the same
+  `perry_ui_bloomview_get_hwnd` runtime symbol). The name is platform-neutral now
+  that the handle is an `NSView*` / `UIView*` / `GtkWidget*` / `ANativeWindow*`,
+  not only an HWND. Updated `crates/perry-dispatch/src/ui_table.rs`,
+  `crates/perry-api-manifest/src/entries.rs`, `types/perry/ui/index.d.ts`, and
+  regenerated `docs/api/perry.d.ts` + `docs/src/api/reference.md`.
+- **Sizing**: the non-Windows backends created the view but ignored the requested
+  size, so the renderer's surface came up 0×0 and nothing drew. `BloomView(w, h)`
+  now pins the size — macOS/iOS/visionOS/tvOS via Auto Layout
+  (`set_width`/`set_height` + `translatesAutoresizingMaskIntoConstraints = false`),
+  GTK4 already used `set_size_request`, Android via `LayoutParams`, Windows already
+  reserved a fixed-size child window.
+- **tvOS**: promoted the 0-handle stub to a real `UIView` (new
+  `crates/perry-ui-tvos/src/widgets/bloomview.rs`), mirroring iOS.
+- **Android**: switched the host widget from `android.view.View` to
+  `android.view.SurfaceView`, and `bloomViewGetNativeHandle` now returns the real
+  `ANativeWindow*` (via NDK `ANativeWindow_fromSurface` on the view's
+  `SurfaceHolder.getSurface()`) instead of echoing the registry token. Returns 0
+  until the surface is ready (laid out / `surfaceCreated`).
+- **Input/focus**: the host view is now focusable so a focused `BloomView` can
+  receive keyboard/pointer events for the attached engine to consume (macOS
+  `acceptsFirstResponder` via a `PerryBloomView` subclass; iOS/tvOS/visionOS
+  `userInteractionEnabled`; GTK `set_focusable`/`set_can_target`; Android
+  `setFocusable`/`setFocusableInTouchMode`).
+- **Demo**: `examples/bloomview_embed_demo.ts` renders a live Bloom scene inside a
+  Perry UI window — `BloomView` + `bloomViewGetNativeHandle` + the engine's
+  `attachToNSView`, driven from `onFrame`. Verified on macOS: the integrated
+  binary (Perry UI + Bloom engine) links and runs the attach/frame loop; iOS
+  cross-compiles. Android/GTK/Windows/tvOS/visionOS are best-effort (no local
+  cross-toolchain), mirroring established per-backend patterns.
+
 ## v0.5.1198 — fix(packaging): ship `libperry_ui_android.a` to Windows installs so `perry/ui` android apps link (#4823)
 
 A Windows user (discussion #4823) with the NDK/SDK and Rust android targets

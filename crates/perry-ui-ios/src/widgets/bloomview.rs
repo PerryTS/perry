@@ -2,9 +2,9 @@
 //!
 //! Reserves a bare `UIView` in the Perry UI view tree for an external GPU
 //! renderer (e.g. the Bloom engine) to draw into. Perry UI only owns the view
-//! and exposes its pointer via `bloomViewGetHwnd`; user TypeScript hands that
-//! pointer to the renderer, which builds its (Metal) surface on it. Mirrors the
-//! Windows implementation, with the HWND replaced by the raw `UIView*`.
+//! and exposes its pointer via `bloomViewGetNativeHandle`; user TypeScript hands
+//! that pointer to the renderer, which builds its (Metal) surface on it. Mirrors
+//! the Windows implementation, with the HWND replaced by the raw `UIView*`.
 
 use objc2::msg_send;
 use objc2::rc::Retained;
@@ -12,10 +12,10 @@ use objc2::runtime::AnyClass;
 use objc2_foundation::MainThreadMarker;
 use objc2_ui_kit::UIView;
 
-/// Create a BloomView host. `width`/`height` are advisory — the layout engine
-/// sizes the view. Returns the widget handle (0 if called off the main thread).
+/// Create a BloomView host sized `width` × `height` points. Returns the widget
+/// handle (0 if called off the main thread). The size is pinned via Auto Layout
+/// so the renderer's surface comes up non-zero (#5519).
 pub fn create(width: f64, height: f64) -> i64 {
-    let _ = (width, height);
     // UIKit views must be created on the main thread; don't panic across the
     // FFI boundary if that contract is violated — return an invalid handle.
     let Some(_mtm) = MainThreadMarker::new() else {
@@ -23,7 +23,18 @@ pub fn create(width: f64, height: f64) -> i64 {
     };
     unsafe {
         let view: Retained<UIView> = msg_send![AnyClass::get(c"UIView").unwrap(), new];
-        super::register_widget(view)
+        // Auto Layout drives the size (set_width/set_height below).
+        let _: () = msg_send![&view, setTranslatesAutoresizingMaskIntoConstraints: false];
+        // Let the host view receive touches so the attached engine can route input.
+        let _: () = msg_send![&view, setUserInteractionEnabled: true];
+        let handle = super::register_widget(view);
+        if width.is_finite() && width >= 1.0 {
+            super::set_width(handle, width);
+        }
+        if height.is_finite() && height >= 1.0 {
+            super::set_height(handle, height);
+        }
+        handle
     }
 }
 

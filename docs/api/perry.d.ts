@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1945 entries across 113 modules
+// Coverage: 1946 entries across 113 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2867,6 +2867,8 @@ declare module "perry/ui" {
   export function attributedTextClear(...args: any[]): any;
   /** stdlib */
   export function bloomViewGetHwnd(...args: any[]): any;
+  /** stdlib */
+  export function bloomViewGetNativeHandle(...args: any[]): any;
   /** stdlib */
   export function blur(...args: any[]): any;
   /** stdlib */

@@ -211,15 +211,15 @@ pub extern "C" fn perry_ui_webview_create(
     0
 }
 
-// BloomView (issue #2395) — stub on this platform, matching the WebView shape
-// above; returns a 0 handle so apps that import BloomView still link and run.
+// BloomView (issue #2395 / #5519) — a real `UIView` render-surface host the
+// Bloom engine attaches its Metal surface to (via `attachToUIView`).
 #[no_mangle]
-pub extern "C" fn perry_ui_bloomview_create(_width: f64, _height: f64) -> i64 {
-    0
+pub extern "C" fn perry_ui_bloomview_create(width: f64, height: f64) -> i64 {
+    crate::widgets::bloomview::create(width, height)
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_bloomview_get_hwnd(_handle: i64) -> i64 {
-    0
+pub extern "C" fn perry_ui_bloomview_get_hwnd(handle: i64) -> i64 {
+    crate::widgets::bloomview::get_native_handle(handle)
 }
 
 #[no_mangle]
