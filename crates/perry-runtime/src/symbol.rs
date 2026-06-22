@@ -2247,6 +2247,27 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             throw_value_not_iterable();
         }
     }
+    // A pointer-tagged value whose payload lies in the small-handle band
+    // (`< HANDLE_BAND_MAX`, e.g. a near-null `POINTER_TAG | 1`) is NOT a
+    // dereferenceable heap object — the handle bands carry proxy/stream/zlib
+    // ids that never reach this function's for-of path, so a payload down here
+    // is a corrupted reference. Reading `[Symbol.iterator]` off it below would
+    // walk `js_object_get_symbol_property` against address `1`, find nothing,
+    // and return the bogus value UNCHANGED as its own "iterator"; the lazy
+    // for-of then calls `.next()` on it, gets `undefined`, and throws the
+    // misleading late "Iterator result is not an object" far from the real
+    // fault. Throw the correct "not iterable" here instead. (The upstream bug
+    // that lets such a value into a `for…of` is separate; this keeps the
+    // runtime from manufacturing a bogus iterator from a non-object.)
+    {
+        let jsv = crate::value::JSValue::from_bits(val_f64.to_bits());
+        if jsv.is_pointer() {
+            let raw = jsv.as_pointer::<u8>() as usize;
+            if crate::value::addr_class::is_handle_band(raw) {
+                throw_value_not_iterable();
+            }
+        }
+    }
     // A string PRIMITIVE (heap STRING_TAG or inline SSO short string) iterates
     // over its Unicode code points per `String.prototype[Symbol.iterator]`
     // (ECMA-262 §22.1.3.36). The generic `[Symbol.iterator]` lookup below only
