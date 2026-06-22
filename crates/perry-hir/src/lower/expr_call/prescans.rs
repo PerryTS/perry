@@ -79,7 +79,16 @@ pub(super) fn run_call_prescans(
     // perry-ext-http's `js_http_on` for client-side IncomingMessage
     // handles too via the cross-module on-listener path).
     if let Some(res_name) = pre_scan_node_http_client_callback_params(ctx, call) {
-        ctx.register_native_instance(res_name, "http".to_string(), "IncomingMessage".to_string());
+        // Protect only when registration actually happened — it no-ops under a
+        // `perry.compilePackages` override, and protecting without a fresh tag
+        // would let a later same-named param skip tombstoning a stale one.
+        if ctx.register_native_instance(
+            res_name.clone(),
+            "http".to_string(),
+            "IncomingMessage".to_string(),
+        ) {
+            ctx.protect_native_param(res_name);
+        }
     }
 
     // Issue #577 Phase 4 — `httpServer.on('upgrade', (req, wsId, head) => …)`
@@ -88,7 +97,16 @@ pub(super) fn run_call_prescans(
     // `wsId.close()` inside the handler dispatch via the Client-class
     // entries in NATIVE_MODULE_TABLE.
     if let Some(ws_id_name) = pre_scan_node_http_upgrade_params(ctx, call) {
-        ctx.register_native_instance(ws_id_name, "ws".to_string(), "Client".to_string());
+        // The arrow's own `wsId` param binding would otherwise tombstone this
+        // fresh tag via shadow_native_instance_if_present — protect it so
+        // `wsId.send`/`.on` inside the handler keep the Client-class dispatch.
+        // Protect only when registration actually happened (it no-ops under a
+        // compile-package override), else a later same-named param would skip
+        // tombstoning a genuinely stale tag.
+        if ctx.register_native_instance(ws_id_name.clone(), "ws".to_string(), "Client".to_string())
+        {
+            ctx.protect_native_param(ws_id_name);
+        }
     }
 
     // Issue #2211 — `request.on('socket', sock => …)` on a `ClientRequest`
@@ -98,7 +116,12 @@ pub(super) fn run_call_prescans(
     // handler dispatches through the class-filtered Socket rows in
     // NATIVE_MODULE_TABLE.
     if let Some(sock_name) = pre_scan_node_http_client_request_socket_params(ctx, call) {
-        ctx.register_native_instance(sock_name, "net".to_string(), "Socket".to_string());
+        // Protect only on successful registration (no-ops under a
+        // compile-package override) — see the `wsId` site above.
+        if ctx.register_native_instance(sock_name.clone(), "net".to_string(), "Socket".to_string())
+        {
+            ctx.protect_native_param(sock_name);
+        }
     }
 
     // perry/ui reactive Text: `Text(\`...${state.value}...\`)` where at least one

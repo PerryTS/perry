@@ -421,6 +421,24 @@ pub struct LoweringContext {
     /// truncated). The old lookup scanned FORWARD (first-match-wins), so the
     /// index keeps the FIRST pushed index per name (`entry().or_insert`).
     pub(crate) func_return_native_instances_index: HashMap<String, usize>,
+    /// Param names a pre-scan registered as native instances for the callback
+    /// it is ABOUT to lower (e.g. the `wsId` of `server.on('upgrade', (req,
+    /// wsId, head) => …)` tagged `("ws","Client")`). The callback's own param
+    /// binding then calls `shadow_native_instance_if_present(param)` to tombstone
+    /// stale leaked native tags — but here the tag is the FRESH, intended one,
+    /// so that shadow would wrongly erase it (the `wsId.send`/`.on` dead-channel
+    /// bug). One-shot per name: `shadow_native_instance_if_present` consumes the
+    /// entry and skips the tombstone exactly once.
+    ///
+    /// Each entry is anchored to the CALLBACK's param `scope_depth` (one below
+    /// the caller scope the pre-scan runs in); the consume matches at exactly
+    /// that depth and `exit_scope` drops entries deeper than the surviving depth.
+    /// So a protection whose expected consumer never fires (an unusual callback
+    /// shape, or a binding path that doesn't route through
+    /// `shadow_native_instance_if_present`) is cleared when the callback scope
+    /// exits and cannot leak into the caller scope to wrongly skip a later,
+    /// unrelated same-named binding's tombstone.
+    pub(crate) prescan_protected_native_params: std::collections::HashMap<String, usize>,
     /// Perf index for `native_modules` (push-only, never truncated). The old
     /// `lookup_native_module` scanned FORWARD (first-match-wins), so the index
     /// keeps the FIRST pushed index per name (`entry().or_insert`).

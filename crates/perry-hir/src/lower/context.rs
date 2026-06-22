@@ -123,6 +123,7 @@ impl LoweringContext {
             native_instances_index: HashMap::new(),
             module_native_instances_index: HashMap::new(),
             func_return_native_instances_index: HashMap::new(),
+            prescan_protected_native_params: std::collections::HashMap::new(),
             native_modules_index: HashMap::new(),
             module_shadow_stack: Vec::new(),
             class_statics_index: HashMap::new(),
@@ -1194,12 +1195,16 @@ impl LoweringContext {
             .map(|(root, sub)| (root.as_str(), sub.as_str()))
     }
 
+    /// Register `local_name` as a native instance of `module_name`/`class_name`.
+    /// Returns `false` (a no-op) when the package is a `perry.compilePackages`
+    /// override (#5137) — callers that gate a side effect on successful
+    /// registration (e.g. `protect_native_param`) must check this.
     pub(crate) fn register_native_instance(
         &mut self,
         local_name: String,
         module_name: String,
         class_name: String,
-    ) {
+    ) -> bool {
         // #5137: if the user opted this package into `perry.compilePackages`,
         // its real npm source is being compiled and the binding resolves to
         // the compiled-from-source class. Registering a native instance here
@@ -1211,7 +1216,7 @@ impl LoweringContext {
         // is used. `is_native_module` already makes the same back-off for the
         // import-resolution side (#665).
         if is_compile_package_override(&module_name) {
-            return;
+            return false;
         }
         // Push the new index onto this name's shadow stack (innermost last).
         let idx = self.native_instances.len();
@@ -1221,6 +1226,7 @@ impl LoweringContext {
             .push(idx);
         self.native_instances
             .push((local_name, module_name, class_name));
+        true
     }
 
     /// Shadow any prior native-instance tag for `local_name` by pushing a
@@ -1248,9 +1254,36 @@ impl LoweringContext {
     /// saw `e.map`/`e.length`/`e.constructor` all read 0 while `e[0]` and
     /// `Array.prototype.map.call(e)` worked → `(number).join is not a function`).
     pub(crate) fn shadow_native_instance_if_present(&mut self, name: &str) {
+        // A pre-scan registered this exact param name as a native instance for
+        // the callback now being lowered (e.g. `wsId` for `server.on('upgrade',
+        // (req, wsId, head) => …)`). That tag is the FRESH, intended one — the
+        // param IS the native instance — so its own param binding must NOT
+        // tombstone it. One-shot: consume the protection so a later, unrelated
+        // param of the same name still shadows a genuinely stale tag.
+        // Consume only when this binding is at the depth the pre-scan anchored
+        // the protection to (the callback's own param scope). A same-named
+        // binding at any other depth must NOT consume it; `exit_scope` drops a
+        // never-consumed entry when the callback scope unwinds.
+        if self.prescan_protected_native_params.get(name).copied() == Some(self.scope_depth) {
+            self.prescan_protected_native_params.remove(name);
+            return;
+        }
         if self.lookup_native_instance(name).is_some() {
             self.shadow_native_instance(name.to_string());
         }
+    }
+
+    /// Mark `name` as a pre-scan-designated native-instance param so the very
+    /// next `shadow_native_instance_if_present(name)` (the callback's own param
+    /// binding) skips tombstoning it. The pre-scan runs in the CALLER's scope,
+    /// one level above the callback, so anchor to `scope_depth + 1` (the
+    /// callback's param scope): the consume matches at exactly that depth, and a
+    /// never-consumed entry is dropped when the callback scope exits — it can't
+    /// linger into the caller scope and shadow a later, unrelated same-named
+    /// binding. See `prescan_protected_native_params`.
+    pub(crate) fn protect_native_param(&mut self, name: String) {
+        self.prescan_protected_native_params
+            .insert(name, self.scope_depth + 1);
     }
 
     /// Truncate `native_instances` back to `mark`, keeping the
@@ -1470,6 +1503,12 @@ impl LoweringContext {
     pub(crate) fn exit_scope(&mut self, mark: (usize, usize, usize)) {
         debug_assert!(self.scope_depth > 0, "exit_scope called at module depth");
         self.scope_depth = self.scope_depth.saturating_sub(1);
+        // Drop any pre-scan param protections registered in a scope deeper than
+        // the one we just returned to — their expected consumer (the callback's
+        // param binding) never fired, so they must not linger and skip a later
+        // same-named binding's tombstone.
+        self.prescan_protected_native_params
+            .retain(|_, depth| *depth <= self.scope_depth);
         self.scope_local_marks.pop();
         // #wall5: restore native-module shadowing for this scope.
         if let Some(m) = self.scope_module_shadow_marks.pop() {
