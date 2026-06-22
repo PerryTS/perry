@@ -265,6 +265,27 @@ pub unsafe extern "C" fn js_numeric_step(numeric: f64, is_increment: i32) -> f64
 /// the results — turning `"c" + ""` into `NaN + 0 = NaN`).
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 {
+    // #5525 hot fast path: both operands are plain IEEE-754 doubles (not a
+    // NaN-boxed string / pointer / bigint / int32 / singleton — i.e. top 16 bits
+    // below the 0x7FF9 Perry tag band). Then `a + b` is exactly the spec result:
+    // ToPrimitive is identity on numbers, neither side is a string (no concat),
+    // neither is a BigInt or Symbol, and there are no GC pointers to root. This
+    // skips the `RuntimeHandleScope` + four `root_nanbox_f64` thread-local
+    // accesses (`_tlv_get_addr`) that otherwise run for *every* dynamic `+`.
+    // bcryptjs's Blowfish core does ~hundreds of millions of `n += S[i]` adds on
+    // `any`-typed locals whose values are always plain numbers, so this scope +
+    // rooting was the single largest remaining cost after the typed-array
+    // element-access fix (#5525). Canonical-NaN (0x7FF8) and negative-NaN
+    // payloads from real arithmetic stay on this path and add to NaN, matching
+    // IEEE semantics. Any tagged operand falls through to the full path below.
+    const TAG_BAND_FLOOR: u64 = 0x7FF9_0000_0000_0000;
+    let abits = a.to_bits();
+    let bbits = b.to_bits();
+    if (abits & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR
+        && (bbits & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR
+    {
+        return a + b;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let a_handle = scope.root_nanbox_f64(a);
     let b_handle = scope.root_nanbox_f64(b);

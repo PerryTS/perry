@@ -222,6 +222,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ],
                 ));
             }
+            // #5525: when the receiver's static type is genuinely unknown
+            // (`Type::Any`/`Type::Unknown`) and the index is numeric, route the
+            // write through `js_dyn_index_set` — the exact symmetric counterpart
+            // of the IndexGet `recv_unknown` arm (index_get.rs), which routes
+            // reads through `js_dyn_index_get`. Both helpers carry the #5525
+            // process-global typed-array kind cache + inline `typed_array_fast_
+            // index_{get,set}` fast path, so a hot monomorphic `S[i]`/`P[i] = v`
+            // on an `Int32Array` reaching a function through an untyped
+            // `Array.<number>` parameter (bcryptjs's Blowfish P/S boxes) lands on
+            // a cached load/store instead of the polymorphic feedback helper's
+            // thread-local registry dispatch (`typed_array_owner_*` →
+            // `_tlv_get_addr`). Pre-fix this fell all the way through to
+            // `js_typed_feedback_object_set_index_polymorphic`, whose
+            // `typed_array_set_numeric_index` path dominated the bcrypt profile.
+            // The gate is narrow (only Any/Unknown receiver + numeric index) so
+            // every statically-typed array / typed-array / object fast path below
+            // is preserved.
+            let recv_ty = crate::type_analysis::static_type_of(ctx, object);
+            let recv_unknown = matches!(
+                recv_ty,
+                None | Some(perry_types::Type::Any) | Some(perry_types::Type::Unknown)
+            );
+            // The index may be numeric, a runtime string, or (rarely) a runtime
+            // symbol — `js_dyn_index_set` triages all three. We only keep the
+            // statically-known string-literal / symbol keys on their dedicated
+            // (interned-handle / symbol-side-table) routes below; everything else
+            // on an unknown receiver goes through the cached fast path. bcryptjs's
+            // `lr[off]`/`lr[off + 1]` writes have an `off` param typed `any`, so
+            // `off + 1` is NOT provably numeric — gating on `is_numeric_expr`
+            // (the original #5525 attempt) missed exactly those ~4M hot writes
+            // and they kept falling through to `js_put_value_set`.
+            let index_is_static_string_or_symbol = matches!(
+                index.as_ref(),
+                Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+            ) || is_string_expr(ctx, index);
+            if recv_unknown && !index_is_static_string_or_symbol {
+                let obj_box = lower_expr(ctx, object)?;
+                let idx_d = lower_expr(ctx, index)?;
+                let val_double = lower_expr(ctx, value)?;
+                let blk = ctx.block();
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_dyn_index_set",
+                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_d), (DOUBLE, &val_double)],
+                ));
+            }
             // Issue #637 / hono r2 followup: `arr[stringKey] = val` where
             // the index is statically string-typed (e.g. `for (const i in
             // sparseArr)` produces string i; then `out[i] = val`). Pre-fix

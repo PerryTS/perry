@@ -118,3 +118,100 @@ console.log("F=" + get(whole, 1) + "," + get(view, 0));
          semantics across kinds, bounds, exotic keys, BigInt, and buffer views"
     );
 }
+
+/// #5525 follow-up: closing the bcrypt perf gap relaxed the unknown-receiver
+/// index gates so that *all* non-static-string/symbol element accesses on an
+/// `any` receiver route through `js_dyn_index_get` / `js_dyn_index_set` (which
+/// carry the cached typed-array fast path) — including the `lr[off]` /
+/// `lr[off + 1]` writes whose index is not statically numeric. That widening
+/// must not change semantics for the non-typed-array cases the same dispatchers
+/// now also serve: runtime string keys, numeric-string keys, Symbol keys, plain
+/// arrays, and plain objects. It also adds a both-operands-plain-number fast
+/// path to the dynamic `+`; this pins that `+` still concatenates strings and
+/// coerces mixed operands per spec.
+#[test]
+fn untyped_index_routing_preserves_non_typed_array_semantics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    let output = dir.path().join("main_bin");
+
+    std::fs::write(
+        &entry,
+        r#"
+// All accesses go through untyped params, so the access site can't narrow the
+// receiver and must route through the dynamic get/set dispatchers.
+function g(a: any, k: any): any { return a[k]; }
+function s(a: any, k: any, v: any): void { a[k] = v; }
+
+// (A) typed array with a NON-statically-numeric index (mirrors bcryptjs
+// `lr[off]` / `lr[off + 1]` where `off` is an `any` param).
+const ta = new Int32Array(4);
+const off: any = 0;
+s(ta, off, 100);
+s(ta, off + 1, -7);
+console.log("A=" + g(ta, off) + "," + g(ta, off + 1) + "," + (g(ta, 9) === undefined));
+
+// (B) plain object reached through the untyped path: a runtime string key and a
+// numeric-string key must land as ordinary properties, not elements.
+const o: any = {};
+const key: any = "fo" + "o"; // runtime (non-literal) string
+s(o, key, 42);
+s(o, "7", 9);
+console.log("B=" + g(o, key) + "," + o.foo + "," + g(o, "7"));
+
+// (C) a Symbol key must resolve through the symbol side-table on both get & set.
+const sym: any = Symbol("x");
+const o2: any = {};
+s(o2, sym, "viaSym");
+console.log("C=" + g(o2, sym) + "," + (g(o2, "nope") === undefined));
+
+// (D) a plain array grown through the untyped write path.
+const arr: any = [];
+s(arr, 0, 11);
+s(arr, 1, 22);
+console.log("D=" + arr[0] + "," + arr[1] + "," + arr.length);
+
+// (E) the dynamic `+` plain-number fast path must not change string concat or
+// mixed-operand coercion.
+function add(a: any, b: any): any { return a + b; }
+console.log("E=" + add(2, 3) + "," + add("x", 5) + "," + add(1, "y") + "," + add(2.5, 0.5));
+"#,
+    )
+    .expect("write entry");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(
+        stdout,
+        "A=100,-7,true\n\
+         B=42,42,9\n\
+         C=viaSym,true\n\
+         D=11,22,2\n\
+         E=5,x5,1y,3\n",
+        "widening the unknown-receiver index routing must preserve spec semantics \
+         for runtime-string / numeric-string / Symbol keys, plain arrays & objects, \
+         and the dynamic `+` fast path"
+    );
+}

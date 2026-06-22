@@ -371,6 +371,18 @@ pub extern "C" fn js_to_integer_or_infinity(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_number_coerce(value: f64) -> f64 {
+    // #5525 hot fast path: a plain IEEE-754 double (top 16 bits, sign stripped,
+    // below the 0x7FF9 Perry NaN-box tag band) is already a Number — ToNumber is
+    // identity. Returns before the undefined/null/bool/string/int32/bigint/
+    // pointer tag ladder below. bcryptjs's Blowfish core funnels every `any`-
+    // typed `S[i]` element read (which `js_dyn_index_get` returns as a plain f64)
+    // through this coercion before the Feistel arithmetic, so it was the #1 frame
+    // after the typed-array element-access + dynamic-add fast paths landed.
+    // Canonical / payload NaNs (top16 0x7FF8) and all finite/inf doubles stay on
+    // this path; tagged values (0x7FF9..=0x7FFF) fall through unchanged.
+    if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+        return value;
+    }
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() {

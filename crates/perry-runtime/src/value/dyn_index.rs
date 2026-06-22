@@ -18,6 +18,14 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
     let jsval = JSValue::from_bits(bits);
+    // #5525: a Symbol *index* (`obj[Symbol.iterator]`) must resolve through the
+    // symbol side-table, never the integer-index / stringify paths below (which
+    // would coerce the symbol's NaN-boxed bits to a garbage i32). The codegen
+    // routes all non-string-literal, unknown-receiver reads here, so the runtime
+    // owns the symbol triage that the codegen-side fallback used to do inline.
+    if unsafe { crate::symbol::js_is_symbol(index) } != 0 {
+        return unsafe { crate::symbol::js_object_get_symbol_property(value, index) };
+    }
     // #5525 hot fast path: `obj[i]` where `obj` is dynamically an owning numeric
     // typed array and `i` a canonical index. bcryptjs's Blowfish core reaches
     // its `Int32Array` P/S boxes through untyped `Array.<number>` params, so
@@ -259,6 +267,15 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
+    // #5525: a Symbol *index* (`obj[sym] = v`) routes to the symbol side-table,
+    // mirroring the get side. Codegen sends all non-string-literal unknown-
+    // receiver writes here, so the runtime owns the symbol triage.
+    if unsafe { crate::symbol::js_is_symbol(index) } != 0 {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(obj, index, value);
+        }
+        return value;
+    }
     // #5525 hot fast path mirroring `js_dyn_index_get` — an owning numeric
     // typed array with a canonical index stores inline, skipping the dynamic
     // setter chain. Placed before the `note_object_prototype_index_write`

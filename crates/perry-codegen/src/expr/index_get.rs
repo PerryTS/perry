@@ -847,7 +847,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 recv_ty,
                 None | Some(perry_types::Type::Any) | Some(perry_types::Type::Unknown)
             );
-            if recv_unknown && is_numeric_expr(ctx, index) {
+            // #5525: route every non-static-string/symbol read on an unknown
+            // receiver through `js_dyn_index_get` (numeric, runtime-string, and
+            // runtime-symbol are all triaged in the runtime). The earlier
+            // `is_numeric_expr(index)` gate missed `lr[off]`/`lr[off + 1]`
+            // (bcryptjs `_encipher`'s `off` is an `any` param, so `off + 1` is
+            // not provably numeric); statically-known string-literal / symbol
+            // keys keep their dedicated interned-handle / symbol routes below.
+            let index_is_static_string_or_symbol = matches!(
+                index.as_ref(),
+                Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+            ) || is_string_expr(ctx, index);
+            if recv_unknown && !index_is_static_string_or_symbol {
                 let obj_box = lower_expr(ctx, object)?;
                 let idx_d = lower_expr(ctx, index)?;
                 let blk = ctx.block();
