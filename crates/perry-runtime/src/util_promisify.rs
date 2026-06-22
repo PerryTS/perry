@@ -163,6 +163,10 @@ fn register_thunks_once() {
         js_register_closure_arity(callbackify_fulfilled_thunk as *const u8, 1);
         js_register_closure_arity(callbackify_rejected_thunk as *const u8, 1);
         js_register_closure_rest(deprecate_outer_thunk as *const u8, 0);
+        // crypto.generateKeyPair promisify wrapper: outer is a rest function;
+        // inner callback takes `(err, publicKey, privateKey)`.
+        js_register_closure_rest(gkp_outer_thunk as *const u8, 0);
+        js_register_closure_arity(gkp_inner_callback_thunk as *const u8, 3);
         crate::builtins::register_function_name_if_absent(
             deprecate_outer_thunk as *const () as usize,
             "deprecated",
@@ -189,6 +193,29 @@ pub extern "C" fn js_util_promisify(fn_value: f64) -> f64 {
     {
         if module == "child_process" && (method == "exec" || method == "execFile") {
             return crate::child_process::make_promisified_child_process(&method);
+        }
+        // Node attaches a `customPromisifyArgs` of `['publicKey','privateKey']`
+        // to `crypto.generateKeyPair`, so `promisify(generateKeyPair)` resolves
+        // to a `{ publicKey, privateKey }` object rather than the single first
+        // result the general wrapper yields. Without this, the awaited result
+        // is just the public-key PEM string and `result.publicKey` is
+        // undefined. Build a dedicated wrapper whose inner callback collects
+        // the three `(err, publicKey, privateKey)` arguments into that object.
+        if module == "crypto" && method == "generateKeyPair" {
+            register_thunks_once();
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let fn_handle = scope.root_nanbox_f64(fn_value);
+            let closure = js_closure_alloc(gkp_outer_thunk as *const u8, 1);
+            if closure.is_null() {
+                return TAG_UNDEFINED_F64;
+            }
+            let closure_handle = scope.root_raw_mut_ptr(closure);
+            js_closure_set_capture_f64(
+                closure_handle.get_raw_mut_ptr(),
+                0,
+                fn_handle.get_nanbox_f64(),
+            );
+            return nanbox_pointer(closure_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
         }
     }
 
@@ -393,6 +420,144 @@ extern "C" fn inner_callback_thunk(closure: *const ClosureHeader, err: f64, valu
     } else {
         js_promise_reject(promise_ptr, err);
     }
+    TAG_UNDEFINED_F64
+}
+
+/// Outer body for `promisify(crypto.generateKeyPair)`. Mirrors
+/// [`outer_thunk`] but installs a 3-arg inner callback so the resolved
+/// value is Node's `{ publicKey, privateKey }` object (via
+/// `customPromisifyArgs`) rather than just the public key.
+extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+
+    let fn_value = if closure.is_null() {
+        TAG_UNDEFINED_F64
+    } else {
+        js_closure_get_capture_f64(closure, 0)
+    };
+    let fn_handle = scope.root_nanbox_f64(fn_value);
+
+    let promise_ptr = js_promise_new();
+    if promise_ptr.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
+
+    // Inner `(err, publicKey, privateKey)` callback capturing the promise.
+    let cb_closure = js_closure_alloc(gkp_inner_callback_thunk as *const u8, 1);
+    if cb_closure.is_null() {
+        return nanbox_promise(promise_handle.get_raw_mut_ptr());
+    }
+    let cb_handle = scope.root_raw_mut_ptr(cb_closure);
+    js_closure_set_capture_ptr(
+        cb_handle.get_raw_mut_ptr(),
+        0,
+        promise_handle.get_raw_const_ptr::<Promise>() as i64,
+    );
+    let cb_value = nanbox_pointer(cb_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
+    let cb_value_handle = scope.root_nanbox_f64(cb_value);
+
+    // Compose `[...rest, inner_cb]` — same shape as `outer_thunk`.
+    let rest_bits = rest_value.to_bits();
+    let rest_arr_ptr = if (rest_bits & TAG_MASK) == POINTER_TAG {
+        (rest_bits & POINTER_MASK) as *const ArrayHeader
+    } else {
+        std::ptr::null()
+    };
+    let rest_len = if rest_arr_ptr.is_null() {
+        0
+    } else {
+        js_array_length(rest_arr_ptr) as usize
+    };
+
+    let mut combined = js_array_alloc((rest_len + 1) as u32);
+    if !rest_arr_ptr.is_null() && rest_len > 0 {
+        let rest_data = unsafe {
+            (rest_arr_ptr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+        };
+        for i in 0..rest_len {
+            let v = unsafe { *rest_data.add(i) };
+            combined = js_array_push_f64(combined, v);
+        }
+    }
+    combined = js_array_push_f64(combined, cb_value_handle.get_nanbox_f64());
+    let combined_handle = scope.root_raw_mut_ptr(combined);
+
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { setjmp(trap_buf as *mut c_int) };
+    if jumped == 0 {
+        let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
+        let data =
+            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 };
+        let n = js_array_length(arr) as usize;
+        unsafe {
+            crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
+        }
+    } else {
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        js_promise_reject(promise_handle.get_raw_mut_ptr(), exc);
+    }
+    crate::exception::js_try_end();
+
+    nanbox_promise(promise_handle.get_raw_mut_ptr())
+}
+
+/// Inner callback for the generateKeyPair promisify wrapper:
+/// `(closure, err, publicKey, privateKey)`. On success resolves with a
+/// freshly-built `{ publicKey, privateKey }` object (matching Node's
+/// `customPromisifyArgs`); otherwise rejects with `err`.
+extern "C" fn gkp_inner_callback_thunk(
+    closure: *const ClosureHeader,
+    err: f64,
+    public_key: f64,
+    private_key: f64,
+) -> f64 {
+    if closure.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    if promise_ptr.is_null() {
+        return TAG_UNDEFINED_F64;
+    }
+    if !err_is_nullish(err) {
+        js_promise_reject(promise_ptr, err);
+        return TAG_UNDEFINED_F64;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
+    let pub_handle = scope.root_nanbox_f64(public_key);
+    let priv_handle = scope.root_nanbox_f64(private_key);
+
+    let obj = crate::object::js_object_alloc(0, 2);
+    if obj.is_null() {
+        // Fall back to resolving with the public key alone rather than hang.
+        js_promise_resolve(
+            promise_handle.get_raw_mut_ptr(),
+            pub_handle.get_nanbox_f64(),
+        );
+        return TAG_UNDEFINED_F64;
+    }
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+
+    let pub_key = js_string_from_bytes(b"publicKey".as_ptr(), b"publicKey".len() as u32);
+    let pub_key_handle = scope.root_string_ptr(pub_key);
+    crate::object::js_object_set_field_by_name(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        pub_key_handle.get_raw_const_ptr::<crate::StringHeader>(),
+        pub_handle.get_nanbox_f64(),
+    );
+    let priv_key = js_string_from_bytes(b"privateKey".as_ptr(), b"privateKey".len() as u32);
+    let priv_key_handle = scope.root_string_ptr(priv_key);
+    crate::object::js_object_set_field_by_name(
+        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        priv_key_handle.get_raw_const_ptr::<crate::StringHeader>(),
+        priv_handle.get_nanbox_f64(),
+    );
+
+    let obj_value =
+        nanbox_pointer(obj_handle.get_raw_const_ptr::<crate::object::ObjectHeader>() as *const u8);
+    js_promise_resolve(promise_handle.get_raw_mut_ptr(), obj_value);
     TAG_UNDEFINED_F64
 }
 
