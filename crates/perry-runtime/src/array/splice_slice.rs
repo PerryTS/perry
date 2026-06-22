@@ -138,8 +138,14 @@ pub extern "C" fn js_array_splice(
         // Insert new items
         if items_count > 0 && !items.is_null() {
             for i in 0..items_count as usize {
+                let item = *items.add(i);
+                // A uniquely-owned string spliced in now aliases the array slot —
+                // demote it to shared so a later `s += x` doesn't mutate it in
+                // place. No-op for SSO / non-string. (This insert path doesn't
+                // funnel through `note_array_slot`.)
+                crate::string::js_string_addref_if_heap_string(item);
                 // GC_STORE_AUDIT(BARRIERED): splice inserted item writes are followed by layout/barrier rebuild.
-                ptr::write(elements_ptr.add(start_idx as usize + i), *items.add(i));
+                ptr::write(elements_ptr.add(start_idx as usize + i), item);
             }
         }
 

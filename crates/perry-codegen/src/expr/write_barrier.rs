@@ -204,6 +204,17 @@ fn emit_jsvalue_slot_store_on_block_inner(
     };
     // GC_STORE_AUDIT(BARRIERED): generated heap JSValue stores route through this shared emitter.
     blk.store(DOUBLE, value_double, slot_ptr);
+    // A uniquely-owned (refcount==1) string written into this slot now aliases
+    // it — demote it to shared so a later in-place `+=` on the source local
+    // allocates fresh instead of mutating the stored element. This is the inline
+    // codegen choke point the runtime store functions (`js_array_push_f64`, …)
+    // are bypassed for on the fast paths. Tag-checked at runtime (a no-op for
+    // SSO / non-string), and only emitted when the value can be a heap pointer
+    // (`layout_note_needed`), so numeric stores pay nothing. Mirrors the
+    // object-field demote in `runtime_store_jsvalue_slot` (#5533).
+    if layout_note_needed {
+        blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+    }
     if !layout_note_needed && !write_barrier_needed {
         return None;
     }

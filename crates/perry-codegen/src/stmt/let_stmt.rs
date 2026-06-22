@@ -2,7 +2,10 @@
 
 use super::*;
 
-use crate::expr::{emit_root_nanbox_store_on_block, lower_expr_with_expected_type};
+use crate::expr::{
+    emit_root_nanbox_store_on_block, expr_produces_non_pointer_bits_by_construction,
+    lower_expr_with_expected_type,
+};
 use crate::native_value::{
     AliasState, BufferAccessMode, BufferElem, BufferIndexUnit, BufferViewSlot, LengthSource,
     LoweredValue, MaterializationReason, NativeOwnedViewSlot, NativeRep, PodLayoutDecision,
@@ -401,6 +404,21 @@ pub(crate) fn lower_let(
                 }
                 let v = lower_expr(ctx, elem)?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
+                // A uniquely-owned string captured into this scalar-replaced
+                // array slot aliases its heap buffer; demote it to shared so a
+                // later in-place `+=` on the source local doesn't mutate the
+                // stored element. Only a `LocalGet` can be `+=`'d in place after
+                // the store; gate on "value may be a heap pointer" (not an exact
+                // `string` type) so `any`-typed and union locals are covered too.
+                // The runtime helper is tag-checked (a no-op for SSO / non-string),
+                // and proven-numeric locals are skipped to avoid the call. Mirrors
+                // the object scalar-field demote and the runtime array-store demotes.
+                let needs_string_demote = matches!(elem, perry_hir::Expr::LocalGet(_))
+                    && !expr_produces_non_pointer_bits_by_construction(ctx, elem);
+                if needs_string_demote {
+                    ctx.block()
+                        .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
+                }
                 let lowered = LoweredValue {
                     semantic: SemanticKind::JsValue,
                     rep: NativeRep::JsValue,

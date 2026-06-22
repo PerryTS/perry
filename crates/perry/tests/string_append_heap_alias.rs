@@ -114,12 +114,156 @@ console.log("o.v=" + o.v + " s=" + s);
     );
 }
 
-// NOTE: non-escaping ARRAY element stores (`const a = [s]`, `a.push(s)`,
-// `a[i] = s`) have the same aliasing exposure as object fields, but the array
-// store paths are numerous (small-literal `js_array_alloc` + `js_array_push_f64`,
-// the inline bump-allocator, `js_array_from_values`, indexing/splice/…) and span
-// ~9 runtime files. Covering them is tracked as a follow-up rather than bundled
-// here, to keep this change focused on the object-field path it set out to fix.
+// Array-element stores have the same aliasing exposure as object fields, across
+// every store path: literal construction, `arr[i] = s`, `push`, and `splice`.
+// Each stores a NON-SSO string made uniquely-owned (refcount==1) via a first
+// append, then grows the source — the stored element must keep its value. These
+// fail without the array-store demotes (`note_array_slot`, `js_array_from_values`,
+// the splice insert, and the inline array-literal codegen).
+
+/// `const a = [s]` — small literal (lowers to `js_array_alloc` + `js_array_push_f64`).
+#[test]
+fn unique_string_stored_in_array_literal_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+let s = "prefix";   // non-SSO, shared literal
+s += "_init";       // append on shared -> fresh heap string, refcount==1
+const a = [s];      // element store -> must demote s to shared
+s += "_more";       // refcount==1 in-place append -> must NOT corrupt a[0]
+console.log("a0=" + a[0] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let out = compile_and_run(dir.path(), &entry);
+    assert!(
+        out.contains("a0=prefix_init s=prefix_init_more"),
+        "string stored in an array literal must not be corrupted by a later += (got: {out:?})"
+    );
+}
+
+/// `a[i] = s` — index assignment.
+#[test]
+fn unique_string_stored_via_index_set_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+const a = ["placeholder"];
+let s = "prefix";
+s += "_init";
+a[0] = s;           // index-set -> must demote s to shared
+s += "_more";
+console.log("a0=" + a[0] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let out = compile_and_run(dir.path(), &entry);
+    assert!(
+        out.contains("a0=prefix_init s=prefix_init_more"),
+        "string stored via arr[i]= must not be corrupted by a later += (got: {out:?})"
+    );
+}
+
+/// `a.push(s)` — push.
+#[test]
+fn unique_string_pushed_into_array_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+const a = [];
+let s = "prefix";
+s += "_init";
+a.push(s);          // push -> must demote s to shared
+s += "_more";
+console.log("a0=" + a[0] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let out = compile_and_run(dir.path(), &entry);
+    assert!(
+        out.contains("a0=prefix_init s=prefix_init_more"),
+        "string pushed into an array must not be corrupted by a later += (got: {out:?})"
+    );
+}
+
+/// `a.splice(i, 0, s)` — splice insertion.
+#[test]
+fn unique_string_spliced_into_array_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+const a = ["head", "tail"];
+let s = "prefix";
+s += "_init";
+a.splice(1, 0, s);  // splice insert -> must demote s to shared
+s += "_more";
+console.log("a1=" + a[1] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let out = compile_and_run(dir.path(), &entry);
+    assert!(
+        out.contains("a1=prefix_init s=prefix_init_more"),
+        "string spliced into an array must not be corrupted by a later += (got: {out:?})"
+    );
+}
+
+/// The OUTLINED array-literal construction path (`js_array_from_values`), forced
+/// via `PERRY_FULL_OUTLINE_IC=1`. The array must escape so it isn't
+/// scalar-replaced and routes through `lower_array_literal`'s outline branch.
+#[test]
+fn unique_string_in_outlined_array_literal_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+let s = "prefix";
+s += "_init";
+const a = [s];                // escapes below -> js_array_from_values (full-outline)
+s += "_more";
+(globalThis as any).keep = a; // escape so the literal isn't scalar-replaced
+console.log("a0=" + a[0] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let output = dir.path().join("main_bin");
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .env("PERRY_FULL_OUTLINE_IC", "1")
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let out = String::from_utf8_lossy(&run.stdout).to_string();
+    assert!(
+        out.contains("a0=prefix_init s=prefix_init_more"),
+        "string in an outlined array literal must not be corrupted by a later += (got: {out:?})"
+    );
+}
 
 /// The snapshot-then-grow shape end to end: store the latest value into a heap
 /// field each step, then keep growing the source. Every stored snapshot must

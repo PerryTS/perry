@@ -163,6 +163,13 @@ unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    // A uniquely-owned (refcount==1) string pushed into the array aliases an
+    // element slot — demote it to shared so a later `s += x` on the source local
+    // allocates fresh instead of mutating the stored element in place. No-op for
+    // SSO / non-string. Done on the raw value, covering the inline, grow, and
+    // proxy paths below (mirrors the object-field demote in
+    // `runtime_store_jsvalue_slot`).
+    crate::string::js_string_addref_if_heap_string(value);
     // #5135: a Proxy whose static type is an array (immer drafts) reaches here
     // with the masked proxy id. Perform the spec `Array.prototype.push` for a
     // single element directly through the proxy's `get`/`set` traps:
