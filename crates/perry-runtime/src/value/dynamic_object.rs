@@ -57,6 +57,18 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     // nonsense.
     if top16 == 0x7FFD {
         let handle = (bits & POINTER_MASK) as usize;
+        // A POINTER_TAG value in a handle band (Web Fetch
+        // Headers/Request/Response/Blob, net/http small handles, zlib stream
+        // ids, revocable-proxy ids — all `< 0x100000`) is a registry id, not a
+        // heap pointer. None of them carry a `.length`, and dereferencing the
+        // raw id (`handle - 8` GcHeader read, or `*handle` u32 below) hits
+        // unmapped low memory → SIGSEGV. The macOS 2 TB `heap_min` floor below
+        // masks this, but the Linux/Android/iOS `0x1000` floor does not, so
+        // reject the band explicitly here. Matches the band gating the inline
+        // `.length` codegen fast path now applies before falling in here.
+        if crate::value::addr_class::is_handle_band(handle) {
+            return 0.0;
+        }
         // Heap window: macOS mimalloc lands in 3-5 TB, but Android scudo,
         // Linux glibc, Windows mimalloc, and iOS-family device
         // libsystem_malloc all allocate much lower (often hundreds of GB
@@ -615,4 +627,42 @@ pub unsafe extern "C" fn js_dynamic_object_keys(ptr: i64) -> *mut crate::array::
 #[no_mangle]
 pub unsafe extern "C" fn js_get_property(object: f64, name_ptr: i64, name_len: i64) -> f64 {
     js_dynamic_object_get_property(object, name_ptr as *const i8, name_len as usize)
+}
+
+#[cfg(test)]
+mod length_handle_band_tests {
+    use super::*;
+    use crate::value::addr_class;
+
+    /// A POINTER_TAG-boxed *handle-band* value (Web Fetch
+    /// Headers/Request/Response/Blob ids, net/http handles, zlib/proxy ids —
+    /// all `< 0x100000`) is a registry id, not a heap pointer. Reaching the
+    /// `.length` slow path with such a value must return `0.0` WITHOUT
+    /// dereferencing the raw id (which would SIGSEGV at the unmapped low
+    /// address). Regression for the doctor / mcp-list startup crash where a
+    /// Fetch handle (e.g. `0x40005`) flowed into a `.length` site; the inline
+    /// codegen fast path now band-gates before falling in here, and this slow
+    /// path rejects the band explicitly so it is safe on every platform.
+    #[test]
+    fn fetch_band_handle_length_is_zero_not_a_deref() {
+        // Sample one id from each handle sub-band, including the exact band
+        // boundaries the bug touched.
+        for &id in &[
+            1usize,                                  // common native handle
+            addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
+            addr_class::FETCH_HANDLE_BAND_START + 5, // 0x40005 — the crash addr
+            addr_class::FETCH_HANDLE_BAND_END - 1,   // top of fetch band
+            addr_class::PROXY_ID_BAND_START,         // revocable-proxy id
+            addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF — last handle-band id
+        ] {
+            assert!(addr_class::is_handle_band(id));
+            let boxed = crate::value::js_nanbox_pointer(id as i64);
+            // Must not crash and must report no length.
+            assert_eq!(
+                js_value_length_f64(boxed),
+                0.0,
+                "handle-band id {id:#x} must yield length 0 without dereferencing"
+            );
+        }
+    }
 }

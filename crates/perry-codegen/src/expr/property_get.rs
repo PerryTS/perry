@@ -424,16 +424,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `.length` hot path). Tag check is platform-independent.
             let recv_tag = blk.lshr(I64, &recv_bits, "48");
             let recv_tag_masked = blk.and(I64, &recv_tag, "65533"); // 0xFFFD
-            let handle_ok = blk.icmp_eq(I64, &recv_tag_masked, "32765"); // 0x7FFD
-                                                                         // SSO receivers fail this guard → route to slow path
-                                                                         // `js_value_length_f64` which has an SSO branch (reads
-                                                                         // length from the tag byte, no heap access). Accepting
-                                                                         // SSO here is safe because the fast path's
-                                                                         // `safe_load_i32_from_ptr(&recv_handle)` would read
-                                                                         // arbitrary bytes at the SSO "pointer" address, but
-                                                                         // the subsequent phi feeds the slow-path result when
-                                                                         // handle_ok is false — so SSO flow is correct via the
-                                                                         // slow path already, no widening needed.
+            let tag_ok = blk.icmp_eq(I64, &recv_tag_masked, "32765"); // 0x7FFD
+                                                                      // The tag check alone admits POINTER_TAG-boxed *handle-band*
+                                                                      // values — Web Fetch handles (Headers/Request/Response/Blob, id
+                                                                      // in [0x40000, 0xE0000)), net/http small handles, revocable-proxy
+                                                                      // ids — which are NaN-boxed registry ids, NOT heap pointers. A
+                                                                      // value statically typed Array/String/Named that actually holds
+                                                                      // such a handle at runtime (e.g. a `Response`/`Headers` reaching a
+                                                                      // `.length` site) would then `inttoptr` the bare id and load the
+                                                                      // GC-type byte at `id-8` and the length u32 at `id` — both
+                                                                      // unmapped low addresses → SIGSEGV (observed: doctor / mcp list
+                                                                      // crashing at the exact fetch-handle address). The IC-miss path
+                                                                      // (`js_object_get_field_ic_miss`) and the inline class-field guard
+                                                                      // already gate on `> HANDLE_BAND_TOP`; mirror that here so any
+                                                                      // handle-band receiver routes to the `js_value_length_f64` slow
+                                                                      // path, which classifies it by registry without dereferencing the
+                                                                      // raw id. `HANDLE_BAND_TOP` = 0xFFFFF (addr_class::HANDLE_BAND_MAX
+                                                                      // - 1).
+            let above_band = blk.icmp_ugt(I64, &recv_handle, "1048575"); // 0xFFFFF
+            let handle_ok = blk.and(I1, &tag_ok, &above_band);
+            // SSO receivers fail this guard → route to slow path
+            // `js_value_length_f64` which has an SSO branch (reads
+            // length from the tag byte, no heap access). Accepting
+            // SSO here is safe because the fast path's
+            // `safe_load_i32_from_ptr(&recv_handle)` would read
+            // arbitrary bytes at the SSO "pointer" address, but
+            // the subsequent phi feeds the slow-path result when
+            // handle_ok is false — so SSO flow is correct via the
+            // slow path already, no widening needed.
 
             let check_gc_idx = ctx.new_block("plen.check_gc");
             let fast_idx = ctx.new_block("plen.fast");
