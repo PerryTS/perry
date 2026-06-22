@@ -137,7 +137,11 @@ fn install_method(obj: *mut ObjectHeader, name: &str, func_ptr: *const u8, arity
 
 #[derive(Default)]
 struct PortState {
-    /// Pointer to the entangled (paired) port object. 0 until linked.
+    /// Heap address of the entangled (paired) port object. 0 until linked.
+    /// Used only as a `PORT_STATES` key (never dereferenced), but it is a live
+    /// reference to the partner port: the GC scanner visits it with
+    /// `visit_usize_slot` so the partner survives event-loop turns and so the
+    /// address is rewritten if the partner is evacuated.
     entangled: usize,
     /// FIFO of cloned message values waiting to be dispatched to THIS port.
     queue: VecDeque<f64>,
@@ -163,20 +167,45 @@ fn ensure_gc_scanner_registered() {
     }
 }
 
-/// Keep queued message values, `onmessage` handlers, and listener closures
-/// alive across event-loop turns — they are NaN-boxed JS values held only by
-/// this side table while a macrotask is pending.
+/// Keep queued message values, `onmessage` handlers, listener closures, and the
+/// entangled partner port alive across event-loop turns — they are NaN-boxed JS
+/// values / heap pointers held only by this side table while a macrotask is
+/// pending. The table is keyed by each port's heap address, so the keys are
+/// rewritten too: if the GC evacuates a port, a stale key would make later
+/// `this`-pointer lookups miss and silently drop messages.
 pub fn port_states_root_scanner_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut guard = crate::gc::lock_gc_root_registry(&PORT_STATES);
-    if let Some(map) = guard.as_mut() {
-        for state in map.values_mut() {
-            for v in state.queue.iter_mut() {
-                visitor.visit_nanbox_f64_slot(v);
-            }
-            visitor.visit_nanbox_f64_slot(&mut state.onmessage);
-            for l in state.listeners.iter_mut() {
-                visitor.visit_nanbox_f64_slot(l);
-            }
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+
+    for state in map.values_mut() {
+        for v in state.queue.iter_mut() {
+            visitor.visit_nanbox_f64_slot(v);
+        }
+        visitor.visit_nanbox_f64_slot(&mut state.onmessage);
+        // Root + rewrite the entangled-partner address (raw heap pointer).
+        visitor.visit_usize_slot(&mut state.entangled);
+        for l in state.listeners.iter_mut() {
+            visitor.visit_nanbox_f64_slot(l);
+        }
+    }
+
+    // Rewrite any keys whose port object was evacuated so the entry stays
+    // reachable under its new address. Collect first to avoid mutating the map
+    // while its key iterator is borrowed.
+    let relocations: Vec<(usize, usize)> = map
+        .keys()
+        .copied()
+        .filter_map(|old| {
+            let mut new = old;
+            visitor.visit_usize_slot(&mut new);
+            (new != old).then_some((old, new))
+        })
+        .collect();
+    for (old, new) in relocations {
+        if let Some(state) = map.remove(&old) {
+            map.insert(new, state);
         }
     }
 }
@@ -361,9 +390,24 @@ extern "C" fn port_close(_closure: *const ClosureHeader) -> f64 {
     let self_ptr = this_port_ptr();
     if self_ptr != 0 {
         with_port_states(|map| {
-            if let Some(state) = map.get_mut(&self_ptr) {
-                state.closed = true;
-                state.queue.clear();
+            let Some(state) = map.get_mut(&self_ptr) else {
+                return;
+            };
+            state.closed = true;
+            state.queue.clear();
+            let entangled = state.entangled;
+            // Reclaim side-table entries once the channel is dead: a port with
+            // no partner, or whose partner is already closed (or gone). This
+            // keeps long-running apps that churn through short-lived
+            // MessageChannels (e.g. the React scheduler pattern) from
+            // accumulating stale port state without bound.
+            let partner_done = entangled == 0
+                || map.get(&entangled).map(|s| s.closed).unwrap_or(true);
+            if partner_done {
+                map.remove(&self_ptr);
+                if entangled != 0 {
+                    map.remove(&entangled);
+                }
             }
         });
     }
