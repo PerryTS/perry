@@ -46,7 +46,22 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
         }
         e
     }
-    fn record_var(decl: &ast::VarDeclarator, ctx: &mut LoweringContext) {
+    // Names bound (anywhere in the module) to a `new <X>` whose `<X>` is NOT a
+    // tracked weak type — i.e. an ordinary class/constructor. The weak-locals
+    // sets are keyed by BARE NAME with no scope discrimination, so a name reused
+    // across functions (extremely common in minified bundles, e.g. a one-letter
+    // `z`) for both `new WeakMap()` in one function and `new SomeCache()` in
+    // another would route the second function's `z.get/set` to the WeakMap
+    // intrinsic — throwing `Invalid value used as weak map key` when the
+    // non-weak cache is legitimately keyed by a string. Collect such ambiguous
+    // names and subtract them from all weak-locals sets after the walk so the
+    // call falls back to ordinary dynamic method dispatch (correct for both a
+    // real WeakMap and the other constructor).
+    fn record_var(
+        decl: &ast::VarDeclarator,
+        ctx: &mut LoweringContext,
+        poison: &mut HashSet<String>,
+    ) {
         if let (ast::Pat::Ident(ident), Some(init)) = (&decl.name, decl.init.as_ref()) {
             let init_unwrapped = unwrap_init(init);
             if let ast::Expr::New(new_expr) = init_unwrapped {
@@ -66,6 +81,11 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                     }
                     Some("Proxy") => {
                         ctx.proxy_locals.insert(name);
+                    }
+                    // `new <OtherClass>()` — this name is also used for a
+                    // non-weak instance somewhere; mark it ambiguous.
+                    None => {
+                        poison.insert(name);
                     }
                     _ => {}
                 }
@@ -103,16 +123,16 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
             }
         }
     }
-    fn walk_stmt(stmt: &ast::Stmt, ctx: &mut LoweringContext) {
+    fn walk_stmt(stmt: &ast::Stmt, ctx: &mut LoweringContext, poison: &mut HashSet<String>) {
         match stmt {
             ast::Stmt::Decl(ast::Decl::Var(var_decl)) => {
                 for decl in &var_decl.decls {
-                    record_var(decl, ctx);
+                    record_var(decl, ctx, poison);
                 }
             }
             ast::Stmt::Decl(ast::Decl::Using(using_decl)) => {
                 for decl in &using_decl.decls {
-                    record_var(decl, ctx);
+                    record_var(decl, ctx, poison);
                 }
             }
             // Function declarations — descend into the body so `const
@@ -122,70 +142,90 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
             ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) => {
                 if let Some(body) = &fn_decl.function.body {
                     for s in &body.stmts {
-                        walk_stmt(s, ctx);
+                        walk_stmt(s, ctx, poison);
                     }
                 }
             }
             ast::Stmt::Block(block) => {
                 for s in &block.stmts {
-                    walk_stmt(s, ctx);
+                    walk_stmt(s, ctx, poison);
                 }
             }
             ast::Stmt::If(if_stmt) => {
-                walk_stmt(&if_stmt.cons, ctx);
+                walk_stmt(&if_stmt.cons, ctx, poison);
                 if let Some(alt) = &if_stmt.alt {
-                    walk_stmt(alt, ctx);
+                    walk_stmt(alt, ctx, poison);
                 }
             }
-            ast::Stmt::While(w) => walk_stmt(&w.body, ctx),
-            ast::Stmt::DoWhile(w) => walk_stmt(&w.body, ctx),
+            ast::Stmt::While(w) => walk_stmt(&w.body, ctx, poison),
+            ast::Stmt::DoWhile(w) => walk_stmt(&w.body, ctx, poison),
             ast::Stmt::For(f) => {
                 if let Some(ast::VarDeclOrExpr::VarDecl(vd)) = &f.init {
                     for decl in &vd.decls {
-                        record_var(decl, ctx);
+                        record_var(decl, ctx, poison);
                     }
                 }
-                walk_stmt(&f.body, ctx);
+                walk_stmt(&f.body, ctx, poison);
             }
-            ast::Stmt::ForIn(f) => walk_stmt(&f.body, ctx),
-            ast::Stmt::ForOf(f) => walk_stmt(&f.body, ctx),
+            ast::Stmt::ForIn(f) => walk_stmt(&f.body, ctx, poison),
+            ast::Stmt::ForOf(f) => walk_stmt(&f.body, ctx, poison),
             ast::Stmt::Try(t) => {
                 for s in &t.block.stmts {
-                    walk_stmt(s, ctx);
+                    walk_stmt(s, ctx, poison);
                 }
                 if let Some(catch) = &t.handler {
                     for s in &catch.body.stmts {
-                        walk_stmt(s, ctx);
+                        walk_stmt(s, ctx, poison);
                     }
                 }
                 if let Some(finalizer) = &t.finalizer {
                     for s in &finalizer.stmts {
-                        walk_stmt(s, ctx);
+                        walk_stmt(s, ctx, poison);
                     }
                 }
             }
             ast::Stmt::Switch(s) => {
                 for case in &s.cases {
                     for s in &case.cons {
-                        walk_stmt(s, ctx);
+                        walk_stmt(s, ctx, poison);
                     }
                 }
             }
             _ => {}
         }
     }
+    let mut poison: HashSet<String> = HashSet::new();
     for item in &ast_module.body {
         match item {
-            ast::ModuleItem::Stmt(stmt) => walk_stmt(stmt, ctx),
+            ast::ModuleItem::Stmt(stmt) => walk_stmt(stmt, ctx, &mut poison),
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
                 if let ast::Decl::Var(var_decl) = &export_decl.decl {
                     for decl in &var_decl.decls {
-                        record_var(decl, ctx);
+                        record_var(decl, ctx, &mut poison);
                     }
                 }
             }
             _ => {}
         }
+    }
+    // A name reused for both `new WeakMap()`/`new WeakSet()` and a non-weak
+    // constructor is ambiguous: the bare-name weak-locals set can't tell the
+    // two bindings apart, so routing `.set/.get/.has/.delete`/`.add` to the
+    // weak intrinsic would be wrong for the non-weak instance (e.g. a
+    // string-keyed cache → `Invalid value used as weak map key`). Drop such
+    // ambiguous names so their method calls fall back to ordinary dynamic
+    // dispatch. This is correct for a real WeakMap/WeakSet too: the runtime's
+    // `WeakMap/WeakSet.prototype` thunks (collection_proto_thunks) re-validate
+    // the receiver's class id and re-enter `js_weakmap_set` etc.
+    //
+    // Restricted to weakmap/weakset only: WeakRef.deref / FinalizationRegistry
+    // .register / Proxy use distinct method names that don't collide with the
+    // cache `.get/.set/.add` family, and (unlike WeakMap/WeakSet) have no
+    // runtime method-dispatch fallback — they rely on the codegen fast path —
+    // so dropping them could regress a genuine instance with no upside.
+    for name in &poison {
+        ctx.weakmap_locals.remove(name);
+        ctx.weakset_locals.remove(name);
     }
 }
 
