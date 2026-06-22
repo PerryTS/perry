@@ -401,8 +401,8 @@ extern "C" fn port_close(_closure: *const ClosureHeader) -> f64 {
             // keeps long-running apps that churn through short-lived
             // MessageChannels (e.g. the React scheduler pattern) from
             // accumulating stale port state without bound.
-            let partner_done = entangled == 0
-                || map.get(&entangled).map(|s| s.closed).unwrap_or(true);
+            let partner_done =
+                entangled == 0 || map.get(&entangled).map(|s| s.closed).unwrap_or(true);
             if partner_done {
                 map.remove(&self_ptr);
                 if entangled != 0 {
