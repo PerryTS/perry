@@ -676,6 +676,21 @@ fn helper_return_facts(bits: u64) -> (usize, u32, u16, u64, u16) {
 fn normalize_raw_object_addr(bits: u64) -> usize {
     let top = bits >> 48;
     let addr = if top >= 0x7FF8 {
+        // NaN-boxed: only POINTER/STRING/BIGINT tags carry a real, dereferenceable
+        // heap address. SHORT_STRING/INT32/primitive/handle pack INLINE data in
+        // the low 48 bits — masking that to an "address" and probing
+        // `addr - header` as a GC object faults. A short (SSO) string receiver
+        // such as `email = "jo"` (inline bytes `0x..6f6a`) reaching
+        // `email.includes("@")` through typed-feedback method dispatch otherwise
+        // dereferences those bytes as a pointer (EXC_BAD_ACCESS in
+        // `object_shape`). Mirrors the heap-pointer check at `value_tag` /
+        // `gc::barrier::decode_heap_addr`. (Heap-allocated receivers hide this;
+        // small-string-optimized values such as `JSON.parse(...).value` expose
+        // it.)
+        let tag = bits & TAG_MASK;
+        if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
+            return 0;
+        }
         bits & POINTER_MASK
     } else {
         bits

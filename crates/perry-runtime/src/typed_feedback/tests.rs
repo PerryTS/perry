@@ -1272,3 +1272,65 @@ fn typed_feedback_roots_rewrite_shape_observations() {
     assert_eq!(shape_addr, forwarded_user as usize);
     assert_ne!(shape_addr, shape_user as usize);
 }
+
+/// Typed-feedback method dispatch must never dereference a NaN-boxed *inline*
+/// receiver (SHORT_STRING / INT32) as a heap object. Only POINTER / STRING /
+/// BIGINT tags carry a real, dereferenceable heap pointer in the low 48 bits;
+/// SHORT_STRING (small-string optimization) and INT32 pack their payload
+/// inline, so masking that payload to an "address" and probing `addr - header`
+/// in `object_shape` reads unmapped memory and faults.
+///
+/// Regression: a short receiver string such as `email = "jo"` reaching
+/// `email.includes("@")` through native-method dispatch had its inline bytes
+/// (`0x..6f6a`) treated as a pointer and dereferenced (EXC_BAD_ACCESS in
+/// `object_shape`). The guard returns 0 — the "not a GC object" sentinel — for
+/// every non-heap-pointer tag in the NaN-box band, so dispatch falls back to the
+/// safe generic path. Heap pointers (POINTER/STRING/BIGINT) still pass through.
+#[test]
+fn normalize_raw_object_addr_rejects_inline_nanboxed_receivers() {
+    // The inline payloads below are deliberately >= the native-handle band
+    // ceiling (`addr_class::HANDLE_BAND_MAX`, 0x100000) and < 2^48, i.e. they
+    // alias *plausible heap addresses*. That is the case only the tag check
+    // catches: the downstream `is_handle_band` / `addr >> 48` fallbacks already
+    // reject tiny or out-of-range payloads, so a small value like 0x6f6a would
+    // pass this test even without the guard. A real SSO string's inline bytes
+    // can land anywhere in the 48-bit space, including this dereferenceable-
+    // looking range — which is exactly what faulted.
+
+    // SHORT_STRING (SSO): inline UTF-8 bytes in the low 48 bits, NOT a heap
+    // pointer, but a bit pattern that looks like a valid address. Must
+    // normalize to 0 rather than be dereferenced.
+    let sso = crate::value::SHORT_STRING_TAG | 0x0000_5566_7788_99aa;
+    assert_eq!(
+        normalize_raw_object_addr(sso),
+        0,
+        "short-string receiver must not be dereferenced as an object",
+    );
+
+    // INT32: inline integer payload (max i32, well above the handle band).
+    let int32 = crate::value::INT32_TAG | 0x7fff_ffff;
+    assert_eq!(
+        normalize_raw_object_addr(int32),
+        0,
+        "int32 receiver must not be dereferenced as an object",
+    );
+
+    // POINTER: a genuine heap address (above every native-handle band, below
+    // 2^48) is preserved so real object receivers still dispatch natively.
+    let heap_addr: u64 = 0x0000_0001_0000_0000; // 4 GiB — clear of the handle bands
+    let ptr = crate::value::POINTER_TAG | heap_addr;
+    assert_eq!(
+        normalize_raw_object_addr(ptr),
+        heap_addr as usize,
+        "real heap-pointer receiver must pass through unchanged",
+    );
+
+    // STRING: heap string headers are dereferenceable; the tag passes through.
+    let str_addr: u64 = 0x0000_0002_0000_0000;
+    let strv = crate::value::STRING_TAG | str_addr;
+    assert_eq!(
+        normalize_raw_object_addr(strv),
+        str_addr as usize,
+        "heap-string receiver must pass through unchanged",
+    );
+}
