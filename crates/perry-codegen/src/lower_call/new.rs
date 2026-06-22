@@ -360,6 +360,24 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         if let Some(val) = lower_builtin_new(ctx, class_name, args)? {
             return Ok(val);
         }
+        // Aliased built-in import: a minified bundle renames a node built-in
+        // constructor (`import { AsyncLocalStorage as xQ5 } from "async_hooks";
+        // new xQ5()`). The syntactic callee is the alias `xQ5`, so the
+        // canonical-name arms in `lower_builtin_new` (keyed on
+        // `"AsyncLocalStorage"`) never fired and `new xQ5()` fell through to the
+        // empty-object placeholder — the instance had no `.run`/`.getStore`, so
+        // `xQ5().getStore()` threw `TypeError: getStore is not a function`.
+        // Recover the original export name and retry. The alias is only present
+        // here when it was NOT already a user-defined class (the enclosing
+        // `!ctx.classes.contains_key(class_name)` guard), so a renamed import
+        // can't shadow a real local class.
+        if let Some(original) = ctx.imported_class_original_names.get(class_name).cloned() {
+            if original != class_name {
+                if let Some(val) = lower_builtin_new(ctx, &original, args)? {
+                    return Ok(val);
+                }
+            }
+        }
     }
 
     // Local class alias rerouting: `let C = SomeClass; new C()` lowers

@@ -737,6 +737,16 @@ pub(crate) struct CrossModuleCtx {
     /// "Client" arm only fires when the local `Client` was imported from
     /// "pg" (named or default). See issue #602.
     pub imported_class_sources: std::collections::HashMap<String, String>,
+    /// Per-module mapping: local alias → original imported export name, for
+    /// named imports where the binding was renamed (`import { AsyncLocalStorage
+    /// as xQ5 } from "async_hooks"` records `xQ5 -> "AsyncLocalStorage"`). Built
+    /// once in `compile_module` from `hir.imports`. Lets `lower_new` recover the
+    /// real export name so the built-in constructor arms in `lower_builtin_new`
+    /// (keyed on the canonical name like `"AsyncLocalStorage"`) still fire when
+    /// a minified bundle aliases the import. Without this, `new xQ5()` fell
+    /// through to the empty-object placeholder and the instance had no
+    /// `.getStore`/`.run` methods (`TypeError: getStore is not a function`).
+    pub imported_class_original_names: std::collections::HashMap<String, String>,
     /// Issue #655: map from interface name → HIR Interface definition.
     /// Lets `static_type_of` resolve `obj.field` when `obj` is typed
     /// against a TS `interface` (not a `class`). The `class_table`

@@ -493,6 +493,11 @@ pub(crate) struct FnCtx<'a> {
     /// Used by `lower_builtin_new` to disambiguate ambiguously-named
     /// built-in constructors. See issue #602.
     pub imported_class_sources: &'a std::collections::HashMap<String, String>,
+    /// Per-module alias → original imported export name (renamed named imports
+    /// only). Used by `lower_new` to recover the canonical built-in constructor
+    /// name when a bundle aliases the import (`import { AsyncLocalStorage as xQ5
+    /// }`). See `CompileOptions::imported_class_original_names`.
+    pub imported_class_original_names: &'a std::collections::HashMap<String, String>,
     /// Number of currently-open `try { ... }` blocks at the current
     /// lowering position. Incremented before lowering a try body,
     /// decremented after. `Stmt::Return` emits `js_try_end()` this many

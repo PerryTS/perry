@@ -214,6 +214,69 @@ console.log(typeof s.connect, typeof s.write, typeof s.end);
     assert_eq!(aliased, "function function function\n");
 }
 
+/// Aliased `async_hooks.AsyncLocalStorage`: a minified bundle renames the
+/// import (`import { AsyncLocalStorage as xQ5 }`) and later does `new xQ5()`.
+/// The syntactic `new`-callee is the alias `xQ5`, so the codegen built-in
+/// constructor arm (keyed on the canonical name `"AsyncLocalStorage"`) did not
+/// fire and the instance fell through to the empty-object placeholder with no
+/// methods — `xQ5().getStore()` threw `TypeError: getStore is not a function`.
+/// Exercises the exact `run(store, cb)` / `getStore()` round-trip that a CLI's
+/// `doctor`-style context plumbing relies on.
+#[test]
+fn aliased_async_local_storage_run_getstore_round_trip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+import { AsyncLocalStorage as xQ5 } from "async_hooks";
+const als: any = new xQ5();
+console.log("getStore type:", typeof als.getStore);
+console.log("outside:", als.getStore());
+const inside = als.run({ cwd: "/work" }, () => als.getStore().cwd);
+console.log("inside:", inside);
+console.log("after:", als.getStore());
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "getStore type: function\n\
+         outside: undefined\n\
+         inside: /work\n\
+         after: undefined\n"
+    );
+}
+
+/// The aliased `async_hooks.AsyncLocalStorage` path must match the un-aliased
+/// path byte-for-byte (alias resolution == canonical lowering).
+#[test]
+fn aliased_async_local_storage_matches_unaliased() {
+    let prog = |import_line: &str, ctor: &str| {
+        format!(
+            "{import_line}\nconst als: any = new {ctor}();\n\
+             const r = als.run({{ id: 7 }}, () => als.getStore().id);\n\
+             console.log(typeof als.getStore, typeof als.run, r, als.getStore());\n"
+        )
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let aliased = compile_and_run(
+        dir.path(),
+        &prog(
+            "import { AsyncLocalStorage as Q9 } from \"node:async_hooks\";",
+            "Q9",
+        ),
+    );
+    let dir2 = tempfile::tempdir().expect("tempdir");
+    let unaliased = compile_and_run(
+        dir2.path(),
+        &prog(
+            "import { AsyncLocalStorage } from \"node:async_hooks\";",
+            "AsyncLocalStorage",
+        ),
+    );
+    assert_eq!(aliased, unaliased);
+    assert_eq!(aliased, "function function 7 undefined\n");
+}
+
 /// A non-native user import alias must NOT be treated as a native class — the
 /// fix must not over-trigger native handling on ordinary user modules.
 #[test]

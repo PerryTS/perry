@@ -314,6 +314,7 @@ pub(super) fn compile_closure(
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         imported_class_sources: &cross_module.imported_class_sources,
+        imported_class_original_names: &cross_module.imported_class_original_names,
         interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
