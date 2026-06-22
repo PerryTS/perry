@@ -199,9 +199,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     CallArg::Spread(e) => {
                         let part_box = lower_expr(ctx, e)?;
-                        let part_handle = ctx
-                            .block()
-                            .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
+                        let part_handle =
+                            ctx.block()
+                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
                         acc_handle = ctx.block().call(
                             I64,
                             "js_array_concat",

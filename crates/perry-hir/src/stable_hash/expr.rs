@@ -97,7 +97,7 @@ impl SH for Expr {
             Expr::This => tag(h, 50),
             Expr::SuperCall(args) => { tag(h, 51); args.hash(h); }
             Expr::SuperMethodCall { method, args } => { tag(h, 52); method.hash(h); args.hash(h); }
-            Expr::SuperMethodCallSpread { method, args } => { tag(h, 12241); method.hash(h); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
+            Expr::SuperMethodCallSpread { method, args } => { tag(h, 12509); method.hash(h); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::SuperPropertyGet { property } => { tag(h, 461); property.hash(h); }
             Expr::SuperPropertySet { parent_class_id, parent_class_name, key, value } => { tag(h, 12238); parent_class_id.hash(h); parent_class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ObjectSuperPropertyGet { home, key, receiver } => { tag(h, 12231); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
