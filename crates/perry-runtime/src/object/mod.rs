@@ -798,15 +798,32 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
             return true;
         }
         let bits = proto.to_bits();
-        // Not a heap-object pointer → end of chain (null prototype). Nothing
-        // below to intercept.
-        if (bits >> 48) != 0x7FFD {
+        let top16 = bits >> 48;
+        // Classify the prototype value before dereferencing it — mirror the
+        // shapes `js_object_get_prototype_of` can hand back:
+        //  - 0x7FFD NaN-boxed pointer: a small-handle payload (e.g. a Proxy)
+        //    is NOT an ObjectHeader and may carry a trap → be conservative.
+        //  - top16 == 0 raw pointer: module-level object literals recorded via
+        //    `Object.setPrototypeOf` come back as raw I64 pointers.
+        //  - null / undefined: genuine end of chain, nothing to intercept.
+        //  - anything else: unknown shape → do not risk the fast path.
+        let p = if top16 == 0x7FFD {
+            let p = (bits & crate::value::POINTER_MASK) as usize;
+            if p == 0 {
+                return false;
+            }
+            if crate::value::addr_class::is_small_handle(p) {
+                // Proxy / handle prototype — assume it may intercept the write.
+                return true;
+            }
+            p
+        } else if top16 == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+            bits as usize
+        } else if bits == crate::value::TAG_NULL || bits == crate::value::TAG_UNDEFINED {
             return false;
-        }
-        let p = (bits & crate::value::POINTER_MASK) as usize;
-        if p == 0 {
-            return false;
-        }
+        } else {
+            return true;
+        };
         if crate::array::object_prototype_addr_matches(p) {
             // Reached the canonical Object.prototype: per-key check, then done.
             return object_proto_may_intercept_key(key);

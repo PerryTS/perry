@@ -1273,8 +1273,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // Object.prototype doesn't intercept this key (per-key, not
                             // the coarse process-wide descriptor flag — that made wide
                             // builds O(n²)).
-                            crate::object::prototype_chain::object_static_prototype(addr)
-                                .is_none()
+                            crate::object::prototype_chain::object_static_prototype(addr).is_none()
                                 && !crate::object::object_proto_may_intercept_key(key)
                         } else {
                             // Class instance: the `class_id == 0` guard previously sent
