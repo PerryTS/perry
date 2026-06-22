@@ -40,17 +40,37 @@ pub(super) fn run_call_prescans(
     let fastify_handler_names: Option<(String, String)> =
         pre_scan_fastify_handler_params(ctx, call);
     if let Some((req_name, reply_name)) = &fastify_handler_names {
-        ctx.register_native_instance(
+        // The arrow's own `req`/`reply` param bindings would otherwise tombstone
+        // these fresh tags via `shadow_native_instance_if_present` (the arrow
+        // param-shadowing added in #5438) — protect them so `request.header(...)`
+        // and `reply.code(...).send(...)` inside the handler keep dispatching
+        // through the fastify Request/Reply table rows. Protect only when
+        // registration actually happened (it no-ops under a `perry.compilePackages`
+        // override), else a later same-named param would skip tombstoning a
+        // genuinely stale tag — same gating as the `wsId`/`sock` sites below.
+        //
+        // Without this, an untyped `(req, reply) =>` handler lost the Reply tag,
+        // so every `reply.*` lowered to the generic fallback and silently no-op'd:
+        // `reply.code(n)`/`status(n)` were ignored (status stayed 200),
+        // `reply.send(x)` left the body empty, and `reply.code(n).send(x)` threw
+        // (the un-dispatched `.code(n)` returned undefined). Typed
+        // `reply: FastifyReply` handlers were masked by the post-shadow type-based
+        // re-registration, which is why only the common untyped JS form broke.
+        if ctx.register_native_instance(
             req_name.clone(),
             "fastify".to_string(),
             "Request".to_string(),
-        );
-        if !reply_name.is_empty() {
-            ctx.register_native_instance(
+        ) {
+            ctx.protect_native_param(req_name.clone());
+        }
+        if !reply_name.is_empty()
+            && ctx.register_native_instance(
                 reply_name.clone(),
                 "fastify".to_string(),
                 "Reply".to_string(),
-            );
+            )
+        {
+            ctx.protect_native_param(reply_name.clone());
         }
     }
 
