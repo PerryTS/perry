@@ -62,7 +62,8 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     // or `Some(undefined)` for an in-range OOB index, `None` for the BigInt /
     // non-canonical-key cases the slow path still owns.
     if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw as usize) {
-        if let Some(value) = crate::typedarray::typed_array_fast_index_get(raw as usize, kind, idx) {
+        if let Some(value) = crate::typedarray::typed_array_fast_index_get(raw as usize, kind, idx)
+        {
             return value;
         }
     }
