@@ -120,6 +120,32 @@ mod tests {
         assert_ne!(native_id as usize, id);
         crate::common::drop_handle(native_id);
     }
+
+    /// `string_from_header` must treat a handle-band value (a Fetch / native
+    /// registry id, not a `StringHeader` pointer) as "not a string" and return
+    /// `None` WITHOUT dereferencing it. Regression for the doctor / mcp-list
+    /// startup SIGSEGV: `fetch()` called with a non-string first argument (a
+    /// `Request`/`Headers` object) passed the bare handle id into the
+    /// `url_ptr` `*StringHeader` slot, and reading `(*ptr).byte_len` at `id+4`
+    /// dereferenced an unmapped low address.
+    #[test]
+    fn string_from_header_rejects_handle_band_ids() {
+        use perry_runtime::value::addr_class;
+        for &id in &[
+            1usize,                                  // common native handle
+            addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
+            addr_class::FETCH_HANDLE_BAND_START + 2, // a fetch handle id
+            addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF
+        ] {
+            assert!(addr_class::is_handle_band(id));
+            // Must return None without dereferencing the bogus pointer.
+            let r = unsafe { string_from_header(id as *const StringHeader) };
+            assert!(
+                r.is_none(),
+                "handle-band id {id:#x} must be rejected, got {r:?}"
+            );
+        }
+    }
 }
 
 struct StreamState {
@@ -196,6 +222,20 @@ pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<Stri
     // NaN-boxed TAG_UNDEFINED (0x7FFC_0000_0000_0001) unboxes to 0x1
     // after POINTER_MASK. Treat any pointer below page size as invalid.
     if ptr.is_null() || (ptr as usize) < 0x1000 {
+        return None;
+    }
+    // A handle-band value (`< 0x100000`: Web Fetch Headers/Request/Response/Blob
+    // ids, net/http small handles, zlib/proxy ids) is a registry id, NOT a
+    // `StringHeader` pointer. It reaches here when `fetch()` is called with a
+    // non-string first argument such as a `Request`/`Headers` object — the
+    // codegen passes the bare handle id into the `url_ptr` `*StringHeader`
+    // slot. Reading `(*ptr).byte_len` at `id + 4` then dereferences an
+    // unmapped low address → SIGSEGV (the doctor / mcp-list startup crash at
+    // the fetch-handle address). The `< 0x1000` floor above only catches the
+    // TAG_UNDEFINED `0x1` remnant; widen it to the whole handle band so any
+    // native handle is treated as "not a string" (`None`) rather than
+    // dereferenced.
+    if perry_runtime::value::addr_class::is_handle_band(ptr as usize) {
         return None;
     }
     let len = (*ptr).byte_len as usize;
