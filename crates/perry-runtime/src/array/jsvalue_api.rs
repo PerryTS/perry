@@ -36,8 +36,13 @@ pub extern "C" fn js_array_from_jsvalue(elements: *const u64, count: u32) -> *mu
         // Each u64 contains NaN-boxed JSValue bits, store as f64 bits
         for i in 0..count as usize {
             let bits = *elements.add(i);
+            let value = f64::from_bits(bits);
+            // #5552: demote a uniquely-owned source string before it aliases its
+            // slot — the JSValue sibling of the already-covered
+            // `js_array_from_values` (#5548). No-op for SSO / non-string.
+            crate::string::js_string_addref_if_heap_string(value);
             // GC_STORE_AUDIT(BARRIERED): JSValue array initialization is followed by layout/barrier rebuild.
-            ptr::write(arr_elements.add(i), f64::from_bits(bits));
+            ptr::write(arr_elements.add(i), value);
         }
         rebuild_array_layout(arr);
     }

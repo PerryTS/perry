@@ -265,6 +265,92 @@ console.log("a0=" + a[0] + " s=" + s);
     );
 }
 
+// #5552: sibling array insert/replace paths that #5548 left uncovered —
+// `unshift`, `fill`, `with`, and mixed-type literal construction
+// (`js_array_from_jsvalue`). Each does a raw write of the source value into a
+// slot without the demote; the same snapshot-then-grow shape corrupts the
+// stored element. Each fails without the matching runtime demote.
+
+/// `a.unshift(s)` — front insertion (`js_array_unshift_f64`).
+#[test]
+fn unique_string_unshifted_into_array_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+let s = "prefix";   // non-SSO, shared literal
+s += "_init";       // append on shared -> fresh heap string, refcount==1
+const a = ["x"];
+a.unshift(s);       // front insert -> must demote s to shared
+s += "_more";       // refcount==1 in-place append -> must NOT corrupt a[0]
+console.log("a0=" + a[0] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let out = compile_and_run(dir.path(), &entry);
+    assert!(
+        out.contains("a0=prefix_init s=prefix_init_more"),
+        "string unshifted into an array must not be corrupted by a later += (got: {out:?})"
+    );
+}
+
+/// `a.fill(s)` — fills every slot with the same source (`js_array_fill`). The
+/// source aliases the source local AND every filled slot, so a later `+=` must
+/// not corrupt any of them.
+#[test]
+fn unique_string_filled_into_array_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+let s = "prefix";
+s += "_init";
+const a = ["x", "y", "z"];
+a.fill(s);          // fill all slots -> must demote s to shared
+s += "_more";
+console.log("a0=" + a[0] + " a2=" + a[2] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let out = compile_and_run(dir.path(), &entry);
+    assert!(
+        out.contains("a0=prefix_init a2=prefix_init s=prefix_init_more"),
+        "string filled into an array must not be corrupted by a later += (got: {out:?})"
+    );
+}
+
+/// `a.with(i, s)` — immutable replace stores the source into the new array's
+/// slot (`js_array_with`).
+#[test]
+fn unique_string_stored_via_with_is_not_corrupted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+let s = "prefix";
+s += "_init";
+const a = ["placeholder"].with(0, s);  // replace -> must demote s to shared
+s += "_more";
+console.log("a0=" + a[0] + " s=" + s);
+"#,
+    )
+    .expect("write entry");
+    let out = compile_and_run(dir.path(), &entry);
+    assert!(
+        out.contains("a0=prefix_init s=prefix_init_more"),
+        "string stored via arr.with() must not be corrupted by a later += (got: {out:?})"
+    );
+}
+
+// NOTE: the mixed-type construction path `js_array_from_jsvalue` (#5552) is not
+// emitted by codegen from any TypeScript source, so it has no compiled-TS
+// regression test here. Its demote is covered by the runtime unit test
+// `test_array_from_jsvalue_demotes_unique_string_against_inplace_append` in
+// crates/perry-runtime/src/array/tests.rs.
+
 /// The snapshot-then-grow shape end to end: store the latest value into a heap
 /// field each step, then keep growing the source. Every stored snapshot must
 /// retain the value it had when stored (no in-place rewrite).

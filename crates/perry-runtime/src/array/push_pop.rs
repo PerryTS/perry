@@ -496,6 +496,11 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
 /// Returns a pointer to the (possibly reallocated) array
 #[no_mangle]
 pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
+    // #5552: a uniquely-owned (refcount==1) string unshifted to the front aliases
+    // the new slot — demote it to shared so a later `s += x` on the source local
+    // allocates fresh instead of mutating the stored element. No-op for SSO /
+    // non-string (mirrors `js_array_push_f64`, #5548).
+    crate::string::js_string_addref_if_heap_string(value);
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return js_array_alloc(0);
@@ -590,8 +595,11 @@ pub extern "C" fn js_array_unshift_variadic(
         // Shift existing elements up by `n`.
         // GC_STORE_AUDIT(BARRIERED): memmove + new slots followed by layout/barrier rebuild.
         ptr::copy(elements_ptr, elements_ptr.add(n), length as usize);
-        // Write items in source order at the front.
+        // Write items in source order at the front. #5552: demote each
+        // uniquely-owned string before it aliases its slot (no-op for SSO /
+        // non-string).
         for (i, v) in item_vec.into_iter().enumerate() {
+            crate::string::js_string_addref_if_heap_string(v);
             ptr::write(elements_ptr.add(i), v);
         }
         (*arr).length = length + n as u32;

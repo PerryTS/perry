@@ -739,6 +739,45 @@ fn test_array_from_jsvalue_int32_rebuild_canonicalizes_raw_slots() {
     assert_ne!(js_array_get_f64_unchecked(arr, 1).to_bits(), elements[1]);
 }
 
+/// #5552: `js_array_from_jsvalue` (the JSValue sibling of `js_array_from_values`,
+/// used for mixed-type array construction) must demote a uniquely-owned
+/// (refcount==1) heap string before it aliases an element slot — otherwise a
+/// later in-place `js_string_append` on the source rewrites the stored element.
+/// Codegen never emits this symbol today, so this can only be exercised at the
+/// runtime level (no compiled-TS regression test can reach it).
+#[test]
+fn test_array_from_jsvalue_demotes_unique_string_against_inplace_append() {
+    // A uniquely-owned heap string with spare capacity, so `js_string_append`
+    // takes its in-place (refcount==1) fast path.
+    let init = b"prefix_init";
+    let s = crate::string::js_string_from_bytes_with_capacity(init.as_ptr(), init.len() as u32, 64);
+    unsafe {
+        (*s).refcount = 1;
+    }
+    let s_bits = crate::value::js_nanbox_string(s as i64).to_bits();
+
+    // Construct a mixed-type array via the JSValue path.
+    let elements = [s_bits, int32_jsvalue_bits(1)];
+    let arr = js_array_from_jsvalue(elements.as_ptr(), elements.len() as u32);
+
+    // Grow the source in place. With the demote, `s` is now shared (refcount==0)
+    // so this allocates fresh and leaves the stored element untouched; without
+    // it, the in-place append corrupts arr[0].
+    let more = crate::string::js_string_from_bytes(b"_more".as_ptr(), 5);
+    let grown = crate::string::js_string_append(s, more);
+
+    let stored_bits = js_array_get_jsvalue(arr, 0);
+    let stored_ptr = (stored_bits & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    let stored = crate::string::string_as_str(stored_ptr);
+    assert_eq!(
+        stored, "prefix_init",
+        "string stored via js_array_from_jsvalue must not be corrupted by a later in-place append"
+    );
+    // Sanity: the source itself did grow (the append happened).
+    let grown_str = crate::string::string_as_str(grown as *const crate::StringHeader);
+    assert_eq!(grown_str, "prefix_init_more");
+}
+
 #[test]
 fn test_nonnumeric_append_downgrades_raw_f64_and_preserves_payload() {
     let bool_bits = crate::value::JSValue::bool(true).bits();
