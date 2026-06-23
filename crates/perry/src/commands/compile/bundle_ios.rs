@@ -17,8 +17,8 @@ use anyhow::Result;
 use crate::OutputFormat;
 
 use super::apple_info_plist::{
-    inject_google_auth_info_plist, inject_ios_app_group_entitlement, inject_ios_deeplinks,
-    inject_ios_push_entitlement,
+    inject_ads_info_plist, inject_google_auth_info_plist, inject_ios_app_group_entitlement,
+    inject_ios_deeplinks, inject_ios_push_entitlement,
 };
 use super::resources::stage_native_library_artifacts;
 use super::targets::compile_metallib_for_bundle;
@@ -458,6 +458,12 @@ pub(super) fn build_ios_app_bundle(
     // `@perryts/google-auth` reads at runtime.
     let info_plist =
         inject_google_auth_info_plist(&info_plist, input, format).unwrap_or(info_plist);
+
+    // #867 — `[ads]` block in perry.toml feeds the Google Mobile Ads SDK
+    // via `GADApplicationIdentifier` (+ ATT purpose string) the runtime
+    // reads from `Bundle.main.infoDictionary` at launch. Idempotent with
+    // the passes above — only adds our keys.
+    let info_plist = inject_ads_info_plist(&info_plist, input, format).unwrap_or(info_plist);
 
     fs::write(app_dir.join("Info.plist"), info_plist)?;
 

@@ -183,6 +183,15 @@ pub extern "C" fn perry_ui_image_create_url(url_ptr: i64, alt_ptr: i64) -> i64 {
     widgets::image::create_url(url_ptr as *const u8, alt_ptr as *const u8)
 }
 
+/// Create an AdBanner (#867). `unit_id_ptr` / `size_ptr` are string
+/// headers. Default build is a layout placeholder sized to the banner
+/// slot; a live `GADBannerView` is a feature-gated follow-up. Returns
+/// widget handle.
+#[no_mangle]
+pub extern "C" fn perry_ui_adbanner_create(unit_id_ptr: i64, size_ptr: i64) -> i64 {
+    widgets::adbanner::create(unit_id_ptr as *const u8, size_ptr as *const u8)
+}
+
 /// Set the size of an Image widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_image_set_size(handle: i64, width: f64, height: f64) {

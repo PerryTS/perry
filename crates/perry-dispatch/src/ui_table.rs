@@ -4,6 +4,15 @@ use super::*;
 
 pub const PERRY_UI_TABLE: &[MethodRow] = &[
     // ---- Constructors (return widget handle) ----
+    // AdBanner(unitId, size) — #867. Both args required (the generic
+    // dispatch no-ops on arity mismatch); use the `AdSize` string
+    // constants from the d.ts for `size`.
+    MethodRow {
+        method: "AdBanner",
+        runtime: "perry_ui_adbanner_create",
+        args: &[ArgKind::Str, ArgKind::Str],
+        ret: ReturnKind::Widget,
+    },
     MethodRow {
         method: "Divider",
         runtime: "perry_ui_divider_create",

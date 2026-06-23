@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1946 entries across 113 modules
+// Coverage: 1947 entries across 113 modules
 
 type PerryU32 = number & { readonly __perryU32?: never };
 type PerryU64 = number & { readonly __perryU64?: never };
@@ -2329,6 +2329,8 @@ declare module "perry/ads" {
   export function js_ads_interstitial_load(...args: any[]): any;
   /** stdlib */
   export function js_ads_interstitial_show(...args: any[]): any;
+  /** stdlib */
+  export function js_ads_request_consent(...args: any[]): any;
   /** stdlib */
   export function js_ads_rewarded_load(...args: any[]): any;
   /** stdlib */

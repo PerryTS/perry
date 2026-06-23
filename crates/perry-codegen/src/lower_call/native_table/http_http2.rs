@@ -173,4 +173,13 @@ pub(super) const HTTP_HTTP2_ROWS: &[NativeModSig] = &[
         args: &[NA_F64],
         ret: NR_VOID,
     },
+    NativeModSig {
+        module: "perry/ads",
+        has_receiver: false,
+        method: "js_ads_request_consent",
+        class_filter: None,
+        runtime: "js_ads_request_consent",
+        args: &[],
+        ret: NR_PROMISE,
+    },
 ];

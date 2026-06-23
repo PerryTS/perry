@@ -9,8 +9,24 @@ repository.workspace = true
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+[features]
+# Real iOS Google Mobile Ads bridge (#867) — COMPILE-UNVERIFIED, OFF by
+# default. Enabling it compiles `src/ios_real.rs`, which makes live objc2
+# calls into the GoogleMobileAds framework. That framework must be linked
+# via SwiftPM (`GoogleMobileAds.xcframework`); host CI neither links it
+# nor builds the iOS target, so this code is unverified. The objc2 deps
+# are iOS-target-gated, so toggling the feature on a non-iOS host is a
+# no-op (the module + deps only activate under `cfg(target_os = "ios")`).
+google-ads = ["dep:objc2", "dep:block2", "dep:objc2-foundation"]
+
 [dependencies]
 perry-ffi.workspace = true
+
+# iOS-only, opt-in via the `google-ads` feature — see above.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+block2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

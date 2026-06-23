@@ -5541,6 +5541,9 @@ dependencies = [
 name = "perry-ext-ads"
 version = "0.5.1204"
 dependencies = [
+ "block2",
+ "objc2",
+ "objc2-foundation",
  "perry-ffi",
 ]
 

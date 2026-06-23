@@ -406,6 +406,39 @@ export function Spacer(): Widget;
 /** Visual separator line. */
 export function Divider(): Widget;
 
+/**
+ * Banner ad size keys (#867). Values match Google Mobile Ads' standard
+ * `AdSize` constants. `"adaptive"` requests an adaptive banner sized to
+ * the device; the rest are fixed. A plain string-literal union (not a
+ * runtime enum) so it needs no value backing in the native module.
+ */
+export type AdSizeKey =
+  | "banner"
+  | "large-banner"
+  | "medium-rectangle"
+  | "full-banner"
+  | "leaderboard"
+  | "adaptive";
+
+/**
+ * In-app banner ad (#867). Place it in a layout like any other widget:
+ *
+ * ```ts
+ * VStack(0, [MyContent(), AdBanner("ca-app-pub-xxx/yyy", "banner")])
+ * ```
+ *
+ * Reserves a banner-sized slot (`size`) in the layout on every platform.
+ * Live ad rendering — a `GADBannerView` (iOS) / `AdView` (Android) — lands
+ * when the platform Google Mobile Ads SDK is linked; until then (and
+ * always on macOS, which has no Ads SDK) the widget is a layout
+ * placeholder. Both arguments are required — pass an `AdSizeKey` for `size`.
+ *
+ * The App ID must be configured in `perry.toml` under `[ads]`
+ * (`ios_app_id` / `android_app_id`); the compiler writes it into the
+ * platform manifest at build time.
+ */
+export function AdBanner(unitId: string, size: AdSizeKey): Widget;
+
 /** Indeterminate or determinate progress indicator. */
 export function ProgressView(): Widget;
 

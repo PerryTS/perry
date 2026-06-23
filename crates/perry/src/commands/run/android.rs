@@ -189,6 +189,14 @@ fn build_and_run_android_impl(
         }
     }
 
+    // #867 — inject the Google Mobile Ads `APPLICATION_ID` meta-data into
+    // AndroidManifest.xml from `[ads].android_app_id` in perry.toml.
+    if let Err(e) = inject_ads_android_manifest(&build_dir, project_root, format) {
+        if let OutputFormat::Text = format {
+            println!("Warning: [ads] not applied to AndroidManifest.xml: {}", e);
+        }
+    }
+
     // #1138 — when `@perryts/google-auth` is installed under
     // node_modules, copy its `crate-android/kotlin/*.kt` sources
     // into the Gradle project + merge its declared gradle deps so
@@ -428,6 +436,90 @@ pub fn inject_google_auth_android_resources(
 
     if let OutputFormat::Text = format {
         println!("  google_auth: wrote res/values/google_auth.xml (#1138)");
+    }
+    Ok(())
+}
+
+/// #867 — splice the Google Mobile Ads App ID into AndroidManifest.xml.
+///
+/// The SDK requires
+/// `<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" .../>`
+/// under `<application>`; `MobileAds.initialize()` throws at startup if
+/// it's missing. Reads `[ads].android_app_id` from `perry.toml` and
+/// inserts the element immediately before `</application>`. No-op when
+/// the block / key is absent.
+///
+/// Idempotent: if the manifest already declares the APPLICATION_ID
+/// meta-data (a rebuild into a reused build dir) we leave it untouched
+/// rather than double-injecting.
+pub fn inject_ads_android_manifest(
+    build_dir: &Path,
+    project_root: &Path,
+    format: OutputFormat,
+) -> Result<()> {
+    let mut dir: PathBuf = project_root.to_path_buf();
+    let mut perry_toml: Option<String> = None;
+    for _ in 0..6 {
+        let p = dir.join("perry.toml");
+        if p.exists() {
+            perry_toml = std::fs::read_to_string(&p).ok();
+            break;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    let raw = match perry_toml {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+    let doc: toml::Table = raw.parse()?;
+    let ads = match doc.get("ads").and_then(|v| v.as_table()) {
+        Some(a) => a,
+        None => return Ok(()),
+    };
+    let Some(app_id) = ads.get("android_app_id").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+
+    let manifest_path = build_dir.join("app/src/main/AndroidManifest.xml");
+    if !manifest_path.exists() {
+        return Ok(());
+    }
+    let manifest = std::fs::read_to_string(&manifest_path)?;
+
+    // Idempotency guard — the `</application>` splice below is not
+    // idempotent on its own, so bail if the App ID meta-data is already
+    // present.
+    if manifest.contains("com.google.android.gms.ads.APPLICATION_ID") {
+        return Ok(());
+    }
+
+    // App IDs are `ca-app-pub-<digits>~<digits>` — no XML specials — but
+    // escape defensively to match the rest of the perry.toml->xml flow.
+    let escaped = app_id
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
+    let meta = format!(
+        "        <meta-data\n            android:name=\"com.google.android.gms.ads.APPLICATION_ID\"\n            android:value=\"{}\" />\n",
+        escaped
+    );
+
+    let updated = if let Some(idx) = manifest.find("</application>") {
+        let (head, tail) = manifest.split_at(idx);
+        format!("{}{}{}", head, meta, tail)
+    } else {
+        return Err(anyhow!(
+            "AndroidManifest.xml at `{}` has no </application> tag",
+            manifest_path.display()
+        ));
+    };
+    std::fs::write(&manifest_path, updated)?;
+
+    if let OutputFormat::Text = format {
+        println!("  ads: injected GoogleMobileAds APPLICATION_ID meta-data (#867)");
     }
     Ok(())
 }
@@ -1079,5 +1171,85 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&build_dir);
+    }
+
+    /// #867 — `inject_ads_android_manifest` must splice the
+    /// GoogleMobileAds `APPLICATION_ID` meta-data into a copy of the real
+    /// Android template manifest, reading the value from `[ads]` in
+    /// perry.toml. Running it twice must not double-inject.
+    #[test]
+    fn ads_manifest_injects_application_id_and_is_idempotent() {
+        let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-ui-android/template");
+        let manifest_src = template.join("app/src/main/AndroidManifest.xml");
+        assert!(
+            manifest_src.exists(),
+            "android template not found at {}",
+            template.display()
+        );
+
+        // project_root holds perry.toml; build_dir mirrors the Gradle
+        // layout the real build produces.
+        let root =
+            std::env::temp_dir().join(format!("perry_ads_manifest_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let build_dir = root.join("build");
+        let app_main = build_dir.join("app/src/main");
+        std::fs::create_dir_all(&app_main).unwrap();
+        std::fs::copy(&manifest_src, app_main.join("AndroidManifest.xml")).unwrap();
+        std::fs::write(
+            root.join("perry.toml"),
+            "[ads]\nandroid_app_id = \"ca-app-pub-3940256099942544~3347511713\"\n",
+        )
+        .unwrap();
+
+        inject_ads_android_manifest(&build_dir, &root, OutputFormat::Json).unwrap();
+        // Second run must be a no-op (idempotency guard).
+        inject_ads_android_manifest(&build_dir, &root, OutputFormat::Json).unwrap();
+
+        let manifest = std::fs::read_to_string(app_main.join("AndroidManifest.xml")).unwrap();
+        assert!(
+            manifest.contains("com.google.android.gms.ads.APPLICATION_ID"),
+            "APPLICATION_ID meta-data not injected"
+        );
+        assert!(manifest.contains("ca-app-pub-3940256099942544~3347511713"));
+        assert_eq!(
+            manifest
+                .matches("com.google.android.gms.ads.APPLICATION_ID")
+                .count(),
+            1,
+            "APPLICATION_ID injected more than once"
+        );
+        // Spliced inside <application>, before its close tag.
+        let app_id_pos = manifest.find("APPLICATION_ID").unwrap();
+        let close_pos = manifest.find("</application>").unwrap();
+        assert!(app_id_pos < close_pos, "meta-data not inside <application>");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// No `[ads]` block (or no `android_app_id`) → manifest untouched.
+    #[test]
+    fn ads_manifest_no_op_when_unconfigured() {
+        let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-ui-android/template");
+        let root =
+            std::env::temp_dir().join(format!("perry_ads_manifest_noop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let build_dir = root.join("build");
+        let app_main = build_dir.join("app/src/main");
+        std::fs::create_dir_all(&app_main).unwrap();
+        std::fs::copy(
+            template.join("app/src/main/AndroidManifest.xml"),
+            app_main.join("AndroidManifest.xml"),
+        )
+        .unwrap();
+        // perry.toml with an unrelated section only.
+        std::fs::write(root.join("perry.toml"), "[ios]\nbundle_id = \"a\"\n").unwrap();
+
+        inject_ads_android_manifest(&build_dir, &root, OutputFormat::Json).unwrap();
+
+        let manifest = std::fs::read_to_string(app_main.join("AndroidManifest.xml")).unwrap();
+        assert!(!manifest.contains("com.google.android.gms.ads.APPLICATION_ID"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -476,6 +476,7 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_ads_rewarded_show", I64, &[]);
     module.declare_function("js_ads_banner_create", DOUBLE, &[I64, I64]);
     module.declare_function("js_ads_banner_destroy", VOID, &[DOUBLE]);
+    module.declare_function("js_ads_request_consent", I64, &[]);
 
     // ========== perry/thread (parallelMap, parallelFilter, spawn) ==========
     module.declare_function("js_thread_parallel_map", DOUBLE, &[DOUBLE, DOUBLE]);

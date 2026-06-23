@@ -1,3 +1,4 @@
+pub mod adbanner;
 pub mod alert;
 pub mod attributed_text;
 pub mod bloomview;

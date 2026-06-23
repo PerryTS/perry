@@ -5587,4 +5587,5 @@ pub static API_MANIFEST: &[ApiEntry] = &[
     method("perry/ads", "js_ads_rewarded_show", false, None),
     method("perry/ads", "js_ads_banner_create", false, None),
     method("perry/ads", "js_ads_banner_destroy", false, None),
+    method("perry/ads", "js_ads_request_consent", false, None),
 ];
