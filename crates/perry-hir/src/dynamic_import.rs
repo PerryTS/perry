@@ -1360,7 +1360,15 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
         // import(cfg[k])`) has non-relative values, so it stays deferred exactly
         // as before instead of trying to compile `"app"`/`"3000"` as modules.
         Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
-            match object_registry_values(object, consts) {
+            // Record every const-local id on the registry's indirection chain in
+            // the *outer* `visiting` set so a value that member-accesses back
+            // into this (or an enclosing) registry is caught as a cycle rather
+            // than recursing forever — `const R5 = { a: R6[x] }; const R6 = { b:
+            // R5[y] }` is valid TS and would otherwise overflow the stack. The
+            // chain ids are removed again before returning so sibling
+            // resolutions still see those bindings.
+            let mut chain_ids: Vec<u32> = Vec::new();
+            let resolved = match object_registry_values(object, consts, visiting, &mut chain_ids) {
                 Some(values) => resolve_registry_value_union(
                     &values,
                     consts,
@@ -1369,7 +1377,11 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
                     visiting,
                 ),
                 None => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
+            };
+            for id in &chain_ids {
+                visiting.remove(id);
             }
+            resolved
         }
         _ => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
     }
@@ -1383,38 +1395,36 @@ fn is_relative_specifier(s: &str) -> bool {
 }
 
 /// #5207: collect the candidate value expressions of a const object-literal
-/// "registry", following a single `const`-local indirection
-/// (`const R = { … }; import(R[k])`). Handles both object-literal HIR shapes:
-/// open-shape literals kept as [`Expr::Object`], and closed-shape literals
-/// lowered to `new __AnonShape_…(value0, value1, …)` (the constructor args are
-/// the field values in declaration order — see `lower::expr_object`). Returns
-/// `None` for anything that isn't statically one of those, so member access on
-/// an opaque binding falls back to deferral.
+/// "registry", following `const`-local indirection (`const R = { … };
+/// import(R[k])`). Handles both object-literal HIR shapes: open-shape literals
+/// kept as [`Expr::Object`], and closed-shape literals lowered to
+/// `new __AnonShape_…(value0, value1, …)` (the constructor args are the field
+/// values in declaration order — see `lower::expr_object`). Returns `None` for
+/// anything that isn't statically one of those, so member access on an opaque
+/// binding falls back to deferral.
+///
+/// Every traversed `LocalGet` id is inserted into `visiting` (and pushed onto
+/// `chain_ids` so the caller can undo it) — a binding already in `visiting`
+/// breaks the chain with `None`. Sharing the resolver's `visiting` set is what
+/// makes cycle detection span the recursion back through
+/// [`resolve_registry_value_union`], not just a single indirection chain.
 fn object_registry_values<'a, V: Borrow<Expr>>(
     object: &'a Expr,
     consts: &'a std::collections::HashMap<u32, V>,
-) -> Option<Vec<&'a Expr>> {
-    object_registry_values_inner(object, consts, &mut std::collections::HashSet::new())
-}
-
-fn object_registry_values_inner<'a, V: Borrow<Expr>>(
-    object: &'a Expr,
-    consts: &'a std::collections::HashMap<u32, V>,
-    seen: &mut std::collections::HashSet<u32>,
+    visiting: &mut std::collections::HashSet<u32>,
+    chain_ids: &mut Vec<u32>,
 ) -> Option<Vec<&'a Expr>> {
     match object {
         Expr::Object(entries) => Some(entries.iter().map(|(_, v)| v).collect()),
         Expr::New {
             class_name, args, ..
         } if class_name.starts_with("__AnonShape_") => Some(args.iter().collect()),
-        // Follow a `const`-local indirection (`const R = { … }; import(R[k])`),
-        // cycle-breaking via `seen` so a pathological `const a = b; const b = a`
-        // can't loop.
         Expr::LocalGet(id) => {
-            if !seen.insert(*id) {
+            if !visiting.insert(*id) {
                 return None;
             }
-            object_registry_values_inner(consts.get(id)?.borrow(), consts, seen)
+            chain_ids.push(*id);
+            object_registry_values(consts.get(id)?.borrow(), consts, visiting, chain_ids)
         }
         _ => None,
     }

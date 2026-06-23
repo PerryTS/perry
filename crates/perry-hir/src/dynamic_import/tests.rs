@@ -234,6 +234,65 @@ fn resolve_non_relative_registry_defers() {
 }
 
 #[test]
+fn resolve_circular_registry_defers_without_overflow() {
+    // `const R5 = { a: R6[x] }; const R6 = { b: R5[y] };` — a circular registry
+    // is valid TS and reaches the resolver via the const map. The cross-call
+    // cycle guard must defer (Unresolved) instead of recursing forever.
+    let r5 = Expr::Object(vec![(
+        "a".to_string(),
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(6)),
+            index: Box::new(Expr::LocalGet(99)),
+        },
+    )]);
+    let r6 = Expr::Object(vec![(
+        "b".to_string(),
+        Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(5)),
+            index: Box::new(Expr::LocalGet(99)),
+        },
+    )]);
+    let arg = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(5)),
+        index: Box::new(Expr::LocalGet(99)),
+    };
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(5u32, r5);
+    consts.insert(6u32, r6);
+    let mut visiting = std::collections::HashSet::new();
+    assert!(matches!(
+        resolve_import_path_with_consts(&arg, &consts, &mut visiting),
+        Resolution::Unresolved(_)
+    ));
+}
+
+#[test]
+fn resolve_chained_distinct_registries_resolves() {
+    // `const A = { x: "./a.js" }; const B = { y: A.x }; import(B[k])` — distinct
+    // (non-cyclic) registries must still resolve through the indirection.
+    let a = Expr::Object(vec![("x".to_string(), Expr::String("./a.js".into()))]);
+    let b = Expr::Object(vec![(
+        "y".to_string(),
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(1)),
+            property: "x".to_string(),
+        },
+    )]);
+    let arg = Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(2)),
+        index: Box::new(Expr::LocalGet(99)),
+    };
+    let mut consts = std::collections::HashMap::new();
+    consts.insert(1u32, a);
+    consts.insert(2u32, b);
+    let mut visiting = std::collections::HashSet::new();
+    match resolve_import_path_with_consts(&arg, &consts, &mut visiting) {
+        Resolution::Set(v) => assert_eq!(v, vec!["./a.js"]),
+        Resolution::Unresolved(reason) => panic!("expected Set, got Unresolved: {reason}"),
+    }
+}
+
+#[test]
 fn resolve_non_registry_member_access_defers() {
     // `import(cfg.path)` where cfg is opaque — must keep deferring, not panic.
     let arg = Expr::PropertyGet {
