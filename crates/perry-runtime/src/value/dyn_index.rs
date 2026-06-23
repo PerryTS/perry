@@ -360,6 +360,32 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     if !jsval.is_pointer() && !crate::object::is_valid_obj_ptr(raw_ptr as *const u8) {
         return value;
     }
+    // #5579 / Issue #957 (set side): a STRING index (`obj["foo"] = v`) must
+    // route through the ordinary receiver-aware `[[Set]]`, NOT the numeric
+    // element path below. The `index.is_nan() -> idx_i32 = 0` coercion
+    // otherwise sent every string-keyed write to element 0 — for an arguments
+    // object that meant `args["gp"] = v` clobbered `args[0]` (via
+    // `arguments_object_set_index`) and silently dropped the named property, so
+    // test262 propertyHelper's `isWritable(args, name)` (`args[name] = v` with
+    // an untyped `name` param) reported a writable property as non-writable.
+    // #5544 widened unknown-receiver string-key writes onto this helper,
+    // exposing the gap. `js_put_value_set` is the canonical `[[Set]]` the
+    // pre-#5544 path used: it invokes accessor setters with the correct
+    // receiver and honours data-property writability across arrays / arguments
+    // objects / plain objects / typed arrays, mirroring the IndexGet
+    // string-index arm above (`js_object_get_field_by_name_f64`). Numeric
+    // indices keep the fast element path below, so the #5544 perf win stands.
+    let idx_top16 = index.to_bits() >> 48;
+    if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+        // `target`/`receiver` must be a tagged value, not the raw heap address
+        // (`obj` arrives as a module-slot raw I64 when top16 == 0).
+        let target = if jsval.is_pointer() {
+            obj
+        } else {
+            f64::from_bits(crate::value::js_nanbox_pointer(raw_ptr as i64).to_bits())
+        };
+        return crate::proxy::js_put_value_set(target, index, value, target, 0);
+    }
     let idx_i32 = if index.is_nan() || index.is_infinite() {
         0
     } else {
