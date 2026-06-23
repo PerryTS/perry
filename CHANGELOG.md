@@ -1,16 +1,6 @@
-## v0.5.1202 — fix(codegen): #5437 Next.js W6 — member-new of a function-nested capturing class drops its captures
+## v0.5.1202 — revert: #5546 + #5553 (#5437 module-default wrapper auto-call machinery) — wrong layer, proven cannot close W6
 
-The #5437 "W6" throw — `new uw.SharedCacheControls(...)` → `TypeError: undefined is not a constructor` in the Next.js standalone render — was a `new`-with-captures codegen bug, minimally reproducible in 3 lines:
-
-```js
-function mk(){ const o={m:"OK"}; class C{ r(){return o.m} } return {C}; }
-const ns = mk();
-console.log(new ns.C().r());   // Perry threw; node prints OK
-```
-
-A member-/dynamic-routed construct (`new ns.C()`, `new (Foo)()`, namespace `new ns.Foo()`) of a function-nested class that captured an enclosing-scope local was statically routed by codegen to `lower_new("C", [])` (the `#740` object-field-alias arm + `try_static_class_name` arm in `expr/new_dynamic.rs`) **without** the captures that the bare-identifier `new C()` HIR arm appends (`expr_new.rs:1962`). `--trace llvm` showed `__C_constructor(this, TAG_UNDEFINED)` — the `__perry_cap_*` params literally received `undefined`. In the bundle, the `IncrementalCache` class's captured `require`-bound module local `uw` thus read `undefined`, so `uw.SharedCacheControls` was undefined.
-
-Fix (`crates/perry-codegen`, runtime untouched): new `CaptureFill` in `lower_call/new.rs` — for cap params not supplied by the call's args, fill from the class's decl-site snapshot `js_class_capture_value(class_id, slot)` (snapshot wins for cap params; `caps_absent_from_args` distinguishes member-new from bare-`new` arg layouts). Wired through `new_dynamic.rs` (`#740` + `try_static_class_name` arms → `lower_new_member_captured`) and `this_super_call.rs` (super-inline backfill). Repro matrix 10/10 match node under both no-auto-opt and auto-opt; regression test `issue_5437_member_new_captured_class`. Bundle: undefined-ctor 1→0, the render passes `SharedCacheControls` and advances to the next wall (an unrelated OTel `trace.getSpan`-on-undefined). Supersedes the reverted #5546/#5553 wrapper-registration approach (proven wrong layer).
+Reverts the auto-call wrapper-resolve machinery (#5546) and its boot-crash patch (#5553). A rigorous follow-up disproved the approach: the #5437 throw (`new uw.SharedCacheControls`) fails because the captured `uw` reads a **mis-boxed closure** at request time, whereas `uw` is a correct `module.exports` **object** at every point where the registration/auto-call could fire (the `require`, the class-capture store). So registering module-default wrappers is a guaranteed no-op for this bug — the value that throws never passes through a registration site. The machinery also introduced a regression (auto-calling a CJS function-export wrapper, e.g. `debug`, on the `_interop_require_default` `.__esModule` probe → boot crash; #5553 patched that symptom but the core approach can't close W6). Removing it cleans the dead + risky auto-call path off `main`. The real root — the class-capture materialization mis-boxing the pointer (the scale-emergent captured-pointer mis-box class, CLAUDE.md "captured pointer values must be NaN-boxed before storing") — is tracked under #5437 for a dedicated fix at the capture-store layer.
 
 ## v0.5.1201 — fix(runtime): #5437 — CJS-interop probe on a module-default wrapper must not auto-call it (boot-crash fix for #5546)
 
