@@ -212,8 +212,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
 
             // Case 1 + 2: callee is statically a class.
+            //
+            // #5437: this is a NewDynamic-routed construct (`new (Foo)()`,
+            // `new ns.Foo()` for a namespace import) — the bare-`ast::Expr::Ident`
+            // HIR arm that appends class captures was NOT taken, so the captures
+            // are absent from `args`. Route to `lower_new_member_captured` so a
+            // function-nested capturing class fills its `__perry_cap_*` ctor
+            // params from the decl-site snapshot. No-op for non-capturing
+            // classes (no cap params to fill).
             if let Some(name) = try_static_class_name(callee.as_ref(), ctx) {
-                return lower_new(ctx, name, args);
+                return crate::lower_call::lower_new_member_captured(ctx, name, args);
             }
 
             // date-fns `constructFrom(date, value)`:
@@ -511,6 +519,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // when it sees the original literal — read it back here and
             // dispatch to `lower_new` instead of the empty-object
             // fallback.
+            //
+            // #5437: this is a MEMBER-callee construct — the class's
+            // captures are NOT appended at this `new` site (the captured
+            // enclosing local is out of scope here), so route to
+            // `lower_new_member_captured` which fills the synthesized
+            // `__perry_cap_*` ctor params from the class's decl-site capture
+            // snapshot instead of binding them to `undefined`.
             if let Expr::PropertyGet { object, property } = callee.as_ref() {
                 if let Expr::LocalGet(obj_id) = object.as_ref() {
                     if let Some(class_name) = ctx
@@ -519,7 +534,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .and_then(|f| f.get(property))
                         .cloned()
                     {
-                        return lower_new(ctx, &class_name, args);
+                        return crate::lower_call::lower_new_member_captured(
+                            ctx,
+                            &class_name,
+                            args,
+                        );
                     }
                 }
             }

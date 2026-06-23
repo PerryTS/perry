@@ -771,8 +771,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }));
                     }
                 }
-                let saved_scope =
-                    bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
+                // #5437: any parent cap param the child-forwarding loop above
+                // could not fill (the captured local is out of scope at this
+                // super-call site) BACKFILLS from the parent's decl-site
+                // capture snapshot. The forwarded caps ARE in `lowered_args`,
+                // so this is a backfill (not the caps-absent member-new path).
+                let parent_capture_fill = ctx
+                    .class_ids
+                    .get(effective_parent_name.as_str())
+                    .copied()
+                    .map(crate::lower_call::CaptureFill::backfill);
+                let saved_scope = bind_inline_constructor_params(
+                    ctx,
+                    &parent_ctor.params,
+                    &lowered_args,
+                    parent_capture_fill,
+                );
 
                 ctx.class_stack.push(effective_parent_name.clone());
                 crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;

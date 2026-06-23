@@ -35,6 +35,7 @@ pub(crate) fn bind_inline_constructor_params(
     ctx: &mut FnCtx<'_>,
     params: &[Param],
     lowered_args: &[String],
+    capture_fill: Option<CaptureFill>,
 ) -> InlineConstructorScope {
     let saved = InlineConstructorScope {
         locals: ctx.locals.clone(),
@@ -43,7 +44,8 @@ pub(crate) fn bind_inline_constructor_params(
     };
 
     crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
-    let values = inline_constructor_param_values(ctx, params, lowered_args);
+    let values =
+        inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
     for (param, arg_val) in params.iter().zip(values.iter()) {
         let slot = ctx.func.alloca_entry(DOUBLE);
         if ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
@@ -71,6 +73,62 @@ fn inline_constructor_param_values(
     params: &[Param],
     lowered_args: &[String],
 ) -> Vec<String> {
+    inline_constructor_param_values_with_class(ctx, params, lowered_args, None)
+}
+
+/// Where a synthesized `__perry_cap_<id>` param's value comes from when the
+/// `new` site did not supply it as an appended arg.
+#[derive(Clone, Copy)]
+pub(crate) struct CaptureFill {
+    /// The constructing class's id, used to read its DECL-SITE capture
+    /// snapshot (`js_class_capture_value(cid, slot)`).
+    cid: u32,
+    /// `true` when `lowered_args` does NOT contain appended cap values — the
+    /// member-callee `new ns.C(...)` path. Then ALL `lowered_args` are user
+    /// args and EVERY cap param fills from the snapshot. `false` for the
+    /// bare-identifier `new C(...)` path, where the HIR appended the caps as
+    /// trailing args (tail-split keeps binding them); the snapshot then only
+    /// backfills a cap the HIR didn't append.
+    caps_absent_from_args: bool,
+}
+
+impl CaptureFill {
+    /// Snapshot-only BACKFILL for a cap param the caller's args did not
+    /// supply: the `lowered_args` still carry their appended cap values
+    /// (tail-split keeps binding them). Used by the `super(...)` inline path,
+    /// which explicitly forwards parent caps as args.
+    pub(crate) fn backfill(cid: u32) -> Self {
+        CaptureFill {
+            cid,
+            caps_absent_from_args: false,
+        }
+    }
+}
+
+/// As [`inline_constructor_param_values`], but fills a synthesized
+/// `__perry_cap_<id>` param that the `new` site did not supply from the
+/// class's DECL-SITE capture snapshot (`js_class_capture_value(cid, slot)`)
+/// instead of `undefined`.
+///
+/// #5437 (W6): a member-callee construct `new ns.C()` of a function-nested
+/// class that captured an enclosing local is statically routed to
+/// `lower_new("C", [])` (the `#740` object-field-alias arm in
+/// `expr/new_dynamic.rs`) — the captures are NOT appended as trailing args
+/// (that only happens for the bare-identifier `new C()` HIR arm). With no
+/// cap args the cap params bound to `undefined` and every method reading a
+/// captured local saw `undefined`. The bare-`new C()` HIR-append cannot be
+/// reused for `new ns.C()`: at the outer (member) `new` site the captured
+/// enclosing local is OUT OF SCOPE, so `LocalGet(cid)` would itself read
+/// `undefined`. The decl-site snapshot (registered at the class's
+/// declaration by `js_class_register_capture_values`) holds the correct
+/// captured values. `fill = None` keeps the prior `undefined` fill (no
+/// behavior change for non-capturing/unknown classes).
+fn inline_constructor_param_values_with_class(
+    ctx: &mut FnCtx<'_>,
+    params: &[Param],
+    lowered_args: &[String],
+    capture_fill: Option<CaptureFill>,
+) -> Vec<String> {
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     // Synthesized `__perry_cap_<id>` capture params are always TRAILING
     // params, and `Expr::New` sites always append the capture values after
@@ -80,25 +138,70 @@ fn inline_constructor_param_values(
     // bundle), so positional binding put the user arg into the capture
     // slot. Bind capture params from the args TAIL and user params from
     // the head.
-    let n_caps = params
-        .iter()
-        .filter(|p| {
-            p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+    //
+    // #5437: when a decl-site snapshot is available (`capture_fill = Some`),
+    // EVERY synthesized cap param is filled from that snapshot — the
+    // authoritative decl-site capture value — regardless of whether the `new`
+    // site appended cap args. This is what closes W6: the bundle's bare-`new
+    // uS(...)` appends a MIS-BOXED `uw` cap (the multi-level capture chain
+    // materialized the wrong value), while `uS`'s decl-site snapshot holds the
+    // correct module-exports object; preferring the snapshot makes
+    // `new uw.SharedCacheControls` resolve.
+    //
+    // The split between user args and the (now ignored) appended cap args
+    // still matters for the USER params:
+    //   - member-callee `new ns.C(...)`: caps are NOT appended, so ALL
+    //     `lowered_args` are user args → `n_caps = 0`. (`new ns.C("ARG")`
+    //     binds the user param to `"ARG"`, the cap to the snapshot.)
+    //   - bare-identifier `new C(...)`: the HIR appended the caps as trailing
+    //     args, so strip them (tail-split) to recover the leading user args;
+    //     the stripped cap values are discarded in favour of the snapshot.
+    let caps_absent = matches!(
+        capture_fill,
+        Some(CaptureFill {
+            caps_absent_from_args: true,
+            ..
         })
-        .count()
-        .min(lowered_args.len());
+    );
+    let n_caps = if caps_absent {
+        0
+    } else {
+        params
+            .iter()
+            .filter(|p| {
+                p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+            })
+            .count()
+            .min(lowered_args.len())
+    };
     let user_len = lowered_args.len() - n_caps;
     let (user_args, cap_args) = lowered_args.split_at(user_len);
     let mut cap_iter = cap_args.iter();
 
     let mut out = Vec::with_capacity(params.len());
     let mut visible_index = 0usize;
+    // The cap-slot index of the NEXT cap param: the index of the value in
+    // the decl-site snapshot (registered in `captures_vec` / cap-param
+    // declaration order, which is the same order they appear here).
+    let mut cap_slot = 0u32;
     for param in params {
         if param.name.starts_with("__perry_cap_")
             && !param.is_rest
             && param.arguments_object.is_none()
         {
-            out.push(cap_iter.next().cloned().unwrap_or_else(|| undef.clone()));
+            let slot = cap_slot;
+            cap_slot += 1;
+            // Consume (and discard) any appended cap arg so the tail stays
+            // aligned, then fill from the snapshot when one is registered.
+            let appended = cap_iter.next();
+            out.push(match capture_fill {
+                Some(CaptureFill { cid, .. }) => ctx.block().call(
+                    DOUBLE,
+                    "js_class_capture_value",
+                    &[(I32, &cid.to_string()), (I32, &slot.to_string())],
+                ),
+                None => appended.cloned().unwrap_or_else(|| undef.clone()),
+            });
         } else if param.arguments_object.is_some() {
             out.push(pack_lowered_args_array(ctx, user_args));
         } else if param.is_rest {
@@ -228,6 +331,7 @@ fn call_local_constructor_symbol(
     class: &perry_hir::Class,
     obj_box: &str,
     lowered_args: &[String],
+    caps_absent_from_args: bool,
 ) -> Option<String> {
     let ctor_method_name = format!("{}_constructor", class.name);
     let ctor_name = ctx
@@ -275,8 +379,12 @@ fn call_local_constructor_symbol(
         }
         found
     };
+    let capture_fill = ctx.class_ids.get(&class.name).copied().map(|cid| CaptureFill {
+        cid,
+        caps_absent_from_args,
+    });
     let mut ctor_values = if let Some(params) = effective_params {
-        inline_constructor_param_values(ctx, &params, lowered_args)
+        inline_constructor_param_values_with_class(ctx, &params, lowered_args, capture_fill)
     } else {
         lowered_args.to_vec()
     };
@@ -315,6 +423,30 @@ fn call_local_constructor_symbol(
 ///   enclosing function, not the constructor body)
 /// - No method dispatch or vtables — those land in Phase C.2/C.3
 pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) -> Result<String> {
+    // Bare-identifier `new C(...)` path: the HIR `Expr::New` arm appended the
+    // class captures as trailing `LocalGet` args, so caps are PRESENT in
+    // `args`.
+    lower_new_impl(ctx, class_name, args, false)
+}
+
+/// Member-callee `new ns.C(...)` construct (#5437): the captures were NOT
+/// appended at the `new` site (the captured enclosing local is out of scope
+/// there), so every synthesized `__perry_cap_*` ctor param fills from the
+/// class's decl-site capture snapshot instead. All of `args` are USER args.
+pub(crate) fn lower_new_member_captured(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+) -> Result<String> {
+    lower_new_impl(ctx, class_name, args, true)
+}
+
+fn lower_new_impl(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    caps_absent_from_args: bool,
+) -> Result<String> {
     // Built-in Web classes that the runtime provides constructors for.
     // These are checked BEFORE the ctx.classes lookup because the user
     // code may shadow the name — if they do, the class lookup below
@@ -929,7 +1061,9 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         // function ("value is not a function" on `new Chalk(...).red(...)`).
         // `js_ctor_return_override` returns `obj_box` for an `undefined`/
         // primitive (base) return, so ordinary ctors are unaffected.
-        if let Some(ctor_ret) = call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args) {
+        if let Some(ctor_ret) =
+            call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args, caps_absent_from_args)
+        {
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -1077,10 +1211,13 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
     // `LocalGet` codegen doesn't return 0.0. Locals/local_types are
     // saved-and-restored around the whole inlined ctor flow below; we
     // mirror that here so the ctor params don't leak out of `new`.
-    let mut saved_scope_for_ctor = class
-        .constructor
-        .as_ref()
-        .map(|ctor| bind_inline_constructor_params(ctx, &ctor.params, &lowered_args));
+    let ctor_capture_fill = ctx.class_ids.get(class_name).copied().map(|cid| CaptureFill {
+        cid,
+        caps_absent_from_args,
+    });
+    let mut saved_scope_for_ctor = class.constructor.as_ref().map(|ctor| {
+        bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, ctor_capture_fill)
+    });
 
     if let Some(stop_at) = inherited_ctor_class.clone() {
         apply_field_initializers_recursive(ctx, class_name, FieldInitMode::UpToInclusive(stop_at))?;
@@ -1144,8 +1281,19 @@ pub(crate) fn lower_new(ctx: &mut FnCtx<'_>, class_name: &str, args: &[Expr]) ->
         while let Some(pname) = parent_name {
             if let Some(parent_class) = ctx.classes.get(pname).copied() {
                 if let Some(parent_ctor) = &parent_class.constructor {
-                    let saved_scope =
-                        bind_inline_constructor_params(ctx, &parent_ctor.params, &lowered_args);
+                    // #5437: fill any unfilled parent cap param from the
+                    // parent's decl-site capture snapshot.
+                    let parent_capture_fill =
+                        ctx.class_ids.get(pname).copied().map(|cid| CaptureFill {
+                            cid,
+                            caps_absent_from_args,
+                        });
+                    let saved_scope = bind_inline_constructor_params(
+                        ctx,
+                        &parent_ctor.params,
+                        &lowered_args,
+                        parent_capture_fill,
+                    );
 
                     // Push the parent class name so `this` inside the
                     // parent ctor body resolves field names via the
