@@ -191,15 +191,27 @@ fn inline_constructor_param_values_with_class(
         {
             let slot = cap_slot;
             cap_slot += 1;
-            // Consume (and discard) any appended cap arg so the tail stays
-            // aligned, then fill from the snapshot when one is registered.
+            // Consume the appended cap arg so the tail stays aligned. When a
+            // decl-site snapshot is registered for `cid`, it is authoritative
+            // (W6: the appended arg may be a mis-boxed multi-level capture);
+            // otherwise (e.g. an inline anonymous class capturing a
+            // `require(...)`-derived local — #5437 OTel `trace`) NO snapshot is
+            // registered, so fall back to the appended cap arg rather than
+            // dropping it to `undefined`.
             let appended = cap_iter.next();
             out.push(match capture_fill {
-                Some(CaptureFill { cid, .. }) => ctx.block().call(
-                    DOUBLE,
-                    "js_class_capture_value",
-                    &[(I32, &cid.to_string()), (I32, &slot.to_string())],
-                ),
+                Some(CaptureFill { cid, .. }) => {
+                    let fallback = appended.cloned().unwrap_or_else(|| undef.clone());
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_class_capture_value_or",
+                        &[
+                            (I32, &cid.to_string()),
+                            (I32, &slot.to_string()),
+                            (DOUBLE, &fallback),
+                        ],
+                    )
+                }
                 None => appended.cloned().unwrap_or_else(|| undef.clone()),
             });
         } else if param.arguments_object.is_some() {

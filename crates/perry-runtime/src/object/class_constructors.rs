@@ -142,9 +142,43 @@ pub extern "C" fn js_class_capture_value(class_id: u32, index: u32) -> f64 {
     })
 }
 
-/// Keepalive anchor (generated-code-only callee).
+/// #5437: read one slot of a class's decl-site capture snapshot, falling back
+/// to `fallback` (the value the `new`-site appended as the capture arg) when
+/// NO snapshot was registered for `class_id`.
+///
+/// The W6 fix (member-/bare-`new` of a function-nested capturing class) prefers
+/// the authoritative decl-site snapshot over the `new`-site appended cap arg
+/// because the bundle's multi-level capture chain can materialize a mis-boxed
+/// value into that appended arg. But the snapshot only exists for classes that
+/// reach the `RegisterClassCaptures` decl-site. An inline anonymous class
+/// (`new class { m(){ return capturedLocal } }`) capturing a local whose
+/// initializer derives from a `require(...)` result has NO registered snapshot
+/// — so the bare snapshot read returned `undefined`, dropping the (correct)
+/// appended cap arg. Falling back to `fallback` when the snapshot is absent
+/// keeps W6 (snapshot wins when present) while restoring the appended value for
+/// the snapshot-less case.
+#[no_mangle]
+pub extern "C" fn js_class_capture_value_or(class_id: u32, index: u32, fallback: f64) -> f64 {
+    CLASS_CAPTURE_VALUES.with(|m| {
+        match m.borrow().get(&class_id) {
+            // A snapshot exists for this class: it is authoritative (W6).
+            Some(v) => v
+                .get(index as usize)
+                .copied()
+                .map(f64::from_bits)
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
+            // No snapshot registered: use the `new`-site appended cap value.
+            None => fallback,
+        }
+    })
+}
+
+/// Keepalive anchors (generated-code-only callees).
 #[used]
 static KEEP_JS_CLASS_CAPTURE_VALUE: extern "C" fn(u32, u32) -> f64 = js_class_capture_value;
+#[used]
+static KEEP_JS_CLASS_CAPTURE_VALUE_OR: extern "C" fn(u32, u32, f64) -> f64 =
+    js_class_capture_value_or;
 
 /// `super(...spread)` — invoke the closest registered ancestor constructor
 /// of `child_cid` on the EXISTING `this`, with args from the materialized

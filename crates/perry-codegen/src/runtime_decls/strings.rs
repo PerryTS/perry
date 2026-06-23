@@ -1162,6 +1162,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_class_register_capture_values", VOID, &[I32, PTR, I64]);
     // Static-method prologue read of one decl-site capture snapshot slot.
     module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
+    // #5437: snapshot slot read with a `new`-site appended cap-arg fallback
+    // (used when no decl-site snapshot was registered for the class).
+    module.declare_function("js_class_capture_value_or", DOUBLE, &[I32, I32, DOUBLE]);
     // `super(...spread)` — dynamic-arity ancestor ctor invocation on `this`.
     module.declare_function("js_super_construct_apply", VOID, &[I32, DOUBLE, DOUBLE]);
     // `super.method(...)` on a class with a runtime-registered (dynamic) parent
