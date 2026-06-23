@@ -937,6 +937,17 @@ pub fn try_lower_closure_call_fallthrough(
     // `language/{statements,expressions}/class/dstr/async-gen-meth-static-*`
     // (`C.method(g()).next()`). For a side-effecting receiver, evaluate it
     // once here and read the method off that value directly.
+    //
+    // #5247: capture this call's source byte offset NOW, before the receiver
+    // and arguments are lowered (a nested call in either would overwrite the
+    // shared pending offset). The `js_closure_unbox_callee_checked` dispatch
+    // below throws `TypeError: value is not a function` for a non-callable
+    // callee (`const f: any = 5; f()`, nanoid/yup's failure shape), and that
+    // throw renders `CURRENT_CALL_LOCATION` via `make_stack`. Replaying the
+    // offset as `js_set_call_location` right before the dispatch gives the
+    // throw an `at <file>:<line>` frame under `--debug-symbols`. `0` (and the
+    // default build) → no emission, unchanged `<anonymous>` frame.
+    let call_byte_offset = ctx.strings.pending_call_offset();
     let prelowered_recv: Option<(String, String)> =
         if let Expr::PropertyGet { object, property } = callee {
             if receiver_must_eval_once(object.as_ref()) {
@@ -1006,6 +1017,11 @@ pub fn try_lower_closure_call_fallthrough(
         None
     };
 
+    // #5247: record the source location right before the throw-capable
+    // dispatch — after the receiver/args are lowered, so a nested-call
+    // argument's location no longer shadows this one. Applies to both arity
+    // branches below (the checked unbox throws in either). No-op default build.
+    crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
     let result = if lowered_args.len() <= 16 {
         let blk = ctx.block();
         // #5504: tag-check the callee before masking to a closure pointer.
