@@ -69,7 +69,7 @@ jobs:
       # (`sccache-<os>-perry-`). This runs on main, so the saved entry is
       # main-scoped → restorable by every PR. run_id keeps the key unique.
       - name: Cache sccache objects
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-warm-${{ github.run_id }}

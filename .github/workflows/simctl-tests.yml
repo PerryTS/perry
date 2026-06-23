@@ -38,7 +38,7 @@ jobs:
         run: rustup target add aarch64-apple-ios-sim aarch64-apple-ios
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry

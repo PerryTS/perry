@@ -150,7 +150,7 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Cache sccache objects
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -261,7 +261,7 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Cache sccache objects
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -494,7 +494,7 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Cache sccache objects
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
