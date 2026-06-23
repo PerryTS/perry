@@ -259,6 +259,15 @@ where
 /// objects, or strings, use queue_deferred_resolution instead.
 pub fn queue_promise_resolution(promise_ptr: usize, is_success: bool, result_bits: u64) {
     ensure_gc_scanner_registered();
+    // The await busy-pump only drains PENDING_RESOLUTIONS via the registered
+    // STDLIB_PUMP_FN. Callers that queue a resolution *without* a preceding
+    // `spawn` (e.g. `js_fetch_with_options`'s early "Invalid URL" reject when
+    // `fetch()` is handed a non-string first arg such as a `Request` object)
+    // would otherwise leave the pump unregistered: `js_stdlib_has_active_handles`
+    // reports the pending entry so the awaiter keeps waiting, but nothing ever
+    // drains it → the awaited Promise stays pending forever (deadlock). Register
+    // the pump here so every queued resolution is guaranteed to be processed.
+    ensure_pump_registered();
     {
         let mut pending = PENDING_RESOLUTIONS.lock().unwrap();
         pending.push(PendingResolution {
@@ -283,6 +292,10 @@ where
     F: FnOnce() -> u64 + Send + 'static,
 {
     ensure_gc_scanner_registered();
+    // Same pump-registration guarantee as `queue_promise_resolution` (above):
+    // a deferred resolution queued without a preceding `spawn` must still be
+    // drained by the await busy-pump.
+    ensure_pump_registered();
     {
         let mut pending = PENDING_DEFERRED.lock().unwrap();
         pending.push(DeferredResolution {

@@ -217,6 +217,38 @@ pub(crate) fn handle_to_f64(id: usize) -> f64 {
     perry_runtime::value::js_nanbox_pointer(id as i64)
 }
 
+/// Fields recovered from a `Request` object for the `fetch(Request)` form.
+struct RequestFetchFields {
+    url: String,
+    method: String,
+    body: Option<String>,
+    headers: HashMap<String, String>,
+}
+
+/// When `fetch()` is handed a `Request` object, its handle id lands in the
+/// `url_ptr` slot. Recover the url/method/body/headers from the Request
+/// registry so the request can actually be dispatched. Returns `None` when the
+/// id isn't a live Request handle (e.g. a genuinely bad/undefined first arg).
+fn request_fields_from_handle(maybe_handle: usize) -> Option<RequestFetchFields> {
+    let guard = REQUEST_REGISTRY.lock().unwrap();
+    let req = guard.get(&maybe_handle)?;
+    let headers = req
+        .headers
+        .entries
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    Some(RequestFetchFields {
+        url: req.url.clone(),
+        method: req.method.clone(),
+        body: req
+            .body
+            .as_ref()
+            .map(|b| String::from_utf8_lossy(b).into_owned()),
+        headers,
+    })
+}
+
 /// Helper to extract string from StringHeader pointer
 pub(crate) unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     // NaN-boxed TAG_UNDEFINED (0x7FFC_0000_0000_0001) unboxes to 0x1
@@ -605,23 +637,52 @@ pub unsafe extern "C" fn js_fetch_with_options(
     let promise = perry_runtime::js_promise_new();
     let promise_ptr = promise as usize;
 
-    let url = match string_from_header(url_ptr) {
-        Some(u) => u,
-        None => {
-            let err_msg = "Invalid URL";
-            let err_bits = fetch_error_bits(err_msg);
-            queue_promise_resolution(promise_ptr, false, err_bits);
-            return promise;
-        }
+    // `fetch(Request)` form: axios/gaxios (and any WHATWG-fetch caller) build a
+    // `Request` object and call `fetch(request, init)`. The global-fetch thunk
+    // passes the Request's handle id straight into the `url_ptr` slot, where
+    // `string_from_header` correctly refuses to dereference a handle-band value
+    // and returns `None`. Previously that fell through to an "Invalid URL"
+    // reject (and — before the queue-pump fix — a hang). Instead, recover the
+    // url / method / body / headers from the Request registry so the request is
+    // actually dispatched. `init` overrides (already extracted into
+    // method/body/headers args) win when present, matching the WHATWG rule that
+    // `init` members override the Request's.
+    let url_from_header = string_from_header(url_ptr);
+    let request_fields = if url_from_header.is_none() {
+        request_fields_from_handle(url_ptr as usize)
+    } else {
+        None
     };
 
-    let method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
-    let body = string_from_header(body_ptr);
-    let headers_json = string_from_header(headers_json_ptr).unwrap_or_else(|| "{}".to_string());
+    let url = match url_from_header {
+        Some(u) => u,
+        None => match request_fields.as_ref() {
+            Some(rf) => rf.url.clone(),
+            None => {
+                let err_msg = "Invalid URL";
+                let err_bits = fetch_error_bits(err_msg);
+                queue_promise_resolution(promise_ptr, false, err_bits);
+                return promise;
+            }
+        },
+    };
 
-    // Parse headers from JSON
-    let custom_headers: HashMap<String, String> =
-        serde_json::from_str(&headers_json).unwrap_or_default();
+    let method = string_from_header(method_ptr)
+        .or_else(|| request_fields.as_ref().map(|rf| rf.method.clone()))
+        .unwrap_or_else(|| "GET".to_string());
+    let body = string_from_header(body_ptr)
+        .or_else(|| request_fields.as_ref().and_then(|rf| rf.body.clone()));
+    let headers_json = string_from_header(headers_json_ptr);
+
+    // Parse headers from JSON (the `init.headers` form), falling back to the
+    // Request object's own headers when fetching a `Request`.
+    let custom_headers: HashMap<String, String> = match headers_json {
+        Some(j) => serde_json::from_str(&j).unwrap_or_default(),
+        None => request_fields
+            .as_ref()
+            .map(|rf| rf.headers.clone())
+            .unwrap_or_default(),
+    };
 
     spawn(async move {
         let client = HTTP_CLIENT.clone();
