@@ -335,6 +335,15 @@ crates/perry-hir/src/lower/expr_new.rs
 # function / call-apply / name-resolution helpers into sibling modules is
 # tracked under #1435.
 crates/perry-runtime/src/closure/dispatch.rs
+# Intl trunk (namespace bootstrap + the NumberFormat/DateTimeFormat/Collator/
+# Segmenter/ListFormat/RelativeTimeFormat/PluralRules constructor+prototype
+# shapes and their deterministic formatters). Sat at 1883 LOC on main and
+# crossed the gate after the DateTimeFormat `formatRange`/`formatRangeToParts`
+# methods + option-validation landed (#5582). The DisplayNames/DurationFormat/
+# locale/locales surfaces already live in `intl/` siblings; peeling each
+# constructor's thunks+formatter into its own sibling is the natural next split,
+# tracked under #1435.
+crates/perry-runtime/src/intl.rs
 EOF
 )
 

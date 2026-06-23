@@ -40,6 +40,7 @@ const KEY_CURRENCY: &str = "__intlCurrency";
 const KEY_MAX_FRACTION_DIGITS: &str = "__intlMaxFractionDigits";
 const KEY_DATE_STYLE: &str = "__intlDateStyle";
 const KEY_TIME_ZONE: &str = "__intlTimeZone";
+const KEY_CALENDAR: &str = "__intlCalendar";
 const KEY_GRANULARITY: &str = "__intlGranularity";
 const KEY_TYPE: &str = "__intlType";
 const KEY_LF_STYLE: &str = "__intlListStyle";
@@ -616,6 +617,140 @@ extern "C" fn date_time_format_bound_to_parts_thunk(
     parts_to_js_array(&date_instance_parts(value))
 }
 
+/// `M/D/YY` short form rendered directly from a millisecond timestamp (the
+/// `formatRange` arguments arrive as already-coerced ToNumber values, not Date
+/// cells, so they bypass `date_short_utc`'s `date_cell_timestamp` decode).
+fn date_short_utc_from_ms(ms: f64) -> String {
+    let secs = (ms as i64).div_euclid(1000);
+    let (year, month, day, _, _, _) = crate::date::timestamp_to_components(secs);
+    format!("{}/{}/{:02}", month, day, year.rem_euclid(100))
+}
+
+fn date_range_parts_from_ms(ms: f64) -> Vec<(&'static str, String)> {
+    let secs = (ms as i64).div_euclid(1000);
+    let (year, month, day, _, _, _) = crate::date::timestamp_to_components(secs);
+    vec![
+        ("month", month.to_string()),
+        ("literal", "/".to_string()),
+        ("day", day.to_string()),
+        ("literal", "/".to_string()),
+        ("year", format!("{:02}", year.rem_euclid(100))),
+    ]
+}
+
+/// Shared steps 4–7 of `Intl.DateTimeFormat.prototype.formatRange` /
+/// `formatRangeToParts`: reject `undefined` endpoints (TypeError), coerce each
+/// via ToNumber (propagating abrupt completions and the Symbol TypeError),
+/// reject `x > y` and any non-finite (TimeClip → NaN) endpoint (RangeError).
+/// Returns the clipped `(x, y)` millisecond pair.
+fn date_time_range_clip(method: &str, start: f64, end: f64) -> (f64, f64) {
+    let sj = JSValue::from_bits(start.to_bits());
+    let ej = JSValue::from_bits(end.to_bits());
+    if sj.is_undefined() || ej.is_undefined() {
+        throw_type_error(&format!(
+            "Intl.DateTimeFormat.prototype.{method} called with undefined startDate or endDate"
+        ));
+    }
+    let x = crate::builtins::js_number_coerce(start);
+    let y = crate::builtins::js_number_coerce(end);
+    if x > y {
+        throw_range_error("startDate is greater than endDate in formatRange");
+    }
+    // TimeClip (ECMA-262): a non-finite endpoint, or one whose magnitude exceeds
+    // the maximum representable time (±8.64e15 ms), is NaN → RangeError.
+    // Otherwise truncate toward zero to integer milliseconds, so sub-millisecond
+    // equivalents collapse to the same formatted date.
+    const TIME_CLIP_LIMIT_MS: f64 = 8.64e15;
+    if !x.is_finite()
+        || !y.is_finite()
+        || x.abs() > TIME_CLIP_LIMIT_MS
+        || y.abs() > TIME_CLIP_LIMIT_MS
+    {
+        throw_range_error("Invalid time value");
+    }
+    (x.trunc(), y.trunc())
+}
+
+fn date_time_format_range_value(method: &str, start: f64, end: f64) -> f64 {
+    let (x, y) = date_time_range_clip(method, start, end);
+    if x == y {
+        string_value(&date_short_utc_from_ms(x))
+    } else {
+        string_value(&format!(
+            "{} \u{2013} {}",
+            date_short_utc_from_ms(x),
+            date_short_utc_from_ms(y)
+        ))
+    }
+}
+
+/// Build the `formatRangeToParts` array. Unlike `formatToParts`, each range part
+/// carries a `source` field (`"startRange"` / `"endRange"` / `"shared"`) per
+/// ECMA-402; when the endpoints collapse to one date every part is `"shared"`.
+fn range_parts_to_js_array(parts: &[(&'static str, String, &'static str)]) -> f64 {
+    let mut arr = js_array_alloc(parts.len() as u32);
+    for (ty, val, source) in parts {
+        let obj = js_object_alloc(0, 3);
+        set_field(obj, "type", string_value(ty));
+        set_field(obj, "value", string_value(val));
+        set_field(obj, "source", string_value(source));
+        arr = js_array_push_f64(arr, js_nanbox_pointer(obj as i64));
+    }
+    js_nanbox_pointer(arr as i64)
+}
+
+fn date_time_format_range_parts_value(method: &str, start: f64, end: f64) -> f64 {
+    let (x, y) = date_time_range_clip(method, start, end);
+    let tag = |parts: Vec<(&'static str, String)>, source: &'static str| {
+        parts.into_iter().map(move |(t, v)| (t, v, source))
+    };
+    if x == y {
+        let shared: Vec<_> = tag(date_range_parts_from_ms(x), "shared").collect();
+        return range_parts_to_js_array(&shared);
+    }
+    let mut parts: Vec<(&'static str, String, &'static str)> =
+        tag(date_range_parts_from_ms(x), "startRange").collect();
+    parts.push(("literal", " \u{2013} ".to_string(), "shared"));
+    parts.extend(tag(date_range_parts_from_ms(y), "endRange"));
+    range_parts_to_js_array(&parts)
+}
+
+extern "C" fn date_time_format_range_thunk(
+    _closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let _obj = this_intl_object("formatRange", KIND_DATE_TIME);
+    date_time_format_range_value("formatRange", start, end)
+}
+
+extern "C" fn date_time_format_bound_range_thunk(
+    closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let _obj = captured_intl_object(closure, "formatRange", KIND_DATE_TIME);
+    date_time_format_range_value("formatRange", start, end)
+}
+
+extern "C" fn date_time_format_range_to_parts_thunk(
+    _closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let _obj = this_intl_object("formatRangeToParts", KIND_DATE_TIME);
+    date_time_format_range_parts_value("formatRangeToParts", start, end)
+}
+
+extern "C" fn date_time_format_bound_range_to_parts_thunk(
+    closure: *const ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    let _obj = captured_intl_object(closure, "formatRangeToParts", KIND_DATE_TIME);
+    date_time_format_range_parts_value("formatRangeToParts", start, end)
+}
+
 extern "C" fn date_time_format_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
     let obj = this_intl_object("resolvedOptions", KIND_DATE_TIME);
     date_time_format_resolved_options_object(obj)
@@ -633,7 +768,11 @@ fn date_time_format_resolved_options_object(obj: *const ObjectHeader) -> f64 {
         "locale",
         string_value(&get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string())),
     );
-    set_field(out, "calendar", string_value("gregory"));
+    set_field(
+        out,
+        "calendar",
+        string_value(&get_string_field(obj, KEY_CALENDAR).unwrap_or_else(|| "gregory".to_string())),
+    );
     set_field(out, "numberingSystem", string_value("latn"));
     set_field(
         out,
@@ -891,6 +1030,91 @@ fn enum_option(options: f64, key: &str, allowed: &[&str], default: &str) -> Stri
             }
         }
     }
+}
+
+/// Validate and canonicalize a `calendar` option per the Unicode Locale
+/// Identifier `type` nonterminal: one or more `-`-joined segments, each 3–8
+/// ASCII alphanumerics. Returns the lowercased + alias-resolved calendar ID, or
+/// `None` if the input is malformed (the caller throws RangeError). Non-ASCII
+/// input (e.g. capital dotted `İ`) fails the `is_ascii_alphanumeric` test, so it
+/// is rejected rather than silently lowercased.
+fn canonicalize_calendar_id(raw: &str) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    for segment in raw.split('-') {
+        if segment.len() < 3
+            || segment.len() > 8
+            || !segment.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            return None;
+        }
+    }
+    let lower = raw.to_ascii_lowercase();
+    // BCP-47 `-u-ca-` type aliases (TR35): a handful of legacy IDs canonicalize
+    // to their preferred form. Everything else passes through lowercased.
+    let canonical = match lower.as_str() {
+        "islamicc" => "islamic-civil",
+        "ethioaa" => "ethiopic-amete-alem",
+        other => other,
+    };
+    Some(canonical.to_string())
+}
+
+/// True when `tz` is a syntactically valid UTC-offset time-zone identifier for
+/// `Intl.DateTimeFormat`: `±HH`, `±HHmm`, or `±HH:mm` with hour 00–23 and
+/// minute 00–59. Sub-minute precision (seconds / fractions) is rejected, as are
+/// 1-digit fields and mixed separators. Named zones (no leading sign) are not
+/// the caller's concern — this is only consulted when `tz` begins with `+`/`-`.
+fn is_valid_offset_time_zone(tz: &str) -> bool {
+    let bytes = tz.as_bytes();
+    if bytes.len() < 2 || (bytes[0] != b'+' && bytes[0] != b'-') {
+        return false;
+    }
+    let rest = &bytes[1..];
+    let hour_ok = |h: &[u8]| -> bool {
+        h.len() == 2 && h.iter().all(|b| b.is_ascii_digit()) && {
+            let v = (h[0] - b'0') * 10 + (h[1] - b'0');
+            v <= 23
+        }
+    };
+    let minute_ok = |m: &[u8]| -> bool {
+        m.len() == 2 && m.iter().all(|b| b.is_ascii_digit()) && {
+            let v = (m[0] - b'0') * 10 + (m[1] - b'0');
+            v <= 59
+        }
+    };
+    match rest.len() {
+        2 => hour_ok(rest),
+        4 => hour_ok(&rest[..2]) && minute_ok(&rest[2..]),
+        5 => rest[2] == b':' && hour_ok(&rest[..2]) && minute_ok(&rest[3..]),
+        _ => false,
+    }
+}
+
+/// Canonicalize a *validated* offset time zone (`±HH`, `±HHmm`, `±HH:mm`) to the
+/// `±HH:mm` form ECMA-402's FormatOffsetTimeZoneIdentifier emits. A zero offset
+/// always normalizes to `+00:00` (the sign is forced positive, so `-00:00`
+/// becomes `+00:00`). Assumes `is_valid_offset_time_zone(tz)` already passed.
+fn canonicalize_offset_time_zone(tz: &str) -> String {
+    let bytes = tz.as_bytes();
+    let digits: Vec<u8> = bytes[1..]
+        .iter()
+        .copied()
+        .filter(|b| b.is_ascii_digit())
+        .collect();
+    let hh = (digits[0] - b'0') * 10 + (digits[1] - b'0');
+    let mm = if digits.len() == 4 {
+        (digits[2] - b'0') * 10 + (digits[3] - b'0')
+    } else {
+        0
+    };
+    let sign = if hh == 0 && mm == 0 {
+        '+'
+    } else {
+        bytes[0] as char
+    };
+    format!("{sign}{hh:02}:{mm:02}")
 }
 
 /// Drain any JS iterable into a `Vec<String>`, throwing `TypeError` if an
@@ -1346,10 +1570,46 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_DATE_TIME => {
-            let date_style =
-                get_option_string(options, "dateStyle").unwrap_or_else(|| "short".to_string());
-            let time_zone =
+            // `dateStyle` / `timeStyle` are GetOption string enums — an
+            // out-of-range value is a RangeError (ECMA-402 CreateDateTimeFormat
+            // steps 39/40), not a silent fallthrough.
+            let date_style = enum_option(
+                options,
+                "dateStyle",
+                &["full", "long", "medium", "short"],
+                "short",
+            );
+            if let Some(time_style) = get_option_string(options, "timeStyle") {
+                if !["full", "long", "medium", "short"].contains(&time_style.as_str()) {
+                    throw_range_error(&format!(
+                        "Value {time_style} out of range for Intl options property timeStyle"
+                    ));
+                }
+            }
+            // `calendar` must match the Unicode locale `type` nonterminal; store
+            // the canonicalized ID so `resolvedOptions().calendar` reflects it.
+            if let Some(calendar) = get_option_string(options, "calendar") {
+                match canonicalize_calendar_id(&calendar) {
+                    Some(canonical) => {
+                        set_internal_field(obj, KEY_CALENDAR, string_value(&canonical))
+                    }
+                    None => throw_range_error(&format!(
+                        "Value {calendar} out of range for Intl options property calendar"
+                    )),
+                }
+            }
+            let mut time_zone =
                 get_option_string(options, "timeZone").unwrap_or_else(|| "UTC".to_string());
+            // A timeZone that begins with a sign is an offset identifier: it must
+            // be syntactically valid (ECMA-402 rejects malformed offsets with a
+            // RangeError), and is then canonicalized to `±HH:mm` so
+            // `resolvedOptions().timeZone` matches FormatOffsetTimeZoneIdentifier.
+            if matches!(time_zone.as_bytes().first(), Some(b'+') | Some(b'-')) {
+                if !is_valid_offset_time_zone(&time_zone) {
+                    throw_range_error(&format!("Invalid time zone specified: {time_zone}"));
+                }
+                time_zone = canonicalize_offset_time_zone(&time_zone);
+            }
             set_internal_field(obj, KEY_DATE_STYLE, string_value(&date_style));
             set_internal_field(obj, KEY_TIME_ZONE, string_value(&time_zone));
             install_bound_instance_function(
@@ -1363,6 +1623,18 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 "formatToParts",
                 date_time_format_bound_to_parts_thunk as *const u8,
                 1,
+            );
+            install_bound_instance_function(
+                obj,
+                "formatRange",
+                date_time_format_bound_range_thunk as *const u8,
+                2,
+            );
+            install_bound_instance_function(
+                obj,
+                "formatRangeToParts",
+                date_time_format_bound_range_to_parts_thunk as *const u8,
+                2,
             );
             install_bound_instance_function(
                 obj,
@@ -1762,6 +2034,12 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 "formatToParts",
                 date_time_format_to_parts_thunk as *const u8,
                 1,
+            ),
+            ("formatRange", date_time_format_range_thunk as *const u8, 2),
+            (
+                "formatRangeToParts",
+                date_time_format_range_to_parts_thunk as *const u8,
+                2,
             ),
             (
                 "resolvedOptions",
