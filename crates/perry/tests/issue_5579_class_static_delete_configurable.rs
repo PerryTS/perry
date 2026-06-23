@@ -88,10 +88,7 @@ console.log("DONE");
     .expect("write entry");
 
     let (ok, out) = compile_and_run(dir.path(), &entry);
-    assert!(
-        ok,
-        "compiled binary did not exit cleanly\nstdout:\n{out}"
-    );
+    assert!(ok, "compiled binary did not exit cleanly\nstdout:\n{out}");
     assert!(
         out.contains("static.configurable: true"),
         "static method descriptor must be configurable\n{out}"
@@ -112,5 +109,8 @@ console.log("DONE");
         out.contains("proto.deleted: true"),
         "delete D.prototype.m must still remove the instance method\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
