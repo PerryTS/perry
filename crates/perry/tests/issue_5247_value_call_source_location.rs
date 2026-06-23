@@ -95,6 +95,14 @@ fn run_fixture(fixture: &str, extra_args: &[&str]) -> String {
 
     let bin = root.join("main_bin");
     let run = Command::new(&bin).output().expect("run compiled binary");
+    // The fixtures catch the throw and `console.log` it, so the program exits
+    // cleanly. Assert that, so a crash / non-zero exit can't masquerade as a
+    // plain assertion failure on partial stdout.
+    assert!(
+        run.status.success(),
+        "compiled binary must exit successfully; stderr:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
