@@ -600,6 +600,7 @@ pub extern "C" fn js_array_unshift_variadic(
         // non-string).
         for (i, v) in item_vec.into_iter().enumerate() {
             crate::string::js_string_addref_if_heap_string(v);
+            // GC_STORE_AUDIT(BARRIERED): inserted slots are followed by the layout/barrier rebuild below.
             ptr::write(elements_ptr.add(i), v);
         }
         (*arr).length = length + n as u32;
