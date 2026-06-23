@@ -635,6 +635,37 @@ fn nf_load(obj: *const ObjectHeader) -> NfResolved {
     }
 }
 
+/// A resolved decimal `Intl.NumberFormat` with all spec defaults, for `locale`.
+/// Callers tweak the few fields they need (`Intl.DurationFormat` formats each
+/// unit value through this to stay byte-identical with a nested NumberFormat).
+fn nf_resolved_default(locale: &str) -> NfResolved {
+    NfResolved {
+        locale: locale.to_string(),
+        numbering_system: "latn".to_string(),
+        style: "decimal".to_string(),
+        currency: None,
+        currency_display: "symbol".to_string(),
+        currency_sign: "standard".to_string(),
+        unit: None,
+        unit_display: "short".to_string(),
+        notation: "standard".to_string(),
+        compact_display: "short".to_string(),
+        sign_display: "auto".to_string(),
+        use_grouping: "auto".to_string(),
+        min_int: 1,
+        use_sig: false,
+        compact_both: false,
+        min_sig: 1,
+        max_sig: 21,
+        min_frac: 0,
+        max_frac: 3,
+        rounding_increment: 1.0,
+        rounding_mode: "halfExpand".to_string(),
+        rounding_priority: "auto".to_string(),
+        trailing_zero: "auto".to_string(),
+    }
+}
+
 /// Increment a big-endian ASCII-digit buffer by one, prepending a leading `1`
 /// on overflow (`"999"` → `"1000"`).
 fn increment_decimal(digits: &mut Vec<u8>) {
@@ -1263,8 +1294,19 @@ extern "C" fn number_format_bound_format_thunk(closure: *const ClosureHeader, va
     number_format_format_object(obj, value)
 }
 
+/// Coerce the `Intl.NumberFormat.prototype.format` / `formatToParts` argument to a
+/// number. Unlike `JSValue::to_number`, this parses a String operand (`"0.001"` →
+/// `0.001`) — `Intl.DurationFormat` relies on it to format the fractional seconds
+/// value it passes as a decimal string. This is an `f64`-precision approximation of
+/// the spec's `ToIntlMathematicalValue`, not the exact-decimal mathematical value
+/// (large/high-precision operands lose precision), which is adequate for the
+/// formatter's rendering path.
+fn nf_coerce_number(value: f64) -> f64 {
+    crate::builtins::js_number_coerce(value)
+}
+
 fn number_format_format_object(obj: *const ObjectHeader, value: f64) -> f64 {
-    let number = JSValue::from_bits(value.to_bits()).to_number();
+    let number = nf_coerce_number(value);
     string_value(&format_number_instance(obj, number))
 }
 
@@ -1280,13 +1322,13 @@ extern "C" fn number_format_bound_resolved_options_thunk(closure: *const Closure
 
 extern "C" fn number_format_to_parts_thunk(_closure: *const ClosureHeader, value: f64) -> f64 {
     let obj = this_intl_object("formatToParts", KIND_NUMBER);
-    let number = JSValue::from_bits(value.to_bits()).to_number();
+    let number = nf_coerce_number(value);
     parts_to_js_array(&number_instance_parts(obj, number))
 }
 
 extern "C" fn number_format_bound_to_parts_thunk(closure: *const ClosureHeader, value: f64) -> f64 {
     let obj = captured_intl_object(closure, "formatToParts", KIND_NUMBER);
-    let number = JSValue::from_bits(value.to_bits()).to_number();
+    let number = nf_coerce_number(value);
     parts_to_js_array(&number_instance_parts(obj, number))
 }
 
