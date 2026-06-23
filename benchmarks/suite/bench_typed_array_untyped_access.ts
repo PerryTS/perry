@@ -85,6 +85,20 @@ const typed = Date.now() - t;
 
 // Same input → identical state proves the untyped fast path matches the typed
 // path bit-for-bit (the #5525 inline path must never diverge from the slow one).
+// Fail fast — a divergence is a miscompile, not a slow number, so this guard
+// aborts rather than printing a sentinel.
+if (lrU[0] !== lrT[0] || lrU[1] !== lrT[1]) {
+  throw new Error(
+    `checksum mismatch: untyped=[${lrU[0]},${lrU[1]}] typed=[${lrT[0]},${lrT[1]}]`,
+  );
+}
+
+// The untyped/typed ratio is the #5525 metric: it normalizes out machine speed
+// (Node ≈ 1.0 — no gap; Perry > 1 until static typed-array-kind inference
+// lands). Emit it first so a single-line metric consumer (the suite runner reads
+// only the first `label:number` line) tracks the *gap*, not absolute time.
+const ratio = untyped / typed;
+console.log("ta_untyped_typed_ratio:" + ratio);
 console.log("ta_untyped_access:" + untyped);
 console.log("ta_typed_access:" + typed);
-console.log("checksum:" + (lrU[0] === lrT[0] && lrU[1] === lrT[1] ? lrU[0] : -1));
+console.log("checksum:" + lrU[0]);
