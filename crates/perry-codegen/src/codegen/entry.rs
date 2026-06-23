@@ -187,6 +187,42 @@ fn collect_entry_env_literals(init: &[perry_hir::Stmt]) -> Vec<(String, String)>
 /// module's `<prefix>__init` function in order, then runs the entry
 /// module's top-level statements, then `return 0`.
 ///
+/// #5579: emit the global-object reflection of a Script's bare top-level
+/// `function` declarations (`globalThis[name] = <fn>`). Called from the
+/// entry-module branch only for non-ESM programs, before user init runs.
+///
+/// Each name is reflected with a heap closure built exactly as `Expr::FuncRef`
+/// does (`js_closure_alloc_singleton(@__perry_wrap_<sym>)`), so the property
+/// value is callable and `typeof globalThis[name] === "function"`. The
+/// `hir.script_global_functions` list is already deduped (last declaration
+/// wins) and excludes nested closures / object-literal methods, which must
+/// not pollute the global object.
+fn emit_script_global_function_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
+    for (name, fid) in &hir.script_global_functions {
+        if ctx.block().is_terminated() {
+            break;
+        }
+        let func_name = match ctx.func_names.get(fid) {
+            Some(n) => n.clone(),
+            None => continue,
+        };
+        let wrap_ptr = format!("@__perry_wrap_{}", func_name);
+        let key_idx = ctx.strings.intern(name);
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let global_box = blk.call(DOUBLE, "js_get_global_this", &[]);
+        let obj_raw = crate::expr::unbox_to_i64(blk, &global_box);
+        let closure_handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &wrap_ptr)]);
+        let closure_box = crate::expr::nanbox_pointer_inline(blk, &closure_handle);
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let key_raw = crate::expr::unbox_to_i64(blk, &key_box);
+        blk.call_void(
+            "js_object_set_field_by_name",
+            &[(I64, &obj_raw), (I64, &key_raw), (DOUBLE, &closure_box)],
+        );
+    }
+}
+
 /// For **non-entry modules**: emits `void <prefix>__init()` that runs the
 /// non-entry module's string pool init followed by its top-level
 /// statements. The entry module's main calls these via the
@@ -635,6 +671,19 @@ pub(super) fn compile_module_entry(
         // computed-Symbol-key static fields whose key/init reference
         // module-level lets see populated slots.
         init_static_fields_early(&mut ctx, hir)?;
+        // #5579: GlobalDeclarationInstantiation for a Script. A non-ESM entry
+        // program runs as a *Script*, so its bare top-level `function`
+        // declarations become own properties of the global object (observable
+        // via `Object.prototype.hasOwnProperty.call(globalThis, name)` — the
+        // check the Test262 async harness uses for `$DONE`). ESM modules
+        // (import/export syntax or top-level await) instead bind in the
+        // module record and do NOT reflect. Emitted before user init so the
+        // functions are visible to top-level code (hoisting).
+        let is_esm_entry =
+            !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await;
+        if !is_esm_entry {
+            emit_script_global_function_decls(&mut ctx, hir);
+        }
         stmt::lower_top_level_stmts(&mut ctx, &hir.init)
             .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
         init_static_fields_late(&mut ctx, hir)?;

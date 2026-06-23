@@ -338,7 +338,19 @@ pub(crate) fn lower_stmt(
                         rest_idx,
                         has_synth_args,
                     ));
+                    // #5579: record bare top-level function declarations for
+                    // global-object reflection (Script GlobalDeclarationInst-
+                    // antiation). `func` is moved into the dedup helper below,
+                    // so capture name+id first. Codegen reflects these onto
+                    // `globalThis` only for a non-ESM entry program.
+                    let global_decl = (func.name.clone(), func.id);
                     push_function_decl_dedup(module, func);
+                    // Keep at most one entry per name (last declaration wins,
+                    // matching the dedup helper's overwrite semantics).
+                    module
+                        .script_global_functions
+                        .retain(|(n, _)| n != &global_decl.0);
+                    module.script_global_functions.push(global_decl);
                 }
                 ast::Decl::Var(var_decl) => {
                     let mutable = var_decl.kind != ast::VarDeclKind::Const;
