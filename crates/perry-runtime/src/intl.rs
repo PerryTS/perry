@@ -52,6 +52,27 @@ const KEY_PR_MIN_SIG: &str = "__intlMinSig";
 const KEY_PR_MAX_SIG: &str = "__intlMaxSig";
 const KEY_PR_USE_SIG: &str = "__intlUseSig";
 
+// NumberFormat option storage (ECMA-402 §15). Read once in the constructor and
+// reproduced by `resolvedOptions` / the formatter.
+const KEY_NF_NUMBERING: &str = "__intlNfNumbering";
+const KEY_NF_CURRENCY_DISPLAY: &str = "__intlNfCurrencyDisplay";
+const KEY_NF_CURRENCY_SIGN: &str = "__intlNfCurrencySign";
+const KEY_NF_UNIT: &str = "__intlNfUnit";
+const KEY_NF_UNIT_DISPLAY: &str = "__intlNfUnitDisplay";
+const KEY_NF_NOTATION: &str = "__intlNfNotation";
+const KEY_NF_COMPACT_DISPLAY: &str = "__intlNfCompactDisplay";
+const KEY_NF_SIGN_DISPLAY: &str = "__intlNfSignDisplay";
+const KEY_NF_USE_GROUPING: &str = "__intlNfUseGrouping";
+const KEY_NF_MIN_INT: &str = "__intlNfMinInt";
+const KEY_NF_MIN_FRAC: &str = "__intlNfMinFrac";
+const KEY_NF_USE_SIG: &str = "__intlNfUseSig";
+const KEY_NF_MIN_SIG: &str = "__intlNfMinSig";
+const KEY_NF_MAX_SIG: &str = "__intlNfMaxSig";
+const KEY_NF_ROUNDING_INCREMENT: &str = "__intlNfRoundingIncrement";
+const KEY_NF_ROUNDING_MODE: &str = "__intlNfRoundingMode";
+const KEY_NF_ROUNDING_PRIORITY: &str = "__intlNfRoundingPriority";
+const KEY_NF_TRAILING_ZERO: &str = "__intlNfTrailingZero";
+
 fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -186,6 +207,126 @@ fn get_option_number(options: f64, key: &str) -> Option<f64> {
     }
 }
 
+/// GetOption(options, key, "string", «allowed», default) — coerce to string,
+/// require membership in `allowed`, else `RangeError`. Absent → `default`.
+fn get_string_option_enum(options: f64, key: &str, allowed: &[&str], default: &str) -> String {
+    match get_option_string(options, key) {
+        None => default.to_string(),
+        Some(value) => {
+            if allowed.contains(&value.as_str()) {
+                value
+            } else {
+                throw_range_error(&format!(
+                    "Value {value} out of range for Intl.NumberFormat options property {key}"
+                ))
+            }
+        }
+    }
+}
+
+/// GetOption(options, key, "boolean"/"string", …) for `useGrouping`: returns the
+/// resolved value as a string — `"false"` for a falsy boolean, otherwise one of
+/// `"auto"`/`"always"`/`"min2"`. `true` maps to `"always"`, absent → `default`.
+fn get_use_grouping_option(options: f64, default: &str) -> String {
+    let value = get_option_value(options, "useGrouping");
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_undefined() {
+        return default.to_string();
+    }
+    if js.is_bool() {
+        return if js.as_bool() { "always" } else { "false" }.to_string();
+    }
+    // Strings (and other coercibles) follow the WellFormedUnicodeString path.
+    let s = if js.is_any_string() {
+        string_from_string_value(value).unwrap_or_default()
+    } else if js.is_null() {
+        // `null` coerces to the string "null" → not in the allow-list → RangeError.
+        "null".to_string()
+    } else {
+        value_to_string(value)
+    };
+    match s.as_str() {
+        "min2" | "auto" | "always" => s,
+        "true" => "always".to_string(),
+        "false" => "false".to_string(),
+        other => throw_range_error(&format!(
+            "Value {other} out of range for Intl.NumberFormat options property useGrouping"
+        )),
+    }
+}
+
+/// GetNumberOption(options, key, min, max, fallback) with integer truncation and
+/// `RangeError` when out of `[min, max]`. Returns `None` when absent.
+fn get_int_option_in_range(options: f64, key: &str, min: f64, max: f64) -> Option<f64> {
+    let value = get_option_value(options, key);
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_undefined() {
+        return None;
+    }
+    let n = js.to_number();
+    if n.is_nan() || n < min || n > max {
+        throw_range_error(&format!(
+            "Value {n} out of range for Intl.NumberFormat options property {key}"
+        ));
+    }
+    Some(n.floor())
+}
+
+/// Default fraction-digit count for a currency code (CLDR `currencyDigits`). Most
+/// currencies use 2; this covers the common zero/three-digit exceptions enough
+/// for the parity matrix. Unknown codes fall back to 2.
+fn currency_fraction_digits(code: &str) -> u32 {
+    match code {
+        "JPY" | "KRW" | "CLP" | "ISK" | "HUF" | "TWD" | "VND" => 0,
+        "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 3,
+        _ => 2,
+    }
+}
+
+/// A `numberingSystem` value is structurally valid when it is one or more
+/// hyphen-separated subtags of 3–8 alphanumerics (the `type` Unicode nonterminal).
+fn is_well_formed_numbering_system(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('-').all(|sub| {
+            (3..=8).contains(&sub.len()) && sub.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+}
+
+/// Extract the `-u-nu-<value>` numbering system from a (canonicalized) locale
+/// string, lower-cased. Returns `None` when no `nu` keyword is present.
+fn numbering_system_from_locale(locale: &str) -> Option<String> {
+    let lower = locale.to_ascii_lowercase();
+    let subtags: Vec<&str> = lower.split('-').collect();
+    let u = subtags.iter().position(|s| *s == "u")?;
+    let mut i = u + 1;
+    while i < subtags.len() {
+        let key = subtags[i];
+        // A keyword key is exactly two chars; everything up to the next key is its value.
+        if key.len() == 2 {
+            if key == "nu" {
+                let mut value = String::new();
+                let mut j = i + 1;
+                while j < subtags.len() && subtags[j].len() != 2 {
+                    if !value.is_empty() {
+                        value.push('-');
+                    }
+                    value.push_str(subtags[j]);
+                    j += 1;
+                }
+                return (!value.is_empty()).then_some(value);
+            }
+            i += 1;
+            while i < subtags.len() && subtags[i].len() != 2 {
+                i += 1;
+            }
+        } else {
+            // Hit another singleton extension (e.g. `-t-`); `nu` lives only under `u`.
+            break;
+        }
+    }
+    None
+}
+
 #[cold]
 fn throw_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -206,6 +347,11 @@ fn canonical_locale(tag: &str) -> Option<String> {
         return None;
     }
     let mut out = String::new();
+    // Subtags after a singleton (length-1 `u`/`t`/`x`/…) belong to an extension
+    // or private-use sequence and are canonicalized to lower case (UTS #35) — the
+    // core-tag region rule (uppercase 2-letter subtags) must not apply there, or
+    // `en-US-u-nu-latn` would mis-canonicalize the `nu` keyword to `NU`.
+    let mut in_extension = false;
     for (i, subtag) in tag.split('-').enumerate() {
         if subtag.is_empty()
             || subtag.len() > 8
@@ -219,12 +365,15 @@ fn canonical_locale(tag: &str) -> Option<String> {
         if i > 0 {
             out.push('-');
         }
-        if i == 0 {
+        if i == 0 || in_extension {
             out.push_str(&subtag.to_ascii_lowercase());
         } else if subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic()) {
             out.push_str(&subtag.to_ascii_uppercase());
         } else {
             out.push_str(subtag);
+        }
+        if subtag.len() == 1 {
+            in_extension = true;
         }
     }
     Some(out)
@@ -413,44 +562,634 @@ fn split_numeric_parts(s: &str, locale: &str, parts: &mut Vec<(&'static str, Str
     }
 }
 
+struct NfResolved {
+    locale: String,
+    numbering_system: String,
+    style: String,
+    currency: Option<String>,
+    currency_display: String,
+    currency_sign: String,
+    unit: Option<String>,
+    unit_display: String,
+    notation: String,
+    compact_display: String,
+    sign_display: String,
+    use_grouping: String,
+    min_int: u32,
+    /// Whether the formatter rounds by significant digits (also true for the
+    /// default compact path, which uses 1–2 significant digits).
+    use_sig: bool,
+    /// Compact's default rounding surfaces *both* fraction and significant slots
+    /// in `resolvedOptions` (rounding priority morePrecision).
+    compact_both: bool,
+    min_sig: u32,
+    max_sig: u32,
+    min_frac: u32,
+    max_frac: u32,
+    rounding_increment: f64,
+    rounding_mode: String,
+    rounding_priority: String,
+    trailing_zero: String,
+}
+
+fn nf_load(obj: *const ObjectHeader) -> NfResolved {
+    let num = |key: &str, default: f64| get_number_field(obj, key).unwrap_or(default);
+    NfResolved {
+        locale: get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string()),
+        numbering_system: get_string_field(obj, KEY_NF_NUMBERING)
+            .unwrap_or_else(|| "latn".to_string()),
+        style: get_string_field(obj, KEY_STYLE).unwrap_or_else(|| "decimal".to_string()),
+        currency: get_string_field(obj, KEY_CURRENCY),
+        currency_display: get_string_field(obj, KEY_NF_CURRENCY_DISPLAY)
+            .unwrap_or_else(|| "symbol".to_string()),
+        currency_sign: get_string_field(obj, KEY_NF_CURRENCY_SIGN)
+            .unwrap_or_else(|| "standard".to_string()),
+        unit: get_string_field(obj, KEY_NF_UNIT),
+        unit_display: get_string_field(obj, KEY_NF_UNIT_DISPLAY)
+            .unwrap_or_else(|| "short".to_string()),
+        notation: get_string_field(obj, KEY_NF_NOTATION).unwrap_or_else(|| "standard".to_string()),
+        compact_display: get_string_field(obj, KEY_NF_COMPACT_DISPLAY)
+            .unwrap_or_else(|| "short".to_string()),
+        sign_display: get_string_field(obj, KEY_NF_SIGN_DISPLAY)
+            .unwrap_or_else(|| "auto".to_string()),
+        use_grouping: get_string_field(obj, KEY_NF_USE_GROUPING)
+            .unwrap_or_else(|| "auto".to_string()),
+        min_int: num(KEY_NF_MIN_INT, 1.0) as u32,
+        use_sig: matches!(
+            get_string_field(obj, KEY_NF_USE_SIG).as_deref(),
+            Some("significant") | Some("both")
+        ),
+        compact_both: get_string_field(obj, KEY_NF_USE_SIG).as_deref() == Some("both"),
+        min_sig: num(KEY_NF_MIN_SIG, 1.0) as u32,
+        max_sig: num(KEY_NF_MAX_SIG, 21.0) as u32,
+        min_frac: num(KEY_NF_MIN_FRAC, 0.0) as u32,
+        max_frac: num(KEY_MAX_FRACTION_DIGITS, 3.0) as u32,
+        rounding_increment: num(KEY_NF_ROUNDING_INCREMENT, 1.0),
+        rounding_mode: get_string_field(obj, KEY_NF_ROUNDING_MODE)
+            .unwrap_or_else(|| "halfExpand".to_string()),
+        rounding_priority: get_string_field(obj, KEY_NF_ROUNDING_PRIORITY)
+            .unwrap_or_else(|| "auto".to_string()),
+        trailing_zero: get_string_field(obj, KEY_NF_TRAILING_ZERO)
+            .unwrap_or_else(|| "auto".to_string()),
+    }
+}
+
+/// Increment a big-endian ASCII-digit buffer by one, prepending a leading `1`
+/// on overflow (`"999"` → `"1000"`).
+fn increment_decimal(digits: &mut Vec<u8>) {
+    for d in digits.iter_mut().rev() {
+        if *d == b'9' {
+            *d = b'0';
+        } else {
+            *d += 1;
+            return;
+        }
+    }
+    digits.insert(0, b'1');
+}
+
+fn strip_leading_zeros(s: String) -> String {
+    let trimmed = s.trim_start_matches('0');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+const ROUND_CEIL: u8 = 0;
+const ROUND_FLOOR: u8 = 1;
+const ROUND_EXPAND: u8 = 2;
+const ROUND_TRUNC: u8 = 3;
+const ROUND_HALF_CEIL: u8 = 4;
+const ROUND_HALF_FLOOR: u8 = 5;
+const ROUND_HALF_EXPAND: u8 = 6;
+const ROUND_HALF_TRUNC: u8 = 7;
+const ROUND_HALF_EVEN: u8 = 8;
+
+thread_local! {
+    /// (roundingMode code, value-is-negative) for the in-progress format. Set
+    /// once per `number_instance_parts` call and consumed by the digit-string
+    /// rounding helpers, avoiding threading the pair through every call site.
+    static ROUND_CTX: std::cell::Cell<(u8, bool)> =
+        const { std::cell::Cell::new((ROUND_HALF_EXPAND, false)) };
+}
+
+fn round_mode_code(mode: &str) -> u8 {
+    match mode {
+        "ceil" => ROUND_CEIL,
+        "floor" => ROUND_FLOOR,
+        "expand" => ROUND_EXPAND,
+        "trunc" => ROUND_TRUNC,
+        "halfCeil" => ROUND_HALF_CEIL,
+        "halfFloor" => ROUND_HALF_FLOOR,
+        "halfTrunc" => ROUND_HALF_TRUNC,
+        "halfEven" => ROUND_HALF_EVEN,
+        _ => ROUND_HALF_EXPAND,
+    }
+}
+
+fn set_round_ctx(mode: &str, negative: bool) {
+    ROUND_CTX.with(|c| c.set((round_mode_code(mode), negative)));
+}
+
+/// Decide whether to round the kept digits up given the dropped tail, the active
+/// rounding mode, and the value's sign (ECMA-402 ApplyUnsignedRoundingMode +
+/// signed direction). `last_kept` is the final retained digit (for halfEven).
+fn rounding_up(last_kept: u8, dropped: &[u8]) -> bool {
+    if dropped.iter().all(|&d| d == b'0') {
+        return false; // exact — never rounds.
+    }
+    let (mode, neg) = ROUND_CTX.with(|c| c.get());
+    let first = dropped.first().copied().unwrap_or(b'0');
+    let rest_zero = dropped[1..].iter().all(|&d| d == b'0');
+    let exactly_half = first == b'5' && rest_zero;
+    let more_half = first > b'5' || (first == b'5' && !rest_zero);
+    let half_or_more = more_half || exactly_half;
+    match mode {
+        ROUND_CEIL => !neg,
+        ROUND_FLOOR => neg,
+        ROUND_EXPAND => true,
+        ROUND_TRUNC => false,
+        ROUND_HALF_CEIL => {
+            if neg {
+                more_half
+            } else {
+                half_or_more
+            }
+        }
+        ROUND_HALF_FLOOR => {
+            if neg {
+                half_or_more
+            } else {
+                more_half
+            }
+        }
+        ROUND_HALF_TRUNC => more_half,
+        ROUND_HALF_EVEN => more_half || (exactly_half && (last_kept - b'0') % 2 == 1),
+        _ => half_or_more, // halfExpand (default)
+    }
+}
+
+/// Round the decimal value `int_part.frac_part` to exactly `frac_digits`
+/// fractional places under the active rounding mode, operating on the digit
+/// strings so the result is independent of the binary float's representation
+/// error. Returns `(integer_digits, fraction_digits)`, fraction zero-padded.
+fn round_to_fraction(int_part: &str, frac_part: &str, frac_digits: usize) -> (String, String) {
+    let int_len = int_part.len();
+    let cut = int_len + frac_digits;
+    let mut combined: Vec<u8> = Vec::with_capacity(cut + 1);
+    combined.extend(int_part.bytes());
+    combined.extend(frac_part.bytes());
+    let dropped: Vec<u8> = combined.iter().skip(cut).copied().collect();
+    let mut kept: Vec<u8> = combined.iter().take(cut).copied().collect();
+    while kept.len() < cut {
+        kept.push(b'0');
+    }
+    let last_kept = kept.last().copied().unwrap_or(b'0');
+    if rounding_up(last_kept, &dropped) {
+        increment_decimal(&mut kept);
+    }
+    let new_int_len = kept.len() - frac_digits;
+    let int_str = String::from_utf8(kept[..new_int_len].to_vec()).unwrap();
+    let frac_str = String::from_utf8(kept[new_int_len..].to_vec()).unwrap();
+    (strip_leading_zeros(int_str), frac_str)
+}
+
+/// Round an integer digit string to drop its `place` least-significant digits,
+/// replacing them with zeros, under the active rounding mode. `12345`, place 3 →
+/// `12000`.
+fn round_integer_to_place(int_part: &str, place: usize) -> String {
+    if place >= int_part.len() {
+        // The whole value sits below the rounding unit: every digit is dropped,
+        // left-padded with the implied zeros above the most-significant digit.
+        let mut dropped = vec![b'0'; place - int_part.len()];
+        dropped.extend(int_part.bytes());
+        let mut out = if rounding_up(b'0', &dropped) {
+            vec![b'1']
+        } else {
+            Vec::new()
+        };
+        out.extend(std::iter::repeat(b'0').take(place));
+        return strip_leading_zeros(String::from_utf8(out).unwrap());
+    }
+    let keep = int_part.len() - place;
+    let dropped: Vec<u8> = int_part.as_bytes()[keep..].to_vec();
+    let last_kept = int_part.as_bytes()[keep - 1];
+    let mut kept: Vec<u8> = int_part[..keep].bytes().collect();
+    if rounding_up(last_kept, &dropped) {
+        increment_decimal(&mut kept);
+    }
+    kept.extend(std::iter::repeat(b'0').take(place));
+    strip_leading_zeros(String::from_utf8(kept).unwrap())
+}
+
+/// Count significant digits in a `(int, frac)` decimal (leading zeros excluded,
+/// interior/trailing digits included).
+fn significant_count(int_part: &str, frac_part: &str) -> usize {
+    let mut combined = String::with_capacity(int_part.len() + frac_part.len());
+    combined.push_str(int_part);
+    combined.push_str(frac_part);
+    combined.trim_start_matches('0').len()
+}
+
+/// Round to `max_sig` significant digits, then ensure at least `min_sig` by
+/// padding the fraction with trailing zeros. Returns `(int, frac)`.
+fn round_to_significant(
+    int_part: &str,
+    frac_part: &str,
+    min_sig: u32,
+    max_sig: u32,
+) -> (String, String) {
+    let combined: String = format!("{int_part}{frac_part}");
+    let first_sig = combined.bytes().position(|d| d != b'0');
+    let (mut int_out, mut frac_out) = match first_sig {
+        None => ("0".to_string(), String::new()),
+        Some(fs) => {
+            let msd_exp = int_part.len() as i32 - 1 - fs as i32;
+            let frac_needed = max_sig as i32 - 1 - msd_exp;
+            if frac_needed >= 0 {
+                round_to_fraction(int_part, frac_part, frac_needed as usize)
+            } else {
+                (
+                    round_integer_to_place(int_part, (-frac_needed) as usize),
+                    String::new(),
+                )
+            }
+        }
+    };
+    // Normalize trailing fraction zeros to land within [min_sig, max_sig]
+    // significant digits — rounding may have produced extras (9.999→"10.0").
+    while frac_out.ends_with('0') && significant_count(&int_out, &frac_out) > min_sig as usize {
+        frac_out.pop();
+    }
+    while significant_count(&int_out, &frac_out) < min_sig as usize {
+        frac_out.push('0');
+    }
+    if int_out.is_empty() {
+        int_out.push('0');
+    }
+    (int_out, frac_out)
+}
+
+/// Trim trailing fraction zeros down to `min_frac` places.
+fn trim_fraction(frac: &str, min_frac: usize) -> String {
+    let mut f = frac.to_string();
+    while f.len() > min_frac && f.ends_with('0') {
+        f.pop();
+    }
+    f
+}
+
+/// Most-significant-digit decimal exponent of `abs > 0`, derived from the
+/// shortest round-trip decimal so it is exact for integers.
+fn decimal_msd_exponent(int_part: &str, frac_part: &str) -> i32 {
+    let combined: String = format!("{int_part}{frac_part}");
+    match combined.bytes().position(|d| d != b'0') {
+        Some(fs) => int_part.len() as i32 - 1 - fs as i32,
+        None => 0,
+    }
+}
+
+/// Group an integer digit string into locale parts. Pushes `integer`/`group`
+/// segments. Grouping is applied when `grouping` is true and the integer has >3
+/// digits.
+fn push_grouped_integer(
+    parts: &mut Vec<(&'static str, String)>,
+    int_digits: &str,
+    group_sep: char,
+    grouping: bool,
+) {
+    if !grouping || int_digits.len() <= 3 {
+        parts.push(("integer", int_digits.to_string()));
+        return;
+    }
+    let chars: Vec<char> = int_digits.chars().collect();
+    let n = chars.len();
+    let head = if n % 3 == 0 { 3 } else { n % 3 };
+    parts.push(("integer", chars[..head].iter().collect()));
+    let mut i = head;
+    while i < n {
+        parts.push(("group", group_sep.to_string()));
+        parts.push(("integer", chars[i..i + 3].iter().collect()));
+        i += 3;
+    }
+}
+
+/// Whether grouping separators should be emitted for an integer of `int_len`
+/// digits under the resolved `useGrouping` value.
+fn grouping_enabled(use_grouping: &str, int_len: usize) -> bool {
+    match use_grouping {
+        "false" => false,
+        "min2" => int_len >= 5,
+        // "auto" / "always" both group for the locales we render (Latin/de).
+        _ => int_len > 3,
+    }
+}
+
+/// Compact-notation suffix tables for `en` (short and long forms).
+fn compact_suffix(power: u32, long: bool) -> &'static str {
+    match (power, long) {
+        (3, false) => "K",
+        (6, false) => "M",
+        (9, false) => "B",
+        (12, false) => "T",
+        (3, true) => "thousand",
+        (6, true) => "million",
+        (9, true) => "billion",
+        (12, true) => "trillion",
+        _ => "",
+    }
+}
+
+/// Append the leading sign segment per `signDisplay`. `negative` already folds in
+/// the `-0` case; `is_zero` covers both signed zeros.
+fn push_sign(
+    parts: &mut Vec<(&'static str, String)>,
+    sign_display: &str,
+    negative: bool,
+    is_zero: bool,
+) {
+    let seg = match sign_display {
+        "never" => None,
+        "always" => Some(if negative {
+            ("minusSign", "-")
+        } else {
+            ("plusSign", "+")
+        }),
+        "exceptZero" => {
+            if is_zero {
+                None
+            } else if negative {
+                Some(("minusSign", "-"))
+            } else {
+                Some(("plusSign", "+"))
+            }
+        }
+        "negative" => {
+            if negative && !is_zero {
+                Some(("minusSign", "-"))
+            } else {
+                None
+            }
+        }
+        // auto
+        _ => {
+            if negative {
+                Some(("minusSign", "-"))
+            } else {
+                None
+            }
+        }
+    };
+    if let Some((ty, v)) = seg {
+        parts.push((ty, v.to_string()));
+    }
+}
+
 /// Build the typed `formatToParts` segment list for a NumberFormat instance.
 /// `format()` is defined as the concatenation of these segments' values.
 fn number_instance_parts(obj: *const ObjectHeader, value: f64) -> Vec<(&'static str, String)> {
-    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
-    let style = get_string_field(obj, KEY_STYLE).unwrap_or_else(|| "decimal".to_string());
+    let r = nf_load(obj);
+    number_parts_from_resolved(&r, value)
+}
+
+/// Build the typed parts from an already-resolved [`NfResolved`] (the shared
+/// rendering core behind `format` / `formatToParts`).
+fn number_parts_from_resolved(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> {
+    // Currency keeps its existing locale-specific symbol rendering.
+    if r.style == "currency" {
+        return currency_instance_parts(r, value);
+    }
+
+    let de_style = r.locale.eq_ignore_ascii_case("de") || r.locale.starts_with("de-");
+    let group_sep = if de_style { '.' } else { ',' };
+    let decimal_sep = if de_style { ',' } else { '.' };
+
     let mut parts: Vec<(&'static str, String)> = Vec::new();
-    if style == "currency" {
-        let digits = format_number_parts(value, &locale, Some(2), None);
-        let currency = get_string_field(obj, KEY_CURRENCY);
-        let mut numeric: Vec<(&'static str, String)> = Vec::new();
-        split_numeric_parts(&digits, &locale, &mut numeric);
-        match currency.as_deref() {
-            Some("EUR") if locale.starts_with("de") => {
-                parts = numeric;
-                parts.push(("literal", "\u{00a0}".to_string()));
-                parts.push(("currency", "\u{20ac}".to_string()));
+    let is_zero = value == 0.0;
+    let negative = value < 0.0 || (is_zero && value.is_sign_negative());
+    set_round_ctx(&r.rounding_mode, negative);
+
+    if value.is_nan() {
+        // NaN is non-negative and non-zero for sign purposes: only `always`
+        // prepends a (plus) sign — `+NaN` — every other mode shows bare `NaN`.
+        push_sign(&mut parts, &r.sign_display, false, true);
+        parts.push(("nan", "NaN".to_string()));
+        push_style_suffix(&mut parts, r, decimal_sep);
+        return parts;
+    }
+
+    let mut abs = value.abs();
+    if r.style == "percent" {
+        abs *= 100.0;
+    }
+
+    if abs.is_infinite() {
+        let mut out: Vec<(&'static str, String)> = Vec::new();
+        push_sign(&mut out, &r.sign_display, negative, false);
+        out.push(("infinity", "∞".to_string()));
+        push_style_suffix(&mut out, r, decimal_sep);
+        return out;
+    }
+
+    // Exact shortest-decimal digit strings (Rust's `Display` never uses exponent).
+    let shortest = format!("{abs}");
+    let (int_part, frac_part) = shortest.split_once('.').unwrap_or((&shortest, ""));
+
+    match r.notation.as_str() {
+        "scientific" | "engineering" => {
+            let msd = decimal_msd_exponent(int_part, frac_part);
+            let exp = if r.notation == "engineering" {
+                (msd as f64 / 3.0).floor() as i32 * 3
+            } else {
+                msd
+            };
+            // Significant digit string, decimal point placed after `int_digits` digits.
+            let combined: String = format!("{int_part}{frac_part}");
+            let sig_digits = combined.trim_start_matches('0');
+            let sig_digits = if sig_digits.is_empty() {
+                "0"
+            } else {
+                sig_digits
+            };
+            let int_digits = (msd - exp + 1).max(1) as usize;
+            let (m_int, m_frac) = if sig_digits.len() >= int_digits {
+                (&sig_digits[..int_digits], &sig_digits[int_digits..])
+            } else {
+                (sig_digits, "")
+            };
+            let (mut i_out, f_out) = if r.use_sig {
+                round_to_significant(m_int, m_frac, r.min_sig, r.max_sig)
+            } else {
+                round_to_fraction(m_int, m_frac, r.max_frac as usize)
+            };
+            // Significant rounding already normalizes trailing zeros; only the
+            // fraction path trims down to the minimum fraction count.
+            let f_out = if r.use_sig {
+                f_out
+            } else {
+                trim_fraction(&f_out, r.min_frac as usize)
+            };
+            while (i_out.len() as u32) < r.min_int {
+                i_out.insert(0, '0');
             }
-            Some("EUR") => {
-                parts.push(("currency", "\u{20ac}".to_string()));
-                parts.extend(numeric);
+            push_grouped_integer(&mut parts, &i_out, group_sep, false);
+            if !f_out.is_empty() {
+                parts.push(("decimal", decimal_sep.to_string()));
+                parts.push(("fraction", f_out));
             }
-            Some("USD") => {
-                parts.push(("currency", "$".to_string()));
-                parts.extend(numeric);
+            parts.push(("exponentSeparator", "E".to_string()));
+            if exp < 0 {
+                parts.push(("exponentMinusSign", "-".to_string()));
             }
-            Some(code) => {
-                parts = numeric;
-                parts.push(("literal", " ".to_string()));
-                parts.push(("currency", code.to_string()));
-            }
-            None => parts = numeric,
+            parts.push(("exponentInteger", exp.abs().to_string()));
         }
+        "compact" => {
+            let mut power = if abs >= 1e12 {
+                12
+            } else if abs >= 1e9 {
+                9
+            } else if abs >= 1e6 {
+                6
+            } else if abs >= 1e3 {
+                3
+            } else {
+                0
+            };
+            // Rounding can push the scaled value up a tier (999_999 → 999.999 →
+            // rounds to 1000 → 1M, not 1000K). Re-scale until the rounded integer
+            // part stays below 1000 (or we run out of suffix tiers).
+            let (mut i_out, f_out) = loop {
+                let (ii, ff) = if power == 0 {
+                    // No scaling below the first threshold: render like standard
+                    // notation (fraction rounding), unless the caller explicitly
+                    // requested significant digits.
+                    if r.use_sig && !r.compact_both {
+                        round_to_significant(int_part, frac_part, r.min_sig, r.max_sig)
+                    } else {
+                        let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
+                        (i, trim_fraction(&f, r.min_frac as usize))
+                    }
+                } else {
+                    let scaled = format!("{}", abs / 10f64.powi(power as i32));
+                    let (si, sf) = scaled.split_once('.').unwrap_or((&scaled, ""));
+                    compact_round(si, sf, r)
+                };
+                if ii.len() > 3 && power < 12 {
+                    power += 3;
+                    continue;
+                }
+                break (ii, ff);
+            };
+            while (i_out.len() as u32) < r.min_int {
+                i_out.insert(0, '0');
+            }
+            let grouping = grouping_enabled(&r.use_grouping, i_out.len());
+            push_grouped_integer(&mut parts, &i_out, group_sep, grouping);
+            if !f_out.is_empty() {
+                parts.push(("decimal", decimal_sep.to_string()));
+                parts.push(("fraction", f_out));
+            }
+            if power > 0 {
+                let long = r.compact_display == "long";
+                if long {
+                    parts.push(("literal", " ".to_string()));
+                }
+                parts.push(("compact", compact_suffix(power, long).to_string()));
+            }
+        }
+        _ => {
+            let (mut i_out, f_out) = if r.use_sig {
+                round_to_significant(int_part, frac_part, r.min_sig, r.max_sig)
+            } else {
+                let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
+                (i, trim_fraction(&f, r.min_frac as usize))
+            };
+            while (i_out.len() as u32) < r.min_int {
+                i_out.insert(0, '0');
+            }
+            let grouping = grouping_enabled(&r.use_grouping, i_out.len());
+            push_grouped_integer(&mut parts, &i_out, group_sep, grouping);
+            if !f_out.is_empty() {
+                parts.push(("decimal", decimal_sep.to_string()));
+                parts.push(("fraction", f_out));
+            }
+        }
+    }
+
+    // Sign is decided after rounding: `exceptZero`/`negative` suppress the sign
+    // when the *rounded* magnitude is zero (e.g. -0.0001 → "0"), while
+    // `auto`/`always` follow the original mathematical sign (→ "-0").
+    let rounded_is_zero = parts
+        .iter()
+        .filter(|(t, _)| *t == "integer" || *t == "fraction")
+        .all(|(_, v)| v.bytes().all(|b| b == b'0'));
+    let mut out: Vec<(&'static str, String)> = Vec::with_capacity(parts.len() + 2);
+    push_sign(&mut out, &r.sign_display, negative, rounded_is_zero);
+    out.append(&mut parts);
+    push_style_suffix(&mut out, r, decimal_sep);
+    out
+}
+
+/// Round `(int, frac)` for compact notation: significant digits when configured
+/// (the default compact path uses 1–2 significant digits), else fraction digits.
+fn compact_round(int_part: &str, frac_part: &str, r: &NfResolved) -> (String, String) {
+    if r.use_sig {
+        round_to_significant(int_part, frac_part, r.min_sig, r.max_sig)
     } else {
-        let max_digits = get_number_field(obj, KEY_MAX_FRACTION_DIGITS)
-            .filter(|n| *n >= 0.0)
-            .map(|n| n as usize);
-        let digits = format_number_parts(value, &locale, None, max_digits);
-        split_numeric_parts(&digits, &locale, &mut parts);
+        let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
+        (i, trim_fraction(&f, r.min_frac as usize))
+    }
+}
+
+/// Append the trailing style suffix (`percent`/`unit`) after the numeric parts.
+fn push_style_suffix(parts: &mut Vec<(&'static str, String)>, r: &NfResolved, _decimal_sep: char) {
+    match r.style.as_str() {
+        "percent" => parts.push(("percentSign", "%".to_string())),
+        "unit" => {
+            if let Some(unit) = &r.unit {
+                parts.push(("literal", " ".to_string()));
+                parts.push(("unit", unit.clone()));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Existing locale-specific currency rendering, factored out of
+/// `number_instance_parts`.
+fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> {
+    let locale = &r.locale;
+    let digits = format_number_parts(
+        value,
+        locale,
+        Some(r.currency.as_deref().map_or(2, currency_fraction_digits) as usize),
+        None,
+    );
+    let mut numeric: Vec<(&'static str, String)> = Vec::new();
+    split_numeric_parts(&digits, locale, &mut numeric);
+    let mut parts: Vec<(&'static str, String)> = Vec::new();
+    match r.currency.as_deref() {
+        Some("EUR") if locale.starts_with("de") => {
+            parts = numeric;
+            parts.push(("literal", "\u{00a0}".to_string()));
+            parts.push(("currency", "\u{20ac}".to_string()));
+        }
+        Some("EUR") => {
+            parts.push(("currency", "\u{20ac}".to_string()));
+            parts.extend(numeric);
+        }
+        Some("USD") => {
+            parts.push(("currency", "$".to_string()));
+            parts.extend(numeric);
+        }
+        Some(code) => {
+            parts = numeric;
+            parts.push(("literal", " ".to_string()));
+            parts.push(("currency", code.to_string()));
+        }
+        None => parts = numeric,
     }
     parts
 }
@@ -542,18 +1281,55 @@ extern "C" fn number_format_bound_to_parts_thunk(closure: *const ClosureHeader, 
 }
 
 fn number_format_resolved_options_object(obj: *const ObjectHeader) -> f64 {
-    let out = js_object_alloc(0, 6);
-    set_field(
-        out,
-        "locale",
-        string_value(&get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string())),
-    );
-    set_field(out, "numberingSystem", string_value("latn"));
-    let style = get_string_field(obj, KEY_STYLE).unwrap_or_else(|| "decimal".to_string());
-    set_field(out, "style", string_value(&style));
-    if let Some(currency) = get_string_field(obj, KEY_CURRENCY) {
-        set_field(out, "currency", string_value(&currency));
+    let r = nf_load(obj);
+    let out = js_object_alloc(0, 16);
+    set_field(out, "locale", string_value(&r.locale));
+    set_field(out, "numberingSystem", string_value(&r.numbering_system));
+    set_field(out, "style", string_value(&r.style));
+    match r.style.as_str() {
+        "currency" => {
+            if let Some(currency) = &r.currency {
+                set_field(out, "currency", string_value(currency));
+            }
+            set_field(out, "currencyDisplay", string_value(&r.currency_display));
+            set_field(out, "currencySign", string_value(&r.currency_sign));
+        }
+        "unit" => {
+            if let Some(unit) = &r.unit {
+                set_field(out, "unit", string_value(unit));
+            }
+            set_field(out, "unitDisplay", string_value(&r.unit_display));
+        }
+        _ => {}
     }
+    set_field(out, "minimumIntegerDigits", r.min_int as f64);
+    if r.compact_both {
+        // Compact's default rounding (morePrecision) surfaces both slots.
+        set_field(out, "minimumFractionDigits", r.min_frac as f64);
+        set_field(out, "maximumFractionDigits", r.max_frac as f64);
+        set_field(out, "minimumSignificantDigits", r.min_sig as f64);
+        set_field(out, "maximumSignificantDigits", r.max_sig as f64);
+    } else if r.use_sig {
+        set_field(out, "minimumSignificantDigits", r.min_sig as f64);
+        set_field(out, "maximumSignificantDigits", r.max_sig as f64);
+    } else {
+        set_field(out, "minimumFractionDigits", r.min_frac as f64);
+        set_field(out, "maximumFractionDigits", r.max_frac as f64);
+    }
+    if r.use_grouping == "false" {
+        set_field(out, "useGrouping", bool_value(false));
+    } else {
+        set_field(out, "useGrouping", string_value(&r.use_grouping));
+    }
+    set_field(out, "notation", string_value(&r.notation));
+    if r.notation == "compact" {
+        set_field(out, "compactDisplay", string_value(&r.compact_display));
+    }
+    set_field(out, "signDisplay", string_value(&r.sign_display));
+    set_field(out, "roundingIncrement", r.rounding_increment);
+    set_field(out, "roundingMode", string_value(&r.rounding_mode));
+    set_field(out, "roundingPriority", string_value(&r.rounding_priority));
+    set_field(out, "trailingZeroDisplay", string_value(&r.trailing_zero));
     js_nanbox_pointer(out as i64)
 }
 
@@ -1305,6 +2081,239 @@ extern "C" fn plural_rules_bound_resolved_options_thunk(closure: *const ClosureH
     plural_rules_resolved_options_object(obj)
 }
 
+/// Read, validate, and store the NumberFormat option slots (ECMA-402
+/// CreateNumberFormat / SetNumberFormatUnitOptions / SetNumberFormatDigitOptions).
+fn configure_number_format(obj: *mut ObjectHeader, locale: &str, options: f64) {
+    // CoerceOptionsToObject: `null` throws; `undefined` behaves as an empty
+    // null-prototype object (our readers already treat non-objects as empty).
+    if JSValue::from_bits(options.to_bits()).is_null() {
+        throw_type_error("Cannot convert undefined or null to object");
+    }
+
+    // numberingSystem: option (validated, lower-cased) overrides the locale
+    // `-u-nu-` keyword; default "latn".
+    let numbering = match get_option_string(options, "numberingSystem") {
+        Some(value) => {
+            let lower = value.to_ascii_lowercase();
+            if !is_well_formed_numbering_system(&lower) {
+                throw_range_error(&format!(
+                    "Value {value} out of range for Intl.NumberFormat options property numberingSystem"
+                ));
+            }
+            lower
+        }
+        None => numbering_system_from_locale(locale).unwrap_or_else(|| "latn".to_string()),
+    };
+    set_internal_field(obj, KEY_NF_NUMBERING, string_value(&numbering));
+
+    // SetNumberFormatUnitOptions.
+    let style = get_string_option_enum(
+        options,
+        "style",
+        &["decimal", "percent", "currency", "unit"],
+        "decimal",
+    );
+    set_internal_field(obj, KEY_STYLE, string_value(&style));
+
+    let currency = get_option_string(options, "currency");
+    if let Some(code) = &currency {
+        if !is_well_formed_currency_code(code) {
+            throw_range_error(&format!("Invalid currency code : {code}"));
+        }
+        set_internal_field(obj, KEY_CURRENCY, string_value(&code.to_ascii_uppercase()));
+    }
+    let currency_display = get_string_option_enum(
+        options,
+        "currencyDisplay",
+        &["code", "symbol", "narrowSymbol", "name"],
+        "symbol",
+    );
+    let currency_sign = get_string_option_enum(
+        options,
+        "currencySign",
+        &["standard", "accounting"],
+        "standard",
+    );
+    set_internal_field(
+        obj,
+        KEY_NF_CURRENCY_DISPLAY,
+        string_value(&currency_display),
+    );
+    set_internal_field(obj, KEY_NF_CURRENCY_SIGN, string_value(&currency_sign));
+
+    let unit = get_option_string(options, "unit");
+    if let Some(u) = &unit {
+        if !is_well_formed_unit_identifier(u) {
+            throw_range_error(&format!(
+                "Value {u} out of range for Intl.NumberFormat options property unit"
+            ));
+        }
+        set_internal_field(obj, KEY_NF_UNIT, string_value(u));
+    }
+    let unit_display = get_string_option_enum(
+        options,
+        "unitDisplay",
+        &["short", "narrow", "long"],
+        "short",
+    );
+    set_internal_field(obj, KEY_NF_UNIT_DISPLAY, string_value(&unit_display));
+
+    if style == "currency" && currency.is_none() {
+        throw_type_error("Currency code is required with currency style.");
+    }
+    if style == "unit" && unit.is_none() {
+        throw_type_error("unit is required with unit style.");
+    }
+
+    // notation (read before the digit options per the spec order).
+    let notation = get_string_option_enum(
+        options,
+        "notation",
+        &["standard", "scientific", "engineering", "compact"],
+        "standard",
+    );
+    set_internal_field(obj, KEY_NF_NOTATION, string_value(&notation));
+
+    // SetNumberFormatDigitOptions.
+    let min_int =
+        get_int_option_in_range(options, "minimumIntegerDigits", 1.0, 21.0).unwrap_or(1.0);
+    set_internal_field(obj, KEY_NF_MIN_INT, min_int);
+
+    let min_frac_opt = get_int_option_in_range(options, "minimumFractionDigits", 0.0, 100.0);
+    let max_frac_opt = get_int_option_in_range(options, "maximumFractionDigits", 0.0, 100.0);
+    let min_sig_opt = get_int_option_in_range(options, "minimumSignificantDigits", 1.0, 21.0);
+    let max_sig_opt = get_int_option_in_range(options, "maximumSignificantDigits", 1.0, 21.0);
+    let mut rounding_priority = get_string_option_enum(
+        options,
+        "roundingPriority",
+        &["auto", "morePrecision", "lessPrecision"],
+        "auto",
+    );
+
+    let (default_min_frac, default_max_frac) = match style.as_str() {
+        "currency" => {
+            let d = currency.as_deref().map_or(2, currency_fraction_digits);
+            (d, d)
+        }
+        "percent" => (0, 0),
+        _ => (0, 3),
+    };
+
+    let has_sd = min_sig_opt.is_some() || max_sig_opt.is_some();
+    let has_fd = min_frac_opt.is_some() || max_frac_opt.is_some();
+
+    let min_sig = min_sig_opt.unwrap_or(1.0) as u32;
+    let max_sig = (max_sig_opt.unwrap_or(21.0) as u32).max(min_sig);
+    let min_frac = min_frac_opt.unwrap_or(default_min_frac as f64) as u32;
+    let max_frac = max_frac_opt
+        .map(|m| m as u32)
+        .unwrap_or_else(|| (min_frac).max(default_max_frac))
+        .max(min_frac);
+
+    set_internal_field(obj, KEY_NF_MIN_SIG, min_sig as f64);
+    set_internal_field(obj, KEY_NF_MAX_SIG, max_sig as f64);
+    set_internal_field(obj, KEY_NF_MIN_FRAC, min_frac as f64);
+    set_internal_field(obj, KEY_MAX_FRACTION_DIGITS, max_frac as f64);
+
+    // Digit display mode: "fraction" | "significant" | "both" (compact default).
+    let digit_mode = if has_sd && !has_fd {
+        "significant"
+    } else if !has_sd && !has_fd && notation == "compact" {
+        // Compact with no explicit digit options rounds by 1–2 significant
+        // digits with morePrecision priority, surfacing both slots.
+        rounding_priority = "morePrecision".to_string();
+        "both"
+    } else if has_sd && has_fd {
+        if rounding_priority == "lessPrecision" {
+            "fraction"
+        } else {
+            "significant"
+        }
+    } else {
+        "fraction"
+    };
+    // Compact's significant defaults are 1–2 when not explicitly given.
+    if digit_mode == "both" {
+        set_internal_field(obj, KEY_NF_MIN_SIG, 1.0);
+        set_internal_field(obj, KEY_NF_MAX_SIG, 2.0);
+        set_internal_field(obj, KEY_NF_MIN_FRAC, 0.0);
+        set_internal_field(obj, KEY_MAX_FRACTION_DIGITS, 0.0);
+    }
+    set_internal_field(obj, KEY_NF_USE_SIG, string_value(digit_mode));
+
+    set_internal_field(
+        obj,
+        KEY_NF_ROUNDING_INCREMENT,
+        get_int_option_in_range(options, "roundingIncrement", 1.0, 5000.0).unwrap_or(1.0),
+    );
+    let rounding_mode = get_string_option_enum(
+        options,
+        "roundingMode",
+        &[
+            "ceil",
+            "floor",
+            "expand",
+            "trunc",
+            "halfCeil",
+            "halfFloor",
+            "halfExpand",
+            "halfTrunc",
+            "halfEven",
+        ],
+        "halfExpand",
+    );
+    set_internal_field(obj, KEY_NF_ROUNDING_MODE, string_value(&rounding_mode));
+    set_internal_field(
+        obj,
+        KEY_NF_ROUNDING_PRIORITY,
+        string_value(&rounding_priority),
+    );
+    let trailing_zero = get_string_option_enum(
+        options,
+        "trailingZeroDisplay",
+        &["auto", "stripIfInteger"],
+        "auto",
+    );
+    set_internal_field(obj, KEY_NF_TRAILING_ZERO, string_value(&trailing_zero));
+
+    // compactDisplay, useGrouping, signDisplay.
+    let compact_display =
+        get_string_option_enum(options, "compactDisplay", &["short", "long"], "short");
+    set_internal_field(obj, KEY_NF_COMPACT_DISPLAY, string_value(&compact_display));
+
+    let default_grouping = if notation == "compact" {
+        "min2"
+    } else {
+        "auto"
+    };
+    let use_grouping = get_use_grouping_option(options, default_grouping);
+    set_internal_field(obj, KEY_NF_USE_GROUPING, string_value(&use_grouping));
+
+    let sign_display = get_string_option_enum(
+        options,
+        "signDisplay",
+        &["auto", "never", "always", "exceptZero", "negative"],
+        "auto",
+    );
+    set_internal_field(obj, KEY_NF_SIGN_DISPLAY, string_value(&sign_display));
+}
+
+/// A currency code is well-formed when it is exactly three ASCII letters
+/// (ISO 4217 alphabetic). Validity (vs. an actual currency) is not checked.
+fn is_well_formed_currency_code(code: &str) -> bool {
+    code.len() == 3 && code.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
+/// A core unit identifier is a `-`-separated sequence of lowercase ASCII
+/// segments (optionally a `per-` compound). This is a structural check, not a
+/// validity check against the CLDR sanctioned-unit list.
+fn is_well_formed_unit_identifier(unit: &str) -> bool {
+    !unit.is_empty()
+        && unit
+            .split('-')
+            .all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_alphabetic()))
+}
+
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
     let locale = locale_or_default(locales);
     let obj = js_object_alloc(0, 8);
@@ -1313,19 +2322,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
 
     match kind {
         KIND_NUMBER => {
-            let style =
-                get_option_string(options, "style").unwrap_or_else(|| "decimal".to_string());
-            set_internal_field(obj, KEY_STYLE, string_value(&style));
-            if let Some(currency) = get_option_string(options, "currency") {
-                set_internal_field(
-                    obj,
-                    KEY_CURRENCY,
-                    string_value(&currency.to_ascii_uppercase()),
-                );
-            }
-            if let Some(max) = get_option_number(options, "maximumFractionDigits") {
-                set_internal_field(obj, KEY_MAX_FRACTION_DIGITS, max);
-            }
+            configure_number_format(obj, &locale, options);
             install_bound_instance_function(
                 obj,
                 "format",
