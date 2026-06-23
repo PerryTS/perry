@@ -32,13 +32,23 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
         return;
     }
 
-    // Try Fastify context dispatch (request/reply properties)
-    #[cfg(feature = "http-server")]
-    if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
-        if property_name == "user" {
-            crate::fastify::js_fastify_req_set_user_data(handle, value);
-            // Claimed by the typed setter — must not also fall through to the
-            // generic expando store below.
+    // External-fastify `request.user = …` setter. fastify is served by
+    // perry-ext-fastify (the bundled in-stdlib adapter was removed); the handle
+    // lives in its perry-ffi registry, so probe membership via the external symbol
+    // and forward to its setter — the write counterpart of the
+    // `js_fastify_req_get_user_data` read arm in `js_handle_property_dispatch`, so
+    // a later `request.user` read sees the value rather than missing the generic
+    // expando store. Statically-typed inline sets lower via codegen's
+    // NATIVE_MODULE_TABLE; this covers the erased-receiver dynamic case.
+    #[cfg(feature = "external-fastify-pump")]
+    if property_name == "user" {
+        extern "C" {
+            fn js_ext_fastify_is_context_handle(handle: i64) -> i32;
+            fn js_fastify_req_set_user_data(handle: i64, value: f64);
+        }
+        if unsafe { js_ext_fastify_is_context_handle(handle) } != 0 {
+            unsafe { js_fastify_req_set_user_data(handle, value) };
+            // Claimed by the typed setter — don't also write a stale expando copy.
             return;
         }
     }

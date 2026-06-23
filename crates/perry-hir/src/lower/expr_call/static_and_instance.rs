@@ -439,9 +439,10 @@ pub(super) fn try_static_method_and_instance(
                 // branch only the inner `.code(...)` resolved as a
                 // NativeMethodCall and the rest of the chain fell through to
                 // the generic Call+PropertyGet path. That path routes through
-                // `js_native_call_method` → HANDLE_METHOD_DISPATCH, which has
-                // no fastify arm when the well-known flip strips
-                // `bundled-fastify` from stdlib — so `.type(...)` returned an
+                // `js_native_call_method` → HANDLE_METHOD_DISPATCH, which has no
+                // method-dispatch arm for fastify (the in-stdlib adapter was
+                // removed; fastify is served by perry-ext-fastify) — so without
+                // this branch `.type(...)` returned an
                 // untagged NaN that the next chain step read as a number
                 // ("(number).send is not a function"). Static NATIVE_MODULE_TABLE
                 // dispatch covers it correctly.

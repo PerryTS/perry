@@ -173,52 +173,12 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
-    // Fastify app: routes for HTTP verbs + lifecycle methods.
-    // #1113 adds `"on"` here — `app.server.on(event, cb)` dispatches
-    // against the same FastifyApp handle the user code holds (the
-    // `app.server` getter returns the app handle pointer-tagged).
-    #[cfg(feature = "http-server")]
-    if matches!(
-        method_name,
-        "get"
-            | "post"
-            | "put"
-            | "delete"
-            | "patch"
-            | "head"
-            | "options"
-            | "all"
-            | "addHook"
-            | "setErrorHandler"
-            | "register"
-            | "listen"
-            | "close"
-            | "on"
-    ) && with_handle::<crate::fastify::FastifyApp, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return dispatch_fastify_app(handle, method_name, &args);
-    }
-
-    // Fastify request/reply context.
-    #[cfg(feature = "http-server")]
-    if matches!(
-        method_name,
-        "send"
-            | "status"
-            | "code"
-            | "header"
-            | "type"
-            | "method"
-            | "url"
-            | "body"
-            | "json"
-            | "params"
-            | "headers"
-    ) && with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true)
-        .unwrap_or(false)
-    {
-        return dispatch_fastify_context(handle, method_name, &args);
-    }
+    // Fastify app + request/reply context method dispatch lived here when the
+    // bundled adapter was compiled into perry-stdlib. fastify now routes entirely
+    // through the external perry-ext-fastify crate (well-known flip), whose
+    // `app.get(...)` / `reply.send(...)` calls lower via the static
+    // NATIVE_MODULE_TABLE rather than this dynamic-handle dispatcher — so no
+    // fastify arm is needed here.
 
     // ioredis client.
     #[cfg(feature = "database-redis")]

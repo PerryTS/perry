@@ -155,9 +155,9 @@ pub(super) const FASTIFY_ROWS: &[NativeModSig] = &[
     // pointer-tagged (NR_PTR) so `typeof` resolves to `"object"` and
     // `.on(…)` routes through HANDLE_METHOD_DISPATCH back into the
     // FastifyApp arm. See `js_fastify_app_server` in
-    // perry-stdlib/src/fastify/app.rs for the rationale and the gap
-    // still owed (hyper accept-loop doesn't yet dispatch incoming
-    // `Upgrade:` requests to the registered handlers).
+    // perry-ext-fastify (crates/perry-ext-fastify/src/app.rs) for the
+    // rationale — fastify is served by that external crate (the in-stdlib
+    // adapter was removed).
     NativeModSig {
         module: "fastify",
         has_receiver: true,

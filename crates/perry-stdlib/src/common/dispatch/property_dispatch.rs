@@ -8,7 +8,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
-    #[cfg(feature = "http-server")]
+    #[cfg(feature = "external-fastify-pump")]
     use perry_runtime::JSValue;
 
     let property_name = if property_name_ptr.is_null() || property_name_len == 0 {
@@ -463,91 +463,18 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         }
     }
 
-    // #1113: `app.server` — return the FastifyApp handle pointer-tagged
-    // so `typeof app.server === "object"` and `.on("upgrade", …)`
-    // routes through HANDLE_METHOD_DISPATCH back into the FastifyApp
-    // arm (see `js_fastify_app_server` for full rationale). Gated on
-    // membership in the FastifyApp registry AND the literal `"server"`
-    // property name so unrelated handle ids that happen to land on
-    // `.server` access don't accidentally claim the path.
-    #[cfg(feature = "http-server")]
-    if property_name == "server"
-        && with_handle::<crate::fastify::FastifyApp, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        // `js_fastify_app_server` returns the bare i64 handle; the
-        // codegen-side NATIVE_MODULE_TABLE arm NaN-boxes it via
-        // `NR_PTR`. The property-dispatch path lives below that
-        // (handles dynamic small-handle `.server` reads when codegen
-        // didn't recognise the receiver), so we tag the handle
-        // inline here to keep the JS-visible shape consistent.
-        let h = crate::fastify::js_fastify_app_server(handle);
-        return f64::from_bits(0x7FFD_0000_0000_0000u64 | ((h as u64) & 0x0000_FFFF_FFFF_FFFF));
-    }
-
-    // Try Fastify context dispatch (request/reply properties)
-    #[cfg(feature = "http-server")]
-    if with_handle::<crate::fastify::FastifyContext, bool, _>(handle, |_| true).unwrap_or(false) {
-        return match property_name {
-            "query" => {
-                // Return a real JavaScript object, not a JSON string
-                crate::fastify::js_fastify_req_query_object(handle)
-            }
-            "params" => crate::fastify::js_fastify_req_params_object(handle),
-            "body" => crate::fastify::js_fastify_req_json(handle),
-            "rawBody" | "text" => {
-                let ptr = crate::fastify::js_fastify_req_body(handle);
-                if ptr.is_null() {
-                    f64::from_bits(0x7FFC_0000_0000_0001)
-                } else {
-                    f64::from_bits(JSValue::string_ptr(ptr).bits())
-                }
-            }
-            "headers" => {
-                // Returns NaN-boxed JS object (parsed from JSON), use bits directly
-                let bits = crate::fastify::js_fastify_req_headers(handle);
-                f64::from_bits(bits as u64)
-            }
-            "method" => {
-                let ptr = crate::fastify::js_fastify_req_method(handle);
-                if ptr.is_null() {
-                    f64::from_bits(0x7FFC_0000_0000_0001)
-                } else {
-                    f64::from_bits(JSValue::string_ptr(ptr).bits())
-                }
-            }
-            "url" => {
-                let ptr = crate::fastify::js_fastify_req_url(handle);
-                if ptr.is_null() {
-                    f64::from_bits(0x7FFC_0000_0000_0001)
-                } else {
-                    f64::from_bits(JSValue::string_ptr(ptr).bits())
-                }
-            }
-            "user" => {
-                // Return user data set by auth middleware
-                crate::fastify::js_fastify_req_get_user_data(handle)
-            }
-            _ => f64::from_bits(0x7FFC_0000_0000_0001), // undefined
-        };
-    }
-
-    // #5037 — external-fastify variant of the request/reply property
-    // dispatch above. When the well-known flip routes `fastify` to
-    // perry-ext-fastify (auto-optimize / `--no-default-features`),
-    // `bundled-fastify`/`http-server` are stripped and the bundled
-    // arm above is compiled out. A `request`/`reply` handle that
-    // escaped into a user helper — its static type erased, so codegen
-    // emitted a generic dynamic property read here rather than a
-    // `NativeMethodCall` — then had no dispatch path and read
-    // `undefined` (inline reads in the handler still worked because
-    // codegen recognised the receiver and called `js_fastify_req_*`
-    // directly). The handle lives in perry-ext-fastify's perry-ffi
-    // registry, not perry-stdlib's, so probe membership via the
-    // external `js_ext_fastify_is_context_handle` symbol (resolved at
-    // link time) and forward to the same `js_fastify_req_*` exports
-    // the bundled arm uses. Mirrors the `external-fastify-pump` pump
-    // wiring in `async_bridge.rs`.
-    #[cfg(all(feature = "external-fastify-pump", not(feature = "http-server")))]
+    // Fastify request/reply property dispatch (#5037, #1113). fastify is served
+    // exclusively by the external perry-ext-fastify crate (the bundled in-stdlib
+    // adapter was removed). A `request`/`reply` handle that escaped into a user
+    // helper has its static type erased, so codegen emits a generic dynamic
+    // property read here rather than a `NativeMethodCall`. The handle lives in
+    // perry-ext-fastify's perry-ffi registry, so probe membership via the external
+    // `js_ext_fastify_is_context_handle` symbol (resolved at link time) and forward
+    // to perry-ext-fastify's `js_fastify_req_*` exports. Enabled by the well-known
+    // flip's `external-fastify-pump`, mirroring the `async_bridge.rs` pump.
+    // (`app.server` and statically-typed inline reads dispatch via codegen's static
+    // NATIVE_MODULE_TABLE; only this erased-receiver dynamic path needs an arm.)
+    #[cfg(feature = "external-fastify-pump")]
     {
         extern "C" {
             fn js_ext_fastify_is_context_handle(handle: i64) -> i32;

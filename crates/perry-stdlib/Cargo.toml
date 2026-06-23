@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 default = ["full"]
 
 # Full stdlib - everything included
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-slugify", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams", "bundled-fastify"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-slugify", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -70,14 +70,11 @@ bundled-commander = []
 
 # HTTP server (hyper-based native framework)
 # Note: dashmap is now always-on (used by core handle registry), no longer listed here.
-# `http-server` umbrella retained for backwards-compat — it now
-# transitively pulls `bundled-fastify` (v0.5.572's per-binding gate
-# the well-known flip toggles for `import 'fastify'`). The
-# `framework` module stays on `http-server` directly so it remains
-# available for non-fastify hyper users; perry-ext-fastify ships
-# its own self-contained surface.
-http-server = ["bundled-fastify", "dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
-bundled-fastify = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
+# Gates the `framework` module (non-fastify hyper plumbing) only. fastify is no
+# longer in-stdlib — `import 'fastify'` is served exclusively by the external
+# perry-ext-fastify crate via the well-known flip (see well_known_bindings.toml);
+# perry-stdlib's per-tick bridge into it lives behind `external-fastify-pump`.
+http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
 
 # HTTP client (node-fetch, axios) — single umbrella for both. The
 # well-known flip strips this when the user imports either module
@@ -185,9 +182,9 @@ external-http-server-pump = ["async-runtime"]
 # the program exits before any callback fires. Issue #769.
 external-http-client-pump = ["async-runtime"]
 
-# Activated by `optimized_libs::build_optimized_libs` when the well-known
-# flip routes `import 'fastify'` to perry-ext-fastify (which is the
-# default path for the bundled-fastify feature). Tells perry-stdlib's
+# Activated by `optimized_libs::build_optimized_libs` whenever the well-known
+# flip routes `import 'fastify'` to perry-ext-fastify (the only fastify path —
+# the in-stdlib adapter was removed). Tells perry-stdlib's
 # `js_stdlib_process_pending` / `js_stdlib_has_active_handles` to call
 # into perry-ext-fastify's `js_fastify_process_pending` /
 # `js_fastify_has_active` externs each tick. Without this, the

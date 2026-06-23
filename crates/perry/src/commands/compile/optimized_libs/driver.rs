@@ -32,6 +32,36 @@ pub(crate) fn build_optimized_libs(
     let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
     let iteration_set = well_known_iteration_set(ctx);
 
+    // fastify has no in-stdlib fallback (the bundled adapter was removed): it can
+    // only be served by perry-ext-fastify *and* a stdlib rebuilt with
+    // `external-fastify-pump` (the per-tick bridge that drains its request queue).
+    // Two fallback paths can't provide that pair, so fail clearly up front instead
+    // of producing a binary that hangs or fails to link with `js_fastify_*`:
+    //   - `PERRY_DISABLE_WELL_KNOWN` — the flip never routes fastify at all.
+    //   - `PERRY_NO_AUTO_OPTIMIZE` — uses the prebuilt `full` stdlib, which is NOT
+    //     built with `external-fastify-pump` (and isn't rebuilt), so even though
+    //     perry-ext-fastify links, requests would never drain (silent hang).
+    let imports_fastify = iteration_set
+        .iter()
+        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "fastify");
+    if imports_fastify && !use_well_known {
+        eprintln!(
+            "error: `import 'fastify'` requires the external perry-ext-fastify wrapper, but the \
+             well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). The in-stdlib fastify adapter \
+             was removed; unset PERRY_DISABLE_WELL_KNOWN so fastify routes to perry-ext-fastify."
+        );
+        std::process::exit(1);
+    }
+    if imports_fastify && std::env::var_os("PERRY_NO_AUTO_OPTIMIZE").is_some() {
+        eprintln!(
+            "error: `import 'fastify'` is not supported with PERRY_NO_AUTO_OPTIMIZE: the prebuilt \
+             stdlib is not compiled with `external-fastify-pump`, so fastify requests would never \
+             drain (the request loop hangs). The in-stdlib fastify adapter was removed; build \
+             without PERRY_NO_AUTO_OPTIMIZE so the stdlib is rebuilt with the fastify pump wired in."
+        );
+        std::process::exit(1);
+    }
+
     // `PERRY_NO_AUTO_OPTIMIZE=1` — opt out of the per-app feature-set
     // specialization and use the prebuilt `target/release/libperry_*.a`
     // built with the default `full` feature set. Used by CI doc-tests
@@ -177,6 +207,19 @@ pub(crate) fn build_optimized_libs(
                 // exists on disk first (so we can actually build it).
                 let crate_dir = workspace_root.join("crates").join(&binding.krate);
                 if !crate_dir.is_dir() {
+                    // fastify has no in-stdlib fallback (the bundled adapter was
+                    // removed) — it can only be served by perry-ext-fastify. Fail
+                    // clearly instead of silently falling back to a copy that no
+                    // longer exists (which would link with unresolved js_fastify_*).
+                    if module_normalized == "fastify" {
+                        eprintln!(
+                            "error: `import 'fastify'` requires the external perry-ext-fastify \
+                             wrapper, but its source crate was not found at `{}`. The in-stdlib \
+                             fastify adapter was removed; build or restore perry-ext-fastify.",
+                            crate_dir.display()
+                        );
+                        std::process::exit(1);
+                    }
                     if matches!(format, OutputFormat::Text) && verbose > 0 {
                         eprintln!(
                             "  well-known: skipping `{}` — crate `{}` source not on disk; \
@@ -278,7 +321,6 @@ pub(crate) fn build_optimized_libs(
                         | "bundled-net"
                         | "http-client"
                         | "bundled-streams"
-                        | "bundled-fastify"
                 )
             }) {
                 features.insert("async-runtime");
@@ -322,18 +364,16 @@ pub(crate) fn build_optimized_libs(
             if matches!(module_normalized, "http" | "https" | "http2") {
                 features.insert("external-ws-pump");
             }
-            // Same shape for fastify. The compat-sweep fastify fixture
-            // hit a hang at `await app.listen(...)` because
-            // perry-ext-fastify's `js_fastify_listen` entered a blocking
-            // event loop that never returned. With `listen()` now non-
-            // blocking, the per-server mpsc receiver lives inside the
-            // FastifyServerHandle and is drained by
-            // `js_fastify_process_pending`. Activating this feature
-            // wires that pump call into perry-stdlib's
-            // `js_stdlib_process_pending` / `_has_active_handles` so
-            // requests flow on the main TS thread once the flip routes
-            // `import 'fastify'` to perry-ext-fastify.
-            if original_features.contains(&"bundled-fastify") {
+            // Same shape for fastify. fastify is served exclusively by
+            // perry-ext-fastify (the in-stdlib adapter was removed), so this
+            // fires whenever `import 'fastify'` is routed here — not off a
+            // (now-gone) `bundled-fastify` feature. `external-fastify-pump`
+            // wires perry-ext-fastify's `js_fastify_process_pending` /
+            // `js_fastify_has_active` into perry-stdlib's
+            // `js_stdlib_process_pending` / `_has_active_handles` so requests
+            // flow on the main TS thread; it pulls `async-runtime` (shared
+            // tokio) transitively via its Cargo feature deps.
+            if module_normalized == "fastify" {
                 features.insert("external-fastify-pump");
             }
             // Closes #604 — when the well-known flip routes `node:http` /

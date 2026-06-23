@@ -124,16 +124,11 @@ pub mod framework;
 pub use framework::*;
 
 // === Fastify-Compatible Framework ===
-// Per-binding gate (v0.5.572): `bundled-fastify` is the only flag
-// that toggles `pub mod fastify`. The well-known flip strips
-// `bundled-fastify` to route to perry-ext-fastify without
-// duplicate-symbol risk. `http-server` callers still get fastify
-// transitively because the umbrella pulls in `bundled-fastify`
-// (declared in this crate's Cargo.toml).
-#[cfg(feature = "bundled-fastify")]
-pub mod fastify;
-#[cfg(feature = "bundled-fastify")]
-pub use fastify::*;
+// The in-stdlib fastify adapter was removed: `import 'fastify'` is served
+// exclusively by the external `perry-ext-fastify` crate via the well-known
+// flip (see `well_known_bindings.toml` + `optimized_libs.rs`). perry-stdlib's
+// per-tick bridge into the external crate lives behind the
+// `external-fastify-pump` feature (drained from `async_bridge`).
 
 // === Web Fetch API (fetch / Headers / Request / Response / Blob) ===
 // #5174: gated on `web-fetch`, NOT `http-client`. The Web Fetch surface

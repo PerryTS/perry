@@ -49,8 +49,6 @@ pub(crate) use fastify_net_zlib::dispatch_external_net_socket;
 pub(crate) use fastify_net_zlib::dispatch_net_socket;
 #[cfg(feature = "compression")]
 pub(crate) use fastify_net_zlib::dispatch_zlib_stream;
-#[cfg(feature = "http-server")]
-pub(crate) use fastify_net_zlib::{dispatch_fastify_app, dispatch_fastify_context};
 
 pub(crate) type EventEmitterOn = unsafe extern "C" fn(i64, i64, i64) -> i64;
 
