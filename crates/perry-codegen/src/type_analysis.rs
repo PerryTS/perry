@@ -1172,6 +1172,24 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
         Expr::Update { .. } => true,
         Expr::DateNow => true,
+        // Unary `-x` / `+x` / `~x` always evaluate to a JS number by
+        // ToNumber/ToInt32 semantics, so the result feeds the native f64
+        // path (#5497, Lever E). The unary lowering coerces the operand
+        // internally (its own `numeric` flag already factors in the
+        // raw-f64 boxed-fallback hazard), so the produced value is a clean
+        // f64 regardless of the operand's runtime shape — no downstream
+        // coerce is needed. BigInt is the sole exception: `-1n` / `~1n`
+        // stay BigInt (their lowering routes through `js_dynamic_neg` /
+        // `js_dynamic_bitnot`, which preserve the BigInt tag), so a bigint
+        // operand must not be treated as numeric. (`!x` is a boolean, not
+        // a number — handled by `is_bool_expr`.)
+        Expr::Unary { op, operand } => {
+            matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
+                && !is_bigint_expr(ctx, operand)
+        }
+        // Explicit numeric-coercion node — lowers to `js_number_coerce`,
+        // which always yields a clean f64.
+        Expr::NumberCoerce(_) => true,
         // `obj.field` where the field is declared as `number` on the
         // owning class. Without this, `this.value + 1` in a hot loop
         // wraps the field load in `js_number_coerce` which prevents
