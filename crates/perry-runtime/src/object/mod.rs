@@ -2393,8 +2393,23 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     }
     // Heap-allocated pointers: discriminate Array / Error from generic
     // Object via the GC header type byte.
+    //
+    // A handle-band value (`< 0x100000`: Web Fetch `Headers`/`Request`/
+    // `Response`/`Blob` ids, net/http small handles, …) is a registry id, NOT a
+    // heap pointer. It reaches here when the SDK coerces such a handle to a
+    // string — e.g. an implicit `ToString(headers)` while assembling a request —
+    // and the bare id lands in `raw_addr`. The `>= GC_HEADER_SIZE + 0x1000`
+    // floor below only rejects sub-`0x1008` addresses, so a fetch handle
+    // (`0x40000`+) sails through and the `(*gc_header).obj_type` back-read
+    // dereferences `id - 8` (the unmapped `0x3FFFB` in the `claude -p` SIGSEGV).
+    // Treat the whole handle band as a non-heap value so it falls through to the
+    // generic `[object Object]` tag instead of being dereferenced (same
+    // #5559/#5560 family as `string_from_header` / `gc_obj_type`).
     let raw_ptr = raw_addr as *const u8;
-    if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+    if !raw_ptr.is_null()
+        && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
+        && !crate::value::addr_class::is_handle_band(raw_addr)
+    {
         if let Some(tag) = arguments_object_to_string_tag(value) {
             return tag;
         }
@@ -2423,7 +2438,14 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     let mut tag_str: Option<String> = None;
     if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
         let obj_ptr = (bits & POINTER_MASK) as *const ObjectHeader;
-        if !obj_ptr.is_null() && (obj_ptr as usize) >= 0x1000 {
+        // Skip handle-band ids (Web Fetch / net / http registry handles) — they
+        // are POINTER_TAG-boxed but are NOT `ObjectHeader` pointers, so reading
+        // `(*obj_ptr).class_id` would dereference the bare id (the same fetch
+        // handle that faults at the GcHeader back-read above).
+        if !obj_ptr.is_null()
+            && (obj_ptr as usize) >= 0x1000
+            && !crate::value::addr_class::is_handle_band(obj_ptr as usize)
+        {
             let class_id = (*obj_ptr).class_id;
             if class_id == crate::object::CLASS_ID_COMPRESSION_STREAM {
                 tag_str = Some("CompressionStream".to_string());

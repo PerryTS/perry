@@ -122,12 +122,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
 
             let blk = ctx.block();
-            // js_json_stringify(value: f64, indent: i32) -> i64 string handle.
-            let zero_i = "0".to_string();
+            // Stringify the headers value into the flat `{name:value}` JSON that
+            // `js_fetch_with_options` parses. Routed through
+            // `js_fetch_headers_to_json` (not the generic `js_json_stringify`) so
+            // a `Headers` instance — a fetch-band registry handle, e.g. `headers:
+            // new Headers(h)` — is read from its registry instead of being
+            // dereferenced as a heap pointer (the `js_json_stringify`-on-handle
+            // SIGSEGV; same #5559/#5560 handle-band family).
             let headers_str = blk.call(
                 I64,
-                "js_json_stringify",
-                &[(DOUBLE, &headers_obj_box), (I32, &zero_i)],
+                "js_fetch_headers_to_json",
+                &[(DOUBLE, &headers_obj_box)],
             );
 
             // The runtime takes raw StringHeader pointers (i64). Unbox each
