@@ -175,7 +175,7 @@ jobs:
       # version (15.x) than being linked (14.x)` across every stdlib .o.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -792,7 +792,7 @@ jobs:
       # users on macOS 13.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable + cross target
         uses: dtolnay/rust-toolchain@stable
@@ -1640,7 +1640,7 @@ jobs:
       contents: read
       id-token: write          # REQUIRED for OIDC + npm --provenance
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
