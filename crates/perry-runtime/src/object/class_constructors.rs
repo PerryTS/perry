@@ -161,12 +161,36 @@ pub extern "C" fn js_class_capture_value(class_id: u32, index: u32) -> f64 {
 pub extern "C" fn js_class_capture_value_or(class_id: u32, index: u32, fallback: f64) -> f64 {
     CLASS_CAPTURE_VALUES.with(|m| {
         match m.borrow().get(&class_id) {
-            // A snapshot exists for this class: it is authoritative (W6).
-            Some(v) => v
-                .get(index as usize)
-                .copied()
-                .map(f64::from_bits)
-                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
+            // A snapshot exists for this class. The recorded slot is
+            // authoritative WHEN IT HOLDS A REAL VALUE (W6: the bundle's
+            // multi-level capture chain can materialize a mis-boxed value into
+            // the `new`-site appended `fallback`, so the decl-site snapshot of
+            // a stable require-result must win over it).
+            //
+            // #5437 (hoisted-class stale snapshot): the decl-site snapshot is
+            // taken at the class's DECLARATION position — and because class
+            // declarations hoist to the top of the enclosing function body,
+            // that runs BEFORE a captured local assigned LATER in the same body
+            // (`class f { m(){ return cache } } const cache = a || await foo()`
+            // — the `RegisterClassCaptures` statement is emitted before the
+            // captured local's `Let` binding). At that point the captured slot
+            // is still `undefined` (TDZ), so the snapshot recorded `undefined`
+            // while the bare-`new f(LocalGet…)` site appended the CORRECT
+            // post-assignment local. Returning the `undefined` snapshot dropped
+            // that live value — every method reading the captured local then
+            // saw `undefined` (e.g. `cache.get(…)` → `Cannot read properties of
+            // undefined`).
+            //
+            // Resolve by SLOT value: an `undefined` snapshot slot carries no
+            // information, so fall back to the `new`-site appended value; a slot
+            // holding a real value stays authoritative (keeps W6). An entirely
+            // absent slot (out-of-range index) also falls back. Same shape as
+            // the require-derived getSpan fix (no snapshot → fallback), extended
+            // to the snapshot-present-but-`undefined`-slot case.
+            Some(v) => match v.get(index as usize).copied() {
+                Some(bits) if bits != crate::value::TAG_UNDEFINED => f64::from_bits(bits),
+                _ => fallback,
+            },
             // No snapshot registered: use the `new`-site appended cap value.
             None => fallback,
         }
