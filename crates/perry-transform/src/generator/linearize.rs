@@ -101,8 +101,11 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
 /// Emit the common `yield *` delegation prelude + driving loop into `current`
 /// and linearize it. Shared by all three desugar positions (statement-level
 /// `yield* e`, `return yield* e`, `let x = yield* e`). Returns the local id
-/// holding the delegated iterator's most-recent result object (`{value, done}`),
-/// whose `.value` the caller uses for the completion value.
+/// holding the delegated iterator's completion value — spec
+/// `IteratorValue(innerResult)` read once from the final `{value, done: true}`
+/// result. The read happens unconditionally even at statement level (where the
+/// value is discarded), because a `value` getter that throws must still fire and
+/// reject the generator (test262 yield-star-next-call-value-get-abrupt).
 #[allow(clippy::too_many_arguments)]
 fn emit_yield_star_loop(
     inner: &Expr,
@@ -194,7 +197,21 @@ fn emit_yield_star_loop(
         finallys,
     );
 
-    del_result_id
+    // Spec step 6.a.vi: `If done is true, then Return ? IteratorValue(innerResult)`.
+    // Read the final result's `.value` exactly once into a dedicated local. This
+    // runs on the loop-exit (done) path, so a throwing `value` getter rejects the
+    // generator here regardless of position — including bare statement-level
+    // `yield* e`, where the value is otherwise discarded.
+    let del_value_id = alloc_local(next_local_id);
+    current.push(Stmt::Expr(Expr::LocalSet(
+        del_value_id,
+        Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(del_result_id)),
+            property: "value".to_string(),
+        }),
+    )));
+
+    del_value_id
 }
 
 pub struct State {
@@ -348,7 +365,7 @@ pub fn linearize_body(
                 value: Some(inner),
                 delegate: true,
             })) => {
-                let del_result_id = emit_yield_star_loop(
+                let del_value_id = emit_yield_star_loop(
                     inner,
                     states,
                     current,
@@ -360,15 +377,12 @@ pub fn linearize_body(
                     finallys,
                 );
 
-                // After the loop, the iterator's final `value` (from
-                // {value, done:true}) is the value of `yield* inner`, which is
+                // The iterator's final `value` (read once by `emit_yield_star_loop`
+                // as spec `IteratorValue`) is the value of `yield* inner`, which is
                 // exactly what `return yield* inner` returns. Wrap it as the
                 // generator's terminal {value, done:true} and flush a Done state.
                 current.push(Stmt::Return(Some(make_iter_result(
-                    Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_result_id)),
-                        property: "value".to_string(),
-                    },
+                    Expr::LocalGet(del_value_id),
                     true,
                 ))));
                 let cont_state = *state_num;
@@ -1066,7 +1080,7 @@ pub fn linearize_body(
                 ty,
                 name,
             } => {
-                let del_result_id = emit_yield_star_loop(
+                let del_value_id = emit_yield_star_loop(
                     inner,
                     states,
                     current,
@@ -1078,14 +1092,11 @@ pub fn linearize_body(
                     finallys,
                 );
 
-                // After the loop, the iterator's final `value` (from
-                // {value, done:true}) becomes the value of `yield* expr`.
+                // The iterator's final `value` (read once by `emit_yield_star_loop`
+                // as spec `IteratorValue`) becomes the value of `yield* expr`.
                 current.push(Stmt::Let {
                     id: *id,
-                    init: Some(Expr::PropertyGet {
-                        object: Box::new(Expr::LocalGet(del_result_id)),
-                        property: "value".to_string(),
-                    }),
+                    init: Some(Expr::LocalGet(del_value_id)),
                     mutable: *mutable,
                     ty: ty.clone(),
                     name: name.clone(),
