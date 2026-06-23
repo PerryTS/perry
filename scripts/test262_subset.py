@@ -475,7 +475,8 @@ def main() -> int:
                 # the case's own `assert.*` self-checks (#4792).
                 out_bin = workdir / "case.out"
                 c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                             PERRY_NO_AUTO_OPTIMIZE="1")
+                             PERRY_NO_AUTO_OPTIMIZE="1",
+                             PERRY_GLOBAL_SCRIPT_THIS="1")
                 c_exit, c_out = run(
                     [str(args.perry_bin), "compile", str(staged), "-o",
                      str(out_bin)], c_env, args.timeout, cwd=str(workdir))
@@ -497,8 +498,16 @@ def main() -> int:
             node_clean = n_exit == 0
             # 2) Perry compile (permissive — unimplemented surfaces as a gap).
             out_bin = workdir / "case.out"
+            # Compile each case as a *global script* so module top-level
+            # `this` is `globalThis` — matching the Node oracle, which runs
+            # the assembled case via `vm.runInThisContext` (host-run.cjs,
+            # #5346/#5511). Without it, Perry models top-level `this` as the
+            # CJS `module.exports` `{}` and the global prop-desc cluster
+            # (`verifyProperty(this, "decodeURI", ...)`) spuriously fails
+            # against the script-mode oracle (#5579).
             c_env = dict(base_env, PERRY_ALLOW_UNIMPLEMENTED="1",
-                         PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1")
+                         PERRY_NO_AUTO_OPTIMIZE="1", PERRY_ALLOW_EVAL="1",
+                         PERRY_GLOBAL_SCRIPT_THIS="1")
             c_exit, c_out = run(
                 [str(args.perry_bin), "compile", str(staged), "-o",
                  str(out_bin)], c_env, args.timeout, cwd=str(workdir))

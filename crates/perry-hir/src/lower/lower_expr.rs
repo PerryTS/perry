@@ -41,6 +41,25 @@ pub(crate) const MAX_EXPR_CHAIN_LOWER_DEPTH: u32 = 512;
 const EXPR_LOWER_STACK_RED_ZONE: usize = 256 * 1024;
 const EXPR_LOWER_STACK_SEGMENT: usize = 2 * 1024 * 1024;
 
+/// Whether `PERRY_GLOBAL_SCRIPT_THIS` is set — compile the program as a
+/// *global script* rather than a CJS module, so module top-level `this`
+/// lowers to `globalThis` instead of the `module.exports` stand-in
+/// (`Expr::ModuleTopThis`). This matches a conforming Test262 host (and the
+/// Node oracle's `vm.runInThisContext`, #5346/#5511); the default stays
+/// CJS so standalone builds match `node --experimental-strip-types`. Read
+/// once per process — the env is fixed for the lifetime of a compile (#5579).
+pub(crate) fn global_script_this_enabled() -> bool {
+    use std::sync::OnceLock;
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| match std::env::var("PERRY_GLOBAL_SCRIPT_THIS") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            !matches!(v.as_str(), "" | "0" | "off" | "false" | "no")
+        }
+        Err(_) => false,
+    })
+}
+
 pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {
@@ -1838,14 +1857,27 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
         ast::Expr::Object(obj) => expr_object::lower_object(ctx, obj),
         ast::Expr::This(_) => {
             // Module TOP-LEVEL `this` is Node-CJS `module.exports` — a fresh
-            // plain object, not `globalThis` (the oracle runs assembled test
-            // files as CommonJS). Function/class/with bodies keep dynamic
-            // `Expr::This` semantics, handled by codegen's ThisContext.
+            // plain object, not `globalThis` (the default `node
+            // --experimental-strip-types` parity oracle runs files as
+            // CommonJS, where top-level `this === module.exports === {}`).
+            // Function/class/with bodies keep dynamic `Expr::This` semantics,
+            // handled by codegen's ThisContext.
             if ctx.scope_depth == 0
                 && ctx.current_class.is_none()
                 && ctx.with_env_stack.is_empty()
                 && !ctx.is_external_module
             {
+                // Global-script mode (`PERRY_GLOBAL_SCRIPT_THIS`): a conforming
+                // Test262 host evaluates each assembled case as a *global
+                // script* (the Node oracle does this via
+                // `vm.runInThisContext`, #5346/#5511), where top-level `this`
+                // is `globalThis`, not a CJS exports object. Opt-in only: the
+                // default stays CJS-`{}` so standalone builds still match
+                // `node --experimental-strip-types`. (#5579 global prop-desc
+                // cluster — `verifyProperty(this, "decodeURI", ...)`.)
+                if global_script_this_enabled() {
+                    return Ok(Expr::GlobalThisExpr);
+                }
                 return Ok(Expr::ModuleTopThis);
             }
             Ok(Expr::This)
