@@ -1,3 +1,17 @@
+## v0.5.1202 — fix(codegen): #5437 Next.js W6 — member-new of a function-nested capturing class drops its captures
+
+The #5437 "W6" throw — `new uw.SharedCacheControls(...)` → `TypeError: undefined is not a constructor` in the Next.js standalone render — was a `new`-with-captures codegen bug, minimally reproducible in 3 lines:
+
+```js
+function mk(){ const o={m:"OK"}; class C{ r(){return o.m} } return {C}; }
+const ns = mk();
+console.log(new ns.C().r());   // Perry threw; node prints OK
+```
+
+A member-/dynamic-routed construct (`new ns.C()`, `new (Foo)()`, namespace `new ns.Foo()`) of a function-nested class that captured an enclosing-scope local was statically routed by codegen to `lower_new("C", [])` (the `#740` object-field-alias arm + `try_static_class_name` arm in `expr/new_dynamic.rs`) **without** the captures that the bare-identifier `new C()` HIR arm appends (`expr_new.rs:1962`). `--trace llvm` showed `__C_constructor(this, TAG_UNDEFINED)` — the `__perry_cap_*` params literally received `undefined`. In the bundle, the `IncrementalCache` class's captured `require`-bound module local `uw` thus read `undefined`, so `uw.SharedCacheControls` was undefined.
+
+Fix (`crates/perry-codegen`, runtime untouched): new `CaptureFill` in `lower_call/new.rs` — for cap params not supplied by the call's args, fill from the class's decl-site snapshot `js_class_capture_value(class_id, slot)` (snapshot wins for cap params; `caps_absent_from_args` distinguishes member-new from bare-`new` arg layouts). Wired through `new_dynamic.rs` (`#740` + `try_static_class_name` arms → `lower_new_member_captured`) and `this_super_call.rs` (super-inline backfill). Repro matrix 10/10 match node under both no-auto-opt and auto-opt; regression test `issue_5437_member_new_captured_class`. Bundle: undefined-ctor 1→0, the render passes `SharedCacheControls` and advances to the next wall (an unrelated OTel `trace.getSpan`-on-undefined). Supersedes the reverted #5546/#5553 wrapper-registration approach (proven wrong layer).
+
 ## v0.5.1201 — fix(runtime): #5437 — CJS-interop probe on a module-default wrapper must not auto-call it (boot-crash fix for #5546)
 
 Follow-up to #5546. That change registers CJS module-default wrapper closures and, on a property miss, auto-calls the wrapper (`js_closure_call0`) to obtain `module.exports`. But for a CJS module whose `module.exports` **is a function** (e.g. `debug` → `createDebug`), the wrapper *is* that function, and the ubiquitous `_interop_require_default(require("debug"))` interop reads `.__esModule` off it → property miss → the fallback **called the module's function with no args** as a side effect → e.g. `enabled(undefined)` → `undefined.length` → threw at module-init (server exits at boot). This regressed the Next.js bundle from serving (HTTP 500) to crashing at boot (HTTP 000) and could break other SWC/Babel-compiled-CJS programs.
