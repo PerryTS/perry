@@ -2263,6 +2263,19 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         };
     }
 
+    // A handle-band value (Web Fetch Headers/Request/Response, net/http handles,
+    // zlib streams) is a registry id, not a heap object — the pointer paths below
+    // would dereference the id and segfault. `key in <handle>` has no own-property
+    // meaning for these registry handles, so report `false` instead of crashing.
+    // Same handle-band family as the string_from_header / inline-`.length` guards.
+    if obj_val.is_pointer()
+        && crate::value::addr_class::is_handle_band(
+            (obj_val.bits() & crate::value::POINTER_MASK) as usize,
+        )
+    {
+        return nanbox_false;
+    }
+
     // #1758: a SYMBOL key. The class-ref path below + the keys_array scan
     // (string keys only) can't see a class-object's static `[Sym]` props nor
     // ones inherited from a class-expression parent. Delegate to the symbol
