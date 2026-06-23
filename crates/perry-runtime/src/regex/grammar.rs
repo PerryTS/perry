@@ -13,6 +13,34 @@ fn parse_decimal_escape(chars: &[char], mut i: usize) -> (usize, usize) {
     (value, i - start)
 }
 
+/// Annex B.1.4: emit a `\<digits>` escape that is *not* a valid backreference as
+/// a `LegacyOctalEscapeSequence` (or a `NonOctalDecimalEscapeSequence` for a
+/// leading `8`/`9`). `start` indexes the first digit (just past the backslash).
+/// Returns the number of digit chars consumed.
+///
+/// `\1` with no group 1, or `\2` referencing a non-existent group, must compile
+/// as the literal byte rather than throwing — the `regex`/`fancy-regex` crates
+/// reject `\1` outright, so we lower it to `\x{HH}`.
+fn push_legacy_octal_escape(out: &mut String, chars: &[char], start: usize) -> usize {
+    let first = chars[start];
+    // `\8` / `\9` are not octal: they match the literal digit.
+    if first == '8' || first == '9' {
+        push_escaped_literal(out, first);
+        return 1;
+    }
+    // Up to three octal digits, but only two when the first is `4`–`7`
+    // (the value must stay ≤ 0o377 = 255).
+    let max = if matches!(first, '0'..='3') { 3 } else { 2 };
+    let mut value: u32 = 0;
+    let mut n = 0;
+    while n < max && start + n < chars.len() && matches!(chars[start + n], '0'..='7') {
+        value = value * 8 + (chars[start + n] as u32 - '0' as u32);
+        n += 1;
+    }
+    push_hex_escape(out, value as u8);
+    n
+}
+
 fn collect_capture_spans(chars: &[char]) -> Vec<CaptureSpan> {
     let mut spans = Vec::new();
     let mut stack: Vec<(usize, usize)> = Vec::new();
@@ -628,30 +656,56 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                     result.push('/');
                     i += 2;
                 }
-                'c' if i + 2 < chars.len() => {
-                    if let Some(value) = control_escape_value(chars[i + 2]) {
+                'c' => {
+                    if let Some(value) = chars.get(i + 2).copied().and_then(control_escape_value) {
                         push_hex_escape(&mut result, value);
                         i += 3;
                     } else {
+                        // Annex B.1.4: a `\c` not followed by an ASCII control
+                        // letter (e.g. `\cА` with a Cyrillic letter, `\c$`, or a
+                        // trailing `\c`) is *not* a control escape — it is the
+                        // literal two-character sequence `\` `c`. Emit an escaped
+                        // backslash plus a literal `c` (the `regex`/`fancy-regex`
+                        // crates reject a bare `\c`); the following char, if any,
+                        // is processed normally so quantifiers/class members keep
+                        // their meaning. Works the same inside a `[...]` class.
+                        result.push('\\');
                         result.push('\\');
                         result.push('c');
                         i += 2;
                     }
                 }
-                '0' if i + 2 >= chars.len() || !chars[i + 2].is_ascii_digit() => {
-                    push_hex_escape(&mut result, 0);
-                    i += 2;
+                '0' => {
+                    // `\0` (NUL) and the legacy octal forms `\0DD` (Annex B.1.4)
+                    // — `push_legacy_octal_escape` consumes the octal run and
+                    // emits `\x{HH}`; a bare `\0` yields `\x00`.
+                    let consumed = push_legacy_octal_escape(&mut result, &chars, i + 1);
+                    i += 1 + consumed;
                 }
                 '1'..='9' => {
                     let (group, digits) = parse_decimal_escape(&chars, i + 1);
-                    if is_forward_backreference(&capture_spans, i, group) {
-                        i += 1 + digits;
-                    } else {
-                        result.push('\\');
-                        for ch in &chars[i + 1..i + 1 + digits] {
-                            result.push(*ch);
+                    // Inside a `[...]` class a decimal escape is never a
+                    // backreference — it is always a legacy octal/identity
+                    // escape (e.g. `[\12-\14]` is the range `\x0A`–`\x0C`).
+                    // Outside a class, `\<n>` is a backreference only when group
+                    // `n` actually exists; otherwise Annex B.1.4 reinterprets it.
+                    if !in_class && group <= capture_spans.len() {
+                        if is_forward_backreference(&capture_spans, i, group) {
+                            // A not-yet-closed group can't be matched by the
+                            // `regex`/`fancy-regex` engines; drop the reference.
+                            i += 1 + digits;
+                        } else {
+                            // A real backward backreference — keep it for
+                            // fancy-regex (the `regex` crate has no backrefs).
+                            result.push('\\');
+                            for ch in &chars[i + 1..i + 1 + digits] {
+                                result.push(*ch);
+                            }
+                            i += 1 + digits;
                         }
-                        i += 1 + digits;
+                    } else {
+                        let consumed = push_legacy_octal_escape(&mut result, &chars, i + 1);
+                        i += 1 + consumed;
                     }
                 }
                 'p' | 'P' if chars.get(i + 2) == Some(&'{') => {

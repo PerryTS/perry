@@ -2041,6 +2041,51 @@ mod tests {
     }
 
     #[test]
+    fn annexb_legacy_decimal_escapes() {
+        // #5594: a `\<n>` with no matching capture group is an Annex B.1.4
+        // legacy octal escape, not a backreference — `\1` → `\x01`, never the
+        // bare `\1` the `regex`/`fancy-regex` crates reject.
+        assert_eq!(js_regex_to_rust(r"\1"), r"\x{01}");
+        assert_eq!(js_regex_to_rust(r"\b(\w+) \2\b"), r"\b(\w+) \x{02}\b");
+        // Multi-digit octal: `\12` = 0o12 = 0x0A, `\14` = 0o14 = 0x0C.
+        assert_eq!(js_regex_to_rust(r"[\12-\14]"), r"[\x{0A}-\x{0C}]");
+        // Inside a class a decimal escape is always octal, never a backref —
+        // even when that group exists.
+        assert_eq!(js_regex_to_rust(r"(a)[\1]"), r"(a)[\x{01}]");
+        // A real backward backreference is preserved for fancy-regex.
+        assert_eq!(js_regex_to_rust(r"(a)\1"), r"(a)\1");
+        // `\8` / `\9` are non-octal decimal escapes → literal digit.
+        assert_eq!(js_regex_to_rust(r"\8"), "8");
+        // `\0` is NUL; legacy `\012` = 0o12 = 0x0A.
+        assert_eq!(js_regex_to_rust(r"\0"), r"\x{00}");
+        assert_eq!(js_regex_to_rust(r"\012"), r"\x{0A}");
+
+        // The patterns that threw at construction must now compile and behave.
+        for pat in [r"\1", r"\b(\w+) \2\b", r"[\d][\12-\14]{1,}[^\d]"] {
+            let re = js_regexp_new(make_string(pat), make_string(""));
+            assert!(!re.is_null(), "pattern failed to construct: {pat}");
+        }
+    }
+
+    #[test]
+    fn annexb_invalid_control_escape_is_literal_backslash_c() {
+        // #5594: `\c` not followed by an ASCII control letter is the literal
+        // two-char sequence `\c`, not a control escape. The `regex`/`fancy-regex`
+        // crates reject a bare `\c`, so emit an escaped backslash + `c`.
+        assert_eq!(js_regex_to_rust(r"\cА"), r"\\cА"); // Cyrillic А (U+0410)
+        assert_eq!(js_regex_to_rust(r"\c "), r"\\c "); // space follows
+        assert_eq!(js_regex_to_rust(r"\c"), r"\\c"); // trailing
+        assert_eq!(js_regex_to_rust(r"[\c ]"), r"[\\c ]"); // inside a class
+                                                           // A valid control letter still lowers to its control byte (`\cA` = 0x01).
+        assert_eq!(js_regex_to_rust(r"\cA"), r"\x{01}");
+
+        for pat in [r"\cА", r"\c!", r"[\c ]"] {
+            let re = js_regexp_new(make_string(pat), make_string(""));
+            assert!(!re.is_null(), "pattern failed to construct: {pat}");
+        }
+    }
+
+    #[test]
     fn surrogate_pairs_fold_to_astral_scalars() {
         // High escape + low class → contiguous astral range.
         assert_eq!(
