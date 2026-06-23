@@ -2197,5 +2197,42 @@ fn artifact_records_raw_numeric_class_field_f64_fast_paths_and_fallback_reasons(
     );
 }
 
+/// Regression: a named/value-form import of a node-core native-module
+/// function (`import { realpathSync } from "fs"; realpathSync(p)`) reaches
+/// codegen as a receiver-less `NativeMethodCall { module: "fs", object: None,
+/// method: "realpathSync" }` with no static `NATIVE_MODULE_TABLE` row.
+/// Pre-fix this hit the receiver-less fall-through and emitted a TAG_UNDEFINED
+/// sentinel, so the call returned `undefined` even though the member form
+/// (`fs.realpathSync(p)`) works. The fix bridges value-form calls of modules
+/// that own a runtime dispatch bucket onto the same runtime by-name dispatcher
+/// the member form uses (`js_native_call_method` on the module namespace). This
+/// asserts the bridge fires (real dispatch call emitted) for an fs method that
+/// has no dedicated table row / HIR fast-path.
+#[test]
+fn named_import_native_fn_routes_to_runtime_dispatch() {
+    let body = vec![
+        Stmt::Expr(native_module_call(
+            "fs",
+            "realpathSync",
+            vec![Expr::String("/tmp".to_string())],
+        )),
+        Stmt::Return(Some(int(0))),
+    ];
+    let ir = compile_ir("named_import_native_fn_dispatch.ts", body);
+    // The value-form call must reach the runtime by-name dispatcher (the same
+    // path the member form `fs.realpathSync(...)` uses), not the dead-end
+    // TAG_UNDEFINED sentinel.
+    assert!(
+        ir.contains("@js_native_call_method"),
+        "named-import native fn must route through js_native_call_method:\n{ir}"
+    );
+    // It must also install the fs dispatch bucket via the module-namespace
+    // receiver synthesis so the method actually resolves at runtime.
+    assert!(
+        ir.contains("@js_nm_install_fs") || ir.contains("@js_create_native_module_namespace"),
+        "fs module namespace receiver must be synthesized:\n{ir}"
+    );
+}
+
 #[path = "native_proof_regressions/invalidation.rs"]
 mod invalidation;

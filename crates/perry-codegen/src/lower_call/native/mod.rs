@@ -2010,6 +2010,58 @@ pub(crate) fn lower_native_method_call(
     // inline .length guard checks ptr < 4096, and TAG_UNDEFINED's
     // lower 48 bits = 1).
     let Some(recv) = object else {
+        // Named/value-form imports of node-core native-module functions
+        // (`import { realpathSync } from "fs"; realpathSync(p)`) reach here
+        // as a receiver-less `NativeMethodCall` with no static-table row.
+        // Pre-fix they fell straight to the TAG_UNDEFINED sentinel below, so
+        // the call returned `undefined` even though the member form
+        // (`fs.realpathSync(p)`) works — the member form routes through the
+        // runtime by-name dispatcher (`dispatch_native_module_method`), which
+        // DOES implement these. Bridge the value form onto that same path by
+        // synthesizing the module namespace receiver (exactly what
+        // `NativeModuleRef(module)` lowers to) and dispatching the method on
+        // it via `js_native_call_method`. Scope strictly to modules that own a
+        // runtime dispatch bucket (`nm_install_symbol(module).is_some()`) so
+        // perry/* internal modules and genuinely-unimplemented modules keep
+        // the historical undefined fall-through and never mis-dispatch.
+        // Fixes the realpathSync class (fs/os/path/url/... named-import fns).
+        if crate::nm_install::nm_install_symbol(module).is_some() {
+            let recv_box =
+                crate::expr::lower_expr(ctx, &Expr::NativeModuleRef(module.to_string()))?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for arg in args {
+                lowered_args.push(lower_expr(ctx, arg)?);
+            }
+            let (args_ptr, args_len) = if lowered_args.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let n = lowered_args.len();
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                {
+                    let blk = ctx.block();
+                    for (i, value) in lowered_args.iter().enumerate() {
+                        let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                        blk.store(DOUBLE, value, &slot);
+                    }
+                }
+                (buf, n.to_string())
+            };
+            let method_idx = ctx.strings.intern(method);
+            let entry = ctx.strings.entry(method_idx);
+            let bytes_global = format!("@{}", entry.bytes_global);
+            let name_len = entry.byte_len.to_string();
+            return Ok(ctx.block().call(
+                DOUBLE,
+                "js_native_call_method",
+                &[
+                    (DOUBLE, &recv_box),
+                    (PTR, &bytes_global),
+                    (I64, &name_len),
+                    (PTR, &args_ptr),
+                    (I64, &args_len),
+                ],
+            ));
+        }
         for a in args {
             let _ = lower_expr(ctx, a)?;
         }
