@@ -53,9 +53,13 @@ const symOut: any = Object.assign({}, new Proxy(symSrc, {}));
 console.log("symbol copied: " + (symOut[sym] === 42 && symOut.plain === 1)); // true
 
 // ---- strict Set: a symbol key onto a non-extensible target throws ----
+// Source carries ONLY a symbol key, so the throw must come from the symbol
+// write path (a stray string key would otherwise throw first and mask it).
+const symOnly: any = {};
+symOnly[Symbol("only")] = 1;
+const symOnlyProxy = new Proxy(symOnly, {});
 const frozenTarget = Object.preventExtensions({});
-const symProxy = new Proxy(symSrc, {});
-console.log(thrown(() => Object.assign(frozenTarget, symProxy)));   // TypeError
+console.log(thrown(() => Object.assign(frozenTarget, symOnlyProxy)));   // TypeError
 
 // ---- trap order: ownKeys -> getOwnPropertyDescriptor -> get, per key ----
 const order: string[] = [];
