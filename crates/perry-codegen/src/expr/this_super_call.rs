@@ -771,11 +771,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }));
                     }
                 }
-                // #5437: any parent cap param the child-forwarding loop above
-                // could not fill (the captured local is out of scope at this
-                // super-call site) BACKFILLS from the parent's decl-site
-                // capture snapshot. The forwarded caps ARE in `lowered_args`,
-                // so this is a backfill (not the caps-absent member-new path).
+                // #5437: fill the parent's cap params from its decl-site
+                // capture snapshot. The snapshot is authoritative for EVERY
+                // parent cap param — `bind_inline_constructor_params` consumes
+                // the values the child-forwarding loop appended above only to
+                // keep the user/cap tail-split aligned, then discards them in
+                // favour of `js_class_capture_value`. This matters when the
+                // captured local is out of scope at the super-call site (the
+                // forwarded value would be `undefined`); the snapshot still
+                // holds the correct decl-site capture. `backfill` sets
+                // `caps_absent_from_args=false` because the caps ARE present in
+                // `lowered_args` (this is not the caps-absent member-new path).
                 let parent_capture_fill = ctx
                     .class_ids
                     .get(effective_parent_name.as_str())

@@ -133,8 +133,7 @@ console.log("5=" + new nsNest.CNest().both());
     );
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert_eq!(
-        stdout,
-        "1=OK\n2=OBJ,OBJ!\n3=AX,BCLO,CSTR,AX\n4=ARG/CAP\n5=OUTER:INNER\n",
+        stdout, "1=OK\n2=OBJ,OBJ!\n3=AX,BCLO,CSTR,AX\n4=ARG/CAP\n5=OUTER:INNER\n",
         "member-new of a function-nested capturing class must fill the \
          synthesized __perry_cap_* params from the decl-site snapshot (#5437)"
     );

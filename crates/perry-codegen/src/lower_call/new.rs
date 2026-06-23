@@ -379,10 +379,14 @@ fn call_local_constructor_symbol(
         }
         found
     };
-    let capture_fill = ctx.class_ids.get(&class.name).copied().map(|cid| CaptureFill {
-        cid,
-        caps_absent_from_args,
-    });
+    let capture_fill = ctx
+        .class_ids
+        .get(&class.name)
+        .copied()
+        .map(|cid| CaptureFill {
+            cid,
+            caps_absent_from_args,
+        });
     let mut ctor_values = if let Some(params) = effective_params {
         inline_constructor_param_values_with_class(ctx, &params, lowered_args, capture_fill)
     } else {
@@ -1061,9 +1065,13 @@ fn lower_new_impl(
         // function ("value is not a function" on `new Chalk(...).red(...)`).
         // `js_ctor_return_override` returns `obj_box` for an `undefined`/
         // primitive (base) return, so ordinary ctors are unaffected.
-        if let Some(ctor_ret) =
-            call_local_constructor_symbol(ctx, class, &obj_box, &lowered_args, caps_absent_from_args)
-        {
+        if let Some(ctor_ret) = call_local_constructor_symbol(
+            ctx,
+            class,
+            &obj_box,
+            &lowered_args,
+            caps_absent_from_args,
+        ) {
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -1211,10 +1219,14 @@ fn lower_new_impl(
     // `LocalGet` codegen doesn't return 0.0. Locals/local_types are
     // saved-and-restored around the whole inlined ctor flow below; we
     // mirror that here so the ctor params don't leak out of `new`.
-    let ctor_capture_fill = ctx.class_ids.get(class_name).copied().map(|cid| CaptureFill {
-        cid,
-        caps_absent_from_args,
-    });
+    let ctor_capture_fill = ctx
+        .class_ids
+        .get(class_name)
+        .copied()
+        .map(|cid| CaptureFill {
+            cid,
+            caps_absent_from_args,
+        });
     let mut saved_scope_for_ctor = class.constructor.as_ref().map(|ctor| {
         bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, ctor_capture_fill)
     });
