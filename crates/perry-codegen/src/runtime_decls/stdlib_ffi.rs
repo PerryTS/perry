@@ -1699,6 +1699,10 @@ pub fn declare_stdlib_ffi(module: &mut LlModule) {
     module.declare_function("js_fetch_stream_status", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fetch_text", I64, &[I64]);
     module.declare_function("js_fetch_with_options", I64, &[I64, I64, I64, I64]);
+    // Headers-aware JSON stringify for the `fetch(url, { headers })` request
+    // path: takes the headers value (f64) and returns a `*const StringHeader`
+    // (i64) holding `{name:value}` JSON, treating a `Headers` handle safely.
+    module.declare_function("js_fetch_headers_to_json", I64, &[DOUBLE]);
 
     // ========== Net ==========
     module.declare_function("js_net_create_connection", DOUBLE, &[I32, I64, I64]);

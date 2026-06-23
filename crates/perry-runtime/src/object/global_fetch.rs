@@ -62,6 +62,14 @@ static GLOBAL_FETCH_BODY_INIT_PTR: AtomicPtr<()> = AtomicPtr::new(null_mut());
 /// of a direct perry-stdlib symbol dependency (which would link-break a
 /// stdlib-less build — the #5112 regression class).
 static GLOBAL_HEADERS_ENTRIES_JSON: AtomicPtr<()> = AtomicPtr::new(null_mut());
+/// perry-stdlib's `Headers` → flat `{name: value}` object-JSON producer, used by
+/// the `fetch(url, { headers })` request path. A `Headers` instance is a
+/// fetch-band registry *handle*, not a heap pointer, so feeding it straight to
+/// `js_json_stringify` faults on the `gc_obj_type` back-read (the `claude -p`
+/// SIGSEGV). Routing handle-band `headers` values here reads the registry
+/// instead of dereferencing the id. Registered separately from the constructors
+/// so a stdlib-less runtime build stays link-clean (the #5112 regression class).
+static GLOBAL_HEADERS_OBJECT_JSON: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 type HeadersEntriesJsonFn = extern "C" fn(f64) -> *mut crate::StringHeader;
 
@@ -139,6 +147,17 @@ fn fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::StringHeader
     crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
 }
 
+/// Codegen entry point for the `fetch(url, { headers })` request path: stringify
+/// the already-evaluated `headers` value into the flat `{name:value}` JSON that
+/// `js_fetch_with_options` parses, treating a `Headers` handle safely (no
+/// dereference of a fetch-band id). Mirrors the runtime thunk's
+/// `headers_init_json_ptr`; returned as an i64 `*const StringHeader` so the
+/// codegen call site can pass it straight into `js_fetch_with_options`.
+#[no_mangle]
+pub extern "C" fn js_fetch_headers_to_json(headers: f64) -> i64 {
+    headers_init_json_ptr(headers) as i64
+}
+
 fn fetch_headers_json_ptr(init: f64) -> *const crate::StringHeader {
     let headers = fetch_option(init, b"headers");
     if matches!(
@@ -147,12 +166,9 @@ fn fetch_headers_json_ptr(init: f64) -> *const crate::StringHeader {
     ) {
         return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
     }
-    let json = unsafe { crate::json::js_json_stringify(headers, 0) };
-    if json.is_null() {
-        crate::string::js_string_from_bytes(b"{}".as_ptr(), 2)
-    } else {
-        json
-    }
+    // `init.headers` may be a `Headers` instance (a fetch-band handle) rather
+    // than a plain object — JSON-stringify it without dereferencing the handle.
+    headers_init_json_ptr(headers)
 }
 
 #[cfg(feature = "external-fetch-symbols")]
@@ -253,6 +269,55 @@ fn call_global_headers_entries_json(value: f64) -> *mut crate::StringHeader {
     }
     let func: HeadersEntriesJsonFn = unsafe { std::mem::transmute(f) };
     func(value)
+}
+
+/// Register perry-stdlib's `Headers` → flat `{name: value}` object-JSON producer
+/// (used by the `fetch(url, { headers: Headers })` request path).
+#[no_mangle]
+pub extern "C" fn js_register_global_headers_object_json(f: HeadersEntriesJsonFn) {
+    GLOBAL_HEADERS_OBJECT_JSON.store(f as *mut (), Ordering::Release);
+}
+
+fn call_global_headers_object_json(value: f64) -> *mut crate::StringHeader {
+    let f = GLOBAL_HEADERS_OBJECT_JSON.load(Ordering::Acquire);
+    if f.is_null() {
+        return null_mut();
+    }
+    let func: HeadersEntriesJsonFn = unsafe { std::mem::transmute(f) };
+    func(value)
+}
+
+/// JSON-stringify a fetch `init.headers` value into the flat `{name: value}`
+/// object that `js_fetch_with_options` parses, WITHOUT ever dereferencing a
+/// `Headers` registry handle.
+///
+/// A `Headers` instance is a fetch-band POINTER_TAG handle (its first id is
+/// `0x40000`), not a heap object. The generic `js_json_stringify` walker reaches
+/// `gc_obj_type` and back-reads `id - 8` as a `GcHeader`, faulting on unmapped
+/// memory — the consistent `claude -p` SIGSEGV during request setup. Classify by
+/// address band first: a handle-band `Headers` value is delegated to the
+/// registered stdlib producer (which reads its own registry); everything else (a
+/// plain `{ … }` object, a `Map`, …) is a real heap value and stringifies
+/// safely. Same family as #5559/#5560 (handle-band ids mis-dereferenced as heap
+/// pointers).
+fn headers_init_json_ptr(headers: f64) -> *const crate::StringHeader {
+    let jsv = crate::value::JSValue::from_bits(headers.to_bits());
+    if jsv.is_pointer() {
+        let addr = (headers.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        if crate::value::addr_class::is_handle_band(addr) {
+            let p = call_global_headers_object_json(headers);
+            if !p.is_null() {
+                return p;
+            }
+            return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
+        }
+    }
+    let json = unsafe { crate::json::js_json_stringify(headers, 0) };
+    if json.is_null() {
+        crate::string::js_string_from_bytes(b"{}".as_ptr(), 2)
+    } else {
+        json
+    }
 }
 
 /// Normalize a `res.setHeaders(x)` argument into a JSON array of

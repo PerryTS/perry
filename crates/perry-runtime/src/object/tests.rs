@@ -758,3 +758,32 @@ fn wide_object_index_reads_and_descriptor_writes() {
         assert_eq!(f64::from_bits(v43.bits()), 4343.0);
     }
 }
+
+/// `js_object_to_string` must NOT dereference a handle-band value (a Web Fetch
+/// `Headers`/`Request`/`Response`/`Blob` registry id, or any other small native
+/// handle) as a heap pointer. Such ids are NaN-boxed as `POINTER_TAG` values but
+/// are not `GcHeader`-prefixed objects; reading the GC type byte at `id - 8` (or
+/// `(*ObjectHeader).class_id` at `id`) faults on unmapped low memory. This is
+/// the `claude -p` SIGSEGV (`EXC_BAD_ACCESS` at `0x3FFFB` == `0x40003 - 8`),
+/// where the SDK coerced a `Headers` handle to a string while building a
+/// request. The brand must fall through to the generic `[object Object]` tag.
+#[test]
+fn object_to_string_rejects_handle_band_ids() {
+    use crate::value::addr_class;
+    for &id in &[
+        addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
+        addr_class::FETCH_HANDLE_BAND_START + 3, // the 0x40003 from the crash
+        addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF
+        1usize,                                  // common native handle
+    ] {
+        assert!(addr_class::is_handle_band(id));
+        let handle = crate::value::js_nanbox_pointer(id as i64);
+        // Must return a string brand without dereferencing the bogus pointer.
+        let result = unsafe { js_object_to_string(handle) };
+        let s = js_string_to_rust(JSValue::from_bits(result.to_bits()));
+        assert_eq!(
+            s, "[object Object]",
+            "handle-band id {id:#x} must brand as [object Object], got {s:?}"
+        );
+    }
+}
