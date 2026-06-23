@@ -995,6 +995,57 @@ unsafe fn object_assign_string_source(
     }
 }
 
+/// Copy a Proxy source's own enumerable properties onto `target`, driving the
+/// proxy's `ownKeys` / `getOwnPropertyDescriptor` / `get` traps in spec order.
+/// Any trap that throws longjmps straight past this frame to the caller's
+/// `try`/`catch`, which is exactly the abrupt-completion propagation
+/// `Object.assign` requires.
+unsafe fn object_assign_proxy_source(
+    target: *mut ObjectHeader,
+    target_f64: f64,
+    target_is_array: bool,
+    source_f64: f64,
+) {
+    // `[[OwnPropertyKeys]]` — fires the ownKeys trap (throw propagates).
+    let keys_arr = crate::proxy::js_proxy_own_keys(source_f64);
+    let keys_val = JSValue::from_bits(keys_arr.to_bits());
+    if !keys_val.is_pointer() {
+        return;
+    }
+    let arr = keys_val.as_pointer::<crate::array::ArrayHeader>();
+    if arr.is_null() {
+        return;
+    }
+    let n = crate::array::js_array_length(arr);
+    for i in 0..n {
+        let key = crate::array::js_array_get(arr, i);
+        let key_f64 = f64::from_bits(key.bits());
+        // `[[GetOwnProperty]]` — fires the getOwnPropertyDescriptor trap.
+        let desc = crate::proxy::js_reflect_get_own_property_descriptor(source_f64, key_f64);
+        let desc_ptr = (desc.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+        if desc.to_bits() == JSValue::undefined().bits() || desc_ptr.is_null() {
+            continue;
+        }
+        let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+        if crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(desc_ptr, ek))
+            == 0
+        {
+            continue;
+        }
+        // `[[Get]]` — fires the get trap.
+        let value_f64 = crate::proxy::js_proxy_get(source_f64, key_f64);
+        if key.is_any_string() {
+            let key_ptr =
+                crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+            if !key_ptr.is_null() {
+                object_assign_set_string_key(target, target_is_array, key_ptr, value_f64);
+            }
+        } else if key.is_pointer() {
+            crate::symbol::js_object_set_symbol_property(target_f64, key_f64, value_f64);
+        }
+    }
+}
+
 /// Per spec, undefined/null target throws TypeError. Non-object sources
 /// are skipped except string primitives, which expose enumerable index
 /// properties (`Object.assign({}, "ab") -> {0:"a",1:"b"}`).
@@ -1035,6 +1086,18 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     }
     if source.is_any_string() {
         object_assign_string_source(target, target_is_array, source_f64);
+        return target_f64;
+    }
+
+    // A Proxy source isn't an `ObjectHeader` (its NaN-box payload is a small
+    // registry id, not a heap pointer), so the raw `keys_array` walk below
+    // would skip it silently. Spec requires enumerating it through its traps —
+    // `[[OwnPropertyKeys]]` (ownKeys), `[[GetOwnProperty]]`
+    // (getOwnPropertyDescriptor) for the enumerable test, then `[[Get]]` for
+    // each value — with every trap's abrupt completion propagating out (test262
+    // Object/assign/source-own-prop-error + source-own-prop-keys-error).
+    if crate::proxy::js_proxy_is_proxy(source_f64) != 0 {
+        object_assign_proxy_source(target, target_f64, target_is_array, source_f64);
         return target_f64;
     }
 
