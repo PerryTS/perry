@@ -1062,15 +1062,10 @@ fn number_parts_from_resolved(r: &NfResolved, value: f64) -> Vec<(&'static str, 
             // part stays below 1000 (or we run out of suffix tiers).
             let (mut i_out, f_out) = loop {
                 let (ii, ff) = if power == 0 {
-                    // No scaling below the first threshold: render like standard
-                    // notation (fraction rounding), unless the caller explicitly
-                    // requested significant digits.
-                    if r.use_sig && !r.compact_both {
-                        round_to_significant(int_part, frac_part, r.min_sig, r.max_sig)
-                    } else {
-                        let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
-                        (i, trim_fraction(&f, r.min_frac as usize))
-                    }
+                    // No scaling below the first threshold, but the same rounding
+                    // applies (default compact uses morePrecision over 1–2
+                    // significant digits, so 1.5 stays "1.5", not "2").
+                    compact_round(int_part, frac_part, r)
                 } else {
                     let scaled = format!("{}", abs / 10f64.powi(power as i32));
                     let (si, sf) = scaled.split_once('.').unwrap_or((&scaled, ""));
@@ -1132,10 +1127,24 @@ fn number_parts_from_resolved(r: &NfResolved, value: f64) -> Vec<(&'static str, 
     out
 }
 
-/// Round `(int, frac)` for compact notation: significant digits when configured
-/// (the default compact path uses 1–2 significant digits), else fraction digits.
+/// Round `(int, frac)` for compact notation. The default compact path resolves
+/// *both* a fraction (max 0) and a significant (1–2) candidate and keeps the more
+/// precise one (roundingPriority `morePrecision`), so e.g. 1.5 stays `1.5` while
+/// 999 stays `999`. Explicit significant- or fraction-only options take the
+/// corresponding single path.
 fn compact_round(int_part: &str, frac_part: &str, r: &NfResolved) -> (String, String) {
-    if r.use_sig {
+    if r.compact_both {
+        let (fi, ff) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
+        let ff = trim_fraction(&ff, r.min_frac as usize);
+        let (si, sf) = round_to_significant(int_part, frac_part, r.min_sig, r.max_sig);
+        // morePrecision: the candidate with more fraction digits wins; on a tie
+        // the fraction candidate is kept (ECMA-402 ToRawFixed preference).
+        if sf.len() > ff.len() {
+            (si, sf)
+        } else {
+            (fi, ff)
+        }
+    } else if r.use_sig {
         round_to_significant(int_part, frac_part, r.min_sig, r.max_sig)
     } else {
         let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
