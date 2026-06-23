@@ -406,7 +406,23 @@ fn lower_guarded_array_index_get(
 /// rejected case defers to the unchanged runtime helper, semantics are
 /// identical; only the hot monomorphic numeric-typed-array case is short-cut.
 /// `obj_box` / `idx_d` are the already-lowered receiver and index (DOUBLE).
-fn lower_inline_dyn_typed_array_get(ctx: &mut FnCtx<'_>, obj_box: &str, idx_d: &str) -> String {
+///
+/// `coerce_slow_to_number`: when the read is used in a context that will
+/// `ToNumber` the result regardless (a non-`+` arithmetic / bitwise operand —
+/// `^`, `-`, `*`, `<<`, …, all of which `ToNumber` their operands; see
+/// [`lower_unknown_local_index_get_for_number_context`]), the cold slow branch's
+/// `js_dyn_index_get` result is wrapped in `js_number_coerce` here so the merged
+/// value is *always* a Number. The hot per-kind fast branches already produce a
+/// Number, so the caller can skip the per-element site `js_number_coerce` it
+/// would otherwise emit — moving that coercion off bcrypt's ~600M-read hot path
+/// and onto the cache-miss path only. `false` leaves the slow result boxed
+/// (the general `obj[i]` read, whose result may legitimately be a non-Number).
+fn lower_inline_dyn_typed_array_get(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    coerce_slow_to_number: bool,
+) -> String {
     // TAG_MASK / POINTER_TAG / POINTER_MASK as signed-i64 LLVM literals.
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
@@ -669,11 +685,22 @@ fn lower_inline_dyn_typed_array_get(ctx: &mut FnCtx<'_>, obj_box: &str, idx_d: &
 
     // ---- slow: the unchanged runtime dispatcher ----
     ctx.current_block = slow_idx;
-    let slow_val = ctx.block().call(
+    let slow_raw = ctx.block().call(
         DOUBLE,
         "js_dyn_index_get",
         &[(DOUBLE, obj_box), (DOUBLE, idx_d)],
     );
+    // In a number context, coerce the (possibly boxed) slow result here so the
+    // merge phi is uniformly a Number and the arithmetic caller skips its own
+    // per-element coerce. A plain double already shortcuts `js_number_coerce`'s
+    // first branch, so re-coercing a fast-path-shaped value is a cheap no-op on
+    // the rare cache-miss path.
+    let slow_val = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &slow_raw)])
+    } else {
+        slow_raw
+    };
     let slow_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -764,6 +791,74 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     let idx_double = lower_expr(ctx, index)?;
     let idx_i32 = ctx.block().fptosi(DOUBLE, &idx_double, I32);
     lower_guarded_array_index_get(ctx, &arr_box, &idx_double, &idx_i32, "arr", true, true).map(Some)
+}
+
+/// #5525: lower an `S[i]` read whose receiver is an *untyped* (`any`/unknown)
+/// local — bcryptjs's Blowfish `S`/`P`/`lr` boxes reach their `Int32Array`
+/// state through plain `Array.<number>` parameters — directly as a guaranteed
+/// **Number**, for use as a non-`+` arithmetic / bitwise operand.
+///
+/// The generic `obj[i]` lowering ([`lower_inline_dyn_typed_array_get`] via
+/// [`lower`]) already emits the guarded inline typed-array load, but leaves its
+/// cold slow branch boxed, so the arithmetic site must wrap the whole result in
+/// a per-element `js_number_coerce`. Here we instead sink that coercion into the
+/// slow branch (`coerce_slow_to_number = true`), so the hot per-kind fast path —
+/// ~100% of bcrypt's ~600M reads — pays *no* coerce at all and the caller skips
+/// its site coerce. Operators like `^`/`-`/`*`/`<<` always `ToNumber` their
+/// operands, so coercing early is semantics-preserving; `+` (which may be string
+/// concat) never reaches this path (its untyped operands route through
+/// `js_dynamic_string_or_number_add`).
+///
+/// Returns `None` (caller falls back to `lower_expr` + a site coerce) unless the
+/// receiver is exactly a non-special `any`/unknown `LocalGet` — the one shape
+/// for which [`lower`]'s `IndexGet` arm provably reaches the inline-TA path, so
+/// this never diverges from the value the generic path would have produced.
+pub(crate) fn lower_unknown_local_index_get_for_number_context(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+) -> Result<Option<String>> {
+    let Expr::IndexGet { object, index } = expr else {
+        return Ok(None);
+    };
+    // Receiver must be a plain local of erased static type. Restricting to
+    // `LocalGet` (not arbitrary expressions) guarantees none of `lower`'s
+    // earlier `IndexGet` branches (Server/globalThis/width-tracked-TA/Uint8Array/
+    // scalar-replaced/flat-const/class-ref/string-receiver) can pre-empt the
+    // inline-TA path, so coercing the slow branch here matches the generic path.
+    let Expr::LocalGet(id) = object.as_ref() else {
+        return Ok(None);
+    };
+    let recv_unknown = matches!(
+        crate::type_analysis::static_type_of(ctx, object),
+        None | Some(HirType::Any) | Some(HirType::Unknown)
+    );
+    if !recv_unknown {
+        return Ok(None);
+    }
+    // Bail if this local is tracked by any specialized lowering that `lower`
+    // would dispatch ahead of the inline-TA path.
+    if ctx.scalar_replaced_arrays.contains_key(id)
+        || ctx.array_row_aliases.contains_key(id)
+        || ctx.scalar_replaced.contains_key(id)
+        || is_string_expr(ctx, object)
+        || index_object_is_class_or_proto_ref(ctx, object)
+    {
+        return Ok(None);
+    }
+    // A statically-string / symbol key is an ordinary [[Get]], not an element
+    // read — leave it to `lower`'s dedicated routes.
+    let index_is_static_string_or_symbol = matches!(
+        index.as_ref(),
+        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+    ) || is_string_expr(ctx, index);
+    if index_is_static_string_or_symbol {
+        return Ok(None);
+    }
+    let obj_box = lower_expr(ctx, object)?;
+    let idx_d = lower_expr(ctx, index)?;
+    Ok(Some(lower_inline_dyn_typed_array_get(
+        ctx, &obj_box, &idx_d, true,
+    )))
 }
 
 fn lower_bounded_array_index_get(
@@ -1201,7 +1296,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // falling back to `js_dyn_index_get` on any guard miss. Removes
                 // the per-element out-of-line call + `lookup_typed_array_kind` +
                 // `js_number_coerce` on bcrypt's hot Int32Array `S[i]`/`P[i]`.
-                return Ok(lower_inline_dyn_typed_array_get(ctx, &obj_box, &idx_d));
+                return Ok(lower_inline_dyn_typed_array_get(
+                    ctx, &obj_box, &idx_d, false,
+                ));
             }
             // Three cases:
             //   1. Receiver is a known array → inline f64 element load

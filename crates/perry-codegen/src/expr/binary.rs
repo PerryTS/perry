@@ -56,6 +56,18 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
             return Ok((value, true));
         }
     }
+    // #5525: an untyped-receiver typed-array element read (`S[i]` with `S` an
+    // `any` param — bcryptjs's Blowfish hot path) used as a non-`+` arithmetic
+    // operand. Lower it as a guaranteed Number (coerce sunk into the cold slow
+    // branch) so the hot per-element fast path skips the site `js_number_coerce`.
+    // Only non-`+` ops reach here (`+` with an untyped operand returned via
+    // `js_dynamic_string_or_number_add` above), and those always `ToNumber`
+    // their operands, so early coercion is semantics-preserving.
+    if let Some(value) =
+        super::index_get::lower_unknown_local_index_get_for_number_context(ctx, expr)?
+    {
+        return Ok((value, true));
+    }
     Ok((lower_expr(ctx, expr)?, false))
 }
 

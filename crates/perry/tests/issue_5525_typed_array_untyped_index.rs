@@ -315,3 +315,114 @@ console.log("D=" + g(own,0) + "," + g(own,1) + "," + g(v,0) + "," + g(v,1));
          view-guard fallback"
     );
 }
+
+/// #5525 follow-up (arithmetic operand coercion): an untyped-receiver typed-
+/// array read (`s[i]` with `s` an `any` param — bcryptjs's Blowfish `S`/`P`
+/// boxes) used as a *non-`+`* arithmetic / bitwise operand previously paid a
+/// per-element `js_number_coerce` at the access site, on top of the inline
+/// typed-array load. The number-context lowering sinks that coercion into the
+/// cold cache-miss slow branch, so the hot per-kind fast path produces a Number
+/// directly and the operator skips its site coerce. This pins that the
+/// optimization is semantics-preserving: the untyped path is bit-identical to
+/// the equivalent typed-receiver path, the slow branch still coerces OOB reads
+/// (`undefined` → `NaN`) and string elements per `ToNumber`, and `+` (which may
+/// be string concat and never takes this path) is unchanged.
+#[test]
+fn untyped_index_in_arithmetic_context_matches_typed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    let output = dir.path().join("main_bin");
+
+    std::fs::write(
+        &entry,
+        r#"
+// Identical bodies; `mixAny`'s `any` params take the new number-context path,
+// `mixTyped`'s `Int32Array` params take the existing typed fast path. Every op
+// here (`^`, `-`, `*`, `<<`, `>>>`, `%`) ToNumbers its operands, so the two must
+// agree bit-for-bit — including for the OOB (i=100) reads that resolve through
+// the coerced slow branch (undefined -> NaN).
+function mixAny(s: any, p: any, i: number): number {
+  let x = s[i] ^ p[i];
+  x = x - s[i + 1];
+  x = x * 3;
+  x = x << 2;
+  x = x >>> 1;
+  x = x % 997;
+  return x | 0;
+}
+function mixTyped(s: Int32Array, p: Int32Array, i: number): number {
+  let x = s[i] ^ p[i];
+  x = x - s[i + 1];
+  x = x * 3;
+  x = x << 2;
+  x = x >>> 1;
+  x = x % 997;
+  return x | 0;
+}
+const s = new Int32Array(8);
+const p = new Int32Array(8);
+for (let k = 0; k < 8; k++) { s[k] = (k * 2654435761) | 0; p[k] = ((k + 9) * 40503) | 0; }
+let okA = true;
+for (let i = 0; i < 6; i++) { if (mixAny(s, p, i) !== mixTyped(s, p, i)) okA = false; }
+console.log("A=" + okA);
+
+// (B) in-bounds and out-of-bounds parity in a number context (the OOB case
+// exercises the slow-branch js_number_coerce of an `undefined` element).
+console.log("B=" + (mixAny(s, p, 100) === mixTyped(s, p, 100)));
+
+// (C) a different element kind (Float64) through both paths.
+const f = new Float64Array(4);
+for (let k = 0; k < 4; k++) f[k] = (k + 1) * 1.5;
+function fAny(a: any, i: number): number { return a[i] * a[i + 1] - a[i + 2]; }
+function fTyped(a: Float64Array, i: number): number { return a[i] * a[i + 1] - a[i + 2]; }
+console.log("C=" + (fAny(f, 0) === fTyped(f, 0)));
+
+// (D) a NON-typed-array receiver in a number context: the slow branch must
+// still ToNumber string elements ("5"*2=10, "x"*2=NaN, "10"-3=7).
+const mixed: any = ["5", "x", "10"];
+console.log("D=" + (mixed[0] * 2) + "," + (mixed[1] * 2) + "," + (mixed[2] - 3));
+
+// (E) `+` is NOT a number-context operand path (it may be string concat) and is
+// unaffected: untyped string elements must still concatenate.
+const ss: any = ["ab", "cd"];
+console.log("E=" + (ss[0] + ss[1]));
+"#,
+    )
+    .expect("write entry");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(
+        stdout,
+        "A=true\n\
+         B=true\n\
+         C=true\n\
+         D=10,NaN,7\n\
+         E=abcd\n",
+        "untyped typed-array reads in a non-`+` arithmetic context must match \
+         the typed path, coerce OOB/string elements via the slow branch, and \
+         leave `+` semantics unchanged"
+    );
+}
