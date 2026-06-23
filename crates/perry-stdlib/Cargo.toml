@@ -368,7 +368,7 @@ dashmap = "6.2"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false, optional = true }
 
 # WebSocket
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"], optional = true }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 
 # TLS (for net.Socket.upgradeToTLS and tls.connect) — rustls-only, no OpenSSL.
