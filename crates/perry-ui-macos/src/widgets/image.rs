@@ -225,6 +225,12 @@ fn load_remote(handle: i64, url: String) {
                         Some(v) => v,
                         None => return,
                     };
+                    // #3073: `setImage:` below is NSImageView-only. If the
+                    // handle no longer resolves to an image view, skip the
+                    // apply rather than risk a method-not-found abort.
+                    if !is_image_view(&view) {
+                        return;
+                    }
                     let ns_data_cls = match objc2::runtime::AnyClass::get(c"NSData") {
                         Some(c) => c,
                         None => return,
@@ -261,9 +267,30 @@ fn load_remote(handle: i64, url: String) {
     });
 }
 
+/// True when `view` is an `NSImageView` (or a subclass). Used to gate
+/// the NSImageView-only selectors below so a handle that resolves to a
+/// non-image view becomes a safe no-op instead of an objc
+/// "method not found" abort. Mirrors the `isKindOfClass:` guards used
+/// for `NSStackView` selectors in `widgets/mod.rs`.
+fn is_image_view(view: &NSView) -> bool {
+    match objc2::runtime::AnyClass::get(c"NSImageView") {
+        Some(cls) => unsafe { msg_send![view, isKindOfClass: cls] },
+        None => false,
+    }
+}
+
 /// Set the frame size of an image widget.
 pub fn set_size(handle: i64, width: f64, height: f64) {
     if let Some(view) = super::get_widget(handle) {
+        // #3073: inside a virtualized `LazyVStack` row the handle can
+        // resolve to the list's backing `NSScrollView` rather than the
+        // row's `NSImageView`. Sending the NSImageView-only `-image`
+        // selector to that view aborts the process. Skip safely when the
+        // handle is not an image view — sizing a non-image view here
+        // (e.g. `setFrameSize` on the scroll view) would be wrong anyway.
+        if !is_image_view(&view) {
+            return;
+        }
         unsafe {
             // Resize the NSImage itself so intrinsic content size matches the desired display size
             let image: *mut objc2::runtime::AnyObject = msg_send![&*view, image];
@@ -280,6 +307,11 @@ pub fn set_size(handle: i64, width: f64, height: f64) {
 /// Set the content tint color of an image widget (for SF Symbols).
 pub fn set_tint(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view) = super::get_widget(handle) {
+        // #3073: `setContentTintColor:` is NSImageView-only; guard against
+        // a handle that resolved to a non-image view (see `set_size`).
+        if !is_image_view(&view) {
+            return;
+        }
         unsafe {
             let color: *mut objc2::runtime::AnyObject = msg_send![
                 objc2::runtime::AnyClass::get(c"NSColor").unwrap(),
