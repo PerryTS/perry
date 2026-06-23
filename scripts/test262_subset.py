@@ -59,8 +59,10 @@ Buckets
                  rejected, the compile rejection is *correct* and lands in
                  `pass` instead.)
 - skip         — couldn't assemble / needs an unsupported flag or `$262` host
-                 API. Excluded from the parity verdict — never charged against
-                 Perry.
+                 API, OR compiled but then hit a construct the AOT model can't
+                 evaluate at runtime (runtime-string `eval`/`new Function`,
+                 runtime-computed `import()`, `.wasm` import — #5593). Excluded
+                 from the parity verdict — never charged against Perry.
 
 Usage
 -----
@@ -135,6 +137,17 @@ _PATH_SKIP = re.compile(
 _HOST_DEP = re.compile(
     r"\$262\b|detachArrayBuffer|createRealm|evalScript|IsHTMLDDA|\bagent\."
 )
+
+# Cases that *compile* but, when run, reach a construct the AOT model
+# categorically cannot evaluate — a runtime-string `eval()` / `new Function()`,
+# a runtime-computed dynamic `import()`, or a `.wasm` import. Perry defers these
+# to a runtime throw carrying this sentinel (`PERRY_ALLOW_EVAL=1` only const-
+# folds *constant-string* eval, so the runtime-string probes — e.g. Annex B
+# B.3.3 sloppy block-function hoisting checked via `eval` — still defer). This
+# is a permanent AOT limitation, not a language-parity gap, so such a case
+# buckets as `skip` (excluded from the verdict) rather than being charged as a
+# `runtime-fail` (#5593).
+_AOT_DEFER = re.compile(r"cannot run in an ahead-of-time compiled binary")
 
 # Frontmatter flags that make a case un-runnable as a plain script under this
 # differential. `module` needs ESM loader semantics; the agent/Can-block flags
@@ -502,6 +515,10 @@ def main() -> int:
                     return (rel, cat, "pass", "", False, False)
                 return (rel, cat, "diff", first_line(p_out), False, False)
             if node_clean and not perry_clean:
+                if _AOT_DEFER.search(p_out):
+                    return (rel, cat, "skip",
+                            "AOT-deferred runtime eval/import (#5593)",
+                            False, False)
                 return (rel, cat, "runtime-fail", first_line(p_out),
                         False, False)
             if not node_clean and not perry_clean:

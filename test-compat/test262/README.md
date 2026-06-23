@@ -110,14 +110,40 @@ runner buckets by Perry-vs-Node **agreement**:
 - `compile-fail` — Perry refused to compile a case Node ran clean. (When
                    Node *also* rejected, Perry's compile rejection is the
                    correct answer and lands in `pass`.)
-- `skip`         — couldn't assemble (missing include) or needs an
-                   unsupported flag / `$262` host API. Excluded from the
-                   parity verdict — never charged against Perry.
+- `skip`         — couldn't assemble (missing include), needs an
+                   unsupported flag / `$262` host API, or *compiled but then*
+                   hit a construct the AOT model categorically can't evaluate
+                   at runtime — a runtime-string `eval()` / `new Function()`,
+                   a runtime-computed dynamic `import()`, or a `.wasm` import
+                   (Perry throws `… cannot run in an ahead-of-time compiled
+                   binary`; see the AOT-eval note below, #5593). Excluded from
+                   the parity verdict — never charged against Perry.
 
 `parity_pct = pass / (pass + diff + runtime-fail + compile-fail)`. The
 report also records `negative_agreements` (how many of the passes are
 both-runtimes-correctly-rejected) so the language-correctness signal and
 the negative-rejection signal stay legible.
+
+### Runtime-string `eval` / `new Function` — a permanent AOT limitation (#5593)
+
+Perry compiles ahead-of-time: there is no interpreter in the produced binary,
+so a `eval()` / `new Function()` whose **source is only known at runtime**
+cannot be evaluated. `PERRY_ALLOW_EVAL=1` (set in the compile env above) makes
+Perry const-fold the cases whose argument is a *constant string* — those run —
+but the rest are compiled to a deferred site that throws
+`eval() cannot run in an ahead-of-time compiled binary (file:line)` if it is
+ever reached. The same deferral covers `new Function(body)`, a runtime-computed
+dynamic `import()`, and a `.wasm` import.
+
+In Test262 this hits a cluster of Annex B cases — `annexB/language/eval-code/
+direct/*` (B.3.3 sloppy block-function hoisting, *probed* via a runtime `eval`)
+and a few `annexB/built-ins/RegExp/*` — roughly 72 cases as of the 2026-06-23
+sweep. These are **out of scope by construction**, not a language-parity gap:
+they require an interpreter Perry deliberately doesn't ship. The runner detects
+the sentinel error in the compiled binary's output and buckets such a case as
+`skip` (excluded from the parity verdict) instead of charging it as a
+`runtime-fail`. This is a deliberate **WONTFIX**: closing it would mean
+embedding a runtime JS interpreter, which is a non-goal for an AOT compiler.
 
 ## Files
 
