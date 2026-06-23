@@ -1644,8 +1644,70 @@ fn lower_new_impl(
                     .push((ctor.symbol.clone(), DOUBLE, ctor_param_types));
                 let ctor_ret = ctx.block().call(DOUBLE, &ctor.symbol, &ctor_args);
                 ctx.block().store(DOUBLE, &ctor_ret, &ctor_result_slot);
+                found_inherited_ctor = true;
             }
         } // end !found_inherited_ctor
+
+        // A no-own-ctor class whose parent is a DYNAMIC runtime value
+        // (`class D extends <fn/value> {}`, captured as `extends_expr`) gets
+        // an implicit default derived ctor `constructor(...args){ super(...args) }`.
+        // The inline `new` path above only finds inherited ctors that live in
+        // `ctx.classes` / `imported_class_ctors`; a parent that resolves to a
+        // plain function value at runtime (zod 4's `$constructor` pattern, where
+        // a class extends another `$constructor`-returned function) matches none
+        // of those, so without this branch `super(...)` is never emitted and the
+        // parent function body never runs on the new instance — its
+        // `this.<field> = …` / `Object.defineProperty(this, …)` writes are lost,
+        // and (when the parent function returns its own `this`) the derived
+        // instance is left uninitialized. Mirrors the synthesized-default-ctor
+        // dynamic-parent super in `codegen/method.rs` (the standalone-symbol
+        // path) and the explicit `Expr::SuperCall` dynamic-parent arm in
+        // `expr/this_super_call.rs`: resolve the decl-time-registered parent
+        // value and dispatch it on `this` via `js_fetch_or_value_super`, which
+        // binds IMPLICIT_THIS to the instance for the duration of the call.
+        if !found_inherited_ctor && class.extends_expr.is_some() {
+            if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
+                let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let parent_val = ctx.block().call(
+                    DOUBLE,
+                    "js_get_dynamic_parent_value",
+                    &[(I32, &cid.to_string())],
+                );
+                let (args_ptr, args_len) = if lowered_args.is_empty() {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+                    for (i, a_val) in lowered_args.iter().enumerate() {
+                        let slot = ctx
+                            .block()
+                            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
+                        ctx.block().store(DOUBLE, a_val, &slot);
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg,
+                        lowered_args.len(),
+                        buf_reg
+                    ));
+                    (ptr_reg, lowered_args.len().to_string())
+                };
+                let this_box = match ctx.this_stack.last().cloned() {
+                    Some(slot) => ctx.block().load(DOUBLE, &slot),
+                    None => undef_lit.clone(),
+                };
+                let _ = ctx.block().call(
+                    DOUBLE,
+                    "js_fetch_or_value_super",
+                    &[
+                        (DOUBLE, &parent_val),
+                        (DOUBLE, &this_box),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
+                );
+            }
+        }
     }
 
     // Now that the parent body chain has run (setting `this.config`, etc.),
