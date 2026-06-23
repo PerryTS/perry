@@ -351,6 +351,17 @@ pub extern "C" fn js_object_delete_field_value(
     obj_value: f64,
     key: *const crate::StringHeader,
 ) -> i32 {
+    // A class reference (`delete C.m` for a `static m()`) is INT32-tagged, so
+    // `is_pointer` is false and the guard below would no-op it. But a static
+    // member delete must still unregister the method/field. `js_object_delete_field`
+    // already treats a sub-0x10000 "pointer" as a class id, so forward the id
+    // there. (#5579: #5490 rerouted `delete` through this value-form wrapper,
+    // whose primitive guard silently dropped class-ref receivers → static
+    // `delete C.m` became a vacuous no-op and verifyProperty's configurable
+    // check failed "m descriptor should be configurable".)
+    if let Some(class_id) = super::native_module::class_ref_id(obj_value) {
+        return js_object_delete_field(class_id as usize as *mut ObjectHeader, key);
+    }
     if !delete_receiver_is_pointer(obj_value) {
         return 1;
     }
@@ -362,6 +373,10 @@ pub extern "C" fn js_object_delete_field_value(
 /// `js_object_delete_field_value`, delegating real objects to the dynamic path.
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
+    // Class-ref receiver (`delete C["m"]`): see `js_object_delete_field_value`.
+    if let Some(class_id) = super::native_module::class_ref_id(obj_value) {
+        return js_object_delete_dynamic(class_id as usize as *mut ObjectHeader, key);
+    }
     if !delete_receiver_is_pointer(obj_value) {
         return 1;
     }
