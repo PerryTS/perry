@@ -44,3 +44,28 @@ const doubler = new Proxy({ x: 2, y: 3 }, {
   get(t: any, k) { return typeof t[k] === "number" ? t[k] * 2 : t[k]; },
 });
 console.log(JSON.stringify(Object.assign({}, doubler)));          // {"x":4,"y":6}
+
+// ---- symbol keys are copied through the traps ----
+const sym = Symbol("s");
+const symSrc: any = { plain: 1 };
+symSrc[sym] = 42;
+const symOut: any = Object.assign({}, new Proxy(symSrc, {}));
+console.log("symbol copied: " + (symOut[sym] === 42 && symOut.plain === 1)); // true
+
+// ---- strict Set: a symbol key onto a non-extensible target throws ----
+const frozenTarget = Object.preventExtensions({});
+const symProxy = new Proxy(symSrc, {});
+console.log(thrown(() => Object.assign(frozenTarget, symProxy)));   // TypeError
+
+// ---- trap order: ownKeys -> getOwnPropertyDescriptor -> get, per key ----
+const order: string[] = [];
+const ordered = new Proxy({ k: 7 }, {
+  ownKeys(t) { order.push("ownKeys"); return Reflect.ownKeys(t); },
+  getOwnPropertyDescriptor(t, k) {
+    order.push("gopd:" + String(k));
+    return Reflect.getOwnPropertyDescriptor(t, k);
+  },
+  get(t: any, k) { order.push("get:" + String(k)); return t[k]; },
+});
+Object.assign({}, ordered);
+console.log("trap order: " + order.join(","));   // ownKeys,gopd:k,get:k
