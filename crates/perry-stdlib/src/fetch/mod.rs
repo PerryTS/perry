@@ -16,6 +16,7 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 // lint gate (#1649). The child module sees mod.rs's private items via its
 // `use super::*`.
 mod headers;
+mod request_handle;
 pub use headers::*;
 
 // Cached bound-method values for Fetch `Headers` handles — split out to keep
@@ -605,23 +606,28 @@ pub unsafe extern "C" fn js_fetch_with_options(
     let promise = perry_runtime::js_promise_new();
     let promise_ptr = promise as usize;
 
-    let url = match string_from_header(url_ptr) {
-        Some(u) => u,
-        None => {
-            let err_msg = "Invalid URL";
-            let err_bits = fetch_error_bits(err_msg);
+    // `fetch(Request)` form: callers (axios/gaxios / any WHATWG-fetch) build a
+    // `Request` object and call `fetch(request, init)`; its handle id lands in
+    // the `url_ptr` slot. Recover url/method/body/headers from the Request
+    // registry so the request is dispatched (`init` members override).
+    let request_handle::FetchInputs {
+        url,
+        method,
+        body,
+        custom_headers,
+    } = match request_handle::resolve_fetch_inputs(
+        string_from_header(url_ptr),
+        string_from_header(method_ptr),
+        string_from_header(body_ptr),
+        string_from_header(headers_json_ptr),
+        url_ptr as usize,
+    ) {
+        Ok(inputs) => inputs,
+        Err(err_bits) => {
             queue_promise_resolution(promise_ptr, false, err_bits);
             return promise;
         }
     };
-
-    let method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
-    let body = string_from_header(body_ptr);
-    let headers_json = string_from_header(headers_json_ptr).unwrap_or_else(|| "{}".to_string());
-
-    // Parse headers from JSON
-    let custom_headers: HashMap<String, String> =
-        serde_json::from_str(&headers_json).unwrap_or_default();
 
     spawn(async move {
         let client = HTTP_CLIENT.clone();
