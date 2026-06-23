@@ -136,15 +136,29 @@ pub extern "C" fn js_with_implicit_read(value: f64, name: f64) -> f64 {
     if value.to_bits() == crate::value::TAG_HOLE {
         // The HOLE sentinel means this with-set FALLBACK never fired: the
         // with-env object took the write, so no binding was created *here*.
-        // That does NOT make the name unresolvable — it may still name a real
-        // property of the global object set independently of the `with`
-        // (`globalThis.p1 = 1; with (o) { p1 = 'x1'; } p1` must read back the
-        // global `1`, since `o` owns `p1` and the assignment went to `o`, not
-        // the global — test262 with/S12.10_A1.*). Defer to the same resolution
-        // the bare unqualified-global read uses: return `globalThis[name]` when
-        // present, else throw the spec `ReferenceError: <name> is not defined`.
-        // When the global lacks the name (`var o = {foo:1}; with(o){foo=42} foo`
-        // — with/12.10-0-7), that path throws exactly as before.
+        // That does NOT make the name unresolvable — it resolves against the
+        // global object exactly like a bare unqualified read
+        // (`globalThis.p1 = 1; with (o) { p1 = 'x1'; } p1` reads the global
+        // `1`, since `o` owns `p1` and the assignment went to `o`, not the
+        // global — test262 with/S12.10_A1.*).
+        //
+        // Use an EXISTENCE check (GlobalEnvironmentRecord HasBinding), NOT a
+        // value check: a global property explicitly set to `undefined` is
+        // present and must read back `undefined` rather than mis-throw. Only a
+        // name that exists nowhere on the global is the spec ReferenceError
+        // (`var o = {foo:1}; with (o) { foo = 42; } foo` — with/12.10-0-7).
+        let g = crate::object::js_get_global_this();
+        if js_is_truthy(crate::object::js_object_has_property(g, name)) != 0 {
+            let gj = JSValue::from_bits(g.to_bits());
+            let gptr = (gj.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+            let key = crate::builtins::js_string_coerce(name);
+            if !gptr.is_null() && !key.is_null() {
+                let v = unsafe { crate::object::js_object_get_field_by_name(gptr, key) };
+                return f64::from_bits(v.bits());
+            }
+        }
+        // Not present anywhere on the global → spec ReferenceError. Reuse the
+        // shared bare-global path so the thrown error's message/shape match.
         return crate::error::js_global_get_or_throw_unresolved(name);
     }
     value

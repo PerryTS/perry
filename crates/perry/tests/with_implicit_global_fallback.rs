@@ -124,11 +124,29 @@ h();
 if (r1 !== "made-global") throw new Error("case4: expected r1==='made-global', got " + r1);
 console.log("case4-ok");
 
+// Case 5: a global property explicitly set to `undefined` is PRESENT, so the
+// post-`with` read must observe `undefined` — not mis-throw a ReferenceError
+// off the unfilled HOLE. The fallback resolves by existence, not value.
+(globalThis as any).u1 = undefined;
+const o5: any = { u1: 0 };
+with (o5) {
+  u1 = 1;
+}
+let u1WasUndefined = false;
+try {
+  u1WasUndefined = u1 === undefined;
+} catch (e) {
+  throw new Error("case5: present-but-undefined global must not throw");
+}
+if (!u1WasUndefined) throw new Error("case5: expected u1===undefined");
+if (o5.u1 !== 1) throw new Error("case5b: expected o5.u1===1, got " + o5.u1);
+console.log("case5-ok");
+
 console.log("ok");
 "#,
     );
     assert_eq!(
-        stdout, "case1-ok\ncase2-ok\ncase3-ok\ncase4-ok\nok\n",
+        stdout, "case1-ok\ncase2-ok\ncase3-ok\ncase4-ok\ncase5-ok\nok\n",
         "with-implicit read must fall back to globalThis, still throwing for truly-unresolved names"
     );
 }
