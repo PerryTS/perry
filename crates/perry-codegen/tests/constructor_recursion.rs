@@ -125,6 +125,8 @@ fn module_with_recursive_constructor_return() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: Vec::new(),
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         init: vec![Stmt::Expr(Expr::New {
             class_name: "RecursiveCtor".to_string(),
             args: vec![Expr::Bool(true), Expr::Undefined],

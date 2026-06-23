@@ -20,6 +20,7 @@ impl SH for Module {
             globals,
             functions,
             script_global_functions,
+            references_global_this,
             init,
             exported_native_instances,
             exported_func_return_native_instances,
@@ -47,9 +48,11 @@ impl SH for Module {
         enums.hash(h);
         globals.hash(h);
         functions.hash(h);
-        // #5579: drives the globalThis function-reflection codegen, so it
-        // participates in the stable hash (else a cached object could omit it).
+        // #5579: both drive the globalThis function-reflection codegen, so
+        // they participate in the stable hash (else a cached object could omit
+        // the reflection or emit it under the wrong gate).
         script_global_functions.hash(h);
+        references_global_this.hash(h);
         init.hash(h);
         exported_native_instances.hash(h);
         exported_func_return_native_instances.hash(h);

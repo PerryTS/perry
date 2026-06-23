@@ -70,6 +70,8 @@ fn module_with_init(init: Vec<Stmt>) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: Vec::new(),
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         init,
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),

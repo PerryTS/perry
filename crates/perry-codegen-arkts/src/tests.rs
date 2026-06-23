@@ -15,6 +15,8 @@ fn empty_module() -> Module {
         enums: vec![],
         globals: vec![],
         functions: vec![],
+        script_global_functions: vec![],
+        references_global_this: false,
         init: vec![],
         exported_native_instances: vec![],
         exported_func_return_native_instances: vec![],

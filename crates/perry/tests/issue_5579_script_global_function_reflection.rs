@@ -119,7 +119,10 @@ console.log("DONE");
         out.contains("own.method: false"),
         "an object-literal method must NOT be reflected onto globalThis\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
 
 #[test]
@@ -152,5 +155,52 @@ console.log("DONE");
         out.contains("call.dup: second"),
         "the last duplicate declaration must win on globalThis\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
+}
+
+#[test]
+fn esm_entry_does_not_reflect_top_level_functions() {
+    // The opposite branch of the `is_esm_entry` guard: a module with
+    // import/export syntax is an ESM Module, not a Script, so its top-level
+    // `function` declarations bind in the module record and are NOT own
+    // properties of the global object. A *named* export (`export const`) is
+    // used as the ESM marker because it populates `Module::exports`, which is
+    // the signal the codegen gate reads (an empty `export {}` clause leaves the
+    // export list empty and is not currently classified as ESM by Perry).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(
+        &entry,
+        r#"
+export const marker = 1;
+function $DONE(error: any) {
+  return error;
+}
+const hasOwn = Object.prototype.hasOwnProperty;
+// The function is still callable as a binding (hoisting is unaffected)...
+console.log("typeof.$DONE:", typeof $DONE);
+// ...but it must NOT leak onto globalThis for an ESM entry.
+console.log("own.$DONE:", hasOwn.call(globalThis, "$DONE"));
+console.log("DONE");
+"#,
+    )
+    .expect("write entry");
+
+    let (ok, out) = compile_and_run(dir.path(), &entry);
+    assert!(ok, "compiled binary did not exit cleanly\nstdout:\n{out}");
+    assert!(
+        out.contains("typeof.$DONE: function"),
+        "the function binding must still exist in module scope\n{out}"
+    );
+    assert!(
+        out.contains("own.$DONE: false"),
+        "an ESM entry must NOT reflect top-level functions onto globalThis\n{out}"
+    );
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }

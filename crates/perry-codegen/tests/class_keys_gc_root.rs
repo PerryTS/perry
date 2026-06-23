@@ -125,6 +125,8 @@ fn module_with_declared_field_class() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: Vec::new(),
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         init: Vec::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),

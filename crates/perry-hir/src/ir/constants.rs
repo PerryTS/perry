@@ -286,6 +286,24 @@ pub fn current_module_line_at(byte_offset: u32) -> Option<usize> {
     })
 }
 
+/// #5579: true iff the currently-installed module source mentions the
+/// `globalThis` identifier. Codegen reflects a Script's top-level `function`
+/// declarations onto the global object only when the program could observe it
+/// (i.e. it references `globalThis`); otherwise the reflection is dead work
+/// that would also add dynamic-property-helper calls to module init (tripping
+/// the native-region-proof gate) for pure programs that never touch the global
+/// object. The token is rare and precise, so a substring check is both
+/// sufficient (every reachable `globalThis` access spells the name) and
+/// conservative (a stray occurrence in a comment only causes unobservable
+/// reflection). Returns `false` when no source is installed (unit tests).
+pub fn current_module_source_mentions_global_this() -> bool {
+    CURRENT_MODULE_SOURCE.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|src| src.contains("globalThis"))
+    })
+}
+
 /// #4101: extract the source text spanning `[lo, hi)` (SWC `BytePos`, which
 /// is 1-based) from the currently-installed module source. Used at lowering
 /// to retain each function's original source for `Function.prototype.toString`.

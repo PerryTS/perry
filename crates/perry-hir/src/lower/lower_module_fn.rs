@@ -831,6 +831,12 @@ pub fn lower_module_full(
         }
     }
 
+    // #5579: record whether the source references `globalThis`, gating the
+    // codegen reflection of top-level `function` declarations onto the global
+    // object (see `Module::references_global_this`). The module source is
+    // installed for the duration of this lower (collect_modules.rs).
+    module.references_global_this = crate::ir::current_module_source_mentions_global_this();
+
     if !ctx.sloppy_implicit_globals.is_empty() {
         let mut implicit_globals: Vec<Stmt> = ctx
             .sloppy_implicit_globals

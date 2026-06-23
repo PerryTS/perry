@@ -677,11 +677,16 @@ pub(super) fn compile_module_entry(
         // via `Object.prototype.hasOwnProperty.call(globalThis, name)` — the
         // check the Test262 async harness uses for `$DONE`). ESM modules
         // (import/export syntax or top-level await) instead bind in the
-        // module record and do NOT reflect. Emitted before user init so the
-        // functions are visible to top-level code (hoisting).
+        // module record and do NOT reflect.
+        //
+        // Gated additionally on the program actually referencing `globalThis`:
+        // if it never reads the global object the reflection is unobservable,
+        // so skipping it avoids adding dynamic-property-helper calls (and their
+        // startup cost) to every pure program's module init. Emitted before
+        // user init so the functions are visible to top-level code (hoisting).
         let is_esm_entry =
             !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await;
-        if !is_esm_entry {
+        if !is_esm_entry && hir.references_global_this {
             emit_script_global_function_decls(&mut ctx, hir);
         }
         stmt::lower_top_level_stmts(&mut ctx, &hir.init)

@@ -176,6 +176,8 @@ fn module_with_classes(
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
         exported_functions: Vec::new(),
+        script_global_functions: Vec::new(),
+        references_global_this: false,
         widgets: Vec::new(),
         uses_fetch: false,
         uses_webassembly: false,
