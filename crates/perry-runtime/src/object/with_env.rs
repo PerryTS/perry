@@ -134,20 +134,18 @@ static KEEP_JS_WITH_IMPLICIT_READ: extern "C" fn(f64, f64) -> f64 = js_with_impl
 #[no_mangle]
 pub extern "C" fn js_with_implicit_read(value: f64, name: f64) -> f64 {
     if value.to_bits() == crate::value::TAG_HOLE {
-        let name_ptr = crate::value::js_get_string_pointer_unified(name) as *const StringHeader;
-        let name_str = if name_ptr.is_null() {
-            "<ident>".to_string()
-        } else {
-            unsafe {
-                let ptr = (name_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-                let len = (*name_ptr).byte_len as usize;
-                String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
-            }
-        };
-        let msg = format!("{} is not defined", name_str);
-        let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_referenceerror_new(msg_str);
-        crate::exception::js_throw(js_nanbox_pointer(err as i64));
+        // The HOLE sentinel means this with-set FALLBACK never fired: the
+        // with-env object took the write, so no binding was created *here*.
+        // That does NOT make the name unresolvable — it may still name a real
+        // property of the global object set independently of the `with`
+        // (`globalThis.p1 = 1; with (o) { p1 = 'x1'; } p1` must read back the
+        // global `1`, since `o` owns `p1` and the assignment went to `o`, not
+        // the global — test262 with/S12.10_A1.*). Defer to the same resolution
+        // the bare unqualified-global read uses: return `globalThis[name]` when
+        // present, else throw the spec `ReferenceError: <name> is not defined`.
+        // When the global lacks the name (`var o = {foo:1}; with(o){foo=42} foo`
+        // — with/12.10-0-7), that path throws exactly as before.
+        return crate::error::js_global_get_or_throw_unresolved(name);
     }
     value
 }

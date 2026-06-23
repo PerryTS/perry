@@ -1846,7 +1846,6 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     "`with` statement is forbidden in strict mode"
                 );
             }
-            let insert_at = result.len();
             let env_id = ctx.define_local("__perry_with_env".to_string(), Type::Any);
             result.push(Stmt::Let {
                 id: env_id,
@@ -1859,14 +1858,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             let body_result = lower_body_stmt(ctx, &with_stmt.body);
             ctx.pop_with_env();
             result.extend(body_result?);
-            // Sentinel slots for implicit globals minted by with-set
-            // fallbacks inside this body (see with_set_fallback_for_ident).
-            for (i, (id, name)) in ctx.pending_with_implicit_inits.drain(..).enumerate() {
-                result.insert(
-                    insert_at + i,
-                    crate::lower::with_implicit_unset_let(id, name),
-                );
-            }
+            // #5579: a with-set fallback sloppy implicit is a MODULE-level
+            // binding (`define_sloppy_implicit_global` marks it so), and its
+            // HOLE-sentinel init is emitted at module scope by the
+            // sloppy-implicit-globals hoist (lower_module_fn). Do NOT *also*
+            // declare it as a function-LOCAL here: a local `Let` would shadow
+            // the module slot inside this frame, so a fallback write that DOES
+            // fire (the with-env lacks the name → the assignment creates a real
+            // global, e.g. `with (o) { p5 = 'x5'; }` where `o` has no `p5`)
+            // would land in the throwaway shadow and a later module-scope read
+            // would miss it (S12.10_A1.2/A1.3 `p5`). Just clear the queue so the
+            // pending ids don't leak into a sibling `with` body; the module
+            // hoist owns the declaration. (Module-scope `with` keeps inserting
+            // its own init in `lower::stmt`, where the slot IS the module slot.)
+            ctx.pending_with_implicit_inits.clear();
         }
         // Final catch-all: any genuinely unexpected variant (e.g. a future
         // swc Stmt variant we haven't enumerated) bails instead of silently

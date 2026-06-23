@@ -835,12 +835,32 @@ pub fn lower_module_full(
         let mut implicit_globals: Vec<Stmt> = ctx
             .sloppy_implicit_globals
             .iter()
-            .map(|(name, id)| Stmt::Let {
-                id: *id,
-                name: name.clone(),
-                ty: Type::Any,
-                mutable: true,
-                init: Some(Expr::Undefined),
+            .map(|(name, id)| {
+                // #5579: a `with`-set FALLBACK sloppy global (`with (o) { p1 =
+                // 'x1'; }`) must hoist as the HOLE sentinel, NOT `undefined`.
+                // The HOLE routes a later bare read through
+                // `js_with_implicit_read`, which resolves the name against the
+                // global object (so `globalThis.p1` set independently reads
+                // back) and only throws when it is genuinely unresolvable. A
+                // plain `undefined` hoist instead makes the read silently yield
+                // `undefined`. This module-scope hoist is the ONLY declaration
+                // site for the slot when the `with` is nested inside a function
+                // (the in-body HOLE init lands in the callee's own frame), so
+                // without this the function-nested cases regress
+                // (S12.10_A1.2/A1.3/A3.2). Plain sloppy implicit globals
+                // (`undeclared = 1` outside any `with`) keep the `undefined`
+                // hoist.
+                if ctx.with_sloppy_implicit_ids.contains_key(id) {
+                    with_implicit_unset_let(*id, name.clone())
+                } else {
+                    Stmt::Let {
+                        id: *id,
+                        name: name.clone(),
+                        ty: Type::Any,
+                        mutable: true,
+                        init: Some(Expr::Undefined),
+                    }
+                }
             })
             .collect();
         implicit_globals.append(&mut module.init);
