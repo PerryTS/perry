@@ -98,7 +98,10 @@ fn global_script_mode_top_level_this_is_global_this() {
         out.contains("desc.decodeURI: true/false/true/function"),
         "global builtin descriptor must be {{writable, !enumerable, configurable, function}}\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
 
 #[test]
@@ -124,7 +127,10 @@ fn default_mode_top_level_this_stays_cjs_exports() {
         out.contains("desc.decodeURI: undefined"),
         "default top-level `this` has no `decodeURI` descriptor\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }
 
 #[test]
@@ -147,5 +153,8 @@ console.log("DONE");
         out.contains("eval.this===this: true"),
         "`eval(\"this\") === this` must hold in global-script mode\n{out}"
     );
-    assert!(out.contains("DONE"), "program must run to completion\n{out}");
+    assert!(
+        out.contains("DONE"),
+        "program must run to completion\n{out}"
+    );
 }

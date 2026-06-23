@@ -798,8 +798,7 @@ fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) ->
     // direct `eval('this')` must fold to the same — keeping `eval('this') ===
     // this` true under a conforming Test262 host (#5579). See `lower_expr`'s
     // `ast::Expr::This` arm for the matching default-vs-script split.
-    let module_top_this_global =
-        module_top_this && super::lower_expr::global_script_this_enabled();
+    let module_top_this_global = module_top_this && super::lower_expr::global_script_this_enabled();
     if let Some(normalized) = normalize_eval_this_body(&body) {
         return match normalized.as_str() {
             "globalThis" => Some(Expr::GlobalThisExpr),
