@@ -1074,6 +1074,28 @@ pub extern "C" fn js_date_value_of(timestamp: f64) -> f64 {
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(timestamp) {
         return payload;
     }
+    // A real Date cell yields its numeric timestamp.
+    if is_date_value(timestamp) {
+        return date_cell_timestamp(timestamp);
+    }
+    // Any other ordinary object: `obj.valueOf()` follows ordinary member
+    // dispatch, so a user-defined own `valueOf` wins over the default
+    // Object.prototype.valueOf (which returns the receiver). `Object(x)`
+    // returns `x` unchanged, so `Object(x).valueOf()` must run x's own
+    // `valueOf` (test262 built-ins/Object/S9.9_A6). Route through the shared
+    // `valueOf` dispatch in `js_native_call_method`, which performs the own-
+    // property lookup and falls back to the default for plain objects.
+    if crate::value::JSValue::from_bits(timestamp.to_bits()).is_pointer() {
+        return unsafe {
+            crate::object::js_native_call_method(
+                timestamp,
+                b"valueOf".as_ptr() as *const i8,
+                "valueOf".len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+    }
 
     date_cell_timestamp(timestamp)
 }

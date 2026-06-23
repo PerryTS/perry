@@ -4681,6 +4681,23 @@ pub unsafe extern "C" fn js_native_call_method(
         // while ordinary objects now get the inherited default instead of
         // falling through to "valueOf is not a function".
         "valueOf" => {
+            // A user-defined own `valueOf` wins over the default, mirroring the
+            // `toLocaleString` arm below. `Object(x)` returns `x` unchanged, so
+            // `Object(x).valueOf()` must run x's own `valueOf`
+            // (test262 built-ins/Object/S9.9_A6). The explicit-base form
+            // `Object.prototype.valueOf.call(x)` goes through
+            // `object_prototype_value_of_thunk` instead and correctly skips this
+            // own-property lookup.
+            let own =
+                crate::object::js_object_get_own_field_or_undef(object, b"valueOf".as_ptr(), 7);
+            if let Some(result) = call_primitive_closure_value(
+                object,
+                JSValue::from_bits(own.to_bits()),
+                args_ptr,
+                args_len,
+            ) {
+                return result;
+            }
             return js_object_default_value_of(object);
         }
 
