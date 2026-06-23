@@ -937,6 +937,40 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // Resolve through any scope-local class rename so `new X` binds to
             // the lexically-correct (possibly disambiguated) class.
             let mut class_name = ctx.resolve_class_name(ident.sym.as_str());
+            // Snapshot the callee identifier's local/param binding at the TOP
+            // of the ident arm, before any argument lowering or native-module
+            // probing below runs. Two distinct hazards make a later lookup
+            // unreliable, and both surface as the same bug — `new C(args)`
+            // where `C` is a function parameter (the `function _f(Class,
+            // params) { return new Class(params); }` factory shape that
+            // zod-style libraries use heavily) silently falling through to an
+            // empty-object `Expr::New { class_name }` placeholder whose
+            // constructor body never runs, so `Object.defineProperty(this, …)`
+            // / `this.x = …` writes are lost and the constructed value is
+            // missing all its prototype methods:
+            //
+            //   1. Lowering an argument expression (e.g. a spread object
+            //      literal `new C({ ...f(x) })`, which lowers to a synthesized
+            //      IIFE closure) opens and closes nested lexical scopes;
+            //      `exit_scope` truncates the locals stack and can drop the
+            //      enclosing function's OWN parameters from view, so a later
+            //      `lookup_local` misses the param.
+            //
+            //   2. A local/param `C` lexically shadows a same-named outer
+            //      `const C = class {}` alias, but `let_class_aliases` is
+            //      name-keyed and NOT scope-aware, so `resolve_class_alias`
+            //      returns the stale enclosing-scope alias even though the
+            //      param shadows it — and the `resolve_class_alias().is_none()`
+            //      guard on the reroute block below would then skip it.
+            //
+            // Capturing the binding here (when no real class of this name is in
+            // scope) keeps the reroute stable against both.
+            let callee_local_at_entry: Option<LocalId> = if ctx.lookup_class(&class_name).is_none()
+            {
+                ctx.lookup_local(&class_name)
+            } else {
+                None
+            };
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
@@ -1841,6 +1875,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
+            // A local/param binding lexically shadows any same-named outer
+            // `let`/`const` class alias. When `callee_local_at_entry` is set
+            // (a non-class local was in scope at the top of this arm, before
+            // arg lowering could disturb the scope), route the construct
+            // through that VALUE — even if `resolve_class_alias` would
+            // otherwise resolve `class_name` to a stale enclosing-scope alias
+            // (its map is name-keyed, not scope-aware). Without this, the
+            // `resolve_class_alias().is_none()` guard on the local-reroute
+            // block below is false and the construct falls through to an
+            // empty-object `Expr::New { class_name }` placeholder whose
+            // constructor body never runs.
+            if ctx.lookup_class(&class_name).is_none() {
+                if let Some(local_id) = callee_local_at_entry {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::LocalGet(local_id)),
+                        args,
+                        byte_offset: new_byte_offset,
+                    });
+                }
+            }
             // Issue #838 followup (b): when `<Ident>` is NOT a real
             // class but resolves to a local binding, route through
             // `Expr::NewDynamic { callee: LocalGet(id), … }` so codegen
@@ -1858,7 +1912,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if ctx.lookup_class(&class_name).is_none()
                 && ctx.resolve_class_alias(&class_name).is_none()
             {
-                if let Some(local_id) = ctx.lookup_local(&class_name) {
+                if let Some(local_id) =
+                    callee_local_at_entry.or_else(|| ctx.lookup_local(&class_name))
+                {
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::LocalGet(local_id)),
                         args,
