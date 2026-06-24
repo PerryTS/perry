@@ -26,10 +26,6 @@
 # Allowlisted (real Rust source, deferred for a specific reason —
 # **each entry needs a one-line rationale**):
 #
-#   - crates/perry-codegen-arkts/src/tests.rs — ArkTS golden-output
-#     test fixtures. Top-down test scaffolding, not production code;
-#     splitting would split assertions away from the inputs that
-#     produced them.
 #   - crates/perry/src/commands/compile.rs — the deeply-coupled
 #     `par_iter` codegen closure inside `run_with_parse_cache`
 #     (~1,800 LOC, ~30 captured locals) needs extraction into a
@@ -55,7 +51,6 @@ ALLOWLIST=$(cat <<'EOF'
 # can't move without scattering the thread-local last-match state. Further
 # trunk extraction is a reasonable follow-up.
 crates/perry-runtime/src/regex.rs
-crates/perry-codegen-arkts/src/tests.rs
 crates/perry/src/commands/compile.rs
 # node:dns + node:dgram. Crossed 2000 LOC when the loopback fakes became real
 # getaddrinfo/DNS/UDP I/O (#4911) — the in-process/deterministic paths are kept
@@ -223,12 +218,6 @@ crates/perry-runtime/src/object/object_ops.rs
 # the 2000-line gate after the stdio `'ignore'` handling additions. Splitting the
 # spawn/exec/fork families into sibling modules is tracked under #1435.
 crates/perry-runtime/src/child_process/mod.rs
-# OCI container backend (docker/podman/apple-container process orchestration +
-# OCI lifecycle: create/start/stop/exec/logs/inspect/image ops). Lands oversized
-# from the container-compose subsystem (replacement for external PR #159); the
-# backend is gated behind the `container` feature. Splitting per backend driver
-# / lifecycle family is tracked under #1435.
-crates/perry-container-compose/src/backend.rs
 # perry-stdlib container module root — re-exports `perry_container_compose::*`
 # and the `js_container_*` / `js_compose_*` FFI dispatch surface (gated behind
 # the `container` feature). Splitting the FFI surface per command family is
@@ -255,18 +244,6 @@ crates/perry-codegen/src/lower_call/property_get.rs
 # %TypedArray%.prototype iterator brand-check + array-like/iterable constructor
 # additions. Splitting per concern is tracked under #1435.
 crates/perry-runtime/src/typedarray/mod.rs
-# Generator/async-generator state-machine lowering core (linearize → states →
-# next/return/throw step closures + async-step driver). Crossed the 2000-line
-# gate after the standalone async-generator parity work: synchronous param-
-# prologue lift (run param binding at call time) + per-yield operand Await.
-# Splitting the state builder from the closure assembly is tracked under #1435.
-crates/perry-transform/src/generator/lower.rs
-# HTTP/2 server-and-client session surface (settings/ping/goaway controls,
-# stream lifecycle, the loopback connect/session event-ordering machinery).
-# Crossed the 2000-line gate after the Node-ordering deferral that emits the
-# server `session` event after the client `connect`. Splitting the session
-# event pump from the handle/settings surface is tracked under #1435.
-crates/perry-ext-http-server/src/http2_server.rs
 # node:events bundled module (EventEmitter handle surface, once/on helpers,
 # AbortSignal wiring, AsyncResource). Crossed the 2000-line gate after the
 # `events.on(...)` real async-iterator rewrite (proper { next, return } over a

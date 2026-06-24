@@ -212,10 +212,12 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // releases its keep-alive pool) and flips `destroyed`; not a stub.
     method("http", "destroy", true, Some("Agent")),
     method("http", "close", true, Some("Agent")),
-    method("http", "keepSocketAlive", true, Some("Agent"))
-        .stub_note("reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)"),
-    method("http", "reuseSocket", true, Some("Agent"))
-        .stub_note("reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)"),
+    method("http", "keepSocketAlive", true, Some("Agent")).stub_note(
+        "reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)",
+    ),
+    method("http", "reuseSocket", true, Some("Agent")).stub_note(
+        "reqwest owns the keep-alive pool; per-socket hooks are no-ops, warns once (#4917)",
+    ),
     // Synthetic `__get_<name>` / `__set_<name>` accessor methods (HIR
     // rewrites bare `agent.maxSockets` reads to `__get_maxSockets()`
     // when the receiver is class-tagged) + their bare-name twins for
@@ -846,8 +848,18 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("http", "__get_method", true, Some("IncomingMessage")),
     method("http", "__get_url", true, Some("IncomingMessage")),
     method("http", "__get_httpVersion", true, Some("IncomingMessage")),
-    method("http", "__get_httpVersionMajor", true, Some("IncomingMessage")),
-    method("http", "__get_httpVersionMinor", true, Some("IncomingMessage")),
+    method(
+        "http",
+        "__get_httpVersionMajor",
+        true,
+        Some("IncomingMessage"),
+    ),
+    method(
+        "http",
+        "__get_httpVersionMinor",
+        true,
+        Some("IncomingMessage"),
+    ),
     method("http", "__get_complete", true, Some("IncomingMessage")),
     method("http", "__get_aborted", true, Some("IncomingMessage")),
     method("http", "__get_destroyed", true, Some("IncomingMessage")),
