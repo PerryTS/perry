@@ -641,14 +641,14 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
-        unsafe { super::dispatch_http::dispatch_client_request_property(handle, property_name) }
+        unsafe { super::super::dispatch_http::dispatch_client_request_property(handle, property_name) }
     {
         return value;
     }
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
-        unsafe { super::dispatch_http::dispatch_client_incoming_property(handle, property_name) }
+        unsafe { super::super::dispatch_http::dispatch_client_incoming_property(handle, property_name) }
     {
         return value;
     }

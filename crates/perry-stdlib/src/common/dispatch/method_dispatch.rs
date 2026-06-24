@@ -524,14 +524,14 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
-        unsafe { super::dispatch_http::dispatch_client_request_method(handle, method_name, &args) }
+        unsafe { super::super::dispatch_http::dispatch_client_request_method(handle, method_name, &args) }
     {
         return value;
     }
 
     #[cfg(feature = "external-http-client-pump")]
     if let Some(value) =
-        unsafe { super::dispatch_http::dispatch_client_incoming_method(handle, method_name, &args) }
+        unsafe { super::super::dispatch_http::dispatch_client_incoming_method(handle, method_name, &args) }
     {
         return value;
     }
