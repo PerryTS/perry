@@ -918,20 +918,29 @@ pub extern "C" fn js_node_http_server_close_all_connections(handle: i64) {
     // Parked async requests on the destroyed connections can never flush
     // a response (the per-request oneshot receiver died with the
     // connection task) — drop them now so `has_in_flight_requests()`
-    // doesn't pin the event loop for the 300s grace window.
-    let mut to_finalize: Vec<(i64, i64)> = Vec::new();
+    // doesn't pin the event loop for the 300s grace window. The response
+    // never ended, so a handler still suspended on a slow `await` could
+    // resume and write through the bare id; defer recycling that id until the
+    // request's grace deadline (same use-after-recycle guard as the reaper's
+    // peer-gone path) so a late write hits an empty slot, not a recycled one.
+    let mut to_finalize: Vec<(i64, i64, Option<Instant>)> = Vec::new();
     if let Ok(mut guard) = IN_FLIGHT.lock() {
         guard.retain(|e| {
             if e.server_handle == handle {
-                to_finalize.push((e.request_handle, e.response_handle));
+                let recycle_deadline = if response_writable_ended(e.response_handle) {
+                    None
+                } else {
+                    Some(e.deadline)
+                };
+                to_finalize.push((e.request_handle, e.response_handle, recycle_deadline));
                 false
             } else {
                 true
             }
         });
     }
-    for (req, res) in to_finalize {
-        finalize_request_handles(req, res);
+    for (req, res, recycle_deadline) in to_finalize {
+        finalize_request_handles_deferred(req, res, recycle_deadline);
     }
 }
 
@@ -1404,11 +1413,31 @@ fn response_writable_ended(response_handle: i64) -> bool {
 }
 
 /// Free the per-request request + response handles. Mirrors the tail of
-/// the synchronous-handler path in `process_pending`.
+/// the synchronous-handler path in `process_pending`. The response is ended
+/// (or about to be, via synthesize), so its id takes the one-tick fast path.
 fn finalize_request_handles(request_handle: i64, response_handle: i64) {
+    finalize_request_handles_deferred(request_handle, response_handle, None);
+}
+
+/// Free the per-request handles. `recycle_deadline` is `Some` only when the
+/// response is being finalized WITHOUT having ended (the reaper's
+/// peer-disconnect / server-force-close paths) — its id is then held in the
+/// deadline-gated quarantine through the request's grace window so a
+/// long-suspended handler that resumes and writes hits an empty slot rather
+/// than a recycled response (see `perry_ffi::drop_handle_until`). `None` is the
+/// ended / synchronous case. The request id always takes the one-tick path —
+/// `IncomingMessage` has no late-write surface, and it is closed here first.
+fn finalize_request_handles_deferred(
+    request_handle: i64,
+    response_handle: i64,
+    recycle_deadline: Option<Instant>,
+) {
     close_incoming_message(request_handle);
     perry_ffi::drop_handle(request_handle);
-    perry_ffi::drop_handle(response_handle);
+    match recycle_deadline {
+        Some(deadline) => perry_ffi::drop_handle_until(response_handle, deadline),
+        None => perry_ffi::drop_handle(response_handle),
+    };
 }
 
 /// True iff any request is parked awaiting an async handler — keeps the
@@ -1423,8 +1452,8 @@ fn has_in_flight_requests() -> bool {
 /// grace deadline has elapsed (a handler that never responds). Called each
 /// pump tick. #4728.
 fn reap_in_flight_requests() {
-    // (request_handle, response_handle, needs_synthesize)
-    let mut to_finalize: Vec<(i64, i64, bool)> = Vec::new();
+    // (request_handle, response_handle, needs_synthesize, recycle_deadline)
+    let mut to_finalize: Vec<(i64, i64, bool, Option<Instant>)> = Vec::new();
     let mut drain_listeners: Vec<Vec<i64>> = Vec::new();
     {
         let mut guard = match IN_FLIGHT.lock() {
@@ -1457,14 +1486,28 @@ fn reap_in_flight_requests() {
                 || crate::response::stream_receiver_gone(e.response_handle);
             let expired = now >= e.deadline;
             if ended || expired || peer_gone {
+                // Only synthesize when we're giving up on a handler
+                // that never ended the response — not when it ended
+                // it itself, never for skip-default paths, and never
+                // when the peer is gone (nothing to deliver to).
+                let needs_synth = !ended && !e.skip_default_response && !peer_gone;
+                // If the response will NOT be ended after finalize (it wasn't
+                // ended and we're not synthesizing it to ended — the peer-gone
+                // and not-ended-skip-default paths), its `writable_ended` stays
+                // unset, so a handler suspended on a slow `await` could resume
+                // later and write through the bare id. Defer recycling that id
+                // until the request's grace deadline so the late write lands on
+                // an empty slot for the whole window, not a recycled response.
+                let recycle_deadline = if ended || needs_synth {
+                    None
+                } else {
+                    Some(e.deadline)
+                };
                 to_finalize.push((
                     e.request_handle,
                     e.response_handle,
-                    // Only synthesize when we're giving up on a handler
-                    // that never ended the response — not when it ended
-                    // it itself, never for skip-default paths, and never
-                    // when the peer is gone (nothing to deliver to).
-                    !ended && !e.skip_default_response && !peer_gone,
+                    needs_synth,
+                    recycle_deadline,
                 ));
                 false
             } else {
@@ -1478,11 +1521,11 @@ fn reap_in_flight_requests() {
     // Finalize outside the lock — `synthesize_default_response_if_needed`
     // and `drop_handle` don't touch `IN_FLIGHT`, but keeping them off the
     // lock avoids any future re-entrancy surprise.
-    for (req, res, needs_synth) in to_finalize {
+    for (req, res, needs_synth, recycle_deadline) in to_finalize {
         if needs_synth {
             synthesize_default_response_if_needed(res);
         }
-        finalize_request_handles(req, res);
+        finalize_request_handles_deferred(req, res, recycle_deadline);
     }
 }
 
