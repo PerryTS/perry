@@ -457,6 +457,52 @@ fn call_local_constructor_symbol(
     Some(ctx.block().call(DOUBLE, &ctor_name, &ctor_args))
 }
 
+/// Emit the `js_gc_init_typed_shape_layout` call that registers the freshly
+/// constructed instance's raw-f64 / pointer slot masks with the GC so the
+/// typed-feedback class-field fast path engages. Must run AFTER the constructor
+/// body has set the declared fields to their numeric values (the runtime
+/// validates each raw-f64 slot currently holds a plain double before promoting).
+/// No-op for classes without an inline-keys shape global. Refs the standalone
+/// `<class>_constructor` symbol path, which previously returned before reaching
+/// this — leaving every numeric class field permanently on the by-name hashmap
+/// fallback (10M `counter.increment()` ran ~640ns/call instead of slot-direct).
+fn emit_typed_shape_layout_init(ctx: &mut FnCtx<'_>, class_name: &str, obj_handle: &str) {
+    let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() else {
+        return;
+    };
+    let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
+    let slot_count_str = typed_layout.slot_count.to_string();
+    let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
+    let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
+    let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        format!(
+            "@{}",
+            crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
+        )
+    };
+    let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
+        "null".to_string()
+    } else {
+        format!(
+            "@{}",
+            crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
+        )
+    };
+    ctx.block().call_void(
+        "js_gc_init_typed_shape_layout",
+        &[
+            (I64, obj_handle),
+            (I32, &slot_count_str),
+            (PTR, &raw_mask_ref),
+            (I32, &raw_mask_word_count_str),
+            (PTR, &pointer_mask_ref),
+            (I32, &pointer_mask_word_count_str),
+        ],
+    );
+}
+
 /// Lower `new ClassName(args…)` — Phase C.1.
 ///
 /// Strategy: allocate an anonymous object via `js_object_alloc(0, N)`
@@ -1174,6 +1220,12 @@ fn lower_new_impl(
                 ctx.block()
                     .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
             }
+            // The constructor body has run and set the declared fields; register
+            // the typed raw-f64/pointer slot layout so class-field accesses hit
+            // the slot-direct fast path instead of the by-name hashmap fallback.
+            // The inline-ctor path does this at its tail (below); this
+            // standalone-symbol path returns here, so it must do it too.
+            emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -1869,39 +1921,7 @@ fn lower_new_impl(
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
-    if let Some(keys_global_name) = ctx.class_keys_globals.get(class_name).cloned() {
-        let typed_layout = crate::typed_shape::class_typed_layout(ctx.classes, class_name);
-        let slot_count_str = typed_layout.slot_count.to_string();
-        let raw_mask_word_count_str = typed_layout.raw_f64_mask_words.len().to_string();
-        let pointer_mask_word_count_str = typed_layout.pointer_mask_words.len().to_string();
-        let raw_mask_ref = if typed_layout.raw_f64_mask_words.is_empty() {
-            "null".to_string()
-        } else {
-            format!(
-                "@{}",
-                crate::typed_shape::raw_f64_mask_global_name_from_keys_global(&keys_global_name)
-            )
-        };
-        let pointer_mask_ref = if typed_layout.pointer_mask_words.is_empty() {
-            "null".to_string()
-        } else {
-            format!(
-                "@{}",
-                crate::typed_shape::mask_global_name_from_keys_global(&keys_global_name)
-            )
-        };
-        ctx.block().call_void(
-            "js_gc_init_typed_shape_layout",
-            &[
-                (I64, &obj_handle),
-                (I32, &slot_count_str),
-                (PTR, &raw_mask_ref),
-                (I32, &raw_mask_word_count_str),
-                (PTR, &pointer_mask_ref),
-                (I32, &pointer_mask_word_count_str),
-            ],
-        );
-    }
+    emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the
     // shared after-block, then apply the spec return-override at construction
