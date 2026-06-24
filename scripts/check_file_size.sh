@@ -70,12 +70,6 @@ crates/perry/src/commands/compile.rs
 # (dns) into siblings is a reasonable follow-up.
 crates/perry-runtime/src/dns.rs
 crates/perry-runtime/src/dgram.rs
-# `PERRY_UI_TABLE` — flat `MethodRow` data table for receiver-less perry/ui
-# calls (one row per constructor/setter). Generated-feel manifest like
-# entries.rs: length reflects widget-API breadth, not complexity, and a single
-# const array can't be split across files without scattering rows that belong
-# next to each other for review. Crossed 2000 LOC on current main.
-crates/perry-dispatch/src/ui_table.rs
 # Native-module dispatch table; one big match by (module, method, class).
 # Splitting per-namespace is tracked under the API-manifest refactor in #793.
 crates/perry-codegen/src/lower_call/native/mod.rs
