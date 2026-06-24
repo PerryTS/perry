@@ -16,8 +16,8 @@ fn perry_bin() -> PathBuf {
 #[test]
 fn block_list_add_subnet_respects_numeric_prefix() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let entry = dir.join("main.ts");
-    let out = dir.join("main_bin");
+    let entry = dir.path().join("main.ts");
+    let out = dir.path().join("main_bin");
     std::fs::write(
         &entry,
         r#"
