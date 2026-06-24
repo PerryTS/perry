@@ -96,6 +96,63 @@ fn is_forward_backreference(spans: &[CaptureSpan], escape_pos: usize, group: usi
     span.close == usize::MAX || escape_pos < span.close
 }
 
+/// Annex B.1.4 does NOT apply to Unicode-mode (`/u` or `/v`) patterns: the
+/// legacy escapes that `js_regex_to_rust` silently relaxes for sloppy patterns
+/// (a `LegacyOctalEscapeSequence`, a `NonOctalDecimalEscapeSequence`, or a `\c`
+/// not followed by an ASCII control letter) are a hard `SyntaxError` under
+/// `/u`. Returns `true` if `pattern` contains any such escape, so the caller
+/// can throw at construction instead of compiling a relaxed pattern.
+///
+/// Mirrors exactly the escapes the sloppy-mode translator would reinterpret:
+/// any other escape (a valid backreference, `\d`, `\x41`, `\u{…}`, an escaped
+/// metacharacter, …) is left for the normal translation path.
+pub(super) fn has_unicode_forbidden_legacy_escape(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let spans = collect_capture_spans(&chars);
+    let num_groups = spans.len();
+    let mut in_class = false;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' if i + 1 < chars.len() => {
+                match chars[i + 1] {
+                    // `\c` is a valid control escape only when followed by an
+                    // ASCII control letter (`A`–`Z` / `a`–`z`); anything else
+                    // (a digit, `_`, a non-ASCII letter, end-of-pattern) is the
+                    // Annex B identity escape, forbidden under `/u`.
+                    'c' if !matches!(chars.get(i + 2), Some(c) if c.is_ascii_alphabetic()) => {
+                        return true;
+                    }
+                    // `\0` is the NUL escape (valid under `/u`) only when not
+                    // followed by a decimal digit; `\0DD` is a legacy octal.
+                    '0' if matches!(chars.get(i + 2), Some(c) if c.is_ascii_digit()) => {
+                        return true;
+                    }
+                    // `\1`–`\9`: a backreference to an existing group is valid;
+                    // anything else is a legacy octal / non-octal decimal escape.
+                    // Inside a class a decimal escape is never a backreference.
+                    '1'..='9' => {
+                        let (group, _) = parse_decimal_escape(&chars, i + 1);
+                        if in_class || group == 0 || group > num_groups {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+                // Any backslash escape consumes the following char, so `\[`,
+                // `\]`, and `\\` never toggle class state.
+                i += 2;
+                continue;
+            }
+            '[' => in_class = true,
+            ']' => in_class = false,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 fn is_regex_identity_escape(ch: char) -> bool {
     matches!(
         ch,

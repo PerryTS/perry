@@ -497,6 +497,43 @@ pub extern "C" fn js_object_set_field_by_name(
                 crate::array::js_array_set_f64_extend(arr, index, value);
                 return;
             }
+            // Own-accessor short-circuit — an Array can carry a named accessor
+            // property installed via `Object.defineProperty(arr, k, {get,set})`.
+            // A `[[Set]]` on such a property must invoke the setter (a
+            // getter-only accessor is read-only), exactly as the generic-object
+            // path below does. The array branch otherwise dropped the write at
+            // the writable gate (an accessor has no `[[Writable]]`) and never
+            // ran the setter (test262 Object/defineProperty + defineProperties
+            // accessor-on-Array cases, e.g. 15.2.3.6-4-278).
+            //
+            // Gated on the per-array `OBJ_FLAG_ARRAY_DESCRIPTORS` flag (the
+            // ArrayHeader analogue of `object_has_descriptors` — the ObjectHeader
+            // `OBJ_FLAG_HAS_DESCRIPTORS` is never set for an ArrayHeader). The
+            // flag is set unconditionally by `define_array_property` whenever any
+            // descriptor is installed on the array and travels with it across
+            // evacuation; `ACCESSOR_DESCRIPTORS` is keyed by raw address, so a
+            // fresh array reusing a freed address (its `_reserved` zeroed at
+            // allocation) skips this lookup and can't fire a previous tenant's
+            // stale accessor.
+            if ACCESSORS_IN_USE.with(|c| c.get())
+                && (*gc_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            {
+                if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
+                    if acc.set != 0 {
+                        let closure = (acc.set & crate::value::POINTER_MASK)
+                            as *const crate::closure::ClosureHeader;
+                        if !closure.is_null() {
+                            let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                            let previous_this = super::js_implicit_this_set(receiver);
+                            crate::closure::js_closure_call1(closure, value);
+                            super::js_implicit_this_set(previous_this);
+                        }
+                    } else {
+                        crate::error::throw_immutable_write(0, name);
+                    }
+                    return;
+                }
+            }
             if let Some(attrs) = super::get_property_attrs(obj as usize, name) {
                 if !attrs.writable() {
                     return;

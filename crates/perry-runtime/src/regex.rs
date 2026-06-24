@@ -49,7 +49,9 @@ use exec_array::{
     set_exec_array_indices_fancy, set_exec_array_metadata,
 };
 #[cfg(feature = "regex-engine")]
-use grammar::{has_invalid_repeated_quantifier, js_regex_to_rust};
+use grammar::{
+    has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape, js_regex_to_rust,
+};
 #[cfg(feature = "regex-engine")]
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
@@ -427,6 +429,17 @@ pub extern "C" fn js_regexp_new(
     // the regex crate fails but fancy-regex succeeds; check both here.
     {
         if has_invalid_repeated_quantifier(pattern_str) {
+            throw_regexp_syntax_error(&format!(
+                "Invalid regular expression: /{}/: invalid pattern",
+                pattern_str
+            ));
+        }
+        // Annex B.1.4 legacy escapes (`\1` non-backref octal, `\0DD`, `\8`/`\9`,
+        // `\c` without a control letter) are accepted in sloppy patterns but are
+        // a hard SyntaxError under the `/u` (and `/v`) flag — `js_regex_to_rust`
+        // would otherwise silently relax them. (test262 RegExp/
+        // unicode_restricted_octal_escape + unicode_restricted_identity_escape_c)
+        if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
             throw_regexp_syntax_error(&format!(
                 "Invalid regular expression: /{}/: invalid pattern",
                 pattern_str
