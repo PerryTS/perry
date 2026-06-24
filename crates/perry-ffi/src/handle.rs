@@ -26,10 +26,13 @@
 //! bounded freelist and handed back out by [`register_handle`]
 //! before the counter advances, so a handle-per-request workload
 //! consumes ids in proportion to its *concurrent* live count rather
-//! than its *cumulative* allocation count and never exhausts the
-//! band. Ids are therefore reused over time but a given id is unique
-//! among the handles live at any instant — a recycled id is only
-//! parked after its prior entry was removed from the map.
+//! than its *cumulative* allocation count — while reclaimed ids fit
+//! within the bounded freelist. Frees beyond [`FREE_HANDLES_CAP`]
+//! are intentionally discarded, so a burst larger than the cap can
+//! still advance [`NEXT_HANDLE`] and consume fresh ids. Ids are
+//! therefore reused over time but a given id is unique among the
+//! handles live at any instant — a recycled id is only parked after
+//! its prior entry was removed from the map.
 //!
 //! perry-stdlib has its own copy of this same registry (in
 //! `crates/perry-stdlib/src/common/handle.rs`). They are separate
@@ -83,7 +86,7 @@ static NEXT_HANDLE: AtomicI64 = AtomicI64::new(FFI_HANDLE_ID_START);
 /// long-lived process that allocates a handle per unit of work — e.g.
 /// `perry-ext-http-server`, which registers a request + response handle per
 /// request and `drop_handle`s both once the response flushes — burns through
-/// the visible id band (`1 ..= 0x40000`) and eventually panics in
+/// the visible id band (`1 .. 0x40000`) and eventually panics in
 /// [`next_fresh_handle_id`], even though only a handful of handles are live at
 /// any instant. Recycling freed ids bounds id consumption by the *concurrent*
 /// live-handle count rather than the *cumulative* allocation count.
@@ -708,23 +711,60 @@ mod tests {
 
     static RECYCLE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Register `value`, reporting whether `register_handle` REUSED a parked
+    /// id rather than minting a fresh one (the recycling contract). A pop
+    /// leaves [`NEXT_HANDLE`] untouched; a fresh mint advances it, which a
+    /// no-reclaim build would do on every register. Returns `(handle, reused)`.
+    fn register_observing_reuse<T: 'static + Send + Sync>(value: T) -> (Handle, bool) {
+        let before = NEXT_HANDLE.load(Ordering::SeqCst);
+        let handle = register_handle(value);
+        let reused = NEXT_HANDLE.load(Ordering::SeqCst) == before;
+        (handle, reused)
+    }
+
+    /// Free `id`, then register `value` and keep retrying until we observe a
+    /// REUSE (the new registration drew a parked id instead of minting fresh),
+    /// returning the reused handle. Each non-reusing attempt is dropped so it
+    /// re-parks an id for the next try.
+    ///
+    /// The bounded retry is what makes the reuse assertion both robust and
+    /// meaningful on the *process-wide* freelist. The non-serialized registry
+    /// tests (`round_trip_simple_value` etc.) run in parallel and can pop the
+    /// very id we just freed in the window before our register — so a single
+    /// observation can legitimately miss reuse. But recycling guarantees reuse
+    /// happens *eventually* (we keep re-parking ids), whereas a no-reclaim
+    /// `drop_handle` parks NOTHING, so every attempt mints fresh and the loop
+    /// exhausts — turning "reuse never happens" into a hard failure.
+    fn drop_then_register_reusing<T: 'static + Send + Sync>(id: Handle, value: T) -> Handle
+    where
+        T: Clone,
+    {
+        assert!(drop_handle(id), "the id to recycle must have been live");
+        for _ in 0..10_000 {
+            let (handle, reused) = register_observing_reuse(value.clone());
+            if reused {
+                return handle;
+            }
+            // A parallel test popped our parked id first and we minted fresh;
+            // drop it (re-parking an id) and try again.
+            assert!(drop_handle(handle));
+        }
+        panic!(
+            "register_handle never reused a freed id across 10000 attempts — \
+             ids are not being recycled (a no-reclaim drop_handle would do this)"
+        );
+    }
+
     #[test]
     fn register_drop_register_reuses_a_freed_id() {
-        // End-to-end: a register/drop/register cycle does not consume a
-        // second fresh id — `register_handle` draws the freed one back from
-        // the freelist. A no-reclaim `drop_handle` would force a fresh mint
-        // here, advancing the counter. Robust to concurrent tests: even if
-        // another thread interleaves its own fresh mints, the counter delta
-        // attributable to THIS cycle is zero because a freed id is always
-        // available when our second register runs (we just freed one).
+        // End-to-end: a register/drop/register cycle reuses the freed id rather
+        // than minting a second fresh one. A no-reclaim `drop_handle` parks
+        // nothing, so `register_handle` would always mint fresh and
+        // `drop_then_register_reusing` would never observe reuse — a hard fail.
         let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
         let h1 = register_handle(7_i64);
-        assert!(drop_handle(h1));
-        // Freelist is non-empty (we just parked h1, modulo concurrent pops);
-        // either way the next register must reuse SOME freed id, never grow
-        // the live set beyond one.
-        let h2 = register_handle(9_i64);
+        let h2 = drop_then_register_reusing(h1, 9_i64);
         assert_eq!(with_handle::<i64, _, _>(h2, |v| *v), Some(9));
         assert!(drop_handle(h2));
     }
@@ -733,17 +773,17 @@ mod tests {
     fn reused_id_carries_no_stale_state() {
         let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
-        // Register a String, drop it, then register a different type under a
-        // recycled id. Whatever id `register_handle` returns, it must resolve
-        // to the NEW value with the NEW type — never the prior String
-        // (cross-request bleed). The String is no longer reachable under any
-        // live id because its entry was removed at drop.
+        // Register a String, drop it, then register a different type under the
+        // RECYCLED id. The recycled id must resolve to the NEW value with the
+        // NEW type — never the prior String (cross-request bleed). The String
+        // is no longer reachable because its entry was removed at drop.
+        //
+        // `drop_then_register_reusing` guarantees the second register actually
+        // reused the freed id, so this test exercises the recycle path — it
+        // would never silently pass on a no-reclaim registry where the
+        // stale-state question is moot.
         let first = register_handle("stale".to_string());
-        assert!(drop_handle(first));
-
-        let second = register_handle(1234_i64);
-        // A recycled id (or a fresh one) — both are clean. The dropped
-        // String must not be reachable through it.
+        let second = drop_then_register_reusing(first, 1234_i64);
         assert!(
             with_handle::<String, _, _>(second, |s| s.clone()).is_none(),
             "recycled id must not expose the prior handle's value or type"
