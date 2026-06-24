@@ -16,6 +16,18 @@ mod lifecycle;
 mod logs_exec;
 mod workload;
 
+// Re-export the `#[no_mangle]` FFI surface (js_container_* / js_compose_* /
+// js_workload_*) at the `container::` path. These fns were defined directly in
+// this module before the split, so by-path consumers (e.g. the
+// `container_ffi_tests` integration test referencing
+// `perry_stdlib::container::js_container_run`) keep resolving.
+pub use backend_ctl::*;
+pub use compose_ffi::*;
+pub use images::*;
+pub use lifecycle::*;
+pub use logs_exec::*;
+pub use workload::*;
+
 mod mod_private {
     use super::get_global_backend;
     use crate::container::backend::ContainerBackend;

@@ -31,6 +31,7 @@ pub(crate) use emitter_als::{
 };
 #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
 pub(crate) use emitter_als::{dispatch_event_emitter_method, dispatch_event_emitter_property};
+#[cfg(feature = "database-sqlite")]
 pub(crate) use sqlite::{dispatch_sqlite_db, dispatch_sqlite_stmt};
 
 #[cfg(all(
