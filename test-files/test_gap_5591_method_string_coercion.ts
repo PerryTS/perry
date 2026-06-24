@@ -46,3 +46,21 @@ console.log(1 + f, "" + f);
 // (7) Numeric coercion of a method is NaN (valueOf returns the function, so
 //     ToNumber falls through to the source string → NaN).
 console.log(Number(C.prototype.m));
+
+// (8) A user-defined `toString` on a function participates in the `+`
+//     ToPrimitive (default hint, valueOf→toString) and its *primitive* result
+//     is kept as-is — `1 + ts` is 43 (number), not the stringified "42".
+function ts() {}
+(ts as unknown as { toString: () => number }).toString = () => 42;
+console.log(1 + ts, typeof (1 + ts));
+
+// (9) A callable `toString` returning a non-primitive object exhausts
+//     OrdinaryToPrimitive → TypeError.
+function objfn() {}
+(objfn as unknown as { toString: () => object }).toString = () => ({});
+try {
+  void (1 + objfn);
+  console.log("no throw");
+} catch (e) {
+  console.log((e as Error).constructor.name);
+}

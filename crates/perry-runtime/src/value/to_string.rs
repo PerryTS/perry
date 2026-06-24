@@ -462,11 +462,18 @@ unsafe fn call_function_method(
 /// `valueOf`/`toString` field lookups (`call_method_for_primitive` →
 /// `js_object_get_field_by_name`) bit-cast it as one and, for a class-method
 /// closure, read a bogus `valueOf` slot that they then *call* → EXC_BAD_ACCESS
-/// (`"" + C.prototype.method`). Resolve via the closure-aware lookup instead:
-/// honor an own/inherited `valueOf` (so `f.valueOf = () => 42; 1 + f` stays
-/// 43), else fall back to `Function.prototype.toString` (the function's source
-/// / native form) — exactly what OrdinaryToPrimitive yields for a function
-/// whose inherited `valueOf` returns the function itself (a non-primitive).
+/// (`"" + C.prototype.method`). Resolve via the closure-aware lookup instead.
+///
+/// Faithful to OrdinaryToPrimitive: try `valueOf` then `toString`; the first
+/// callable returning a *primitive* wins and is returned **as-is** (so
+/// `f.valueOf = () => 42; 1 + f` is `43` and `f.toString = () => 42; 1 + f` is
+/// `43`, not the stringified `"42"`). A callable `toString` returning a
+/// non-primitive object exhausts both steps → `TypeError` (Node: `1 + g` where
+/// `g.toString = () => ({})` throws). For a plain function the inherited
+/// `valueOf` returns the function itself (non-primitive) and `toString`
+/// resolves to `Function.prototype.toString` → the source / native form. The
+/// trailing `js_jsvalue_to_string` is only a guard for the (shouldn't-happen)
+/// case where no callable `toString` resolves at all.
 pub(crate) unsafe fn function_to_primitive_for_add(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
@@ -476,6 +483,17 @@ pub(crate) unsafe fn function_to_primitive_for_add(value: f64) -> f64 {
         if is_primitive_value(ret) {
             return ret;
         }
+    }
+    if let FunctionMethodOutcome::Value(ret) =
+        call_function_method(&scope, &value_handle, b"toString")
+    {
+        if is_primitive_value(ret) {
+            return ret;
+        }
+        // Both `valueOf` and a callable `toString` yielded non-primitives:
+        // OrdinaryToPrimitive throws `TypeError: Cannot convert object to
+        // primitive value`.
+        throw_cannot_convert_to_primitive();
     }
     let s = js_jsvalue_to_string(value_handle.get_nanbox_f64());
     crate::value::js_nanbox_string(s as i64)
