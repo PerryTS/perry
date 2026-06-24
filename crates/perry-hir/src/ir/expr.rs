@@ -417,6 +417,19 @@ pub enum Expr {
     ClassCaptureValue {
         class_name: String,
         index: u32,
+        /// #5437 (cross-module member-`new`): when present, codegen emits
+        /// `js_class_capture_value_or(cid, index, <fallback>)` — the decl-site
+        /// snapshot wins WHEN IT HOLDS A REAL VALUE, otherwise the fallback
+        /// (the `new`-site appended/synthesized cap arg) is used. The
+        /// synthesized constructor stashes its `__perry_cap_*` fields through
+        /// this form so a CROSS-MODULE `new ns.C(...)` — which routes to the
+        /// runtime construct path (`construct_registered_class_ref`) and
+        /// supplies NO cap args, leaving the cap params bound to garbage —
+        /// still recovers the captured value from the class's own decl-site
+        /// snapshot (the ctor body is compiled in the class's home module, so
+        /// `class_name` resolves to its real `class_id` there). `None` keeps
+        /// the plain snapshot read used by STATIC method prologue rebinds.
+        fallback: Option<Box<Expr>>,
     },
 
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the

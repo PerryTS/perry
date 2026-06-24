@@ -587,7 +587,11 @@ where
                 f(c);
             }
         }
-        Expr::ClassCaptureValue { .. } => {}
+        Expr::ClassCaptureValue { fallback, .. } => {
+            if let Some(fb) = fallback {
+                f(fb);
+            }
+        }
         Expr::RegisterClassStaticSymbol {
             key_expr,
             value_expr,
