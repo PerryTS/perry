@@ -418,7 +418,7 @@ mod tests {
     /// tag 0x7FF9, length in bits 40..=47, data little-endian in bits
     /// 0..=39. This is the exact representation codegen hands the
     /// `res.write` / `res.end` shim for a short string literal — the
-    /// repr `jsvalue_to_body_bytes` used to drop (#1781).
+    /// repr `jsvalue_to_body_bytes` must not drop.
     fn sso(bytes: &[u8]) -> f64 {
         assert!(bytes.len() <= 5);
         let mut payload: u64 = 0;
@@ -429,19 +429,18 @@ mod tests {
         f64::from_bits(bits)
     }
 
-    /// #1781 regression — a short response body (`res.end("hi")`) arrives
-    /// as an inline SSO value, not a `STRING_TAG` heap pointer. Before
-    /// the fix `jsvalue_to_body_bytes` gated on the strict `is_string()`
-    /// (STRING_TAG only); the SSO value matched no branch and the body was
-    /// silently dropped (returned `None`) — the wire response had an empty
-    /// body. It must now convert to its UTF-8 bytes, including the empty
-    /// string and the 5-byte SSO boundary.
+    /// A short response body (`res.end("hi")`) arrives as an inline SSO
+    /// value, not a `STRING_TAG` heap pointer. Gating on the strict
+    /// `is_string()` (STRING_TAG only) makes the SSO value match no branch,
+    /// so `jsvalue_to_body_bytes` silently drops the body (returns `None`)
+    /// and the wire response has an empty body. It must convert to its
+    /// UTF-8 bytes, including the empty string and the 5-byte SSO boundary.
     #[test]
     fn body_bytes_converts_sso_short_string() {
         assert_eq!(
             jsvalue_to_body_bytes(sso(b"hi")).as_deref(),
             Some(&b"hi"[..]),
-            "SSO short body must convert to its bytes, not be dropped (#1781)"
+            "SSO short body must convert to its bytes, not be dropped"
         );
         assert_eq!(
             jsvalue_to_body_bytes(sso(b"")).as_deref(),
@@ -455,9 +454,9 @@ mod tests {
         );
     }
 
-    /// A heap `STRING_TAG` body (length > 5) still converts — the #1781
-    /// widening of the string branch must not regress the long-string
-    /// path that already worked.
+    /// A heap `STRING_TAG` body (length > 5) still converts — widening the
+    /// string branch to match SSO must not regress the long-string path
+    /// that already worked.
     #[test]
     fn body_bytes_converts_heap_string() {
         let v = JsValue::from_string_ptr(perry_ffi::alloc_string("longer-than-sso").as_raw());

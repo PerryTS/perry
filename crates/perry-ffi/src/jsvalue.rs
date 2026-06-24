@@ -424,13 +424,13 @@ mod tests {
         }
     }
 
-    /// #1781 — a JS string has TWO NaN-box representations: a heap
+    /// A JS string has TWO NaN-box representations: a heap
     /// `STRING_TAG` (real `*StringHeader`) and an inline `SHORT_STRING_TAG`
     /// SSO value (string ≤5 bytes packed into the payload). `is_any_string`
     /// must match BOTH; the strict `is_string` matches only the heap repr.
-    /// The footgun the bug hit: branching on `is_string()` silently drops
-    /// SSO short strings, so `socket.write("hi")` / `res.end("hi")` emitted
-    /// nothing. `is_short_string` must distinguish the SSO repr specifically.
+    /// The footgun: branching on `is_string()` silently drops SSO short
+    /// strings, so `socket.write("hi")` / `res.end("hi")` emit nothing.
+    /// `is_short_string` must distinguish the SSO repr specifically.
     #[test]
     fn is_any_string_matches_both_string_reprs() {
         // An inline SSO value, built the way the runtime packs one: tag
@@ -442,7 +442,7 @@ mod tests {
         assert!(sso.is_short_string(), "SSO short string is the short repr");
         assert!(
             !sso.is_string(),
-            "strict is_string() must NOT match SSO — this is the #1781 footgun"
+            "strict is_string() must NOT match SSO — this is the footgun"
         );
         assert!(!sso.is_pointer(), "SSO is not a heap pointer");
 
