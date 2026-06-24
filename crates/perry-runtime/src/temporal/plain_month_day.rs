@@ -140,7 +140,7 @@ pub fn call(recv: f64, md: &PlainMonthDay, name: &str, args: &[f64]) -> f64 {
         "toPlainDate" => {
             let obj =
                 super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "toPlainDate");
-            let year = super::options::to_plain_date_year_field(obj);
+            let year = super::options::to_plain_date_year_field(obj, md.calendar());
             alloc_temporal_cell(TemporalValue::PlainDate(ok_or_throw(
                 md.to_plain_date(Some(year)),
             )))

@@ -185,7 +185,7 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let fields = super::options::with_datetime_fields(obj);
+            let fields = super::options::with_datetime_fields(obj, dt.calendar());
             let overflow = super::options::overflow(raw_arg(args, 1));
             wrap(ok_or_throw(dt.with(fields, overflow)))
         }

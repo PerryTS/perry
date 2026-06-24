@@ -226,7 +226,7 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
-            let fields = super::options::zoned_fields(obj);
+            let fields = super::options::zoned_fields(obj, z.calendar());
             let opts = raw_arg(args, 1);
             wrap(ok_or_throw(z.with(
                 fields,

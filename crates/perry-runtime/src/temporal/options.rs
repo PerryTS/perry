@@ -60,16 +60,28 @@ pub fn require_options_object(arg: f64) -> Option<*const crate::object::ObjectHe
     }
 }
 
-/// Read the `era` / `eraYear` calendar fields, but ONLY for a non-ISO calendar.
-/// The ISO-8601 calendar has no eras, so `ToTemporalDate` / `ToTemporalYearMonth`
-/// never read `era`/`eraYear` for it — and the order-of-operations tests assert
-/// exactly that (an ISO bag observes no `era`/`eraYear` gets). Reading them
-/// unconditionally would record extra observable property accesses.
+/// `true` for a calendar that has no eras at all — `iso8601`, `chinese`, and
+/// `dangi`. For these the `era`/`eraYear` keys are not part of any date-field
+/// group, so they are never read (and a bag carrying them is treated as if they
+/// were absent — `from({ era, eraYear, year, … })` ignores them, and a `with`
+/// bag carrying *only* `era`/`eraYear` is empty → the `EmptyFieldsIsInvalid`
+/// TypeError, NOT an `Unknown era` RangeError). The `chinese`/`dangi` lunisolar
+/// calendars track years by `year` (+ optional cyclic `monthCode`), never eras.
+fn calendar_has_no_eras(calendar: &Calendar) -> bool {
+    calendar.is_iso() || matches!(calendar.identifier(), "chinese" | "dangi")
+}
+
+/// Read the `era` / `eraYear` calendar fields, but ONLY for a calendar that
+/// actually uses eras (see [`calendar_has_no_eras`]). The era-less calendars
+/// never read `era`/`eraYear` — the order-of-operations tests assert exactly
+/// that (an ISO bag observes no `era`/`eraYear` gets), and the
+/// `calendar-not-supporting-eras` / chinese-dangi `mutually-exclusive-fields`
+/// cases require those keys to be ignored rather than rejected as an unknown era.
 fn read_era_fields(
     obj: *const crate::object::ObjectHeader,
     calendar: &Calendar,
 ) -> (Option<TinyAsciiStr<19>>, Option<i32>) {
-    if calendar.is_iso() {
+    if calendar_has_no_eras(calendar) {
         return (None, None);
     }
     let era =
@@ -306,7 +318,7 @@ pub fn plain_date_time_from_bag(v: f64, opts: f64) -> temporal_rs::PlainDateTime
         None => type_error("Cannot convert value to a Temporal.PlainDateTime".to_string()),
     };
     let calendar = calendar_slot(field(obj, "calendar"));
-    let fields = datetime_fields(obj);
+    let fields = datetime_fields(obj, &calendar);
     let overflow = overflow(opts);
     let partial = temporal_rs::partial::PartialDateTime { fields, calendar };
     ok_or_throw(temporal_rs::PlainDateTime::from_partial(partial, overflow))
@@ -782,12 +794,12 @@ fn relative_to_field(obj: *const crate::object::ObjectHeader) -> Option<Relative
         // millisecond, minute, month, monthCode, nanosecond, offset, second,
         // timeZone, year — with `ToNumber`/`valueOf` coercion per field (the
         // order-of-operations tests observe this exact interleaving). `era`/
-        // `eraYear` are NOT in the ISO field set. A present `timeZone` makes it a
-        // `ZonedDateTime`, otherwise a `PlainDate`; `monthCode` is parsed at its
-        // read position so a bad month code throws before a later wrong-typed
-        // field is even read.
+        // `eraYear` (read right after `day`) are part of the field set only for a
+        // non-ISO calendar. A present `timeZone` makes it a `ZonedDateTime`,
+        // otherwise a `PlainDate`; `monthCode` is parsed at its read position so a
+        // bad month code throws before a later wrong-typed field is even read.
         let calendar = calendar_slot(field(o, "calendar"));
-        let (cf, pt, offset, tz_raw) = read_zoned_bag_alpha(o);
+        let (cf, pt, offset, tz_raw) = read_zoned_bag_alpha(o, &calendar);
 
         if !is_undefined(tz_raw) {
             let tz = timezone(tz_raw);
@@ -929,29 +941,49 @@ pub fn to_plain_date_day_field(obj: *const crate::object::ObjectHeader) -> Calen
     f
 }
 
-/// `Temporal.PlainMonthDay.prototype.toPlainDate(item)` reads ONLY `year` from
-/// `item` (the month/day come from the receiver).
-pub fn to_plain_date_year_field(obj: *const crate::object::ObjectHeader) -> CalendarFields {
+/// `Temporal.PlainMonthDay.prototype.toPlainDate(item)` reads the `YEAR`
+/// calendar-field group from `item` (the month/day come from the receiver).
+/// For a non-ISO calendar that group also includes `era`/`eraYear`
+/// (`PrepareCalendarFields(calendar, item, « YEAR », …)` — the calendar expands
+/// the requested `year` field to its era-relative keys), read **alphabetically**:
+/// `era`, `eraYear`, `year`. So `toPlainDate({ era, eraYear })` observes the
+/// `eraYear.valueOf` get and rejects a non-finite `eraYear` with a `RangeError`
+/// (the `*-infinity-throws-rangeerror` tests). An ISO calendar reads only `year`.
+pub fn to_plain_date_year_field(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> CalendarFields {
     let mut f = CalendarFields::new();
+    let (era, era_year) = read_era_fields(obj, calendar);
     if let Some(n) = num_field(obj, "year") {
         f.year = Some(n.trunc() as i32);
+    }
+    f.era = era;
+    if let Some(y) = era_year {
+        f.era_year = Some(y);
     }
     f
 }
 
-/// Read the ISO date+time field set in spec (alphabetical) order — day, hour,
-/// microsecond, millisecond, minute, month, monthCode, nanosecond, [offset,]
-/// second, year — with `ToNumber`/`valueOf` coercion per numeric field and
-/// `monthCode`/`offset` as required strings (parsed at their read position). The
-/// order-of-operations tests observe exactly this interleaving. `era`/`eraYear`
-/// are NOT in the ISO field set, so they are not read (reading them would record
-/// extra observable gets). `read_offset` controls whether the `offset` field
-/// (ZonedDateTime only) is read.
+/// Read the ISO date+time field set in spec (alphabetical) order — day, [era,
+/// eraYear,] hour, microsecond, millisecond, minute, month, monthCode,
+/// nanosecond, [offset,] second, year — with `ToNumber`/`valueOf` coercion per
+/// numeric field and `monthCode`/`offset` as required strings (parsed at their
+/// read position). The order-of-operations tests observe exactly this
+/// interleaving. `era`/`eraYear` are read only for a **non-ISO** calendar (the
+/// ISO calendar has no eras, and reading them on an ISO bag would record extra
+/// observable gets); for a non-ISO calendar they ARE part of the date-field set,
+/// so a `{ era, eraYear, monthCode, day }` bag resolves instead of throwing
+/// `Insufficient fields` (the `era-boundary-*` / `era-*` from/with/arithmetic
+/// cases). `read_offset` controls whether the `offset` field (ZonedDateTime
+/// only) is read.
 fn read_iso_fields_alpha(
     obj: *const crate::object::ObjectHeader,
     read_offset: bool,
+    calendar: &Calendar,
 ) -> (CalendarFields, PartialTime, Option<UtcOffset>) {
     let day = num_field(obj, "day");
+    let (era, era_year) = read_era_fields(obj, calendar);
     let hour = num_field(obj, "hour");
     let microsecond = num_field(obj, "microsecond");
     let millisecond = num_field(obj, "millisecond");
@@ -973,6 +1005,10 @@ fn read_iso_fields_alpha(
     cf.month_code = month_code;
     if let Some(n) = day {
         cf.day = Some(positive_field_u8(n, "day"));
+    }
+    cf.era = era;
+    if let Some(y) = era_year {
+        cf.era_year = Some(y);
     }
     let mut pt = PartialTime::new();
     if let Some(n) = hour {
@@ -997,15 +1033,19 @@ fn read_iso_fields_alpha(
 }
 
 /// Read a ZonedDateTime-shaped property bag's fields in spec (alphabetical)
-/// order — day, hour, microsecond, millisecond, minute, month, monthCode,
-/// nanosecond, offset, second, timeZone, year — returning the parsed
+/// order — day, [era, eraYear,] hour, microsecond, millisecond, minute, month,
+/// monthCode, nanosecond, offset, second, timeZone, year — returning the parsed
 /// `CalendarFields` + `PartialTime` + optional offset + the raw `timeZone` value
 /// (so the caller can resolve/validate it). The caller reads `calendar` FIRST.
-/// Shared by `ToTemporalZonedDateTime` (`from`) and `ToRelativeTemporalObject`.
+/// `era`/`eraYear` are read only for a non-ISO calendar (see
+/// [`read_iso_fields_alpha`]). Shared by `ToTemporalZonedDateTime` (`from`) and
+/// `ToRelativeTemporalObject`.
 fn read_zoned_bag_alpha(
     obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
 ) -> (CalendarFields, PartialTime, Option<UtcOffset>, f64) {
     let day = num_field(obj, "day");
+    let (era, era_year) = read_era_fields(obj, calendar);
     let hour = num_field(obj, "hour");
     let microsecond = num_field(obj, "microsecond");
     let millisecond = num_field(obj, "millisecond");
@@ -1028,6 +1068,10 @@ fn read_zoned_bag_alpha(
     cf.month_code = month_code;
     if let Some(n) = day {
         cf.day = Some(positive_field_u8(n, "day"));
+    }
+    cf.era = era;
+    if let Some(y) = era_year {
+        cf.era_year = Some(y);
     }
     let mut pt = PartialTime::new();
     if let Some(n) = hour {
@@ -1066,8 +1110,11 @@ fn reject_calendar_and_timezone(obj: *const crate::object::ObjectHeader) {
 /// Populate a [`DateTimeFields`] (calendar fields + time) for `PlainDateTime.with`,
 /// reading in alphabetical order. The caller performs
 /// `RejectObjectWithCalendarOrTimeZone` first.
-pub fn datetime_fields(obj: *const crate::object::ObjectHeader) -> DateTimeFields {
-    let (cf, pt, _) = read_iso_fields_alpha(obj, false);
+pub fn datetime_fields(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> DateTimeFields {
+    let (cf, pt, _) = read_iso_fields_alpha(obj, false, calendar);
     let mut f = DateTimeFields::new();
     f.calendar_fields = cf;
     f.time = pt;
@@ -1075,10 +1122,14 @@ pub fn datetime_fields(obj: *const crate::object::ObjectHeader) -> DateTimeField
 }
 
 /// `RejectObjectWithCalendarOrTimeZone` + alphabetical-order field read for
-/// `PlainDateTime.with`.
-pub fn with_datetime_fields(obj: *const crate::object::ObjectHeader) -> DateTimeFields {
+/// `PlainDateTime.with` (the receiver supplies the `calendar`, which decides
+/// whether `era`/`eraYear` are part of the field set).
+pub fn with_datetime_fields(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> DateTimeFields {
     reject_calendar_and_timezone(obj);
-    datetime_fields(obj)
+    datetime_fields(obj, calendar)
 }
 
 /// `Temporal.PlainDate.prototype.with` / `PlainMonthDay.prototype.with`
@@ -1117,9 +1168,12 @@ pub fn with_partial_time(obj: *const crate::object::ObjectHeader) -> PartialTime
 /// Populate a [`ZonedDateTimeFields`] (calendar fields + time + offset) for
 /// `ZonedDateTime.with`, reading in alphabetical order after
 /// `RejectObjectWithCalendarOrTimeZone`.
-pub fn zoned_fields(obj: *const crate::object::ObjectHeader) -> ZonedDateTimeFields {
+pub fn zoned_fields(
+    obj: *const crate::object::ObjectHeader,
+    calendar: &Calendar,
+) -> ZonedDateTimeFields {
     reject_calendar_and_timezone(obj);
-    let (cf, pt, offset) = read_iso_fields_alpha(obj, true);
+    let (cf, pt, offset) = read_iso_fields_alpha(obj, true, calendar);
     let mut f = ZonedDateTimeFields::new();
     f.calendar_fields = cf;
     f.time = pt;
@@ -1186,7 +1240,7 @@ pub fn zoned_partial(v: f64) -> Option<PartialZonedDateTime> {
     // timeZone is resolved (a missing `timeZone` is a TypeError — it is required
     // for a ZonedDateTime bag).
     let calendar = calendar_slot(field(obj, "calendar"));
-    let (cf, pt, offset, tz_raw) = read_zoned_bag_alpha(obj);
+    let (cf, pt, offset, tz_raw) = read_zoned_bag_alpha(obj, &calendar);
     if is_undefined(tz_raw) {
         type_error(
             "ZonedDateTime property bag is missing a required \"timeZone\" field".to_string(),
