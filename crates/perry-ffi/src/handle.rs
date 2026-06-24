@@ -187,7 +187,7 @@ extern "C" {
 // isolation (no `--workspace` feature unification, see `.github/workflows/
 // test.yml`). The handle-registry tests below exercise `register_handle`,
 // which calls `js_register_ffi_handle_exists_probe` to wire up the runtime's
-// handle-vs-timer disambiguation probe (#5083). Give that test binary a no-op
+// handle-vs-timer disambiguation probe. Give that test binary a no-op
 // definition so it links and the registry tests keep running. Gated on
 // `not(feature = "runtime-link")` so it never collides with perry-runtime's
 // real definition — which is present whenever runtime-link is on, or at a
@@ -461,9 +461,9 @@ where
 /// pattern is to snapshot ids into a `Vec` first, then act on each
 /// id outside the iteration.
 ///
-/// Added by issue #604 — perry-ext-http-server's main-thread pump
-/// needs to walk every registered HttpServer / HttpsServer /
-/// Http2SecureServer handle each tick to drain pending requests.
+/// perry-ext-http-server's main-thread pump walks every registered
+/// HttpServer / HttpsServer / Http2SecureServer handle each tick to
+/// drain pending requests.
 pub fn iter_handle_ids_of<T, F>(mut f: F)
 where
     T: 'static + Send + Sync,
@@ -696,7 +696,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------
-    // Id-recycling freelist (step 5).
+    // Id-recycling freelist.
     //
     // The registry is process-wide and the default test harness runs
     // these in parallel, so the reuse-sensitive tests below serialize on
