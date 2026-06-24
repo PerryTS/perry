@@ -697,9 +697,7 @@ fn normalize_quantified_lookaround(pattern: &str) -> String {
             // Find the matching close paren for this group (nesting-aware).
             if let Some(close) = matching_group_close(&chars, i) {
                 // Is there a quantifier right after the close paren?
-                if let Some((qstart, qend, lower_zero)) =
-                    quantifier_after(&chars, close + 1)
-                {
+                if let Some((qstart, qend, lower_zero)) = quantifier_after(&chars, close + 1) {
                     let _ = open_len;
                     if lower_zero {
                         // No-op: drop the whole assertion + quantifier.
@@ -786,9 +784,9 @@ fn quantifier_after(chars: &[char], start: usize) -> Option<(usize, usize, bool)
             let mut lower = 0u64;
             let mut saw_digit = false;
             while k < chars.len() && chars[k].is_ascii_digit() {
-                lower = lower.saturating_mul(10).saturating_add(
-                    chars[k].to_digit(10).unwrap_or(0) as u64,
-                );
+                lower = lower
+                    .saturating_mul(10)
+                    .saturating_add(chars[k].to_digit(10).unwrap_or(0) as u64);
                 saw_digit = true;
                 k += 1;
             }
