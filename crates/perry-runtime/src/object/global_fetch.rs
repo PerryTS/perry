@@ -160,14 +160,9 @@ pub extern "C" fn js_fetch_headers_to_json(headers: f64) -> i64 {
 
 fn fetch_headers_json_ptr(init: f64) -> *const crate::StringHeader {
     let headers = fetch_option(init, b"headers");
-    if matches!(
-        headers.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
-    }
-    // `init.headers` may be a `Headers` instance (a fetch-band handle) rather
-    // than a plain object — JSON-stringify it without dereferencing the handle.
+    // `init.headers` may be a `Headers` instance (a fetch-band handle), a plain
+    // object, or null/undefined — `headers_init_json_ptr` normalizes all three
+    // (Headers handle read from its registry, null/undefined → `{}`).
     headers_init_json_ptr(headers)
 }
 
@@ -301,6 +296,16 @@ fn call_global_headers_object_json(value: f64) -> *mut crate::StringHeader {
 /// safely. Same family as #5559/#5560 (handle-band ids mis-dereferenced as heap
 /// pointers).
 fn headers_init_json_ptr(headers: f64) -> *const crate::StringHeader {
+    // Normalize null/undefined to an empty object so BOTH entry points — the
+    // codegen `js_fetch_headers_to_json` and the runtime `fetch_headers_json_ptr`
+    // — serialize `headers: null` as `{}` rather than the literal `"null"` that
+    // `js_fetch_with_options` cannot parse.
+    if matches!(
+        headers.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return crate::string::js_string_from_bytes(b"{}".as_ptr(), 2);
+    }
     let jsv = crate::value::JSValue::from_bits(headers.to_bits());
     if jsv.is_pointer() {
         let addr = (headers.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
