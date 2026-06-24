@@ -1,4 +1,4 @@
-//! Response-build fast path for HTTP/1 (#5419 step 6).
+//! Response-build fast path for HTTP/1.
 //!
 //! The per-response head build runs for *every* response a perry HTTP/1
 //! server emits, so the small-response RPS hot path is dominated by the
