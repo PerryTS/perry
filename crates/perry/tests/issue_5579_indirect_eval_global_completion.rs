@@ -153,9 +153,10 @@ fn indirect_eval_is_always_sloppy_global_script() {
 
 /// The fold is gated to module top level: an indirect eval inside a function
 /// must NOT capture that function's locals (real global eval cannot see them).
-/// Here the inner `local` is invisible to the indirect eval, so reading it is a
-/// ReferenceError — the program exits non-zero. (Pins that the completion IIFE
-/// is not applied at nested scope, where it would wrongly resolve `local`.)
+/// Here the inner `local` is invisible to the indirect eval, so `typeof local`
+/// resolves as `"undefined"` in global scope and the program exits cleanly.
+/// (Pins that the completion IIFE is not applied at nested scope, where it would
+/// wrongly resolve `local` to its `number` value.)
 const NESTED_NOT_FOLDED: &str = r#"
 function f() {
   var local = 7;
@@ -168,10 +169,14 @@ console.log("DONE");
 #[test]
 fn indirect_eval_nested_does_not_capture_locals() {
     let (ok, out) = compile_and_run(NESTED_NOT_FOLDED, /* global_script */ true);
-    // Either Perry defers to the runtime thunk (typeof -> "undefined") or the
-    // body resolves against the global env; in no case may it see the function
-    // local `local` as a "number".
     assert!(ok, "binary did not exit cleanly\n{out}");
+    // Positive expectation: the body resolves against the global env (where
+    // `local` does not exist), so `typeof local` is `"undefined"` — never the
+    // function local's `number` value.
+    assert!(
+        out.contains("typeof: undefined") && out.contains("DONE"),
+        "indirect eval should resolve `typeof local` as \"undefined\" in global scope\n{out}"
+    );
     assert!(
         !out.contains("typeof: number"),
         "indirect eval must not capture the enclosing function's `local`\n{out}"

@@ -816,7 +816,16 @@ fn stmt_declares_binding(stmt: &ast::Stmt) -> bool {
                     .is_some_and(|f| eval_body_declares_bindings(&f.stmts))
         }
         Stmt::Switch(s) => s.cases.iter().any(|c| eval_body_declares_bindings(&c.cons)),
-        _ => false,
+        // Statements that cannot introduce a binding. Listed explicitly (no
+        // `_` catch-all) so a future `ast::Stmt` variant that *can* nest a
+        // declaration is a compile error here rather than a silent miss.
+        Stmt::Expr(_)
+        | Stmt::Empty(_)
+        | Stmt::Debugger(_)
+        | Stmt::Return(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Throw(_) => false,
     }
 }
 
