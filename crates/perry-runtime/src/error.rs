@@ -948,6 +948,17 @@ pub extern "C" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
             if !v.is_undefined() {
                 return f64::from_bits(v.bits());
             }
+            // A global binding initialized to `undefined` (a sloppy global var
+            // created by `f = undefined`, or B.3.3.3 CreateGlobalVarBinding from
+            // eval'd function hoisting) is *resolvable* — reading it yields
+            // `undefined`, not a ReferenceError. `js_object_get_field_by_name`
+            // can't tell "absent" from "present, value undefined", so confirm
+            // the property actually exists (as an OWN property — a global var
+            // binding always is) before falling through to the throw.
+            let has = crate::object::js_object_has_own(g, name_value);
+            if crate::value::js_is_truthy(has) != 0 {
+                return f64::from_bits(crate::value::JSValue::undefined().bits());
+            }
         }
     }
     let name = value_to_lossy_string(name_value);

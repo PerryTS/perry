@@ -236,6 +236,18 @@ pub fn const_string_of(expr: &ast::Expr) -> Option<String> {
                     .unwrap_or_else(|| q.raw.as_str().to_string())
             })
         }
+        // Constant string concatenation: `'a' + 'b' + 'c'`. Test262's
+        // procedurally-generated eval cases split a body across `+`-joined
+        // string literals (one segment per `switch` case / `if` branch), so
+        // the whole argument is still a constant the AOT eval fold can run.
+        // Only fold when BOTH operands are themselves constant strings — a
+        // numeric `+` (or a string + non-constant) is not a constant body.
+        ast::Expr::Bin(bin) if bin.op == ast::BinaryOp::Add => {
+            let mut left = const_string_of(&bin.left)?;
+            let right = const_string_of(&bin.right)?;
+            left.push_str(&right);
+            Some(left)
+        }
         _ => None,
     }
 }
@@ -682,6 +694,38 @@ mod tests {
         let c = classify(EvalSurface::NewFunction, Some(&body), "/app/main.ts", 0);
         assert_eq!(c.bucket, EvalBucket::ConstFoldable);
         assert_eq!(c.body_preview.as_deref(), Some("return 7"));
+    }
+
+    #[test]
+    fn constant_string_concatenation_folds() {
+        // Test262's procedurally-generated eval cases split a body across
+        // `+`-joined string literals; the whole argument is still a constant.
+        let add = |l: ast::Expr, r: ast::Expr| {
+            ast::Expr::Bin(ast::BinExpr {
+                span: Span::new(BytePos(0), BytePos(0)),
+                op: ast::BinaryOp::Add,
+                left: Box::new(l),
+                right: Box::new(r),
+            })
+        };
+        // `'switch (1) {' + '  case 1:' + '}'`
+        let expr = add(
+            add(str_lit("switch (1) {"), str_lit("  case 1:")),
+            str_lit("}"),
+        );
+        assert_eq!(
+            const_string_of(&expr).as_deref(),
+            Some("switch (1) {  case 1:}")
+        );
+        // A non-`+` operator, or a non-constant operand, does not fold.
+        let sub = ast::Expr::Bin(ast::BinExpr {
+            span: Span::new(BytePos(0), BytePos(0)),
+            op: ast::BinaryOp::Sub,
+            left: Box::new(str_lit("a")),
+            right: Box::new(str_lit("b")),
+        });
+        assert_eq!(const_string_of(&sub), None);
+        assert_eq!(const_string_of(&add(str_lit("a"), non_const())), None);
     }
 
     #[test]
