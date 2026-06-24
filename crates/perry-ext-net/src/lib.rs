@@ -33,7 +33,7 @@
 //! `tls = ["net", ...]` feature split is preserved on the perry-stdlib side
 //! for backwards compat; the well-known flip routes here.
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use perry_ffi::{
     alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner_named,
     js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, BufferHeader,
@@ -1297,9 +1297,10 @@ pub(crate) async fn run_socket_task(
     // `BytesMut` in place (no per-read zeroing), and `split_to(n)` carves the
     // freshly-read bytes off as a refcounted `Bytes` view that the 'data'
     // event carries to the drain handler — eliminating the `Vec<u8>` alloc +
-    // memcpy that the old `buf[..n].to_vec()` did on every read. `reserve`
-    // before each read keeps the per-read ceiling at 16 KiB, so read sizing
-    // and 'data' chunk boundaries are unchanged from the fixed-`Vec` path.
+    // memcpy that the old `buf[..n].to_vec()` did on every read. The per-read
+    // 16 KiB ceiling is enforced by the `BufMut::limit` wrapper at the read
+    // site (see below), so read sizing and 'data' chunk boundaries are
+    // unchanged from the fixed-`Vec` path.
     let mut buf = BytesMut::with_capacity(16 * 1024);
 
     loop {
@@ -1309,13 +1310,23 @@ pub(crate) async fn run_socket_task(
         };
 
         // Cap the writable window at 16 KiB so a single `read_buf` reads the
-        // same per-call ceiling the old fixed `[u8; 16 KiB]` scratch did, even
-        // if `BytesMut` over-allocated. `clear()` drops the (already split-off)
-        // contents and `reserve(16 KiB)` from empty gives exactly that window.
+        // same per-call ceiling the old fixed `[u8; 16 KiB]` scratch did.
+        // `clear()` drops the (already split-off) contents and `reserve`
+        // guarantees *at least* 16 KiB of spare capacity — but `BytesMut` may
+        // over-allocate, and `read_buf` would otherwise fill all of it. Wrap
+        // the buffer in `BufMut::limit(16 KiB)` so the read cannot advance past
+        // 16 KiB regardless of the underlying capacity, keeping read sizing and
+        // 'data' chunk boundaries fixed. The adapter only borrows `buf` for the
+        // read future; `read_buf` advances `buf` itself, so `buf.len() == n`
+        // afterwards and `split_to(n)` carves off exactly the freshly-read run.
         buf.clear();
         buf.reserve(16 * 1024);
+        let mut window = (&mut buf).limit(16 * 1024);
         tokio::select! {
-            read_result = t.read_buf(&mut buf) => {
+            read_result = t.read_buf(&mut window) => {
+                // Release the `Limit` borrow of `buf` before touching `buf`
+                // again; `read_buf` already advanced `buf` in place.
+                drop(window);
                 match read_result {
                     Ok(0) => {
                         // #2154 raw mode: signal EOF on the buffer, suppress
