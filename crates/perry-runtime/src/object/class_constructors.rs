@@ -187,12 +187,52 @@ pub extern "C" fn js_class_capture_value_or(class_id: u32, index: u32, fallback:
             // absent slot (out-of-range index) also falls back. Same shape as
             // the require-derived getSpan fix (no snapshot → fallback), extended
             // to the snapshot-present-but-`undefined`-slot case.
+            //
+            // #5437 (captured-`undefined` tag-loss, Next.js dynamic/API routes):
+            // a capture whose value is *genuinely* `undefined` (the bundle's
+            // `let t_ = process.env.X ? fn : void 0` debug logger, `undefined`
+            // by default) records `TAG_UNDEFINED` in the snapshot — which is the
+            // CORRECT value, not a TDZ artifact. At giant-module scale the
+            // `new`-site appended `fallback` for that same capture materializes
+            // as a tag-stripped raw word `0x0000_0000_0000_0001` (the low bits of
+            // `TAG_UNDEFINED` with the `0x7FFC` NaN-box tag stripped by a
+            // multi-level capture mis-box). Blindly preferring that `fallback`
+            // over the `undefined` snapshot handed `t_` the non-callable `0x1`,
+            // so `null == t_` was false → `t_(…)` was called → "value is not a
+            // function" → route init aborted → HTTP 500.
+            //
+            // A legitimate captured value is ALWAYS either NaN-boxed (top 16 bits
+            // ≥ 0x7FF9 for ptr/string/int32/bigint/SSO/special) or a normal
+            // IEEE-754 double (non-zero biased exponent). A `fallback` whose top
+            // 16 bits are all zero is therefore a tag-stripped/mis-boxed raw word,
+            // NEVER a real captured JSValue — so it must not override the
+            // snapshot. When the snapshot slot is `undefined` and the fallback is
+            // such a corrupt word, the snapshot's `undefined` is authoritative.
+            // (A valid fallback over an `undefined` snapshot still wins, keeping
+            // the hoisted-class/TDZ fix above.)
             Some(v) => match v.get(index as usize).copied() {
                 Some(bits) if bits != crate::value::TAG_UNDEFINED => f64::from_bits(bits),
-                _ => fallback,
+                slot => {
+                    if fallback_is_tag_stripped(fallback) {
+                        // Corrupt fallback — trust the snapshot (its `undefined`
+                        // for an undefined-valued capture, or `undefined` for an
+                        // absent slot).
+                        f64::from_bits(slot.unwrap_or(crate::value::TAG_UNDEFINED))
+                    } else {
+                        fallback
+                    }
+                }
             },
-            // No snapshot registered: use the `new`-site appended cap value.
-            None => fallback,
+            // No snapshot registered: use the `new`-site appended cap value —
+            // unless it is a tag-stripped/mis-boxed raw word, in which case the
+            // only safe interpretation is `undefined` (calling a `0x1` throws).
+            None => {
+                if fallback_is_tag_stripped(fallback) {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                } else {
+                    fallback
+                }
+            }
         }
     })
 }
@@ -234,6 +274,24 @@ pub extern "C" fn js_param_or_class_capture_value(param: f64, class_id: u32, ind
             .map(f64::from_bits)
             .unwrap_or(param)
     })
+}
+
+/// A legitimate JSValue is either NaN-boxed (top 16 bits ≥ 0x7FF9 — the boxed
+/// tags: SSO/BIGINT/special/POINTER/INT32/STRING) or a normal IEEE-754 double.
+/// A NON-ZERO value whose top 16 bits are all zero is a positive subnormal
+/// (< 2^-996) — a magnitude no program meaningfully captures — and is in
+/// practice the `0x7FFC_…_0001 → 0x0000_…_0001` signature of a captured
+/// `undefined` (or any heap pointer) that lost its NaN-box tag through a
+/// low-bits extraction at giant-module scale. Such a word is never a real
+/// captured value, so the capture-snapshot fallback must reject it. See #5437.
+///
+/// `+0.0`/`-0.0` are excluded: the number `0` is a legitimate captured value
+/// (its bits are `0x0000_…_0000` / `0x8000_…_0000`, the latter has a non-zero
+/// top 16), and a TDZ fallback that is genuinely `0` must still win.
+#[inline]
+pub(crate) fn fallback_is_tag_stripped(fallback: f64) -> bool {
+    let bits = fallback.to_bits();
+    (bits >> 48) == 0 && bits != 0
 }
 
 /// Keepalive anchors (generated-code-only callees).

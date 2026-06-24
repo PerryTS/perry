@@ -787,3 +787,89 @@ fn object_to_string_rejects_handle_band_ids() {
         );
     }
 }
+
+/// #5437 — captured-`undefined` tag-loss on Next.js dynamic/API routes.
+///
+/// `js_class_capture_value_or` must NOT replace a snapshot whose slot is a
+/// genuinely-undefined capture (`TAG_UNDEFINED`) with a tag-stripped/mis-boxed
+/// raw-word `fallback` (`0x0000_0000_0000_0001` — `TAG_UNDEFINED` with its
+/// `0x7FFC` NaN-box tag stripped). The bundle's `let t_ = cond ? fn : void 0`
+/// debug logger is `undefined`; at giant-module scale the `new`-site appended
+/// fallback for it materialized as `0x1`, so the snapshot's correct `undefined`
+/// was discarded → `t_` became `0x1` → `null == t_` false → `t_(…)` called →
+/// "value is not a function" → route 500.
+#[test]
+fn class_capture_value_or_rejects_tag_stripped_fallback() {
+    const TAG_UNDEFINED: u64 = crate::value::TAG_UNDEFINED; // 0x7FFC_0000_0000_0001
+    const STRIPPED: u64 = 0x0000_0000_0000_0001; // tag-stripped undefined
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    let stripped = f64::from_bits(STRIPPED);
+
+    // Case 1 (THE BUG): snapshot slot is genuinely `undefined`, fallback is the
+    // tag-stripped `0x1`. Must return `undefined`, NOT the corrupt fallback.
+    let cid_a: u32 = 0x5437_0001;
+    let snap_a = [TAG_UNDEFINED, TAG_UNDEFINED, TAG_UNDEFINED];
+    unsafe {
+        js_class_register_capture_values(cid_a, snap_a.as_ptr() as *const f64, snap_a.len());
+    }
+    let got = js_class_capture_value_or(cid_a, 1, stripped).to_bits();
+    assert_eq!(
+        got, TAG_UNDEFINED,
+        "undefined snapshot + tag-stripped fallback must yield undefined, got {got:#018x}"
+    );
+
+    // Case 2 (W6 — snapshot wins): a real pointer in the snapshot stays
+    // authoritative even when the fallback is a (different) real value.
+    let cid_b: u32 = 0x5437_0002;
+    let real_ptr = crate::value::POINTER_TAG | 0x1234_5678;
+    let snap_b = [real_ptr];
+    unsafe {
+        js_class_register_capture_values(cid_b, snap_b.as_ptr() as *const f64, snap_b.len());
+    }
+    let other = f64::from_bits(crate::value::POINTER_TAG | 0xDEAD);
+    let got_b = js_class_capture_value_or(cid_b, 0, other).to_bits();
+    assert_eq!(
+        got_b, real_ptr,
+        "non-undefined snapshot slot must win over the fallback (W6), got {got_b:#018x}"
+    );
+
+    // Case 3 (#5437 hoisted-class/TDZ — VALID fallback over undefined snapshot
+    // still wins): snapshot slot is `undefined` (class decl hoisted above the
+    // local's assignment) but the fallback is a legitimate NaN-boxed value.
+    let cid_c: u32 = 0x5437_0003;
+    let snap_c = [TAG_UNDEFINED];
+    unsafe {
+        js_class_register_capture_values(cid_c, snap_c.as_ptr() as *const f64, snap_c.len());
+    }
+    let valid_fb = crate::value::POINTER_TAG | 0xCAFE;
+    let got_c = js_class_capture_value_or(cid_c, 0, f64::from_bits(valid_fb)).to_bits();
+    assert_eq!(
+        got_c, valid_fb,
+        "undefined snapshot + VALID fallback must keep the fallback (TDZ fix), got {got_c:#018x}"
+    );
+
+    // Case 4 (no snapshot + tag-stripped fallback): with no registered snapshot
+    // a corrupt `0x1` fallback is not callable, so resolve to `undefined`.
+    let cid_d: u32 = 0x5437_0004; // never registered
+    let got_d = js_class_capture_value_or(cid_d, 0, stripped).to_bits();
+    assert_eq!(
+        got_d, TAG_UNDEFINED,
+        "no snapshot + tag-stripped fallback must yield undefined, got {got_d:#018x}"
+    );
+
+    // Case 5 (no snapshot + valid fallback): the appended cap value is used
+    // (getSpan/require-derived-capture path preserved).
+    let cid_e: u32 = 0x5437_0005; // never registered
+    let valid2 = crate::value::POINTER_TAG | 0xBEEF;
+    let got_e = js_class_capture_value_or(cid_e, 0, f64::from_bits(valid2)).to_bits();
+    assert_eq!(
+        got_e, valid2,
+        "no snapshot + valid fallback must use the fallback, got {got_e:#018x}"
+    );
+
+    // Sanity: `0.0` (the number zero) is a legitimate captured value and must
+    // NOT be treated as a tag-stripped word.
+    assert!(!fallback_is_tag_stripped(0.0_f64));
+    assert!(fallback_is_tag_stripped(stripped));
+    assert!(!fallback_is_tag_stripped(undef));
+}
