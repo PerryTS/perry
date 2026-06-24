@@ -30,10 +30,6 @@
 #     test fixtures. Top-down test scaffolding, not production code;
 #     splitting would split assertions away from the inputs that
 #     produced them.
-#   - crates/perry-api-manifest/src/entries.rs — generated-feel
-#     manifest table (one entry per public API surface item). Length
-#     reflects API breadth, not complexity, and splitting would scatter
-#     entries that ought to live next to each other for drift review.
 #   - crates/perry/src/commands/compile.rs — the deeply-coupled
 #     `par_iter` codegen closure inside `run_with_parse_cache`
 #     (~1,800 LOC, ~30 captured locals) needs extraction into a
@@ -60,7 +56,6 @@ ALLOWLIST=$(cat <<'EOF'
 # trunk extraction is a reasonable follow-up.
 crates/perry-runtime/src/regex.rs
 crates/perry-codegen-arkts/src/tests.rs
-crates/perry-api-manifest/src/entries.rs
 crates/perry/src/commands/compile.rs
 # node:dns + node:dgram. Crossed 2000 LOC when the loopback fakes became real
 # getaddrinfo/DNS/UDP I/O (#4911) — the in-process/deterministic paths are kept
