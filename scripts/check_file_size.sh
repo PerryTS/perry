@@ -26,11 +26,6 @@
 # Allowlisted (real Rust source, deferred for a specific reason —
 # **each entry needs a one-line rationale**):
 #
-#   - crates/perry-runtime/src/gc/tests.rs — left behind by the gc.rs
-#     split in the #1090 GC architecture checkpoint. The companion
-#     production files in `gc/` all came in under 2k; only the test
-#     fixture remained big. Re-evaluate once the GC owner peels it
-#     apart.
 #   - crates/perry-codegen-arkts/src/tests.rs — ArkTS golden-output
 #     test fixtures. Top-down test scaffolding, not production code;
 #     splitting would split assertions away from the inputs that
@@ -53,7 +48,6 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 
 # Allowlist (one file per line; blank lines + `#` comments OK).
 ALLOWLIST=$(cat <<'EOF'
-crates/perry-runtime/src/gc/tests.rs
 # RegExp runtime trunk. Crossed 2000 LOC (2041) when the user's regex engine
 # was gated behind the `regex-engine` cargo feature — the per-fn `#[cfg]`
 # attributes, the no-engine fallbacks, and the `CompiledRegex` header type alias
@@ -211,10 +205,6 @@ crates/perry-stdlib/src/sqlite.rs
 # Node core native table crossed the limit on current main after namespace
 # alias additions; split per namespace in the native-table cleanup tracked in #1435.
 crates/perry-codegen/src/lower_call/native_table/node_core.rs
-# HTTP/HTTPS native table crossed the limit on current main after ClientRequest
-# header-state surface additions; split per client/server family in the
-# native-table cleanup tracked under #1435.
-crates/perry-codegen/src/lower_call/native_table/http.rs
 # globalThis constructor/prototype registry is over the limit on current main;
 # splitting constructor tables from property dispatch is tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
@@ -240,11 +230,6 @@ crates/perry-runtime/src/symbol.rs
 # the gate. Kept here as a backstop in case the merged dispatch tower creeps
 # back over; further descriptor/ops splits are tracked under #1435.
 crates/perry-runtime/src/object/object_ops.rs
-# node:http/https native-lowering table (one dispatch arm per ClientRequest /
-# IncomingMessage / ServerResponse member). Crossed the 2000-line gate after the
-# http live-message + ClientRequest header-state surface additions (#4152/#4159).
-# Splitting per message-kind family is tracked under #1435.
-crates/perry-codegen/src/lower_call/native_table/http.rs
 # child_process module root (spawn/exec/fork dispatch + reactor wiring). Crossed
 # the 2000-line gate after the stdio `'ignore'` handling additions. Splitting the
 # spawn/exec/fork families into sibling modules is tracked under #1435.
@@ -260,10 +245,6 @@ crates/perry-container-compose/src/backend.rs
 # the `container` feature). Splitting the FFI surface per command family is
 # tracked under #1435.
 crates/perry-stdlib/src/container/mod.rs
-# HIR analysis pass (binding/closure/this-capture + builtin-shape analysis).
-# Crossed the 2000-line gate after the prototype/super assignment parity arms.
-# Splitting per analysis concern is tracked under #1435.
-crates/perry-hir/src/analysis.rs
 # node:stream classic constructor + web-adapter surface (Readable/Writable/
 # Duplex/Transform construction + toWeb/fromWeb/Readable.fromWeb adapters).
 # Crossed the 2000-line gate after the stream/web adapter additions. Splitting
