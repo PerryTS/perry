@@ -262,8 +262,13 @@ impl HyperResponseShape {
     /// Build a hyper `Response<BoxBody<Bytes, Infallible>>` ready to return from the
     /// service fn.
     pub fn into_hyper(self) -> Response<ResponseBody> {
-        let mut builder =
-            Response::builder().status(StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
+        // Fast path: common status codes resolve to a pre-validated
+        // `StatusCode` constant, skipping `from_u16`'s numeric range-check
+        // + `unwrap_or` on every response. Uncommon / custom codes keep the
+        // parsing path, so the resulting status is identical for every code.
+        let status = crate::response_fast::status_code_const(self.status)
+            .unwrap_or_else(|| StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
+        let mut builder = Response::builder().status(status);
         // `res.statusMessage = 'Custom Message'` must reach the HTTP/1
         // status line (test-http-status-message reads it off the raw
         // socket). hyper emits it via the ReasonPhrase extension.
@@ -354,8 +359,14 @@ impl HyperResponseShape {
             self.headers
                 .push(("Connection".to_string(), "keep-alive".to_string()));
             let secs = (keep_alive_timeout_ms / 1000.0).floor().max(0.0) as u64;
-            self.headers
-                .push(("Keep-Alive".to_string(), format!("timeout={}", secs)));
+            // Fast path: the `Keep-Alive: timeout=N` value is interned for the
+            // timeouts servers commonly run with (Node's 5 s default, etc.), so
+            // the per-response `format!` only fires for an unusual timeout. The
+            // interned string equals `format!("timeout={}", secs)` exactly.
+            let value = crate::response_fast::keep_alive_header_value(secs)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("timeout={}", secs));
+            self.headers.push(("Keep-Alive".to_string(), value));
         } else {
             self.headers
                 .push(("Connection".to_string(), "close".to_string()));
@@ -1739,14 +1750,26 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
         sr.writable_ended = true;
         sr.ensure_content_length();
         let body = std::mem::take(&mut sr.buffered_body);
-        let reason = sr.status_message.clone().unwrap_or_else(|| {
-            StatusCode::from_u16(sr.status_code)
-                .ok()
-                .and_then(|s| s.canonical_reason())
-                .unwrap_or("")
-                .to_string()
+        // Fast path: with no custom `statusMessage`, a common status code has a
+        // precomputed `HTTP/1.1 <code> <canonical reason>\r\n` status line,
+        // skipping the per-response `format!`. The interned bytes equal exactly
+        // what the `format!` produced for `(code, canonical reason)`. A custom
+        // message, or an uncommon code, falls back so its reason still reaches
+        // the wire byte-for-byte.
+        let mut head = match sr.status_message.as_deref() {
+            None => crate::response_fast::status_line_bytes(sr.status_code).map(str::to_string),
+            Some(_) => None,
+        }
+        .unwrap_or_else(|| {
+            let reason = sr.status_message.clone().unwrap_or_else(|| {
+                StatusCode::from_u16(sr.status_code)
+                    .ok()
+                    .and_then(|s| s.canonical_reason())
+                    .unwrap_or("")
+                    .to_string()
+            });
+            format!("HTTP/1.1 {} {}\r\n", sr.status_code, reason)
         });
-        let mut head = format!("HTTP/1.1 {} {}\r\n", sr.status_code, reason);
         for (k, v) in sr.snapshot_headers() {
             head.push_str(&k);
             head.push_str(": ");

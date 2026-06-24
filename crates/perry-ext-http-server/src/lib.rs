@@ -66,6 +66,7 @@ mod https_server;
 mod raw_upgrade;
 mod request;
 mod response;
+mod response_fast;
 mod server;
 #[cfg(test)]
 mod test_async_shims;
