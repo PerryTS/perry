@@ -1745,8 +1745,17 @@ fn lower_new_impl(
     // super + applies SelfOnly) or has an explicit body. Drizzle's
     // `BetterSQLiteSession` (explicit ctor) and arrow-field cross-
     // module classes are both load-bearing. Refs #420 / #618 followup.
-    if !has_own_ctor && has_extends && !has_imported_ctor {
-        if builtin_parent_runtime.is_some() || fetch_parent_runtime.is_some() {
+    // `extends_expr` (dynamic-parent, e.g. zod 4's `$constructor`) classes also
+    // need their own field initializers re-applied here — AFTER the parent body
+    // ran via `js_fetch_or_value_super` above. ECMAScript runs derived-class
+    // field initializers after `super()` returns; `has_extends` only covers
+    // static `extends_name`, so include the `extends_expr` case (SelfOnly,
+    // mirroring the explicit-`SuperCall` dynamic-parent arm in this_super_call.rs).
+    if !has_own_ctor && (has_extends || class.extends_expr.is_some()) && !has_imported_ctor {
+        if builtin_parent_runtime.is_some()
+            || fetch_parent_runtime.is_some()
+            || (class.extends_expr.is_some() && !has_extends)
+        {
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
         } else if let Some(stop_at) = inherited_ctor_class {
             apply_field_initializers_recursive(
