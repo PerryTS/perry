@@ -57,9 +57,9 @@ pub fn apply_mask(buf: &mut [u8], mask: [u8; 4]) {
 
 /// Unmask `buf` in place with `mask`, where `buf[0]` is at key phase
 /// `key_offset` (i.e. `buf[i] ^= mask[(key_offset + i) & 3]`). Returns
-/// the key phase the *next* contiguous byte would use, so a frame split
-/// across multiple buffers can be unmasked chunk-by-chunk while keeping
-/// the key phase continuous across chunk boundaries:
+/// the key phase (`0..=3`) the *next* contiguous byte would use, so a
+/// frame split across multiple buffers can be unmasked chunk-by-chunk
+/// while keeping the key phase continuous across chunk boundaries:
 ///
 /// ```ignore
 /// let mut phase = 0;
@@ -68,7 +68,9 @@ pub fn apply_mask(buf: &mut [u8], mask: [u8; 4]) {
 /// ```
 ///
 /// The result is identical to unmasking `chunk_a ++ chunk_b` as one
-/// buffer.
+/// buffer. The return is always normalized to `0..=3` (any
+/// `key_offset` is reduced mod 4 on entry), so feeding it straight
+/// back never lets the phase cursor grow unbounded across many chunks.
 #[inline]
 pub fn apply_mask_from(buf: &mut [u8], mask: [u8; 4], key_offset: usize) -> usize {
     let len = buf.len();
@@ -78,7 +80,7 @@ pub fn apply_mask_from(buf: &mut [u8], mask: [u8; 4], key_offset: usize) -> usiz
     // alignment dance; tiny buffers go straight to the scalar loop.
     if len < 16 {
         apply_mask_scalar_from(buf, mask, phase);
-        return key_offset.wrapping_add(len);
+        return (phase + len) & 3;
     }
 
     // Split into an unaligned head, a `u64`-aligned body, and a tail.
@@ -105,7 +107,7 @@ pub fn apply_mask_from(buf: &mut [u8], mask: [u8; 4], key_offset: usize) -> usiz
     let tail_phase = (body_phase + words.len() * 8) & 3;
     apply_mask_scalar_from(tail, mask, tail_phase);
 
-    key_offset.wrapping_add(len)
+    (phase + len) & 3
 }
 
 #[cfg(test)]
@@ -154,7 +156,11 @@ mod tests {
                 let ret = apply_mask_from(&mut got, mask, phase);
 
                 assert_eq!(got, want, "len={len} phase={phase}: wide != oracle");
-                assert_eq!(ret, phase + len, "len={len} phase={phase}: bad next phase");
+                assert_eq!(
+                    ret,
+                    (phase + len) & 3,
+                    "len={len} phase={phase}: bad next phase"
+                );
             }
         }
     }
@@ -163,6 +169,30 @@ mod tests {
     fn empty_payload_is_a_noop() {
         let mut buf: [u8; 0] = [];
         assert_eq!(apply_mask_from(&mut buf, [1, 2, 3, 4], 2), 2);
+    }
+
+    /// The returned phase is always normalized to `0..=3`, never an
+    /// unbounded `key_offset + len` cursor — both the scalar (`len<16`)
+    /// and wide (`len>=16`) paths, and any large incoming `key_offset`.
+    #[test]
+    fn returned_phase_is_normalized() {
+        let mask = [0x6d, 0xb6, 0xb2, 0x80];
+        // Scalar path (len < 16) and wide path (len >= 16), large offset.
+        for len in [0usize, 1, 7, 15, 16, 17, 100] {
+            for key_offset in [0usize, 2, 5, 103, 4096] {
+                let mut buf: Vec<u8> = (0..len as u16).map(|i| i as u8).collect();
+                let ret = apply_mask_from(&mut buf, mask, key_offset);
+                assert!(
+                    ret <= 3,
+                    "len={len} off={key_offset}: ret={ret} not in 0..=3"
+                );
+                assert_eq!(
+                    ret,
+                    (key_offset + len) & 3,
+                    "len={len} off={key_offset}: ret not the normalized phase"
+                );
+            }
+        }
     }
 
     #[test]
@@ -240,7 +270,7 @@ mod tests {
                 whole, want,
                 "whole: len={len} mask={mask:?} off={key_offset}"
             );
-            assert_eq!(ret, key_offset + len);
+            assert_eq!(ret, (key_offset + len) & 3);
 
             // Two random chunks — phase must carry.
             if len > 0 {
