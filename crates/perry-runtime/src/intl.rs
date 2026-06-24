@@ -31,16 +31,15 @@ mod segmenter;
 pub(crate) use date_collator::{
     collator_bound_compare_thunk, collator_bound_resolved_options_thunk, collator_compare_object,
     collator_compare_thunk, collator_resolved_options_object, collator_resolved_options_thunk,
-    compare_strings, date_instance_parts, date_range_parts_from_ms, date_short_utc,
-    date_short_utc_from_ms, date_time_format_bound_format_thunk,
-    date_time_format_bound_range_thunk, date_time_format_bound_range_to_parts_thunk,
-    date_time_format_bound_resolved_options_thunk, date_time_format_bound_to_parts_thunk,
-    date_time_format_format_thunk, date_time_format_format_value,
-    date_time_format_range_parts_value, date_time_format_range_thunk,
-    date_time_format_range_to_parts_thunk, date_time_format_range_value,
-    date_time_format_resolved_options_object, date_time_format_resolved_options_thunk,
-    date_time_format_to_parts_thunk, date_time_range_clip, range_parts_to_js_array,
-    swedish_collation_key,
+    compare_strings, date_range_parts_from_ms, date_short_utc_from_ms,
+    date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
+    date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
+    date_time_format_bound_to_parts_thunk, date_time_format_format_thunk,
+    date_time_format_format_value, date_time_format_range_parts_value,
+    date_time_format_range_thunk, date_time_format_range_to_parts_thunk,
+    date_time_format_range_value, date_time_format_resolved_options_object,
+    date_time_format_resolved_options_thunk, date_time_format_to_parts_thunk, date_time_range_clip,
+    range_parts_to_js_array, swedish_collation_key,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, collect_string_list,
@@ -99,6 +98,24 @@ const KEY_MAX_FRACTION_DIGITS: &str = "__intlMaxFractionDigits";
 const KEY_DATE_STYLE: &str = "__intlDateStyle";
 const KEY_TIME_ZONE: &str = "__intlTimeZone";
 const KEY_CALENDAR: &str = "__intlCalendar";
+// DateTimeFormat option storage (ECMA-402 CreateDateTimeFormat). Each option is
+// read+validated once in the constructor and reproduced by `resolvedOptions`.
+// Absent fields are simply never written, so `resolvedOptions` can omit them.
+const KEY_NUMBERING_SYSTEM: &str = "__intlDtNumbering";
+const KEY_HOUR_CYCLE: &str = "__intlDtHourCycle";
+const KEY_HOUR12: &str = "__intlDtHour12";
+const KEY_WEEKDAY: &str = "__intlDtWeekday";
+const KEY_ERA: &str = "__intlDtEra";
+const KEY_YEAR: &str = "__intlDtYear";
+const KEY_MONTH: &str = "__intlDtMonth";
+const KEY_DAY: &str = "__intlDtDay";
+const KEY_DAY_PERIOD: &str = "__intlDtDayPeriod";
+const KEY_HOUR: &str = "__intlDtHour";
+const KEY_MINUTE: &str = "__intlDtMinute";
+const KEY_SECOND: &str = "__intlDtSecond";
+const KEY_FRACTIONAL: &str = "__intlDtFractional";
+const KEY_TIME_ZONE_NAME: &str = "__intlDtTimeZoneName";
+const KEY_TIME_STYLE: &str = "__intlDtTimeStyle";
 const KEY_GRANULARITY: &str = "__intlGranularity";
 const KEY_TYPE: &str = "__intlType";
 const KEY_LF_STYLE: &str = "__intlListStyle";
@@ -326,6 +343,24 @@ fn get_int_option_in_range(options: f64, key: &str, min: f64, max: f64) -> Optio
     if n.is_nan() || n < min || n > max {
         throw_range_error(&format!(
             "Value {n} out of range for Intl.NumberFormat options property {key}"
+        ));
+    }
+    Some(n.floor())
+}
+
+/// GetNumberOption(options, key, min, max, undefined) using a full ToNumber
+/// (`js_number_coerce`) so string and object option values coerce correctly
+/// (`JSValue::to_number` returns NaN for non-primitives). Out of `[min, max]`,
+/// NaN, or a non-numeric value is a `RangeError`; the result is floored.
+fn get_number_option_coerced(options: f64, key: &str, min: f64, max: f64) -> Option<f64> {
+    let value = get_option_value(options, key);
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        return None;
+    }
+    let n = crate::builtins::js_number_coerce(value);
+    if n.is_nan() || n < min || n > max {
+        throw_range_error(&format!(
+            "Value {n} out of range for Intl options property {key}"
         ));
     }
     Some(n.floor())
@@ -645,6 +680,114 @@ fn enum_option(options: f64, key: &str, allowed: &[&str], default: &str) -> Stri
         }
     }
 }
+
+/// GetBooleanOption(options, key): `undefined` → `None`, otherwise ToBoolean.
+fn get_bool_option(options: f64, key: &str) -> Option<bool> {
+    let value = get_option_value(options, key);
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        None
+    } else {
+        Some(crate::value::js_is_truthy(value) != 0)
+    }
+}
+
+/// Read a `DateTimeFormat` component option (Table 7): a GetOption string enum
+/// that, when present, must be one of `allowed` (else `RangeError`) and is then
+/// stored in `store_key`. Returns whether the option was supplied.
+fn dt_component_option(
+    obj: *mut ObjectHeader,
+    options: f64,
+    key: &str,
+    allowed: &[&str],
+    store_key: &str,
+) -> bool {
+    match get_option_string(options, key) {
+        None => false,
+        Some(value) => {
+            if !allowed.contains(&value.as_str()) {
+                throw_range_error(&format!(
+                    "Value {value} out of range for Intl options property {key}"
+                ));
+            }
+            set_internal_field(obj, store_key, string_value(&value));
+            true
+        }
+    }
+}
+
+/// Validate a *named* (non-offset) `timeZone` identifier. Perry ships no tz
+/// database (see `date.rs`), so this is a structural check rather than a lookup:
+/// the case-insensitive UTC aliases normalize to `"UTC"`, the legacy
+/// single-component zone names are accepted from a fixed list, and any other
+/// identifier must be an all-ASCII, space-free `Area/Location[/…]` form. Real
+/// IANA zone identifiers pass; the malformed names ECMA-402 rejects
+/// (`"MEZ"`, `"invalid"`, `"Europe/İstanbul"`, …) do not. Returns the (best
+/// effort, un-recased) canonical identifier, or `None` to signal `RangeError`.
+fn canonicalize_named_time_zone(tz: &str) -> Option<String> {
+    if tz.eq_ignore_ascii_case("UTC") || tz.eq_ignore_ascii_case("Etc/UTC") {
+        return Some("UTC".to_string());
+    }
+    if !tz.is_ascii() {
+        return None;
+    }
+    // Legacy single-component IANA zones / links that carry no '/'.
+    const SINGLE_WORD_ZONES: &[&str] = &[
+        "GMT",
+        "GMT0",
+        "Zulu",
+        "Universal",
+        "UCT",
+        "Greenwich",
+        "Navajo",
+        "Eire",
+        "Iceland",
+        "Cuba",
+        "Egypt",
+        "Hongkong",
+        "Iran",
+        "Israel",
+        "Japan",
+        "Jamaica",
+        "Libya",
+        "Poland",
+        "Portugal",
+        "PRC",
+        "Singapore",
+        "Turkey",
+        "ROC",
+        "ROK",
+        "W-SU",
+        "Factory",
+        "EST",
+        "MST",
+        "HST",
+        "EST5EDT",
+        "CST6CDT",
+        "MST7MDT",
+        "PST8PDT",
+    ];
+    if SINGLE_WORD_ZONES.iter().any(|z| z.eq_ignore_ascii_case(tz)) {
+        return Some(tz.to_string());
+    }
+    let segments: Vec<&str> = tz.split('/').collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    let mut has_alpha = false;
+    for seg in &segments {
+        if seg.is_empty() {
+            return None;
+        }
+        for b in seg.bytes() {
+            if b.is_ascii_alphabetic() {
+                has_alpha = true;
+            } else if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'+' || b == b'-') {
+                return None;
+            }
+        }
+    }
+    has_alpha.then(|| tz.to_string())
+}
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
     let locale = locale_or_default(locales);
     let obj = js_object_alloc(0, 8);
@@ -674,22 +817,25 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_DATE_TIME => {
-            // `dateStyle` / `timeStyle` are GetOption string enums — an
-            // out-of-range value is a RangeError (ECMA-402 CreateDateTimeFormat
-            // steps 39/40), not a silent fallthrough.
-            let date_style = enum_option(
-                options,
-                "dateStyle",
-                &["full", "long", "medium", "short"],
-                "short",
-            );
-            if let Some(time_style) = get_option_string(options, "timeStyle") {
-                if !["full", "long", "medium", "short"].contains(&time_style.as_str()) {
-                    throw_range_error(&format!(
-                        "Value {time_style} out of range for Intl options property timeStyle"
-                    ));
-                }
+            // CoerceOptionsToObject: `undefined` behaves as an empty (null-proto)
+            // options object, but `null` (and other ToObject-rejected primitives)
+            // is a TypeError. Primitives that DO coerce become wrapper objects
+            // with no DateTimeFormat-relevant properties, i.e. behave as empty —
+            // `object_ptr_from_value` already returns `None` for them, so option
+            // reads simply see `undefined`.
+            if JSValue::from_bits(options.to_bits()).is_null() {
+                throw_type_error("Cannot convert undefined or null to object");
             }
+            // GetOption reads run in the exact ECMA-402 CreateDateTimeFormat
+            // order (constructor-options-order.js asserts this sequence).
+            // localeMatcher / formatMatcher are validated but don't affect the
+            // deterministic formatter, so their resolved value is discarded.
+            let _ = enum_option(
+                options,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            );
             // `calendar` must match the Unicode locale `type` nonterminal; store
             // the canonicalized ID so `resolvedOptions().calendar` reflects it.
             if let Some(calendar) = get_option_string(options, "calendar") {
@@ -702,20 +848,144 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                     )),
                 }
             }
+            // `numberingSystem` must be a well-formed `type` nonterminal.
+            if let Some(ns) = get_option_string(options, "numberingSystem") {
+                if !is_well_formed_numbering_system(&ns) {
+                    throw_range_error(&format!(
+                        "Value {ns} out of range for Intl options property numberingSystem"
+                    ));
+                }
+                set_internal_field(obj, KEY_NUMBERING_SYSTEM, string_value(&ns));
+            }
+            // hour12 (boolean) then hourCycle (enum) — both only surface in
+            // `resolvedOptions` when the resolved pattern has an hour field.
+            if let Some(h12) = get_bool_option(options, "hour12") {
+                set_internal_field(obj, KEY_HOUR12, bool_value(h12));
+            }
+            if let Some(hc) = get_option_string(options, "hourCycle") {
+                if !["h11", "h12", "h23", "h24"].contains(&hc.as_str()) {
+                    throw_range_error(&format!(
+                        "Value {hc} out of range for Intl options property hourCycle"
+                    ));
+                }
+                set_internal_field(obj, KEY_HOUR_CYCLE, string_value(&hc));
+            }
             let mut time_zone =
                 get_option_string(options, "timeZone").unwrap_or_else(|| "UTC".to_string());
             // A timeZone that begins with a sign is an offset identifier: it must
             // be syntactically valid (ECMA-402 rejects malformed offsets with a
             // RangeError), and is then canonicalized to `±HH:mm` so
             // `resolvedOptions().timeZone` matches FormatOffsetTimeZoneIdentifier.
+            // Named zones are validated structurally (Perry has no tz database).
             if matches!(time_zone.as_bytes().first(), Some(b'+') | Some(b'-')) {
                 if !is_valid_offset_time_zone(&time_zone) {
                     throw_range_error(&format!("Invalid time zone specified: {time_zone}"));
                 }
                 time_zone = canonicalize_offset_time_zone(&time_zone);
+            } else {
+                match canonicalize_named_time_zone(&time_zone) {
+                    Some(canonical) => time_zone = canonical,
+                    None => throw_range_error(&format!("Invalid time zone specified: {time_zone}")),
+                }
             }
-            set_internal_field(obj, KEY_DATE_STYLE, string_value(&date_style));
             set_internal_field(obj, KEY_TIME_ZONE, string_value(&time_zone));
+            // Date/time component options (ECMA-402 Table 7), read in order. Each
+            // out-of-range value is a RangeError.
+            let mut any_component = false;
+            any_component |= dt_component_option(
+                obj,
+                options,
+                "weekday",
+                &["narrow", "short", "long"],
+                KEY_WEEKDAY,
+            );
+            any_component |=
+                dt_component_option(obj, options, "era", &["narrow", "short", "long"], KEY_ERA);
+            any_component |=
+                dt_component_option(obj, options, "year", &["2-digit", "numeric"], KEY_YEAR);
+            any_component |= dt_component_option(
+                obj,
+                options,
+                "month",
+                &["2-digit", "numeric", "narrow", "short", "long"],
+                KEY_MONTH,
+            );
+            any_component |=
+                dt_component_option(obj, options, "day", &["2-digit", "numeric"], KEY_DAY);
+            any_component |= dt_component_option(
+                obj,
+                options,
+                "dayPeriod",
+                &["narrow", "short", "long"],
+                KEY_DAY_PERIOD,
+            );
+            any_component |=
+                dt_component_option(obj, options, "hour", &["2-digit", "numeric"], KEY_HOUR);
+            any_component |=
+                dt_component_option(obj, options, "minute", &["2-digit", "numeric"], KEY_MINUTE);
+            any_component |=
+                dt_component_option(obj, options, "second", &["2-digit", "numeric"], KEY_SECOND);
+            // fractionalSecondDigits is GetNumberOption(1, 3) — out of range or
+            // non-numeric is a RangeError.
+            if let Some(n) = get_number_option_coerced(options, "fractionalSecondDigits", 1.0, 3.0)
+            {
+                set_internal_field(obj, KEY_FRACTIONAL, n);
+                any_component = true;
+            }
+            any_component |= dt_component_option(
+                obj,
+                options,
+                "timeZoneName",
+                &[
+                    "short",
+                    "long",
+                    "shortOffset",
+                    "longOffset",
+                    "shortGeneric",
+                    "longGeneric",
+                ],
+                KEY_TIME_ZONE_NAME,
+            );
+            let _ = enum_option(options, "formatMatcher", &["basic", "best fit"], "best fit");
+            // dateStyle / timeStyle have no default (an absent style stays absent
+            // in `resolvedOptions`); an out-of-range value is a RangeError.
+            let date_style = get_option_string(options, "dateStyle");
+            if let Some(ref ds) = date_style {
+                if !["full", "long", "medium", "short"].contains(&ds.as_str()) {
+                    throw_range_error(&format!(
+                        "Value {ds} out of range for Intl options property dateStyle"
+                    ));
+                }
+            }
+            let time_style = get_option_string(options, "timeStyle");
+            if let Some(ref ts) = time_style {
+                if !["full", "long", "medium", "short"].contains(&ts.as_str()) {
+                    throw_range_error(&format!(
+                        "Value {ts} out of range for Intl options property timeStyle"
+                    ));
+                }
+            }
+            let has_style = date_style.is_some() || time_style.is_some();
+            // Combining a style with an explicit component is a TypeError.
+            if has_style && any_component {
+                throw_type_error(
+                    "Intl.DateTimeFormat: dateStyle/timeStyle cannot be used with explicit date-time component options",
+                );
+            }
+            if let Some(ds) = date_style {
+                set_internal_field(obj, KEY_DATE_STYLE, string_value(&ds));
+            }
+            if let Some(ts) = time_style {
+                set_internal_field(obj, KEY_TIME_STYLE, string_value(&ts));
+            }
+            // ToDateTimeOptions(required="any", defaults="date"): when neither a
+            // style nor any component was requested, fall back to numeric
+            // year/month/day so `resolvedOptions` reports the default date shape.
+            if !has_style && !any_component {
+                set_internal_field(obj, KEY_YEAR, string_value("numeric"));
+                set_internal_field(obj, KEY_MONTH, string_value("numeric"));
+                set_internal_field(obj, KEY_DAY, string_value("numeric"));
+            }
             install_bound_instance_function(
                 obj,
                 "format",
