@@ -1621,6 +1621,19 @@ where
 pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     let mut count = 0i32;
 
+    // Promote ids freed on PRIOR ticks from quarantine to the reusable
+    // freelist — at the top of the tick, before this tick's finalizations
+    // quarantine fresh ids. The one-tick deferral closes the same-tick ABA
+    // hazard: a handler that returned before `res.end()` leaves a stale `res`
+    // (a bare tagged handle id) outstanding, and recycling its id immediately
+    // would let the next request re-occupy it and a microtask-deferred
+    // `res.write`/`res.end` corrupt the new request's response. Holding the id
+    // in quarantine for a full tick lets those stale calls spend themselves
+    // against an empty slot first. (A write deferred MORE than a tick past
+    // finalization is a write-after-end use error and out of scope — see
+    // `perry_ffi::drain_quarantined_handles`.)
+    perry_ffi::drain_quarantined_handles();
+
     // #4728 — finalize any async-handler requests that have flushed their
     // response since the last tick (or timed out) before draining new ones.
     reap_in_flight_requests();
