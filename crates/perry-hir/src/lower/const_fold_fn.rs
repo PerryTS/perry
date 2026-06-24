@@ -899,19 +899,24 @@ fn synth_ident_assign_stmt(name: &str, ident: &str) -> Option<ast::Stmt> {
     )
 }
 
-/// `if (!Object.prototype.hasOwnProperty.call(globalThis, "<name>")) {
-/// globalThis["<name>"] = void 0; }` — the "create the global binding,
-/// initialized to `undefined`, if it does not already exist" step. Guarded so a
-/// pre-existing global binding is *not* reinitialized (Annex B.3.3.3: a
-/// configurable-false or already-present `f` keeps its value until the
-/// declaration is evaluated). The assignment targets `globalThis` *explicitly*
-/// (not a bare `name = …`): if the eval body also has a same-named top-level
-/// function declaration, that binding lives in the completion IIFE and a bare
-/// write would clobber it — only the global var-environment slot must be
-/// pre-created here.
+/// `if (!({}).hasOwnProperty.call(globalThis, "<name>")) { globalThis["<name>"]
+/// = void 0; }` — the "create the global binding, initialized to `undefined`, if
+/// it does not already exist" step. Guarded so a pre-existing global binding is
+/// *not* reinitialized (Annex B.3.3.3: a configurable-false or already-present
+/// `f` keeps its value until the declaration is evaluated).
+///
+/// `({}).hasOwnProperty` is used instead of the bare `Object.prototype.…` so the
+/// prelude — prepended into the same IIFE as the eval body — does not depend on
+/// the user-shadowable `Object` name. The receiver stays the bare `globalThis`
+/// global (not `this`): the completion IIFE is an arrow whose `this` is the
+/// caller's, which in Perry's lowering is the CJS module-exports stand-in at
+/// module top, not the global object. The assignment also targets `globalThis`
+/// explicitly (not a bare `name = …`) so a same-named top-level function living
+/// in the IIFE is never clobbered — only the global var-environment slot is
+/// pre-created.
 fn synth_create_if_absent_stmt(name: &str) -> Option<ast::Stmt> {
     parse_single_stmt(&format!(
-        "if (!Object.prototype.hasOwnProperty.call(globalThis, {name:?})) \
+        "if (!({{}}).hasOwnProperty.call(globalThis, {name:?})) \
          {{ globalThis[{name:?}] = void 0; }}"
     ))
 }
@@ -978,11 +983,83 @@ fn rename_ident_in_stmt(stmt: &mut ast::Stmt, from: &str, to: &str) {
                 }
             }
         }
-        // Other statement forms (loops with declarations, labeled, try) are not
-        // walked — leaving any inner reference unrenamed is the pre-existing,
-        // already-handled behavior, never a regression.
+        Stmt::Labeled(l) => rename_ident_in_stmt(&mut l.body, from, to),
+        Stmt::Try(t) => {
+            rename_ident_in_block(&mut t.block, from, to);
+            if let Some(h) = t.handler.as_mut() {
+                // A `catch (from)` parameter shadows the function name in the
+                // handler — its references are the catch binding, not ours.
+                let mut p = std::collections::HashSet::new();
+                if let Some(param) = &h.param {
+                    collect_pattern_names(param, &mut p);
+                }
+                if !p.contains(from) {
+                    rename_ident_in_block(&mut h.body, from, to);
+                }
+            }
+            if let Some(f) = t.finalizer.as_mut() {
+                rename_ident_in_block(f, from, to);
+            }
+        }
+        Stmt::For(s) => {
+            // A `for (let/var from …)` head rebinds the name; its test / update /
+            // body references belong to that binding, so skip the whole loop.
+            let head_binds = matches!(
+                &s.init,
+                Some(ast::VarDeclOrExpr::VarDecl(v)) if var_decl_binds(v, from)
+            );
+            if !head_binds {
+                match s.init.as_mut() {
+                    Some(ast::VarDeclOrExpr::Expr(e)) => rename_ident_in_expr(e, from, to),
+                    Some(ast::VarDeclOrExpr::VarDecl(v)) => {
+                        for d in &mut v.decls {
+                            if let Some(i) = d.init.as_mut() {
+                                rename_ident_in_expr(i, from, to);
+                            }
+                        }
+                    }
+                    None => {}
+                }
+                if let Some(t) = s.test.as_mut() {
+                    rename_ident_in_expr(t, from, to);
+                }
+                if let Some(u) = s.update.as_mut() {
+                    rename_ident_in_expr(u, from, to);
+                }
+                rename_ident_in_stmt(&mut s.body, from, to);
+            }
+        }
+        Stmt::ForIn(s) => {
+            if !for_head_binds(&s.left, from) {
+                rename_ident_in_expr(&mut s.right, from, to);
+                rename_ident_in_stmt(&mut s.body, from, to);
+            }
+        }
+        Stmt::ForOf(s) => {
+            if !for_head_binds(&s.left, from) {
+                rename_ident_in_expr(&mut s.right, from, to);
+                rename_ident_in_stmt(&mut s.body, from, to);
+            }
+        }
+        // Remaining forms (`with`, empty, debugger, break/continue) have no
+        // renamable self-reference, or open a dynamic scope we don't model.
         _ => {}
     }
+}
+
+/// Does a `var`/`let`/`const` declaration bind `name` (so it shadows an
+/// outer same-named function binding within its scope)?
+fn var_decl_binds(decl: &ast::VarDecl, name: &str) -> bool {
+    let mut names = std::collections::HashSet::new();
+    for d in &decl.decls {
+        collect_pattern_names(&d.name, &mut names);
+    }
+    names.contains(name)
+}
+
+/// Does a `for-in` / `for-of` head (`for (let x …)`) bind `name`?
+fn for_head_binds(head: &ast::ForHead, name: &str) -> bool {
+    matches!(head, ast::ForHead::VarDecl(v) if var_decl_binds(v, name))
 }
 
 fn rename_ident_in_expr(expr: &mut ast::Expr, from: &str, to: &str) {
@@ -1317,7 +1394,10 @@ impl GlobalEvalHoist {
                     self.rewrite_single(&mut d.body);
                     out.push(stmt);
                 }
-                ast::Stmt::For(_) | ast::Stmt::ForIn(_) | ast::Stmt::ForOf(_) | ast::Stmt::With(_) => {
+                ast::Stmt::For(_)
+                | ast::Stmt::ForIn(_)
+                | ast::Stmt::ForOf(_)
+                | ast::Stmt::With(_) => {
                     self.ok = false;
                     out.push(stmt);
                 }
@@ -2146,7 +2226,8 @@ mod global_eval_hoist_tests {
             match stmt {
                 ast::Stmt::Expr(e) => {
                     if let ast::Expr::Assign(a) = e.expr.as_ref() {
-                        if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(b)) = &a.left
+                        if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(b)) =
+                            &a.left
                         {
                             out.push(b.id.sym.to_string());
                         }
@@ -2201,11 +2282,70 @@ mod global_eval_hoist_tests {
             fns.iter().any(|n| n.starts_with("__perry_ev_fn_")),
             "renamed fn decl, got {fns:?}"
         );
-        assert!(!fns.iter().any(|n| n == "f"), "no `f` decl remains: {fns:?}");
+        assert!(
+            !fns.iter().any(|n| n == "f"),
+            "no `f` decl remains: {fns:?}"
+        );
         // ...and its value published to the global var name `f`.
         assert!(
             assign_targets(&out).iter().any(|t| t == "f"),
             "publishes f = <hidden>"
+        );
+    }
+
+    #[test]
+    fn self_reference_in_loop_body_is_renamed() {
+        // A function self-reference inside a `for` head/body must be renamed
+        // along with the declaration, so a later `f = …` writes the renamed
+        // block binding, not the published global var.
+        let body = parse_body("{ function f() { for (f = 1; false; ) {} return f; } }");
+        let out = apply_global_eval_hoist(&body).expect("hoists");
+        // No bare `f` reference may survive inside the renamed function body.
+        fn idents(stmt: &ast::Stmt, out: &mut Vec<String>) {
+            fn expr(e: &ast::Expr, out: &mut Vec<String>) {
+                match e {
+                    ast::Expr::Ident(i) => out.push(i.sym.to_string()),
+                    ast::Expr::Assign(a) => {
+                        if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(b)) =
+                            &a.left
+                        {
+                            out.push(b.id.sym.to_string());
+                        }
+                        expr(&a.right, out);
+                    }
+                    _ => {}
+                }
+            }
+            match stmt {
+                ast::Stmt::Decl(ast::Decl::Fn(f)) => {
+                    if let Some(b) = &f.function.body {
+                        for s in &b.stmts {
+                            idents(s, out);
+                        }
+                    }
+                }
+                ast::Stmt::Block(b) => b.stmts.iter().for_each(|s| idents(s, out)),
+                ast::Stmt::Return(r) => {
+                    if let Some(a) = &r.arg {
+                        expr(a, out);
+                    }
+                }
+                ast::Stmt::For(s) => {
+                    if let Some(ast::VarDeclOrExpr::Expr(e)) = &s.init {
+                        expr(e, out);
+                    }
+                    idents(&s.body, out);
+                }
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        for s in &out {
+            idents(s, &mut names);
+        }
+        assert!(
+            !names.iter().any(|n| n == "f"),
+            "function body still references bare `f`: {names:?}"
         );
     }
 
