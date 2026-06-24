@@ -121,7 +121,7 @@ Existing string spellings remain valid. The canonical descriptor
 vocabulary is:
 
 ```text
-jsvalue, string, bool, i32, i64, i64_str, u32, u64, usize,
+jsvalue, string, json, bool, i32, i64, i64_str, u32, u64, usize,
 f32, f64, number, ptr, buffer_len, buffer+len, handle<T>,
 promise<T>, pod, void
 ```
@@ -131,7 +131,9 @@ are compatibility aliases for `jsvalue` and `bool`. Bare `handle` is
 the same as an untyped `handle<T>`. Bare `promise` is the same as
 `promise<jsvalue>`. Unlike handles and promises, `pod` has no
 string-only spelling; use object form so the field order and scalar ABI
-types are explicit.
+types are explicit. `json` is parameter-only: it serializes its argument
+with `JSON.stringify` at the callsite and passes the result in a
+`string`-shaped slot (see "Param types").
 
 Descriptors with metadata may also use object form:
 
@@ -189,9 +191,9 @@ i32, i64, u32, u64, usize, f32, f64, number, buffer_len
 ```
 
 `number` aliases `f64`; `buffer_len` is a `u32` byte-length scalar.
-Dynamic or pointerful descriptors such as `jsvalue`, `string`, `bool`,
-`ptr`, `buffer+len`, `handle`, `promise`, nested `pod`, and `void` are
-rejected in POD fields.
+Dynamic or pointerful descriptors such as `jsvalue`, `string`, `json`,
+`bool`, `ptr`, `buffer+len`, `handle`, `promise`, nested `pod`, and
+`void` are rejected in POD fields.
 
 ### Param types
 
