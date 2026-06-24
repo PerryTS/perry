@@ -40,141 +40,27 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 
 # Allowlist (one file per line; blank lines + `#` comments OK).
 ALLOWLIST=$(cat <<'EOF'
-# RegExp runtime trunk. Crossed 2000 LOC (2041) when the user's regex engine
-# was gated behind the `regex-engine` cargo feature — the per-fn `#[cfg]`
-# attributes, the no-engine fallbacks, and the `CompiledRegex` header type alias
-# added ~60 lines. The engine itself is already split across the
-# regex/{compile,exec_array,grammar,match_all,replace_expand,replace_fn,escape}
-# submodules; the trunk that remains is the always-compiled identity/display
-# layer (RegExpHeader + accessors + `is_regex_pointer`, referenced by
-# always-linked formatting/dispatch) plus the shared exec/cache state, which
-# can't move without scattering the thread-local last-match state. Further
-# trunk extraction is a reasonable follow-up.
-crates/perry-runtime/src/regex.rs
 crates/perry/src/commands/compile.rs
-# node:dns + node:dgram. Crossed 2000 LOC when the loopback fakes became real
-# getaddrinfo/DNS/UDP I/O (#4911) — the in-process/deterministic paths are kept
-# behind PERRY_DETERMINISTIC_NET=1, so each module now carries both the real and
-# the deterministic implementation plus the Node-shaped error/validation surface.
-# Splitting the event-emitter helpers (dgram) and resolve-record JS builders
-# (dns) into siblings is a reasonable follow-up.
-crates/perry-runtime/src/dns.rs
-crates/perry-runtime/src/dgram.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
 crates/perry-hir/src/ir/expr.rs
-# Object field get/set + handle/native dispatch shim; grew past the limit
-# after the #1419 KeyObject/.export/.equals routing + main's process-module
-# additions. Splitting tracked under #1435.
-crates/perry-runtime/src/object/field_get_set.rs
-# Dynamic method-call dispatch tower (js_native_call_method); crossed the
-# limit by the 7-line WeakMap/WeakSet dispatch hook in #1757/#1758. Splitting
-# per receiver-kind family tracked alongside #1435.
-crates/perry-runtime/src/object/native_call_method.rs
-# Global object bootstrap crossed the gate on current main; split constructor
-# tables/population helpers alongside the runtime object cleanup tracked in #1435.
-crates/perry-runtime/src/object/global_this.rs
-# Central class registry — class IDs, prototypes, parent-closure
-# scanning, and field-init replay. Crossed the limit after the
-# #1787 instance-field init replay (#2074) + web-stream class
-# wiring (#1641/#2110). Split tracked under #1435.
-crates/perry-runtime/src/object/class_registry.rs
-# Global object/bootstrap native singleton table crossed the current-main
-# threshold after recent builtin surface additions. Splitting constructor and
-# singleton installers into sibling modules is tracked under #1435.
-crates/perry-runtime/src/object/global_this.rs
-# Native-module namespace property/method dispatcher
-# (`get_native_module_constant` is one big match — one arm per
-# stdlib namespace, every property literal inline). Splitting per
-# namespace would scatter arms that share helpers (`fs_const`,
-# `os_signal_const`, …) and the constants tables they index.
-# Crossed the limit at 2014 LOC after the #2135 worker_threads
-# value-export arm. Split tracked under #1435.
-crates/perry-runtime/src/object/native_module.rs
-# Per-module native-method dispatch buckets (devirtualization): the old single
-# ~1975-LOC `dispatch_native_module_method` match was split into 37 per-module
-# `nm_dispatch_<bucket>` fns reached through a registry so the linker can
-# dead-strip unimported modules (−20% hello-world __text). The bucket fns repeat
-# the match-arm + closure-prelude shape, so the file grew past 2000; the arms are
-# intentionally kept together (generated, one logical dispatch surface).
-crates/perry-runtime/src/object/native_module_dispatch.rs
-# globalThis constructor/namespace registry; current main crossed the threshold
-# after WebCrypto + DOM/Event global exposure landed. Split tracked under #1435.
-crates/perry-runtime/src/object/global_this.rs
-# fs directory glob/watch helpers; current main crossed the threshold after
-# namespace-alias exposure work. Split tracked under #1435 with the other
-# runtime file-size cleanups.
-crates/perry-runtime/src/fs/dir_glob_watch.rs
-# node:fs module root — crossed the gate after the final fs parity
-# surface reconciliation (#3969) bumped its dispatch tower by a few lines.
-# Splitting tracked under #1435 with the other runtime file-size cleanups.
-crates/perry-runtime/src/fs/mod.rs
 # stdlib native dispatch table; current main crossed the threshold after
 # namespace-alias exposure work. Split tracked under #1435.
 crates/perry-stdlib/src/common/dispatch.rs
 # SQLite stdlib shim remains a generated-feel native adapter table; current
 # main crossed the threshold before this PR. Split tracked under #1435.
 crates/perry-stdlib/src/sqlite.rs
-# node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
-# wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
-# argument-validation batch landed on main without a split (#3493 setuid/setgid/
-# umask, #3516 exit/chdir/hrtime/cpuUsage, #3518 warning events, #3496 CPU-
-# snapshot/listener-limit validation). Splitting per concern (env/timing/
-# signals/emitter) is tracked under #1435.
-crates/perry-runtime/src/process.rs
-# fs directory glob/watch glue crossed the gate on current main; split glob
-# walking from watcher dispatch alongside the fs modularization tracked in #1435.
-crates/perry-runtime/src/fs/dir_glob_watch.rs
 # Shared stdlib dispatch bridge crossed the gate on current main; split per
 # dispatch family with the stdlib dispatch cleanup tracked in #1435.
 crates/perry-stdlib/src/common/dispatch.rs
 # sqlite stdlib remains a monolithic binding surface on current main; split
 # statements/sessions/backups/functions in the sqlite cleanup tracked in #1435.
 crates/perry-stdlib/src/sqlite.rs
-# globalThis constructor/prototype registry is over the limit on current main;
-# splitting constructor tables from property dispatch is tracked under #1435.
-crates/perry-runtime/src/object/global_this.rs
-# Trunk of the #1103 object.rs split (shape/transition/overflow caches, GC root
-# scanners, implicit-this, descriptor tables). The companion behavior lives in
-# the 30+ `object/` siblings already peeled off; the trunk crossed 2000 LOC on
-# current main after the binary-data / Date inspect alignment batch
-# (#4039/#4040/#4041). Peeling the cache + root-scanner groups into siblings is
-# tracked under #1435.
-crates/perry-runtime/src/object/mod.rs
-# Symbol subsystem (Symbol primitives + per-object/per-class symbol-keyed
-# property + accessor side tables, with their GC root-scan/rewrite dispatch).
-# Crossed the limit at 2159 LOC after the computed-property-names batch added
-# symbol-accessor descriptors and class-static computed-symbol registration
-# (#3557/#3558/#3559/#3560/#3561). The new helpers are interwoven with the
-# symbol root scanner, so a clean topical split is deferred to the runtime
-# file-size cleanup tracked under #1435.
-crates/perry-runtime/src/symbol.rs
-# Sibling of the #1103 object.rs split (defineProperty/getOwnPropertyNames/
-# descriptor + property-ops machinery). Allowlisted on main at 2004 LOC; this
-# PR peeled `js_to_property_key`/object-super helpers into property_key.rs and
-# `js_create_namespace` into namespace_create.rs to keep it comfortably under
-# the gate. Kept here as a backstop in case the merged dispatch tower creeps
-# back over; further descriptor/ops splits are tracked under #1435.
-crates/perry-runtime/src/object/object_ops.rs
-# child_process module root (spawn/exec/fork dispatch + reactor wiring). Crossed
-# the 2000-line gate after the stdio `'ignore'` handling additions. Splitting the
-# spawn/exec/fork families into sibling modules is tracked under #1435.
-crates/perry-runtime/src/child_process/mod.rs
 # perry-stdlib container module root — re-exports `perry_container_compose::*`
 # and the `js_container_*` / `js_compose_*` FFI dispatch surface (gated behind
 # the `container` feature). Splitting the FFI surface per command family is
 # tracked under #1435.
 crates/perry-stdlib/src/container/mod.rs
-# node:stream classic constructor + web-adapter surface (Readable/Writable/
-# Duplex/Transform construction + toWeb/fromWeb/Readable.fromWeb adapters).
-# Crossed the 2000-line gate after the stream/web adapter additions. Splitting
-# classic constructors from the web adapters is tracked under #1435.
-crates/perry-runtime/src/node_stream_constructors.rs
-# TypedArray root — constructor/view-metadata/element load-store/iterator tower.
-# Crossed the 2000-line gate (2062 LOC) on current main after the #4702
-# %TypedArray%.prototype iterator brand-check + array-like/iterable constructor
-# additions. Splitting per concern is tracked under #1435.
-crates/perry-runtime/src/typedarray/mod.rs
 # node:events bundled module (EventEmitter handle surface, once/on helpers,
 # AbortSignal wiring, AsyncResource). Crossed the 2000-line gate after the
 # `events.on(...)` real async-iterator rewrite (proper { next, return } over a
@@ -189,21 +75,6 @@ crates/perry-stdlib/src/events.rs
 # `build_optimized_libs` driver + well-known resolution. Splitting the
 # freshness/well-known helpers into a sibling module is tracked under #1435.
 crates/perry/src/commands/compile/optimized_libs.rs
-# Closure call/apply/bind dispatch tower. Sat at 1998 LOC on main and crossed
-# the gate by the few-line class-ref `this`-coercion hook in #5515 (a class ref
-# must bind as `this` unboxed in `coerce_call_this`). Splitting the bound-
-# function / call-apply / name-resolution helpers into sibling modules is
-# tracked under #1435.
-crates/perry-runtime/src/closure/dispatch.rs
-# Intl trunk (namespace bootstrap + the NumberFormat/DateTimeFormat/Collator/
-# Segmenter/ListFormat/RelativeTimeFormat/PluralRules constructor+prototype
-# shapes and their deterministic formatters). Sat at 1883 LOC on main and
-# crossed the gate after the DateTimeFormat `formatRange`/`formatRangeToParts`
-# methods + option-validation landed (#5582). The DisplayNames/DurationFormat/
-# locale/locales surfaces already live in `intl/` siblings; peeling each
-# constructor's thunks+formatter into its own sibling is the natural next split,
-# tracked under #1435.
-crates/perry-runtime/src/intl.rs
 EOF
 )
 

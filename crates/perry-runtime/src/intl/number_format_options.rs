@@ -1,0 +1,246 @@
+use super::*;
+
+use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
+use crate::closure::ClosureHeader;
+use crate::object::{
+    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name,
+    set_builtin_property_attrs, ObjectHeader, PropertyAttrs,
+};
+use crate::string::{js_string_from_bytes, str_bytes_from_jsvalue};
+use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
+use crate::StringHeader;
+#[cfg(feature = "intl-segmenter")]
+use unicode_segmentation::UnicodeSegmentation;
+
+/// Read, validate, and store the NumberFormat option slots (ECMA-402
+/// CreateNumberFormat / SetNumberFormatUnitOptions / SetNumberFormatDigitOptions).
+pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, options: f64) {
+    // CoerceOptionsToObject: `null` throws; `undefined` behaves as an empty
+    // null-prototype object (our readers already treat non-objects as empty).
+    if JSValue::from_bits(options.to_bits()).is_null() {
+        throw_type_error("Cannot convert undefined or null to object");
+    }
+
+    // numberingSystem: option (validated, lower-cased) overrides the locale
+    // `-u-nu-` keyword; default "latn".
+    let numbering = match get_option_string(options, "numberingSystem") {
+        Some(value) => {
+            let lower = value.to_ascii_lowercase();
+            if !is_well_formed_numbering_system(&lower) {
+                throw_range_error(&format!(
+                    "Value {value} out of range for Intl.NumberFormat options property numberingSystem"
+                ));
+            }
+            lower
+        }
+        None => numbering_system_from_locale(locale).unwrap_or_else(|| "latn".to_string()),
+    };
+    set_internal_field(obj, KEY_NF_NUMBERING, string_value(&numbering));
+
+    // SetNumberFormatUnitOptions.
+    let style = get_string_option_enum(
+        options,
+        "style",
+        &["decimal", "percent", "currency", "unit"],
+        "decimal",
+    );
+    set_internal_field(obj, KEY_STYLE, string_value(&style));
+
+    let currency = get_option_string(options, "currency");
+    if let Some(code) = &currency {
+        if !is_well_formed_currency_code(code) {
+            throw_range_error(&format!("Invalid currency code : {code}"));
+        }
+        set_internal_field(obj, KEY_CURRENCY, string_value(&code.to_ascii_uppercase()));
+    }
+    let currency_display = get_string_option_enum(
+        options,
+        "currencyDisplay",
+        &["code", "symbol", "narrowSymbol", "name"],
+        "symbol",
+    );
+    let currency_sign = get_string_option_enum(
+        options,
+        "currencySign",
+        &["standard", "accounting"],
+        "standard",
+    );
+    set_internal_field(
+        obj,
+        KEY_NF_CURRENCY_DISPLAY,
+        string_value(&currency_display),
+    );
+    set_internal_field(obj, KEY_NF_CURRENCY_SIGN, string_value(&currency_sign));
+
+    let unit = get_option_string(options, "unit");
+    if let Some(u) = &unit {
+        if !is_well_formed_unit_identifier(u) {
+            throw_range_error(&format!(
+                "Value {u} out of range for Intl.NumberFormat options property unit"
+            ));
+        }
+        set_internal_field(obj, KEY_NF_UNIT, string_value(u));
+    }
+    let unit_display = get_string_option_enum(
+        options,
+        "unitDisplay",
+        &["short", "narrow", "long"],
+        "short",
+    );
+    set_internal_field(obj, KEY_NF_UNIT_DISPLAY, string_value(&unit_display));
+
+    if style == "currency" && currency.is_none() {
+        throw_type_error("Currency code is required with currency style.");
+    }
+    if style == "unit" && unit.is_none() {
+        throw_type_error("unit is required with unit style.");
+    }
+
+    // notation (read before the digit options per the spec order).
+    let notation = get_string_option_enum(
+        options,
+        "notation",
+        &["standard", "scientific", "engineering", "compact"],
+        "standard",
+    );
+    set_internal_field(obj, KEY_NF_NOTATION, string_value(&notation));
+
+    // SetNumberFormatDigitOptions.
+    let min_int =
+        get_int_option_in_range(options, "minimumIntegerDigits", 1.0, 21.0).unwrap_or(1.0);
+    set_internal_field(obj, KEY_NF_MIN_INT, min_int);
+
+    let min_frac_opt = get_int_option_in_range(options, "minimumFractionDigits", 0.0, 100.0);
+    let max_frac_opt = get_int_option_in_range(options, "maximumFractionDigits", 0.0, 100.0);
+    let min_sig_opt = get_int_option_in_range(options, "minimumSignificantDigits", 1.0, 21.0);
+    let max_sig_opt = get_int_option_in_range(options, "maximumSignificantDigits", 1.0, 21.0);
+    let mut rounding_priority = get_string_option_enum(
+        options,
+        "roundingPriority",
+        &["auto", "morePrecision", "lessPrecision"],
+        "auto",
+    );
+
+    let (default_min_frac, default_max_frac) = match style.as_str() {
+        "currency" => {
+            let d = currency.as_deref().map_or(2, currency_fraction_digits);
+            (d, d)
+        }
+        "percent" => (0, 0),
+        _ => (0, 3),
+    };
+
+    let has_sd = min_sig_opt.is_some() || max_sig_opt.is_some();
+    let has_fd = min_frac_opt.is_some() || max_frac_opt.is_some();
+
+    let min_sig = min_sig_opt.unwrap_or(1.0) as u32;
+    let max_sig = (max_sig_opt.unwrap_or(21.0) as u32).max(min_sig);
+    let min_frac = min_frac_opt.unwrap_or(default_min_frac as f64) as u32;
+    let max_frac = max_frac_opt
+        .map(|m| m as u32)
+        .unwrap_or_else(|| (min_frac).max(default_max_frac))
+        .max(min_frac);
+
+    set_internal_field(obj, KEY_NF_MIN_SIG, min_sig as f64);
+    set_internal_field(obj, KEY_NF_MAX_SIG, max_sig as f64);
+    set_internal_field(obj, KEY_NF_MIN_FRAC, min_frac as f64);
+    set_internal_field(obj, KEY_MAX_FRACTION_DIGITS, max_frac as f64);
+
+    // Digit display mode: "fraction" | "significant" | "both" (compact default).
+    let digit_mode = if has_sd && !has_fd {
+        "significant"
+    } else if !has_sd && !has_fd && notation == "compact" {
+        // Compact with no explicit digit options rounds by 1–2 significant
+        // digits with morePrecision priority, surfacing both slots.
+        rounding_priority = "morePrecision".to_string();
+        "both"
+    } else if has_sd && has_fd {
+        if rounding_priority == "lessPrecision" {
+            "fraction"
+        } else {
+            "significant"
+        }
+    } else {
+        "fraction"
+    };
+    // Compact's significant defaults are 1–2 when not explicitly given.
+    if digit_mode == "both" {
+        set_internal_field(obj, KEY_NF_MIN_SIG, 1.0);
+        set_internal_field(obj, KEY_NF_MAX_SIG, 2.0);
+        set_internal_field(obj, KEY_NF_MIN_FRAC, 0.0);
+        set_internal_field(obj, KEY_MAX_FRACTION_DIGITS, 0.0);
+    }
+    set_internal_field(obj, KEY_NF_USE_SIG, string_value(digit_mode));
+
+    set_internal_field(
+        obj,
+        KEY_NF_ROUNDING_INCREMENT,
+        get_int_option_in_range(options, "roundingIncrement", 1.0, 5000.0).unwrap_or(1.0),
+    );
+    let rounding_mode = get_string_option_enum(
+        options,
+        "roundingMode",
+        &[
+            "ceil",
+            "floor",
+            "expand",
+            "trunc",
+            "halfCeil",
+            "halfFloor",
+            "halfExpand",
+            "halfTrunc",
+            "halfEven",
+        ],
+        "halfExpand",
+    );
+    set_internal_field(obj, KEY_NF_ROUNDING_MODE, string_value(&rounding_mode));
+    set_internal_field(
+        obj,
+        KEY_NF_ROUNDING_PRIORITY,
+        string_value(&rounding_priority),
+    );
+    let trailing_zero = get_string_option_enum(
+        options,
+        "trailingZeroDisplay",
+        &["auto", "stripIfInteger"],
+        "auto",
+    );
+    set_internal_field(obj, KEY_NF_TRAILING_ZERO, string_value(&trailing_zero));
+
+    // compactDisplay, useGrouping, signDisplay.
+    let compact_display =
+        get_string_option_enum(options, "compactDisplay", &["short", "long"], "short");
+    set_internal_field(obj, KEY_NF_COMPACT_DISPLAY, string_value(&compact_display));
+
+    let default_grouping = if notation == "compact" {
+        "min2"
+    } else {
+        "auto"
+    };
+    let use_grouping = get_use_grouping_option(options, default_grouping);
+    set_internal_field(obj, KEY_NF_USE_GROUPING, string_value(&use_grouping));
+
+    let sign_display = get_string_option_enum(
+        options,
+        "signDisplay",
+        &["auto", "never", "always", "exceptZero", "negative"],
+        "auto",
+    );
+    set_internal_field(obj, KEY_NF_SIGN_DISPLAY, string_value(&sign_display));
+}
+
+/// A currency code is well-formed when it is exactly three ASCII letters
+/// (ISO 4217 alphabetic). Validity (vs. an actual currency) is not checked.
+pub(crate) fn is_well_formed_currency_code(code: &str) -> bool {
+    code.len() == 3 && code.bytes().all(|b| b.is_ascii_alphabetic())
+}
+
+/// A core unit identifier is a `-`-separated sequence of lowercase ASCII
+/// segments (optionally a `per-` compound). This is a structural check, not a
+/// validity check against the CLDR sanctioned-unit list.
+pub(crate) fn is_well_formed_unit_identifier(unit: &str) -> bool {
+    !unit.is_empty()
+        && unit
+            .split('-')
+            .all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_alphabetic()))
+}
