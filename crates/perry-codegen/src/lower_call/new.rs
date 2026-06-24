@@ -13,7 +13,8 @@ use super::field_init::{apply_field_initializers_recursive, FieldInitMode};
 use super::lower_builtin_new;
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
-    ctor_body_has_value_return, ctor_body_uses_this, node_stream_parent_kind,
+    ctor_body_has_value_return, ctor_body_uses_new_target, ctor_body_uses_this,
+    node_stream_parent_kind,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -1095,6 +1096,34 @@ fn lower_new_impl(
         // function ("value is not a function" on `new Chalk(...).red(...)`).
         // `js_ctor_return_override` returns `obj_box` for an `undefined`/
         // primitive (base) return, so ordinary ctors are unaffected.
+        //
+        // #2768/new.target: the standalone `<class>_constructor` symbol is a
+        // separate compiled function, so its only `new.target` source is the
+        // runtime cell — which this path never set, leaving `new.target ===
+        // undefined` for a base class. Set the cell to this class's ref (the
+        // `INT32_TAG | class_id` value `Expr::ClassRef` produces) around the
+        // call and restore it after, but ONLY when the ctor actually reads
+        // `new.target`, so the common ctor keeps the zero-overhead fast path.
+        // ponytail: a throw inside the ctor skips the restore, leaving the cell
+        // set — same edge case the runtime construct paths already have; fix
+        // holistically if it bites.
+        let saved_new_target = if class
+            .constructor
+            .as_ref()
+            .is_some_and(|c| ctor_body_uses_new_target(&c.body))
+        {
+            ctx.class_ids.get(class_name).map(|&cid| {
+                let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
+                let class_ref = double_literal(f64::from_bits(
+                    crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF),
+                ));
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, &class_ref)]);
+                prev
+            })
+        } else {
+            None
+        };
         if let Some(ctor_ret) = call_local_constructor_symbol(
             ctx,
             class,
@@ -1102,6 +1131,10 @@ fn lower_new_impl(
             &lowered_args,
             caps_absent_from_args,
         ) {
+            if let Some(prev) = &saved_new_target {
+                ctx.block()
+                    .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
+            }
             let is_derived = class.extends.is_some()
                 || class.extends_name.is_some()
                 || class.native_extends.is_some()
@@ -1117,6 +1150,10 @@ fn lower_new_impl(
                 ],
             );
             return Ok(final_box);
+        }
+        if let Some(prev) = &saved_new_target {
+            ctx.block()
+                .call(DOUBLE, "js_new_target_set", &[(DOUBLE, prev)]);
         }
         return Ok(obj_box);
     }

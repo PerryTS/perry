@@ -852,7 +852,7 @@ pub unsafe extern "C" fn js_new_function_construct(
     // registered class id and replay the standalone constructor so field
     // initializers and `this.foo = ...` writes match static `new ClassName()`.
     if let Some(class_cid) = constructor_class_ref_id(func_value) {
-        return construct_registered_class_ref(class_cid, class_cid, args_ptr, args_len);
+        return construct_registered_class_ref(class_cid, class_cid, func_value, args_ptr, args_len);
     }
     if is_arrow_function_value(func_value) {
         crate::fs::validate::throw_type_error_with_code(
@@ -1079,6 +1079,7 @@ fn new_target_class_id(new_target: f64) -> Option<u32> {
 unsafe fn construct_registered_class_ref(
     target_cid: u32,
     instance_cid: u32,
+    new_target: f64,
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
@@ -1087,9 +1088,32 @@ unsafe fn construct_registered_class_ref(
     } else {
         js_object_alloc(instance_cid, 0)
     };
+    // #2768: a registered-class constructor reached through this path — static
+    // `new ClassName()`, a first-class ClassRef `new`, or `Reflect.construct`
+    // with a distinct newTarget — must observe `new.target` inside its body.
+    // The function-construct paths set the NEW_TARGET cell (read by codegen's
+    // `js_new_target_get`) around the call; this path replayed the constructor
+    // without it, so `new.target` was `undefined` for a base class and the
+    // explicit `Reflect.construct` newTarget never reached the body. Mirror the
+    // other paths: set the cell to the constructor (or the Reflect newTarget)
+    // around the replay, then restore.
+    //
+    // ponytail: the cell is process-global, so a non-constructor function called
+    // synchronously from the ctor body reads it too and sees the newTarget
+    // instead of `undefined`. This matches the pre-existing plain-function
+    // construct paths (which already set the cell the same way) — the codegen
+    // `new_target_stack` slot avoids this for fully-inlined `new`, but the
+    // replayed ctor is a separate compiled function that can only read the cell.
+    // Fix holistically with the slot mechanism if it ever bites.
+    let prev_new_target = crate::object::js_new_target_get();
+    crate::object::js_new_target_set(new_target);
+    let prev_current_new_target =
+        CURRENT_NEW_TARGET.with(|value| value.replace(new_target.to_bits()));
     super::super::class_constructors::replay_registered_class_constructor(
         target_cid, inst, args_ptr, args_len,
     );
+    CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target));
+    crate::object::js_new_target_set(prev_new_target);
     // ClassRef `new` of a Request/Response subclass — attach the native fetch
     // handle on the dynamic path (mirrors the class-expression arm above).
     if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
@@ -1172,7 +1196,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     }
     if let Some(target_cid) = constructor_class_ref_id(func_value) {
         let instance_cid = new_target_class_id(nt).unwrap_or(target_cid);
-        return construct_registered_class_ref(target_cid, instance_cid, args_ptr, args_len);
+        return construct_registered_class_ref(target_cid, instance_cid, nt, args_ptr, args_len);
     }
     // `Reflect.construct(Int8Array, [len], newTarget)` — a typed-array
     // constructor invoked with a distinct newTarget. Build the typed array the

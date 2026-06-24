@@ -126,3 +126,40 @@ show("proxy class empty handler newTarget", () => {
   const instance: any = Reflect.construct(Wrapped, ["y"], Child);
   return [instance instanceof Child, instance instanceof Thing, instance.child()];
 });
+
+class CtorNewTarget {
+  ntName: string;
+  constructor() {
+    this.ntName = (new.target as any)?.name ?? "undefined";
+  }
+}
+class OtherNewTarget {}
+
+show("Reflect.construct new.target inside class ctor", () => {
+  const a: any = Reflect.construct(CtorNewTarget, [], OtherNewTarget);
+  return a.ntName;
+});
+
+show("ClassRef new new.target inside class ctor", () => {
+  const Ref: any = CtorNewTarget;
+  const a: any = new Ref();
+  return a.ntName;
+});
+
+show("static new new.target inside base class ctor", () => {
+  return new CtorNewTarget().ntName;
+});
+
+function freeProbe(): string {
+  return (new.target as any) === undefined ? "undef" : "leaked";
+}
+class CallsFreeProbe {
+  probed: string;
+  constructor() {
+    this.probed = freeProbe();
+  }
+}
+
+show("free fn called from static-new ctor sees undefined new.target", () => {
+  return new CallsFreeProbe().probed;
+});

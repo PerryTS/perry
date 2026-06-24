@@ -168,6 +168,37 @@ fn expr_uses_this_direct(expr: &Expr) -> bool {
     found
 }
 
+/// #2768: true when the constructor body reads `new.target` — directly, or
+/// lexically from an arrow/closure that captured it. The default `new C()`
+/// path calls the standalone `<class>_constructor` symbol (a separate compiled
+/// function whose only `new.target` source is the runtime cell), so the cell
+/// must be set around that call. Gating on this keeps the common ctor (no
+/// `new.target`) on the zero-overhead fast path — no per-`new`-site cell writes.
+pub(crate) fn ctor_body_uses_new_target(body: &[perry_hir::Stmt]) -> bool {
+    ctor_body_any(body, &expr_uses_new_target, NO_STMT_PRED)
+}
+
+fn expr_uses_new_target(expr: &Expr) -> bool {
+    match expr {
+        Expr::NewTarget => true,
+        // A closure's precomputed flag is authoritative; don't descend (the
+        // walk below would otherwise re-scan its body).
+        Expr::Closure {
+            captures_new_target,
+            ..
+        } => *captures_new_target,
+        _ => {
+            let mut found = false;
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                if !found && expr_uses_new_target(child) {
+                    found = true;
+                }
+            });
+            found
+        }
+    }
+}
+
 /// True when the constructor body contains a value-bearing `return` in its
 /// own body (closures excluded; a bare `return undefined` does NOT count —
 /// spec falls back to the uninitialized `this` and still throws). The
