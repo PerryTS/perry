@@ -215,6 +215,7 @@ pub(super) fn compile_function(
         method_has_rest: &cross_module.method_has_rest,
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
+        ffi_aliases: &cross_module.ffi_aliases,
         imported_class_sources: &cross_module.imported_class_sources,
         imported_class_original_names: &cross_module.imported_class_original_names,
         interfaces: &cross_module.interfaces,

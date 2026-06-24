@@ -1043,6 +1043,18 @@ pub fn try_lower_extern_func_call(
     else {
         return Ok(None);
     };
+    // Issue #5621: ergonomic camelCase native-library exports. When a
+    // `perry.nativeLibrary` package exposes a spec-faithful camelCase
+    // binding (`requestAdapter`) over a snake_case `js_<pkg>_*` FFI symbol
+    // (`js_webgpu_request_adapter`), the CLI driver records the
+    // binding → symbol mapping in `ffi_aliases`. Rewrite `name` to the
+    // manifest symbol up front so every `ffi_signatures` lookup below hits
+    // and codegen emits the call (and `declare`) against the real FFI
+    // symbol — instead of routing through the package's throwing TS
+    // wrapper body or a bare extern to the alias. Exact-match raw exports
+    // (`@perryts/storekit`) carry no alias and pass through unchanged.
+    let aliased_symbol = ctx.ffi_aliases.get(name).cloned();
+    let name: &String = aliased_symbol.as_ref().unwrap_or(name);
     // Issue #1317: when `name` is bound to a named import from a Node
     // submodule Perry recognizes but doesn't yet back with a real impl
     // (`node:timers/promises`, `node:readline/promises`,

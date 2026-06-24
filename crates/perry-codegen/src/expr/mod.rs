@@ -489,6 +489,11 @@ pub(crate) struct FnCtx<'a> {
             perry_api_manifest::NativeAbiType,
         ),
     >,
+    /// Issue #5621: ergonomic camelCase binding → manifest `js_<pkg>_*`
+    /// symbol. `try_lower_extern_func_call` rewrites the binding through
+    /// this map so a camelCase native-library export routes to its real
+    /// FFI symbol and the `ffi_signatures` lookups above hit.
+    pub ffi_aliases: &'a std::collections::HashMap<String, String>,
     /// Per-module map: local class/binding name → import source spec.
     /// Used by `lower_builtin_new` to disambiguate ambiguously-named
     /// built-in constructors. See issue #602.

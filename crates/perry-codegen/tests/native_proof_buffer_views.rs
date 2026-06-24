@@ -13,6 +13,7 @@ fn empty_opts() -> CompileOptions {
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
+        import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
         import_function_v8_specifiers: std::collections::HashMap::new(),
         import_function_node_submodule: std::collections::HashMap::new(),

@@ -91,6 +91,16 @@ pub struct CompileOptions {
     /// `perry_fn_<source_prefix>__<funcname>`. Built by the CLI driver
     /// from each module's `hir.imports` table.
     pub import_function_prefixes: std::collections::HashMap<String, String>,
+    /// Issue #5621: ergonomic camelCase binding → snake_case `js_<pkg>_*`
+    /// FFI symbol, for `perry.nativeLibrary` packages that expose
+    /// spec-faithful camelCase exports (`requestAdapter`) over their
+    /// manifest symbols (`js_webgpu_request_adapter`). `lower_call`
+    /// rewrites the binding to its manifest symbol before consulting
+    /// `ffi_signatures`, so the call is emitted against the real FFI
+    /// symbol. Built by the CLI driver in the per-specifier import loop;
+    /// empty for the byte-for-byte exact-match convention
+    /// (`@perryts/storekit`'s raw ambient `js_storekit_*` exports).
+    pub import_function_ffi_aliases: std::collections::HashMap<String, String>,
     /// Issue #678: for imports that traverse a re-export rename
     /// (e.g. `export { default as render } from './render.js'`), maps the
     /// consumer-visible name (`render`) to the actual export name in the
@@ -727,6 +737,13 @@ pub(crate) struct CrossModuleCtx {
             perry_api_manifest::NativeAbiType,
         ),
     >,
+    /// Issue #5621: ergonomic camelCase binding → manifest `js_<pkg>_*`
+    /// symbol. `lower_call` rewrites a binding through this map before its
+    /// `ffi_signatures` lookups so a camelCase native-library export
+    /// (`requestAdapter`) routes to its real symbol
+    /// (`js_webgpu_request_adapter`). Mirror of
+    /// `CompileOptions::import_function_ffi_aliases`.
+    pub ffi_aliases: std::collections::HashMap<String, String>,
     /// Per-module mapping: local class/binding name → import source spec.
     /// Built once in `compile_module` from `hir.imports`. Used by
     /// `lower_builtin_new` to disambiguate ambiguously-named built-in

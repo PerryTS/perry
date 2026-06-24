@@ -1313,6 +1313,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .iter()
             .map(|(name, params, ret)| (name.clone(), (params.clone(), ret.clone())))
             .collect(),
+        // Issue #5621: ergonomic camelCase binding → manifest symbol, so
+        // `lower_call` can route a camelCase native-library export
+        // (`requestAdapter`) to its real FFI symbol
+        // (`js_webgpu_request_adapter`).
+        ffi_aliases: opts.import_function_ffi_aliases.clone(),
         // Per-module local-name → import-source map. Walks `hir.imports`
         // and records every named/default import binding's source spec.
         // `lower_builtin_new` consults this to gate ambiguously-named
