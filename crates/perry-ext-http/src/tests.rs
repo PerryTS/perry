@@ -105,13 +105,12 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     drop_handle(incoming_handle);
 }
 
-/// #5419 — the streamed-response drain (`ResponseHead` → N×`ResponseChunk`
-/// → `ResponseEnd`) must reassemble a body byte-identically no matter how
-/// the transport split it into chunks. The PR swapped the chunk carrier
-/// from `Vec<u8>` to `Bytes`; both deliver to the drain as `&[u8]`, so this
-/// pins the reassembly contract the type change must preserve — a future
-/// refactor that corrupted a chunk, reordered chunks, or mishandled a
-/// boundary would fail here.
+/// The streamed-response drain (`ResponseHead` → N×`ResponseChunk` →
+/// `ResponseEnd`) must reassemble a body byte-identically no matter how the
+/// transport split it into chunks. The chunk carrier (`Bytes`) delivers to
+/// the drain as `&[u8]`, so this pins the reassembly contract a carrier-type
+/// change must preserve — a future refactor that corrupted a chunk,
+/// reordered chunks, or mishandled a boundary would fail here.
 ///
 /// Drives the buffering branch (no `'data'` listener registered): each
 /// chunk is appended to `IncomingMessageHandle::body`, and `ResponseEnd`
@@ -152,7 +151,7 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         );
         // Each production chunk is a refcounted `Bytes` (reqwest's
         // `response.chunk()` shape) — build the input the same way so the
-        // test exercises the actual carrier type the PR introduced.
+        // test exercises the actual carrier type the drain receives.
         for c in chunks {
             client_events::handle_response_chunk_event(request_handle, Bytes::copy_from_slice(c));
         }
