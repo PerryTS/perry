@@ -638,7 +638,7 @@ impl SH for Expr {
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
             Expr::RegisterClassCaptures { class_name, captures } => { tag(h, 12241); class_name.hash(h); for c in captures { c.hash(h); } }
-            Expr::ClassCaptureValue { class_name, index, fallback } => { tag(h, 12242); class_name.hash(h); index.hash(h); fallback.hash(h); }
+            Expr::ClassCaptureValue { class_name, index, fallback, prefer_fallback } => { tag(h, 12242); class_name.hash(h); index.hash(h); fallback.hash(h); prefer_fallback.hash(h); }
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
             Expr::RegisterClassComputedMethod { class_name, key_expr, method_name, is_static, param_count, has_rest } => { tag(h, 12233); class_name.hash(h); key_expr.as_ref().hash(h); method_name.hash(h); is_static.hash(h); param_count.hash(h); has_rest.hash(h); }
             Expr::RegisterClassComputedAccessor { class_name, key_expr, getter_name, setter_name, is_static } => { tag(h, 12234); class_name.hash(h); key_expr.as_ref().hash(h); getter_name.hash(h); setter_name.hash(h); is_static.hash(h); }

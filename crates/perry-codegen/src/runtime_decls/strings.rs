@@ -1165,6 +1165,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // #5437: snapshot slot read with a `new`-site appended cap-arg fallback
     // (used when no decl-site snapshot was registered for the class).
     module.declare_function("js_class_capture_value_or", DOUBLE, &[I32, I32, DOUBLE]);
+    // #5437 (param-first): the live `new`-site cap param wins when present; the
+    // decl-site snapshot is consulted only when the param is `undefined` (the
+    // cross-module construct path). Used by the synthesized ctor capture rebind.
+    module.declare_function("js_param_or_class_capture_value", DOUBLE, &[DOUBLE, I32, I32]);
     // `super(...spread)` — dynamic-arity ancestor ctor invocation on `this`.
     module.declare_function("js_super_construct_apply", VOID, &[I32, DOUBLE, DOUBLE]);
     // `super.method(...)` on a class with a runtime-registered (dynamic) parent

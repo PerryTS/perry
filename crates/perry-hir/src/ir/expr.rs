@@ -430,6 +430,17 @@ pub enum Expr {
         /// `class_name` resolves to its real `class_id` there). `None` keeps
         /// the plain snapshot read used by STATIC method prologue rebinds.
         fallback: Option<Box<Expr>>,
+        /// #5437 (param-first rebind): when `true`, the `fallback` (the LIVE
+        /// `new`-site cap param) WINS whenever it is present; the decl-site
+        /// snapshot is consulted ONLY when the param is `undefined` (the
+        /// cross-module construct signal — that path drops the cap arg). Codegen
+        /// emits `js_param_or_class_capture_value(param, cid, index)`. This is
+        /// the correct policy for the synthesized constructor's capture rebind:
+        /// a SAME-module `new C(...)` supplies the current (possibly mutated)
+        /// outer, which must not be overridden by a stale decl-site snapshot.
+        /// `false` (default) keeps the snapshot-first
+        /// `js_class_capture_value_or` behavior used by every other caller.
+        prefer_fallback: bool,
     },
 
     /// Issue #894: `class C { static [keyExpr] = initExpr }` where the

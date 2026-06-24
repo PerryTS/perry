@@ -197,12 +197,54 @@ pub extern "C" fn js_class_capture_value_or(class_id: u32, index: u32, fallback:
     })
 }
 
+/// #5437 (cross-module member-`new`, param-first): inverse of
+/// `js_class_capture_value_or` — the LIVE `param` (the value the `new`-site
+/// appended as the capture arg) wins WHENEVER IT IS PRESENT; the decl-site
+/// snapshot is only consulted when `param` is `undefined`.
+///
+/// This is the correct policy for the synthesized constructor's capture
+/// rebind. A SAME-module `new C(...)` supplies the current (possibly mutated)
+/// outer as `param` — and that must NOT be overridden by a stale decl-site
+/// snapshot taken when the class was declared:
+///
+/// ```ignore
+/// let x = "a"; class C { constructor(){ this.x = x } } x = "b"; new C();
+/// // node: this.x === "b" (the live param), NOT the "a" decl-site snapshot.
+/// ```
+///
+/// A CROSS-MODULE `new ns.C(...)` routes to the runtime construct path
+/// (`construct_registered_class_ref`) which supplies NO capture args, so the
+/// synthesized cap param arrives `undefined`. In that case — and only that
+/// case — we recover the captured value from the class's own decl-site
+/// snapshot (the ctor body is compiled in the class's home module, so
+/// `class_id` resolves to the real registered snapshot there). If no snapshot
+/// (or no slot) exists either, the result is `undefined` — same as the param.
+#[no_mangle]
+pub extern "C" fn js_param_or_class_capture_value(param: f64, class_id: u32, index: u32) -> f64 {
+    if param.to_bits() != crate::value::TAG_UNDEFINED {
+        return param;
+    }
+    // param is `undefined` (cross-module construct dropped the cap arg):
+    // recover from the decl-site snapshot when one is registered for this
+    // class; otherwise stay `undefined`.
+    CLASS_CAPTURE_VALUES.with(|m| {
+        m.borrow()
+            .get(&class_id)
+            .and_then(|v| v.get(index as usize).copied())
+            .map(f64::from_bits)
+            .unwrap_or(param)
+    })
+}
+
 /// Keepalive anchors (generated-code-only callees).
 #[used]
 static KEEP_JS_CLASS_CAPTURE_VALUE: extern "C" fn(u32, u32) -> f64 = js_class_capture_value;
 #[used]
 static KEEP_JS_CLASS_CAPTURE_VALUE_OR: extern "C" fn(u32, u32, f64) -> f64 =
     js_class_capture_value_or;
+#[used]
+static KEEP_JS_PARAM_OR_CLASS_CAPTURE_VALUE: extern "C" fn(f64, u32, u32) -> f64 =
+    js_param_or_class_capture_value;
 
 /// `super(...spread)` — invoke the closest registered ancestor constructor
 /// of `child_cid` on the EXISTING `this`, with args from the materialized

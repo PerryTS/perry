@@ -329,6 +329,7 @@ pub fn synthesize_class_captures(
                     class_name: name.to_string(),
                     index: index as u32,
                     fallback: None,
+                    prefer_fallback: false,
                 }),
             });
         }
@@ -371,6 +372,7 @@ pub fn synthesize_class_captures(
                     class_name: name.to_string(),
                     index: index as u32,
                     fallback: None,
+                    prefer_fallback: false,
                 }),
             });
         }
@@ -505,13 +507,19 @@ pub fn synthesize_class_captures(
             is_rest: false,
             arguments_object: None,
         });
-        // param = js_class_capture_value_or(class_id, slot, param)
+        // param = js_param_or_class_capture_value(param, class_id, slot)
+        // — PARAM-FIRST: the live `new`-site cap arg wins whenever present; the
+        // decl-site snapshot is only used when the param is `undefined` (the
+        // cross-module construct path drops the cap arg → undefined). This
+        // avoids overriding a SAME-module `new C(...)`'s current (possibly
+        // mutated) outer with the stale decl-site snapshot.
         rebind_stmts.push(Stmt::Expr(Expr::LocalSet(
             fresh_param_id,
             Box::new(Expr::ClassCaptureValue {
                 class_name: name.to_string(),
                 index: index as u32,
                 fallback: Some(Box::new(Expr::LocalGet(fresh_param_id))),
+                prefer_fallback: true,
             }),
         )));
         assignment_stmts.push(Stmt::Expr(Expr::PropertySet {
@@ -524,16 +532,26 @@ pub fn synthesize_class_captures(
     // stmts (which already reference the fresh ids directly).
     crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
     append_self_sites(&mut ctor.body, &ctor_id_map);
+    // Finding #2: the param REBINDS (`param = param-or-snapshot`) go at
+    // FUNCTION ENTRY (index 0), BEFORE any pre-`super()` user code — a derived
+    // ctor may read a captured outer before calling `super()`, and that read
+    // must already see the recovered value. Only the `this.__perry_cap_* =
+    // param` field STASHES must wait until after `super()` (no `this` exists
+    // before super). A non-derived ctor has no `super`, so both groups land at
+    // entry (assignments right after the rebinds).
+    let rebind_count = rebind_stmts.len();
+    for (i, stmt) in rebind_stmts.into_iter().enumerate() {
+        ctor.body.insert(i, stmt);
+    }
+    // `super_pos` is recomputed AFTER inserting the rebinds (they shifted the
+    // body), so the assignments land just past the (now-relocated) `super()`.
     let super_pos = ctor
         .body
         .iter()
         .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
-    let insert_at = super_pos.map(|p| p + 1).unwrap_or(0);
-    // Order at `insert_at`: rebinds (param = snapshot-or-param) FIRST, then
-    // the `this.__perry_cap_* = param` field stashes, then the user body.
-    let prologue: Vec<Stmt> = rebind_stmts.into_iter().chain(assignment_stmts).collect();
-    for (i, stmt) in prologue.into_iter().enumerate() {
-        ctor.body.insert(insert_at + i, stmt);
+    let assignment_insert_at = super_pos.map(|p| p + 1).unwrap_or(rebind_count);
+    for (i, stmt) in assignment_stmts.into_iter().enumerate() {
+        ctor.body.insert(assignment_insert_at + i, stmt);
     }
     *constructor = Some(ctor);
 

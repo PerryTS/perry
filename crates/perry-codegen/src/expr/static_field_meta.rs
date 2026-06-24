@@ -172,6 +172,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_name,
             index,
             fallback,
+            prefer_fallback,
         } => {
             // The fallback (a synthesized `__perry_cap_*` ctor param) must be
             // lowered FIRST so its value is available regardless of whether the
@@ -184,12 +185,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 let cid_str = class_id.to_string();
                 let idx_str = index.to_string();
-                return Ok(match &fallback_v {
-                    // #5437: snapshot-or-fallback. The decl-site snapshot wins
-                    // when it holds a real value (W6: the appended cap arg may
-                    // be a mis-boxed multi-level capture, or — cross-module —
-                    // absent entirely); otherwise the fallback is used.
-                    Some(fb) => ctx.block().call(
+                return Ok(match (&fallback_v, *prefer_fallback) {
+                    // #5437 (param-first): the LIVE param (the `new`-site cap
+                    // arg) wins whenever present; the decl-site snapshot is
+                    // consulted ONLY when the param is `undefined` (the
+                    // cross-module construct path drops the cap arg). Used by the
+                    // synthesized constructor's capture rebind so a SAME-module
+                    // `new C(...)`'s current (possibly mutated) outer is NOT
+                    // overridden by a stale snapshot.
+                    (Some(fb), true) => ctx.block().call(
+                        DOUBLE,
+                        "js_param_or_class_capture_value",
+                        &[
+                            (DOUBLE, fb),
+                            (crate::types::I32, &cid_str),
+                            (crate::types::I32, &idx_str),
+                        ],
+                    ),
+                    // #5437: snapshot-or-fallback (snapshot-first). The decl-site
+                    // snapshot wins when it holds a real value (W6: the appended
+                    // cap arg may be a mis-boxed multi-level capture, or —
+                    // cross-module — absent entirely); otherwise the fallback is
+                    // used.
+                    (Some(fb), false) => ctx.block().call(
                         DOUBLE,
                         "js_class_capture_value_or",
                         &[
@@ -198,7 +216,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             (DOUBLE, fb),
                         ],
                     ),
-                    None => ctx.block().call(
+                    (None, _) => ctx.block().call(
                         DOUBLE,
                         "js_class_capture_value",
                         &[(crate::types::I32, &cid_str), (crate::types::I32, &idx_str)],
