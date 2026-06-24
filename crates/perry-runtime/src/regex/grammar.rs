@@ -96,6 +96,63 @@ fn is_forward_backreference(spans: &[CaptureSpan], escape_pos: usize, group: usi
     span.close == usize::MAX || escape_pos < span.close
 }
 
+/// Annex B.1.4 does NOT apply to Unicode-mode (`/u` or `/v`) patterns: the
+/// legacy escapes that `js_regex_to_rust` silently relaxes for sloppy patterns
+/// (a `LegacyOctalEscapeSequence`, a `NonOctalDecimalEscapeSequence`, or a `\c`
+/// not followed by an ASCII control letter) are a hard `SyntaxError` under
+/// `/u`. Returns `true` if `pattern` contains any such escape, so the caller
+/// can throw at construction instead of compiling a relaxed pattern.
+///
+/// Mirrors exactly the escapes the sloppy-mode translator would reinterpret:
+/// any other escape (a valid backreference, `\d`, `\x41`, `\u{…}`, an escaped
+/// metacharacter, …) is left for the normal translation path.
+pub(super) fn has_unicode_forbidden_legacy_escape(pattern: &str) -> bool {
+    let chars: Vec<char> = pattern.chars().collect();
+    let spans = collect_capture_spans(&chars);
+    let num_groups = spans.len();
+    let mut in_class = false;
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' if i + 1 < chars.len() => {
+                match chars[i + 1] {
+                    // `\c` is a valid control escape only when followed by an
+                    // ASCII control letter (`A`–`Z` / `a`–`z`); anything else
+                    // (a digit, `_`, a non-ASCII letter, end-of-pattern) is the
+                    // Annex B identity escape, forbidden under `/u`.
+                    'c' if !matches!(chars.get(i + 2), Some(c) if c.is_ascii_alphabetic()) => {
+                        return true;
+                    }
+                    // `\0` is the NUL escape (valid under `/u`) only when not
+                    // followed by a decimal digit; `\0DD` is a legacy octal.
+                    '0' if matches!(chars.get(i + 2), Some(c) if c.is_ascii_digit()) => {
+                        return true;
+                    }
+                    // `\1`–`\9`: a backreference to an existing group is valid;
+                    // anything else is a legacy octal / non-octal decimal escape.
+                    // Inside a class a decimal escape is never a backreference.
+                    '1'..='9' => {
+                        let (group, _) = parse_decimal_escape(&chars, i + 1);
+                        if in_class || group == 0 || group > num_groups {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+                // Any backslash escape consumes the following char, so `\[`,
+                // `\]`, and `\\` never toggle class state.
+                i += 2;
+                continue;
+            }
+            '[' => in_class = true,
+            ']' => in_class = false,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 fn is_regex_identity_escape(ch: char) -> bool {
     matches!(
         ch,
@@ -638,8 +695,175 @@ fn next_is_class_shorthand(chars: &[char], i: usize) -> bool {
 /// Translate a JavaScript regex pattern to a Rust regex-crate compatible pattern.
 /// Handles JS-specific escape sequences not supported by the Rust regex crate.
 /// Also converts JS-style named groups `(?<name>...)` to Rust-style `(?P<name>...)`.
+/// JS allows a quantifier directly on a zero-width assertion group
+/// (`(?=…)?`, `(?!…)*`, `(?<=…)+`, `(?<!…){0,3}`, …). V8 accepts these and
+/// treats them per the quantifier's lower bound: a lower bound of 0 makes the
+/// assertion optional, which — since the assertion consumes nothing — is a
+/// pure no-op; a lower bound of ≥1 is identical to the bare assertion (the
+/// assertion either holds or it doesn't, and matching it more than once at the
+/// same position adds nothing). The `regex` crate has no lookaround at all, and
+/// `fancy-regex` (which Perry falls back to for lookaround) *rejects a
+/// quantifier applied to a lookaround group* — so a JS-valid pattern like Next's
+/// UA-parser table (`(?=lg)?[vl]k…`) would otherwise throw `SyntaxError: invalid
+/// pattern` at regex construction, aborting the whole module that defines it.
+///
+/// This pre-pass rewrites each quantified lookaround into the equivalent
+/// fancy-regex-acceptable form before the main translation runs:
+///   * quantifier lower bound 0 (`?`, `*`, `{0,…}`, `{0}`) → drop the assertion
+///     and its quantifier entirely (no-op).
+///   * quantifier lower bound ≥1 (`+`, `{1,…}`, `{2}`, …) → keep the assertion,
+///     drop the quantifier.
+/// A trailing lazy `?` on the quantifier (`(?=…)*?`) is consumed too. Group
+/// nesting is matched so an inner `(...)` inside the lookaround doesn't confuse
+/// the close-paren scan.
+fn normalize_quantified_lookaround(pattern: &str) -> String {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    let mut in_class = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
+            // Copy an escape pair verbatim — a `\(` is a literal paren.
+            out.push(c);
+            if i + 1 < chars.len() {
+                out.push(chars[i + 1]);
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if in_class {
+            if c == ']' {
+                in_class = false;
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '[' {
+            in_class = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        // Detect a lookaround group opener: `(?=`, `(?!`, `(?<=`, `(?<!`.
+        let look_len = lookaround_opener_len(&chars, i);
+        if let Some(open_len) = look_len {
+            // Find the matching close paren for this group (nesting-aware).
+            if let Some(close) = matching_group_close(&chars, i) {
+                // Is there a quantifier right after the close paren?
+                if let Some((qstart, qend, lower_zero)) = quantifier_after(&chars, close + 1) {
+                    let _ = open_len;
+                    if lower_zero {
+                        // No-op: drop the whole assertion + quantifier.
+                    } else {
+                        // Keep the assertion verbatim, drop the quantifier.
+                        for ch in &chars[i..=close] {
+                            out.push(*ch);
+                        }
+                    }
+                    let _ = qstart;
+                    i = qend;
+                    continue;
+                }
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+/// If `chars[i]` begins a lookaround opener (`(?=`, `(?!`, `(?<=`, `(?<!`),
+/// return the opener length (3 or 4); otherwise `None`.
+fn lookaround_opener_len(chars: &[char], i: usize) -> Option<usize> {
+    if chars.get(i) != Some(&'(') || chars.get(i + 1) != Some(&'?') {
+        return None;
+    }
+    match chars.get(i + 2) {
+        Some('=') | Some('!') => Some(3),
+        Some('<') => match chars.get(i + 3) {
+            Some('=') | Some('!') => Some(4),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Index of the `)` that closes the group opened at `chars[open]` (`open` must
+/// point at `(`), honoring nesting, escapes, and `[...]` classes. `None` if
+/// unbalanced.
+fn matching_group_close(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut j = open;
+    let mut in_class = false;
+    while j < chars.len() {
+        let c = chars[j];
+        if c == '\\' {
+            j += 2;
+            continue;
+        }
+        if in_class {
+            if c == ']' {
+                in_class = false;
+            }
+            j += 1;
+            continue;
+        }
+        match c {
+            '[' => in_class = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(j);
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
+/// If a quantifier starts at `chars[start]`, return `(start, end_exclusive,
+/// lower_bound_is_zero)`; otherwise `None`. Consumes a trailing lazy `?`.
+fn quantifier_after(chars: &[char], start: usize) -> Option<(usize, usize, bool)> {
+    let (mut end, lower_zero) = match chars.get(start) {
+        Some('?') | Some('*') => (start + 1, true),
+        Some('+') => (start + 1, false),
+        Some('{') => {
+            let close = parse_braced_quantifier(chars, start)?;
+            // Lower bound is the digits between `{` and `,`/`}`.
+            let mut k = start + 1;
+            let mut lower = 0u64;
+            let mut saw_digit = false;
+            while k < chars.len() && chars[k].is_ascii_digit() {
+                lower = lower
+                    .saturating_mul(10)
+                    .saturating_add(chars[k].to_digit(10).unwrap_or(0) as u64);
+                saw_digit = true;
+                k += 1;
+            }
+            (close + 1, saw_digit && lower == 0)
+        }
+        _ => return None,
+    };
+    // Lazy modifier on the quantifier (`*?`, `+?`, `{1,2}?`).
+    if chars.get(end) == Some(&'?') {
+        end += 1;
+    }
+    Some((start, end, lower_zero))
+}
+
 pub(super) fn js_regex_to_rust(pattern: &str) -> String {
     let folded = fold_surrogate_pairs(pattern);
+    // Rewrite JS-valid quantified lookaround (`(?=…)?` etc.) that the Rust
+    // `regex`/`fancy-regex` engines reject, before the main translation. See
+    // `normalize_quantified_lookaround`.
+    let folded = normalize_quantified_lookaround(&folded);
     let mut result = String::with_capacity(folded.len());
     let chars: Vec<char> = folded.chars().collect();
     let capture_spans = collect_capture_spans(&chars);
@@ -867,6 +1091,42 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::js_regex_to_rust;
+    use super::normalize_quantified_lookaround;
+
+    #[test]
+    fn quantified_lookaround_normalizes() {
+        // #5437: a quantifier on a zero-width assertion is JS-valid but rejected
+        // by both the `regex` crate and fancy-regex. Lower bound 0 → drop the
+        // whole assertion (no-op); lower bound ≥1 → keep the assertion, drop the
+        // quantifier. Next's UA-parser table (`(?=lg)?[vl]k…`) hits this.
+        assert_eq!(normalize_quantified_lookaround("(?=lg)?x"), "x");
+        assert_eq!(normalize_quantified_lookaround("(?!a)*b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?<=a){0,3}b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?<!a){0}b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?=a)+b"), "(?=a)b");
+        assert_eq!(normalize_quantified_lookaround("(?=a){2,3}b"), "(?=a)b");
+        // Lazy modifier on the quantifier is consumed too.
+        assert_eq!(normalize_quantified_lookaround("(?=a)*?b"), "b");
+        assert_eq!(normalize_quantified_lookaround("(?=a)+?b"), "(?=a)b");
+        // A bare (unquantified) lookaround is left untouched.
+        assert_eq!(normalize_quantified_lookaround("(?=a)b"), "(?=a)b");
+        assert_eq!(normalize_quantified_lookaround("(?!a)b"), "(?!a)b");
+        // The exact Next UA-parser fragment: the inner optional lookahead drops,
+        // the surrounding capture group and the rest stay intact.
+        assert_eq!(
+            normalize_quantified_lookaround(r"((?=lg)?[vl]k\-?\d{3}) bui"),
+            r"([vl]k\-?\d{3}) bui"
+        );
+        // Nested group inside the lookaround: close-paren matching is depth-aware.
+        assert_eq!(normalize_quantified_lookaround("(?=(ab)c)?d"), "d");
+        // A literal escaped paren must not be treated as a group.
+        assert_eq!(normalize_quantified_lookaround(r"\(?=a\)?b"), r"\(?=a\)?b");
+        // Inside a character class, `(?=` is literal — leave it alone.
+        assert_eq!(normalize_quantified_lookaround("[(?=a)]?b"), "[(?=a)]?b");
+        // A quantifier on a normal (non-lookaround) group is untouched.
+        assert_eq!(normalize_quantified_lookaround("(ab)?c"), "(ab)?c");
+        assert_eq!(normalize_quantified_lookaround("(?:ab)?c"), "(?:ab)?c");
+    }
 
     #[test]
     fn surrogate_property_rewrites_to_never_match() {

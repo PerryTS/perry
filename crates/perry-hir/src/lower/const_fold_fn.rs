@@ -729,17 +729,104 @@ pub(crate) fn try_indirect_eval_general(
     if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts) {
         return Ok(Some(throw));
     }
-    // Do NOT model value-producing execution here. Indirect eval runs as global
-    // code: its body sees only the *global* environment, not any enclosing
-    // module/function bindings. A completion-tracking IIFE necessarily captures
-    // the enclosing scope, so it would wrongly resolve module-scoped `var`s that
-    // are invisible to real global eval (e.g. `(0,eval)("y = x")` must throw
-    // ReferenceError when `x` is a module-local) and wrongly persist `var`/
-    // function/class declarations that belong in the global var environment.
-    // Defer all valid bodies to the runtime global-`eval` thunk. (Only the
-    // parse-/early-error SyntaxError cases above are modeled at compile time.)
+    // Indirect eval runs as *global* code: its body sees only the global
+    // environment, never any enclosing module/function bindings. A completion-
+    // tracking IIFE captures the *enclosing* scope, so it only matches global
+    // eval semantics where the enclosing scope already IS the global scope:
+    // module top level (`scope_depth == 0`, no enclosing class / `with` / ESM)
+    // under global-script mode, where module-top `var`s/functions and `this`
+    // are the global bindings (#5608/#5609). There, fold the body to the shared
+    // completion-value IIFE so `(0,eval)('x = 1')` mutates the global `x` and
+    // yields its completion value (test262 language/eval-code/indirect/
+    // cptn-nrml-expr-*, always-non-strict). The wrapper runs sloppy unless the
+    // body opens with its own Use Strict Directive — indirect eval never
+    // inherits the caller's strictness.
+    //
+    // Anywhere else (nested scope, or default CJS mode), capturing the
+    // enclosing scope would wrongly resolve module/function-locals that real
+    // global eval cannot see, so defer those to the runtime global-`eval`
+    // thunk. (Only the parse-/early-error SyntaxError cases above are modeled.)
+    let module_top_global = super::lower_expr::global_script_this_enabled()
+        && ctx.scope_depth == 0
+        && ctx.current_class.is_none()
+        && ctx.with_env_stack.is_empty()
+        && !ctx.is_external_module;
+    // Only fold a *declaration-free* body. A scope-capturing IIFE places any
+    // `var`/`function`/`class`/`let`/`const` the body declares inside the
+    // wrapper, but real global eval routes them to the global var environment
+    // (`var`/`function`) or the eval's own fresh lexical environment
+    // (`let`/`const`/`class`) — and Perry additionally registers class names at
+    // module scope, so a folded `class C {}` would leak `C` to the top level
+    // (test262 language/eval-code/indirect/lex-env-distinct-cls expects it to
+    // stay invisible). A body with no declarations has no such binding to
+    // misplace; it only reads/assigns the globals it names, which the IIFE
+    // resolves correctly. Any declaration → defer to the runtime thunk.
+    if module_top_global && !eval_body_declares_bindings(&body_stmts) {
+        let eval_strict = crate::lower_decl::body_has_use_strict(&body_stmts);
+        return build_eval_completion_iife(ctx, body_stmts, eval_strict, span);
+    }
     let _ = span;
     Ok(None)
+}
+
+/// Does an (indirect) eval body declare any binding — `var` / `function` /
+/// `class` / `let` / `const` / `using` — anywhere within it? Scans recursively
+/// through every statement form that can nest a declaration (a `var`/`function`
+/// hoists out of blocks, loops, `try`, `switch`, `with`, labeled and `if`
+/// statements), so the answer is conservative: a `true` defers the fold.
+fn eval_body_declares_bindings(stmts: &[ast::Stmt]) -> bool {
+    stmts.iter().any(stmt_declares_binding)
+}
+
+fn stmt_declares_binding(stmt: &ast::Stmt) -> bool {
+    use ast::Stmt;
+    match stmt {
+        Stmt::Decl(_) => true,
+        Stmt::Block(b) => eval_body_declares_bindings(&b.stmts),
+        Stmt::Labeled(l) => stmt_declares_binding(&l.body),
+        Stmt::If(i) => {
+            stmt_declares_binding(&i.cons) || i.alt.as_deref().is_some_and(stmt_declares_binding)
+        }
+        Stmt::For(f) => {
+            matches!(&f.init, Some(ast::VarDeclOrExpr::VarDecl(_)))
+                || stmt_declares_binding(&f.body)
+        }
+        Stmt::ForIn(f) => {
+            matches!(
+                &f.left,
+                ast::ForHead::VarDecl(_) | ast::ForHead::UsingDecl(_)
+            ) || stmt_declares_binding(&f.body)
+        }
+        Stmt::ForOf(f) => {
+            matches!(
+                &f.left,
+                ast::ForHead::VarDecl(_) | ast::ForHead::UsingDecl(_)
+            ) || stmt_declares_binding(&f.body)
+        }
+        Stmt::While(w) => stmt_declares_binding(&w.body),
+        Stmt::DoWhile(d) => stmt_declares_binding(&d.body),
+        Stmt::With(w) => stmt_declares_binding(&w.body),
+        Stmt::Try(t) => {
+            eval_body_declares_bindings(&t.block.stmts)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| eval_body_declares_bindings(&h.body.stmts))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| eval_body_declares_bindings(&f.stmts))
+        }
+        Stmt::Switch(s) => s.cases.iter().any(|c| eval_body_declares_bindings(&c.cons)),
+        // Statements that cannot introduce a binding. Listed explicitly (no
+        // `_` catch-all) so a future `ast::Stmt` variant that *can* nest a
+        // declaration is a compile error here rather than a silent miss.
+        Stmt::Expr(_)
+        | Stmt::Empty(_)
+        | Stmt::Debugger(_)
+        | Stmt::Return(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Throw(_) => false,
+    }
 }
 
 pub(crate) fn try_indirect_eval_globalthis(

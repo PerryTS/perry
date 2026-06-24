@@ -1,0 +1,184 @@
+//! Regression (#5579, residual): in *global-script* mode a module-top-level
+//! indirect `eval` of a constant body — `(0, eval)('<const>')` — must execute
+//! as global code and yield the body's completion value, mutating the global
+//! bindings it names.
+//!
+//! Indirect eval runs in the *global* environment, never the caller's lexical
+//! scope. Perry models a constant eval body with a scope-capturing completion
+//! IIFE (the same mechanism direct eval uses, #1679). For indirect eval that is
+//! only sound where the captured enclosing scope already IS the global scope:
+//! module top level under `PERRY_GLOBAL_SCRIPT_THIS` (where module-top `var`s
+//! and `this` are the global bindings, #5608/#5609). There Perry now folds the
+//! body instead of deferring to the runtime global-`eval` thunk (which returned
+//! `undefined` for any body that wasn't the `this`/`globalThis` idiom), so the
+//! Test262 `language/eval-code/indirect/cptn-nrml-expr-*` and
+//! `always-non-strict` completion-value cases resolve against the script-mode
+//! Node oracle.
+//!
+//! Outside that window — a nested scope, or default CJS mode — capturing the
+//! enclosing scope would wrongly resolve function/module-locals that real
+//! global eval cannot see, so those bodies still defer (this test pins that the
+//! fold is gated to module top level + global-script mode).
+
+use std::path::PathBuf;
+use std::process::Command;
+
+fn perry_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_perry"))
+}
+
+/// Compile `src` and run it. `global_script` toggles `PERRY_GLOBAL_SCRIPT_THIS`.
+/// Returns (clean_exit, stdout).
+fn compile_and_run(src: &str, global_script: bool) -> (bool, String) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    std::fs::write(&entry, src).expect("write entry");
+    let output = dir.path().join("main_bin");
+
+    let mut compile = Command::new(perry_bin());
+    compile
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .env("PERRY_NO_AUTO_OPTIMIZE", "1")
+        // Indirect-eval bodies are classified bucket-3 (runtime-unknown) under
+        // strict-eval; the Test262 harness runs permissively. Mirror it.
+        .env("PERRY_ALLOW_EVAL", "1");
+    if global_script {
+        compile.env("PERRY_GLOBAL_SCRIPT_THIS", "1");
+    } else {
+        compile.env_remove("PERRY_GLOBAL_SCRIPT_THIS");
+    }
+    let compiled = compile.output().expect("run perry compile");
+    assert!(
+        compiled.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compiled.stdout),
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    (
+        run.status.success(),
+        String::from_utf8_lossy(&run.stdout).to_string(),
+    )
+}
+
+/// `language/eval-code/indirect/cptn-nrml-expr-prim.js` shape: the completion
+/// value of an indirect eval is its body's expression value, and an assignment
+/// inside the body mutates the *global* (module-top) binding it names.
+const CPTN_PRIM: &str = r#"
+var x;
+console.log("assign:", (0, eval)("x = 1"));   // AssignmentExpression -> 1
+console.log("num:", (0, eval)("1"));          // NumericLiteral      -> 1
+console.log("str:", (0, eval)("'1'"));        // StringLiteral       -> '1'
+x = 1;
+console.log("update:", (0, eval)("++x"));     // UpdateExpression    -> 2
+console.log("x.after:", x);                   // global x mutated    -> 2
+console.log("DONE");
+"#;
+
+#[test]
+fn indirect_eval_completion_value_global_script() {
+    let (ok, out) = compile_and_run(CPTN_PRIM, /* global_script */ true);
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(
+        out.contains("assign: 1"),
+        "x = 1 completion must be 1\n{out}"
+    );
+    assert!(out.contains("num: 1"), "`1` completion must be 1\n{out}");
+    assert!(
+        out.contains("str: 1"),
+        "`'1'` completion must be '1'\n{out}"
+    );
+    assert!(
+        out.contains("update: 2"),
+        "`++x` completion must be 2\n{out}"
+    );
+    assert!(
+        out.contains("x.after: 2"),
+        "indirect eval must mutate the global `x`\n{out}"
+    );
+}
+
+/// `cptn-nrml-expr-obj.js` shape: the eval body reads a global object and the
+/// completion is that very object (identity preserved).
+const CPTN_OBJ: &str = r#"
+var x = { tag: "obj" };
+var y;
+console.log("yx:", (0, eval)("y = x") === x);  // AssignmentExpression -> x
+console.log("id:", (0, eval)("x") === x);      // IdentifierReference  -> x
+console.log("y:", y === x);                     // global y was set     -> true
+console.log("DONE");
+"#;
+
+#[test]
+fn indirect_eval_object_identity_global_script() {
+    let (ok, out) = compile_and_run(CPTN_OBJ, /* global_script */ true);
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(
+        out.contains("yx: true"),
+        "`y = x` completion must be x\n{out}"
+    );
+    assert!(out.contains("id: true"), "`x` completion must be x\n{out}");
+    assert!(
+        out.contains("y: true"),
+        "global `y` must be assigned x\n{out}"
+    );
+}
+
+/// Indirect eval is *always sloppy* (no inherited strictness), so a body that
+/// only a sloppy context admits — `with`, an undeclared assignment — runs and
+/// its side effects land. (`language/eval-code/indirect/always-non-strict.js`
+/// minus the strict-reserved-word `var static` line, a separate gap.)
+const NON_STRICT: &str = r#"
+var count = 0;
+(0, eval)('with ({}) {} count += 1;');
+(0, eval)('unresolvable = null; count += 1;');
+console.log("count:", count);  // -> 2
+console.log("DONE");
+"#;
+
+#[test]
+fn indirect_eval_is_always_sloppy_global_script() {
+    let (ok, out) = compile_and_run(NON_STRICT, /* global_script */ true);
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(
+        out.contains("count: 2"),
+        "both sloppy bodies must run\n{out}"
+    );
+}
+
+/// The fold is gated to module top level: an indirect eval inside a function
+/// must NOT capture that function's locals (real global eval cannot see them).
+/// Here the inner `local` is invisible to the indirect eval, so `typeof local`
+/// resolves as `"undefined"` in global scope and the program exits cleanly.
+/// (Pins that the completion IIFE is not applied at nested scope, where it would
+/// wrongly resolve `local` to its `number` value.)
+const NESTED_NOT_FOLDED: &str = r#"
+function f() {
+  var local = 7;
+  return (0, eval)("typeof local");  // global eval can't see `local`
+}
+console.log("typeof:", f());  // -> "undefined", never "number"
+console.log("DONE");
+"#;
+
+#[test]
+fn indirect_eval_nested_does_not_capture_locals() {
+    let (ok, out) = compile_and_run(NESTED_NOT_FOLDED, /* global_script */ true);
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    // Positive expectation: the body resolves against the global env (where
+    // `local` does not exist), so `typeof local` is `"undefined"` — never the
+    // function local's `number` value.
+    assert!(
+        out.contains("typeof: undefined") && out.contains("DONE"),
+        "indirect eval should resolve `typeof local` as \"undefined\" in global scope\n{out}"
+    );
+    assert!(
+        !out.contains("typeof: number"),
+        "indirect eval must not capture the enclosing function's `local`\n{out}"
+    );
+}

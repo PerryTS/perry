@@ -217,6 +217,13 @@ pub enum NativeAbiType {
     JsValue,
     /// JavaScript string passed/returned through a raw runtime string pointer.
     String,
+    /// JavaScript value serialized to a JSON string before the call. The arg is
+    /// run through `JSON.stringify` at the call site and the resulting runtime
+    /// string pointer is passed in a single `string` ABI slot, so the native
+    /// side receives a `*const StringHeader` it can `serde_json`-deserialize —
+    /// identical wire shape to [`NativeAbiType::String`], but the JS argument
+    /// may be an object, array, or any other serializable value. Param-only.
+    Json,
     /// JavaScript truthiness lowered to a C `i32` boolean slot.
     Bool,
     /// Signed 32-bit integer slot.
@@ -271,6 +278,7 @@ impl NativeAbiType {
         match lower.as_str() {
             "jsvalue" | "js_value" => Ok(Self::JsValue),
             "string" => Ok(Self::String),
+            "json" => Ok(Self::Json),
             "bool" | "boolean" => Ok(Self::Bool),
             "i32" => Ok(Self::I32),
             "i64" => Ok(Self::I64),
@@ -328,6 +336,7 @@ impl NativeAbiType {
         match self {
             Self::JsValue => "jsvalue",
             Self::String => "string",
+            Self::Json => "json",
             Self::Bool => "bool",
             Self::I32 => "i32",
             Self::I64 => "i64",
@@ -439,7 +448,7 @@ impl NativeAbiType {
     pub fn is_valid_return(&self) -> bool {
         !matches!(
             self,
-            Self::BufferAndLen | Self::Pod(_) | Self::PodAndCount(_) | Self::HandleId
+            Self::BufferAndLen | Self::Pod(_) | Self::PodAndCount(_) | Self::HandleId | Self::Json
         )
     }
 
@@ -451,7 +460,7 @@ impl NativeAbiType {
             Self::Bool => "boolean",
             Self::Void => "void",
             Self::Promise(_) => "Promise<any>",
-            Self::Handle(_) | Self::Ptr | Self::JsValue => "any",
+            Self::Handle(_) | Self::Ptr | Self::JsValue | Self::Json => "any",
             Self::Pod(_) => "object",
             Self::PodAndCount(_) => "PerryPodView<any>",
             Self::BufferAndLen => "Buffer",
@@ -543,3 +552,28 @@ impl fmt::Display for NativeAbiParseError {
 }
 
 impl std::error::Error for NativeAbiParseError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_descriptor_parses_and_is_param_only() {
+        // #5626: `"json"` is an opt-in param type that JSON-serializes its JS
+        // argument into a single `string` ABI slot at the call site.
+        let json = NativeAbiType::parse_str("json").expect("json must parse");
+        assert_eq!(json, NativeAbiType::Json);
+        assert_eq!(json.canonical_kind(), "json");
+        assert_eq!(json.to_string(), "json");
+        // Whitespace/case insensitivity, matching the other spellings.
+        assert_eq!(NativeAbiType::parse_str("  JSON ").unwrap(), json);
+
+        // One ABI slot, JS-facing `any`, valid as a param but not as a return.
+        assert_eq!(json.abi_slot_count(), 1);
+        assert_eq!(json.js_type_name(), "any");
+        assert!(json.is_valid_param());
+        assert!(!json.is_valid_return());
+        // Not a scalar POD field.
+        assert!(!json.is_valid_pod_field());
+    }
+}

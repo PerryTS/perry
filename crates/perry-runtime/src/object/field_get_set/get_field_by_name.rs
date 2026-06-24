@@ -1,0 +1,806 @@
+//! `js_object_get_field_by_name` inline-cache hot path: leading receiver
+//! guards. The object-deref tail lives in `get_field_by_name_tail.rs`.
+//! Pure relocation out of field_get_set.rs (issue #1103 split).
+
+use super::*;
+
+#[no_mangle]
+pub extern "C" fn js_object_get_field_by_name(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> JSValue {
+    // #2846: the receiver may be a Proxy value that arrived through a generic
+    // property read (e.g. `rec.proxy.a` where `rec = Proxy.revocable(...)`).
+    // Proxies are encoded as small fake pointers; deref-ing one as an
+    // ObjectHeader would read unmapped memory. Route to the proxy get dispatch,
+    // which forwards to the target (or throws on a revoked proxy) — matching
+    // Node. `js_proxy_is_proxy` validates the value is a *registered* proxy so a
+    // real heap object whose address happens to be small isn't misrouted.
+    {
+        // Proxy ids live in the proxy id band; `js_proxy_is_proxy` confirms
+        // it is a *registered* proxy before we route to the proxy getter.
+        let addr = obj as u64;
+        if crate::value::addr_class::is_proxy_id_band(addr as usize) && !key.is_null() {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
+            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+                let v = crate::proxy::js_proxy_get(boxed, key_f64);
+                return JSValue::from_bits(v.to_bits());
+            }
+        }
+    }
+    if let Some(addr) =
+        crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
+    {
+        if !key.is_null() {
+            unsafe {
+                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let key_len = (*key).byte_len as usize;
+                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                let ta = addr as *const crate::typedarray::TypedArrayHeader;
+                if let Some(value) = crypto_key_property_value(addr, key_bytes) {
+                    return value;
+                }
+                if let Some(value) =
+                    crate::typedarray_props::typed_array_get_own_property_value(ta, key)
+                {
+                    return JSValue::from_bits(value.to_bits());
+                }
+                if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+                    let elem_size = crate::typedarray::elem_size_for_kind(kind);
+                    match key_bytes {
+                        b"length" => {
+                            let len = crate::typedarray::js_typed_array_length(ta);
+                            return JSValue::number(len as f64);
+                        }
+                        b"byteLength" => {
+                            let len = crate::typedarray::js_typed_array_length(ta);
+                            return JSValue::number((len as usize * elem_size) as f64);
+                        }
+                        b"buffer" => {
+                            let buf = crate::typedarray_view::js_typed_array_backing_buffer(ta);
+                            if buf.is_null() {
+                                return JSValue::undefined();
+                            }
+                            return JSValue::from_bits(
+                                crate::value::js_nanbox_pointer(buf as i64).to_bits(),
+                            );
+                        }
+                        b"byteOffset" => {
+                            return JSValue::number(
+                                crate::typedarray_view::js_typed_array_byte_offset(ta) as f64,
+                            )
+                        }
+                        b"BYTES_PER_ELEMENT" => return JSValue::number(elem_size as f64),
+                        // `(new Int8Array(…)).constructor === Int8Array`. The
+                        // instance never carries an own `constructor`; it is
+                        // inherited from the per-kind prototype. Resolve it to
+                        // the global per-kind constructor value so identity holds
+                        // (matches the buffer branch below and the `Number`
+                        // auto-box path). Custom-prototype views (set via the
+                        // `Reflect.construct` newTarget path) record their own
+                        // prototype and resolve `.constructor` through that
+                        // chain instead — handled before this native fallback.
+                        b"constructor" => {
+                            // A custom-`[[Prototype]]` view (Reflect.construct
+                            // with a newTarget whose `.prototype` is an object)
+                            // inherits `.constructor` through that prototype
+                            // chain, NOT from the per-kind constructor.
+                            if let Some(proto_bits) =
+                                super::super::prototype_chain::object_static_prototype(addr)
+                            {
+                                if proto_bits != crate::value::TAG_NULL {
+                                    let proto = JSValue::from_bits(proto_bits);
+                                    if proto.is_pointer() {
+                                        let p = proto.as_pointer::<ObjectHeader>();
+                                        return super::super::js_object_get_field_by_name(p, key);
+                                    }
+                                }
+                            }
+                            // A user patch on the per-kind prototype
+                            // (`Object.defineProperty(TA.prototype,
+                            // "constructor", { get })` or a data overwrite)
+                            // shadows the intrinsic — run the getter with
+                            // `this` = the view (observable; test262
+                            // speciesctor-get-ctor-inherited reads
+                            // `result.constructor` and counts calls).
+                            if let Some(v) =
+                                crate::typedarray::species::prototype_constructor_patch(kind, addr)
+                            {
+                                return JSValue::from_bits(v.to_bits());
+                            }
+                            let name = crate::typedarray::name_for_kind(kind);
+                            let ctor = super::super::js_get_global_this_builtin_value(
+                                name.as_ptr(),
+                                name.len(),
+                            );
+                            return JSValue::from_bits(ctor.to_bits());
+                        }
+                        _ => {}
+                    }
+                } else {
+                    let buf = addr as *const crate::buffer::BufferHeader;
+                    match key_bytes {
+                        b"length" | b"byteLength" => {
+                            return JSValue::number(crate::buffer::js_buffer_length(buf) as f64);
+                        }
+                        b"buffer" | b"parent" => {
+                            let alias = crate::buffer::buffer_backing_array_buffer(addr);
+                            return JSValue::from_bits(
+                                crate::value::js_nanbox_pointer(alias as i64).to_bits(),
+                            );
+                        }
+                        b"byteOffset" | b"offset" => {
+                            let offset = crate::buffer::buffer_byte_offset(addr);
+                            return JSValue::number(offset as f64);
+                        }
+                        b"BYTES_PER_ELEMENT" => return JSValue::number(1.0),
+                        b"constructor" => {
+                            // An ArrayBuffer / SharedArrayBuffer cell answers
+                            // with ITS constructor — only the Uint8Array
+                            // (Buffer-backed view) representation reports
+                            // `Uint8Array` (`ta.buffer.constructor ===
+                            // ArrayBuffer`, test262 ctors/buffer-arg/
+                            // typedarray-backed-by-sharedarraybuffer).
+                            let name: &[u8] = if crate::buffer::is_shared_array_buffer(addr) {
+                                b"SharedArrayBuffer"
+                            } else if crate::buffer::is_any_array_buffer(addr) {
+                                b"ArrayBuffer"
+                            } else {
+                                b"Uint8Array"
+                            };
+                            let ctor = super::super::js_get_global_this_builtin_value(
+                                name.as_ptr(),
+                                name.len(),
+                            );
+                            return JSValue::from_bits(ctor.to_bits());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // #4363 regression fix: a secret-key Uint8Array (KeyObject backing
+        // buffer) exposes `type` / `symmetricKeySize` / `asymmetricKey*`
+        // through the KeyObject metadata block later in this function. The
+        // typed-array own-property fallback must not shadow those with
+        // `undefined` — fall through for a secret-key buffer so the metadata
+        // block resolves them. Plain typed arrays keep the `undefined` result.
+        if !crate::buffer::is_secret_key(addr) {
+            return JSValue::undefined();
+        }
+    }
+    // #2128: a plain JS number value (a finite double or canonical NaN —
+    // anything `JSValue::is_number` returns true for *minus* the raw-I64
+    // pointer convention where top16 == 0) reaches this generic property-get
+    // when codegen lacks static type info — e.g. drizzle's
+    // `buildQueryFromSourceParams` mapping a chunk that happens to be a
+    // bound-param number (`1` row-id, `31` age). Without this guard the
+    // receiver's f64 bits get bit-cast to a pointer and the first downstream
+    // helper that reads a GC header (`is_registered_set` here, `(*obj).field_*`
+    // elsewhere) derefs unmapped memory and SIGSEGVs. Spec: property access
+    // on a primitive number returns undefined for unknown keys (we don't
+    // auto-box to Number.prototype here; that's handled by the method-dispatch
+    // path, not this property-getter slow path). Heap pointers stored as raw
+    // I64 (module-level objects) have top16 == 0 and are preserved by this
+    // check.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        // Two shapes of primitive-number receiver reach this generic slow
+        // path: (a) a finite double whose top16 is neither a NaN-box tag
+        // nor zero — most numbers (1.0 has top16 0x3FF0, -3.14 has
+        // 0xC008...), and (b) the f64 +0.0 whose full bit pattern is
+        // `0` — distinguishable from a raw heap pointer because real
+        // ObjectHeader allocations live above 0x10000 and from null /
+        // undefined because both are NaN-boxed with top16 == 0x7FFC.
+        let is_primitive_number =
+            (top16 != 0 && !(0x7FF9..=0x7FFF).contains(&top16)) || (top16 == 0 && bits == 0);
+        if is_primitive_number {
+            // #2138: auto-box the primitive number for the inherited
+            // `.constructor` read so `n.constructor === Number` (and the
+            // duck-type `value.constructor.name === "Number"` lodash/date-fns
+            // use to discriminate primitives). Route through the same
+            // `js_get_global_this_builtin_value` helper that backs bare-`Number`
+            // identifier resolution so identity comparison holds. Other unknown
+            // keys still return undefined per #2128 (was SIGSEGV pre-#2128).
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        if let Some(v) =
+                            primitive_object_prototype_accessor(name, f64::from_bits(bits))
+                        {
+                            return v;
+                        }
+                    }
+                    if let Some(v) =
+                        primitive_builtin_prototype_property(b"Number", key, f64::from_bits(bits))
+                    {
+                        return v;
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // A primitive string receiver inherits `.constructor` from String.prototype:
+    // `"x".constructor === String` (test262 language/types/string/S8.4_A9/A12).
+    // The common string members (`.length`, indices, methods) are served by the
+    // codegen fast paths and never reach this generic slow path, so only the
+    // inherited `constructor` read needs routing here; resolve it to the same
+    // global `String` value bare-`String` yields so identity holds.
+    {
+        let bits = obj as u64;
+        if !key.is_null() && crate::value::JSValue::from_bits(bits).is_any_string() {
+            unsafe {
+                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let key_len = (*key).byte_len as usize;
+                if std::slice::from_raw_parts(key_ptr, key_len) == b"constructor" {
+                    let ctor =
+                        super::super::js_get_global_this_builtin_value(b"String".as_ptr(), 6);
+                    return JSValue::from_bits(ctor.to_bits());
+                }
+            }
+        }
+    }
+    // Native module registry handles can arrive here either as raw small
+    // integers or as POINTER_TAG-boxed small integers. Route them before any
+    // GC-header probes such as Date/Promise checks.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let raw = if top16 == 0 {
+            bits as usize
+        } else if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else {
+            0
+        };
+        if crate::value::addr_class::is_small_handle(raw) {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if is_timer_handle_method_key(key_bytes)
+                        && crate::timer::is_known_timer_id(raw as i64)
+                    {
+                        let this_f64 =
+                            f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
+                        let result = super::super::js_class_method_bind(this_f64, key_ptr, key_len);
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                    if key_bytes == b"constructor" {
+                        let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
+                        return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                    }
+                    if let Some(dispatch) = handle_property_dispatch() {
+                        let bits = dispatch(raw as i64, key_ptr, key_len);
+                        return JSValue::from_bits(bits.to_bits());
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // #2089: a `Date` is a NaN-boxed pointer to an 8-byte `DateCell`. A
+    // generic property read on it (`date.constructor`, `date[k]`, a method
+    // read as a value) must NOT fall through to the object-deref path below —
+    // the cell is far smaller than an `ObjectHeader`, so reading its
+    // `keys_array`/field slots would deref unmapped memory. Resolve the few
+    // meaningful reads here and return `undefined` for everything else
+    // (matching property reads on the old value-type Date). `obj` may arrive
+    // NaN-boxed (top16 == 0x7FFD) or as a raw-I64 pointer (top16 == 0).
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::date::is_date_cell_addr(addr) {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    // User expando / defineProperty'd own properties first.
+                    if let Ok(name) = std::str::from_utf8(key_bytes) {
+                        let receiver = f64::from_bits(
+                            crate::value::JSValue::pointer(addr as *const u8).bits(),
+                        );
+                        if let Some(v) = super::super::exotic_expando::exotic_get_own_property(
+                            addr,
+                            super::super::exotic_expando::ExoticKind::Date,
+                            name,
+                            receiver,
+                        ) {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
+                    if key_bytes == b"constructor" {
+                        let v = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    // A Date method read as a *value* (`const f = d.getTime`,
+                    // `typeof d.toISOString`, `d.toJSON === Date.prototype.toJSON`)
+                    // resolves to the same thunk installed on `Date.prototype`.
+                    // The `d.method()` call form is handled by codegen's fast
+                    // path and never reaches here, so this only affects value
+                    // reads. Unknown keys still return undefined.
+                    let date_ctor = js_get_global_this_builtin_value(b"Date".as_ptr(), 4);
+                    let cv = JSValue::from_bits(date_ctor.to_bits());
+                    if cv.is_pointer() {
+                        let ctor_ptr = cv.as_pointer::<crate::closure::ClosureHeader>() as usize;
+                        let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
+                        let pv = JSValue::from_bits(proto.to_bits());
+                        if pv.is_pointer() {
+                            let proto_ptr = pv.as_pointer::<ObjectHeader>();
+                            if !proto_ptr.is_null() {
+                                let m = js_object_get_field_by_name(proto_ptr, key);
+                                if !m.is_undefined() {
+                                    return JSValue::from_bits(m.bits());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // Temporal cell (#4686): like Date, a `Temporal.*` value is a NaN-boxed
+    // pointer to a small cell that must NOT fall through to the object-deref
+    // path. Resolve its getters (`duration.years`, `plainDate.month`, …) here
+    // and return `undefined` for anything else (a Temporal method read as a
+    // bare value is rare; the `value.method()` call form is handled in
+    // `js_native_call_method`). `obj` may be NaN-boxed (top16 0x7FFD) or a
+    // raw-I64 pointer (top16 0).
+    #[cfg(feature = "temporal")]
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        let addr = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        if addr != 0 && crate::temporal::is_temporal_cell_addr(addr) {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    let name = String::from_utf8_lossy(key_bytes);
+                    let boxed = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+                    // A user-defined own expando property (`Object.defineProperty`
+                    // / plain assignment) shadows the built-in prototype getters,
+                    // per OrdinaryGet walking own properties before the prototype.
+                    if let Some(v) = super::super::exotic_expando::exotic_get_own_property(
+                        addr,
+                        super::super::exotic_expando::ExoticKind::Temporal,
+                        &name,
+                        boxed,
+                    ) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    if let Some(v) = crate::temporal::dispatch::get_property(boxed, &name) {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // Issue #818 (Effect class-instance pattern): a V8 handle (JS_HANDLE_TAG
+    // = 0x7FFB) reaches here when codegen routes a generic `PropertyGet`
+    // through this slow path — e.g. `Effect.succeed(42).value` where the
+    // call return was a JS handle but the HIR `js_transform` pass didn't
+    // rewrite the consumer-side `.value` into `JsGetProperty` (because the
+    // call lowered as a `StaticMethodCall`, not as a `JsCallMethod`). The
+    // method-call counterpart in `js_call_method` already routes
+    // JS_HANDLE_TAG values to V8 via JS_HANDLE_CALL_METHOD; do the same
+    // here via JS_HANDLE_OBJECT_GET_PROPERTY so subsequent property reads
+    // on a returned class instance reach the live V8 object instead of
+    // falling to the small-handle dispatch (which only knows about
+    // Fastify/axios/sqlite, not generic V8 handles).
+    {
+        let bits = obj as u64;
+        if (bits >> 48) == 0x7FFB && !key.is_null() {
+            let func_ptr = crate::value::JS_HANDLE_OBJECT_GET_PROPERTY
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if !func_ptr.is_null() {
+                let func: unsafe extern "C" fn(f64, *const i8, usize) -> f64 =
+                    unsafe { std::mem::transmute(func_ptr) };
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let result = func(f64::from_bits(bits), key_ptr as *const i8, key_len);
+                    return JSValue::from_bits(result.to_bits());
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // Issue #618-followup: read INT32-tagged class ref's dynamic property
+    // from the side-table (mirror of the set-side intercept). For drizzle's
+    // `SQL.Aliased` lookup pattern.
+    {
+        let bits = obj as u64;
+        if (bits >> 48) == 0x7FFE && !key.is_null() {
+            let class_id = (bits & 0xFFFF_FFFF) as u32;
+            let class_value = f64::from_bits(bits);
+            let is_prototype_ref = super::super::class_prototype_ref_id(class_value).is_some();
+            unsafe {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                    .unwrap_or("");
+                // v0.5.752: class_ref.constructor synthesizes back to the
+                // same class ref so drizzle's
+                // `Object.getPrototypeOf(value).constructor === Class` chain
+                // collapses correctly (with v0.5.751's getPrototypeOf
+                // returning the class ref for instance receivers). Refs
+                // #420 / #618 followup.
+                if is_prototype_ref
+                    && name == "constructor"
+                    && class_id != 0
+                    && class_has_own_method(class_id, name)
+                {
+                    let value = class_prototype_method_value_for_name(class_id, name);
+                    return JSValue::from_bits(value.to_bits());
+                }
+                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
+                    let value = if is_prototype_ref {
+                        super::super::class_constructor_ref_value(class_id)
+                    } else {
+                        class_value
+                    };
+                    return JSValue::from_bits(value.to_bits());
+                }
+                if name == "prototype"
+                    && class_id != 0
+                    && is_class_id_registered(class_id)
+                    && !is_prototype_ref
+                {
+                    let value = super::super::class_registry::class_decl_prototype_value(class_id);
+                    if value.to_bits() == crate::value::TAG_UNDEFINED {
+                        let value = super::super::class_prototype_ref_value(class_id);
+                        return JSValue::from_bits(value.to_bits());
+                    }
+                    return JSValue::from_bits(value.to_bits());
+                }
+                if class_id != 0 && class_has_own_method(class_id, name) {
+                    let value = class_prototype_method_value_for_name(class_id, name);
+                    return JSValue::from_bits(value.to_bits());
+                }
+                if is_prototype_ref {
+                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+                        if let Some(ref reg) = *registry {
+                            let mut cid = class_id;
+                            let mut depth = 0usize;
+                            while depth < 32 {
+                                if let Some(vtable) = reg.get(&cid) {
+                                    if let Some(&getter_ptr) = vtable.getters.get(name) {
+                                        let f: extern "C" fn(f64) -> f64 =
+                                            std::mem::transmute(getter_ptr);
+                                        return JSValue::from_bits(f(class_value).to_bits());
+                                    }
+                                }
+                                match get_parent_class_id(cid) {
+                                    Some(p) if p != 0 && p != cid => {
+                                        cid = p;
+                                        depth += 1;
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        }
+                    }
+                    return JSValue::undefined();
+                }
+                // Empty-string is a legal static member key (`static get ''()`);
+                // the `!name.is_empty()` guard below skips it, so resolve a
+                // static accessor named "" here (Test262 accessor-name-static
+                // literal-string-empty).
+                if name.is_empty() {
+                    if let Some(v) =
+                        super::super::class_registry::class_static_accessor_getter_value(
+                            class_id,
+                            name,
+                            class_value,
+                        )
+                    {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+                if !name.is_empty() {
+                    if super::super::class_registry::class_is_key_deleted(class_id, name) {
+                        return JSValue::undefined();
+                    }
+                    let result = CLASS_DYNAMIC_PROPS.with(|m| {
+                        m.borrow()
+                            .get(&class_id)
+                            .and_then(|props| props.get(name).copied())
+                    });
+                    if let Some(v) = result {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
+                        .is_some()
+                    {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(name_ptr, ptr, name_len);
+                            ptr
+                        };
+                        let result = js_class_method_bind(class_value, heap_name, name_len);
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                    if let Some(v) =
+                        super::super::class_registry::class_static_accessor_getter_value(
+                            class_id,
+                            name,
+                            class_value,
+                        )
+                    {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                    // #1788: a subclass of a class-expression value
+                    // (`class Sub extends make("A") {}`) inherits the parent
+                    // class OBJECT's OWN per-evaluation static fields. The
+                    // parent object was recorded as `class_id`'s static
+                    // prototype at `extends` time; walk that chain (also
+                    // covering multi-level `class Leaf extends Mid {}`).
+                    if let Some(v) =
+                        super::super::class_registry::resolve_proto_chain_field(class_id, key)
+                    {
+                        if !v.is_undefined() && !v.is_null() {
+                            return v;
+                        }
+                    }
+                    // #36 / #321: the subclass extends a FUNCTION value
+                    // (`class Svc extends Context.Tag(id)<...>() {}`). Read the
+                    // named static off the parent closure — its OWN props
+                    // (`Svc.key` → "Svc") plus, via the closure getter, its
+                    // static prototype (`Svc._op` → "Tag" on TagProto).
+                    if let Some(closure_ptr) =
+                        super::super::class_registry::class_parent_closure(class_id)
+                    {
+                        let v = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
+                        let vb = JSValue::from_bits(v.to_bits());
+                        if !vb.is_undefined() && !vb.is_null() {
+                            return vb;
+                        }
+                    }
+                    // #2059: the constructor's built-in `name` own property —
+                    // the class name. Checked last so an explicit static
+                    // `name` member (method/field, handled above) still wins.
+                    // This is what `assert.throws` reads via
+                    // `thrown.constructor.name` to label the thrown error.
+                    if name == "name"
+                        && class_id != 0
+                        && !super::super::class_registry::class_is_key_deleted(class_id, name)
+                    {
+                        if let Some(cname) =
+                            super::super::class_registry::class_name_for_id(class_id)
+                        {
+                            let s = crate::string::js_string_from_bytes(
+                                cname.as_ptr(),
+                                cname.len() as u32,
+                            );
+                            return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                        }
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // #1545: Promise `then`/`catch`/`finally` value-reads return a bound
+    // function so `typeof p.then === "function"`, `const f = p.then`, and
+    // passing `p.then` as a deferred callback all work. (The call form
+    // `p.then(cb)` is lowered directly to `js_promise_then` by codegen.)
+    // `obj` arrives NaN-boxed POINTER-tagged here; mask to the raw promise
+    // pointer and confirm via the GC header before treating it as a promise.
+    {
+        let bits = obj as u64;
+        let top16 = bits >> 48;
+        // Callers reach this helper with either a NaN-boxed POINTER-tagged
+        // value (0x7FFD, e.g. the `_f64` wrapper) or an already-masked raw
+        // heap pointer (top16 == 0, e.g. the PIC miss handler), so accept both.
+        let raw = if top16 == 0x7FFD {
+            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else if top16 == 0 {
+            bits as usize
+        } else {
+            0
+        };
+        // Native-module registry handles live in the handle band and can also
+        // be POINTER_TAG-boxed; do not walk back to a GcHeader for those.
+        if crate::value::addr_class::is_plausible_heap_addr(raw) && !key.is_null() {
+            {
+                unsafe {
+                    let gc_header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                    // Buffers / typed arrays are `std::alloc`-backed and carry
+                    // NO GcHeader, so the byte at `raw - 8` is unrelated memory
+                    // that can read as `GC_TYPE_PROMISE` (5) by coincidence on
+                    // an IC-miss read. Exclude them before acting — otherwise a
+                    // genuine buffer metadata read would early-return undefined.
+                    if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE
+                        && !crate::buffer::is_registered_buffer(raw)
+                        && crate::typedarray::lookup_typed_array_kind(raw).is_none()
+                    {
+                        let name_ptr =
+                            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let name_len = (*key).byte_len as usize;
+                        let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                        let prop = std::str::from_utf8_unchecked(name_bytes);
+                        // #5142: a user-attached own expando (`p.status = …`,
+                        // `Object.assign(p, …)`) wins over the inherited
+                        // prototype method. @tanstack/query-core's
+                        // `pendingThenable()` stores `status`/`value` on the
+                        // promise and gates its retryer on `thenable.status`;
+                        // without this the read came back `undefined`,
+                        // `isResolved()` was permanently true, and the fetch
+                        // never resolved.
+                        if let Some(v) = super::super::exotic_expando::exotic_get_own_property(
+                            raw,
+                            super::super::exotic_expando::ExoticKind::Promise,
+                            prop,
+                            f64::from_bits(obj as u64),
+                        ) {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                        if matches!(name_bytes, b"then" | b"catch" | b"finally") {
+                            if let Some(v) = crate::promise::js_promise_bound_method(
+                                raw as *mut crate::promise::Promise,
+                                prop,
+                            ) {
+                                return JSValue::from_bits(v.to_bits());
+                            }
+                        }
+                        // `promise.constructor` is the global `Promise`
+                        // (inherited from `Promise.prototype.constructor`). Any
+                        // own expando (`p.constructor = X`) already returned via
+                        // `exotic_get_own_property` above. execa
+                        // (`(async () => {})().constructor.prototype`) reads it
+                        // to capture the native promise prototype — without this
+                        // arm it fell through to `undefined` and
+                        // `.prototype` threw `Cannot read properties of
+                        // undefined`.
+                        if name_bytes == b"constructor" {
+                            let v = crate::object::js_get_global_this_builtin_value(
+                                b"Promise".as_ptr(),
+                                7,
+                            );
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                        // A Promise is a `GC_TYPE_PROMISE` cell, not an
+                        // `ObjectHeader`; never fall through to the field/vtable
+                        // path below (it would reinterpret the promise's bytes).
+                        return JSValue::from_bits(crate::value::TAG_UNDEFINED);
+                    }
+                }
+            }
+        }
+    }
+    // SSO property access (v0.5.213 Step 1 gate). The codegen inline
+    // `.length` path routes SHORT_STRING_TAG receivers here because
+    // it doesn't yet know about the SSO tag. Handle `.length` by
+    // reading the length byte directly from the NaN-box payload.
+    // Other property accesses on an SSO string (e.g. `.charAt` via
+    // `[0]`, `.slice`) aren't yet routed here — handled by the
+    // string method dispatch in a future migration step; today they
+    // fall through to "undefined" which matches the behavior for
+    // string-valued property access on untyped locals in general.
+    {
+        let obj_bits = obj as u64;
+        if (obj_bits & crate::value::TAG_MASK) == crate::value::SHORT_STRING_TAG {
+            if !key.is_null() {
+                unsafe {
+                    let key_ptr =
+                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                    let key_len = (*key).byte_len as usize;
+                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                    if key_bytes == b"length" {
+                        let len = (obj_bits & crate::value::SHORT_STRING_LEN_MASK)
+                            >> crate::value::SHORT_STRING_LEN_SHIFT;
+                        return JSValue::number(len as f64);
+                    }
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    // #1670: Web Streams handles are returned as `id as f64` (a normal
+    // float, NOT NaN-boxed) just above the pointer-tagged small-handle band, so
+    // an inline `res.body.locked` reaches this generic field-get with `obj`
+    // carrying the IEEE-754 bits of the stream id.
+    // The NaN-box-strip + small-handle branches below don't recognise it
+    // (top16 is an ordinary exponent, not a tag; the value as a pointer is
+    // far above 0x100000), so it would be dereferenced as a heap pointer →
+    // segfault. Decode the float; when the stdlib probe confirms a live
+    // stream handle, route the property read through the handle property
+    // dispatcher (which carries the #1670 stream getter/method arms).
+    // Mirrors the method-dispatch path in `native_call_method.rs` (#1545).
+    // The typed-local path (`const b = res.body; b.locked`) lowers as a
+    // 0-arg NativeMethodCall getter and never reaches here.
+    {
+        let f = f64::from_bits(obj as u64);
+        if !key.is_null() && f.is_finite() && f > 0.0 && f.fract() == 0.0 {
+            let id = f as usize;
+            if crate::value::addr_class::is_stream_id_band(id) {
+                if let Some(probe) = crate::object::stream_handle_probe() {
+                    unsafe {
+                        if probe(id) {
+                            if let Some(dispatch) = handle_property_dispatch() {
+                                let key_ptr = (key as *const u8)
+                                    .add(std::mem::size_of::<crate::StringHeader>());
+                                let key_len = (*key).byte_len as usize;
+                                let bits = dispatch(id as i64, key_ptr, key_len);
+                                return JSValue::from_bits(bits.to_bits());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // #2058: a raw, unboxed finite f64 NUMBER receiver (e.g. `(5).toString`,
+    // or `n.isPrototypeOf` where `n: number`) reaches here with its float
+    // bits intact — numbers are NOT NaN-boxed in Perry, so `5.0` arrives as
+    // 0x4014_0000_0000_0000. That is neither a NaN-box tag (top16 >= 0x7FF8)
+    // nor a masked heap pointer (those have top16 == 0), so the generic
+    // pointer logic below would dereference the float bits as an
+    // `ObjectHeader` → SIGSEGV. Detect the primitive number first: return a
+    // bound-method closure for the inherited Number/Object prototype methods
+    // (so `typeof n.toString === "function"` holds and the value is
+    // callable), and `undefined` for any other key (matching property reads
+    // on primitives). Date timestamps and Web-Stream handles are raw f64 too,
+    // but both are special-cased above, so they never reach this branch.
+    {
+        let bits = obj as u64;
+        let f = f64::from_bits(bits);
+        // A Date is now a NaN-boxed `DateCell` pointer (non-finite bit
+        // pattern), intercepted earlier in this function, so it never reaches
+        // this finite-number branch.
+        if !key.is_null() && f.is_finite() && (bits >> 48) != 0 {
+            unsafe {
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
+                if let Ok(name) = std::str::from_utf8(name_bytes) {
+                    if let Some(v) = primitive_object_prototype_accessor(name, f) {
+                        return v;
+                    }
+                }
+                if let Some(v) = primitive_builtin_prototype_property(b"Number", key, f) {
+                    return v;
+                }
+                if is_primitive_proto_method(name_bytes) {
+                    let result = super::super::js_class_method_bind(f, name_ptr, name_len);
+                    return JSValue::from_bits(result.to_bits());
+                }
+            }
+            return JSValue::undefined();
+        }
+    }
+    get_field_by_name_object_tail(obj, key)
+}

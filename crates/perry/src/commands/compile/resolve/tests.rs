@@ -451,6 +451,37 @@ mod manifest_parse_tests {
     }
 
     #[test]
+    fn native_abi_json_param_parses_and_is_param_only() {
+        // #5626: `"json"` is accepted as a param (the call site JSON-serializes
+        // the JS argument into a string ABI slot)...
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parsed = parse_manifest_from_functions(
+            dir.path(),
+            serde_json::json!([
+                {
+                    "name": "take_descriptor",
+                    "params": ["i64", "json"],
+                    "returns": "i64"
+                }
+            ]),
+        )
+        .expect("parse manifest")
+        .expect("manifest");
+        assert_eq!(parsed.functions[0].params[1], NativeAbiType::Json);
+
+        // ...but rejected as a return (it has no value-materialization path).
+        let err = parse_manifest_error(serde_json::json!({
+            "name": "bad_json_return",
+            "params": [],
+            "returns": "json"
+        }));
+        assert!(err.contains("package.json"), "{err}");
+        assert!(err.contains("bad_json_return"), "{err}");
+        assert!(err.contains("returns"), "{err}");
+        assert!(err.contains("json"), "{err}");
+    }
+
+    #[test]
     fn native_abi_handle_id_is_valid_only_inside_pod_fields() {
         let err = parse_manifest_error(serde_json::json!({
             "name": "bad_handle_id_param",
