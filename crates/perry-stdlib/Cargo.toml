@@ -444,7 +444,7 @@ scraper = { version = "0.27", optional = true }
 
 # Scheduler
 cron = { version = "0.16", optional = true }
-tokio-cron-scheduler = { version = "0.10", optional = true }
+tokio-cron-scheduler = { version = "0.15", optional = true }
 
 # Rate limiting
 governor = { version = "0.10", optional = true }
