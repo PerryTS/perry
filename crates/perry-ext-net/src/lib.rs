@@ -33,7 +33,7 @@
 //! `tls = ["net", ...]` feature split is preserved on the perry-stdlib side
 //! for backwards compat; the well-known flip routes here.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes};
 use perry_ffi::{
     alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, GcRootVisitor, JsClosure,
     JsPromise, JsValue, RawClosureHeader, StringHeader,
@@ -55,6 +55,10 @@ use tokio_rustls::client::TlsStream;
 // 2000-line size gate. `tls` holds the rustls config + handshake; `ip`
 // holds the `net.isIP*` + auto-select-family helpers.
 mod ip;
+// #5419 step 4 — process-wide freelist of read buffers, so the socket
+// read loop recycles pooled 16 KiB capacity instead of allocating a
+// fresh `BytesMut` per read. See `buffer_pool.rs` for the rationale.
+mod buffer_pool;
 mod tls;
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
 // (once / off / removeAllListeners / listenerCount / eventNames /
@@ -1084,15 +1088,6 @@ pub(crate) async fn run_socket_task(
     rx: &mut mpsc::UnboundedReceiver<SocketCommand>,
 ) {
     let mut transport: Option<Transport> = Some(initial_transport);
-    // Zero-copy read buffer. `read_buf` fills the uninitialized tail of this
-    // `BytesMut` in place (no per-read zeroing), and `split_to(n)` carves the
-    // freshly-read bytes off as a refcounted `Bytes` view that the 'data'
-    // event carries to the drain handler — eliminating the `Vec<u8>` alloc +
-    // memcpy that the old `buf[..n].to_vec()` did on every read. The per-read
-    // 16 KiB ceiling is enforced by the `BufMut::limit` wrapper at the read
-    // site (see below), so read sizing and 'data' chunk boundaries are
-    // unchanged from the fixed-`Vec` path.
-    let mut buf = BytesMut::with_capacity(16 * 1024);
 
     loop {
         let t = match transport.as_mut() {
@@ -1100,19 +1095,29 @@ pub(crate) async fn run_socket_task(
             None => break,
         };
 
-        // Cap the writable window at 16 KiB so a single `read_buf` reads the
-        // same per-call ceiling the old fixed `[u8; 16 KiB]` scratch did.
-        // `clear()` drops the (already split-off) contents and `reserve`
-        // guarantees *at least* 16 KiB of spare capacity — but `BytesMut` may
-        // over-allocate, and `read_buf` would otherwise fill all of it. Wrap
-        // the buffer in `BufMut::limit(16 KiB)` so the read cannot advance past
-        // 16 KiB regardless of the underlying capacity, keeping read sizing and
-        // 'data' chunk boundaries fixed. The adapter only borrows `buf` for the
-        // read future; `read_buf` advances `buf` itself, so `buf.len() == n`
-        // afterwards and `split_to(n)` carves off exactly the freshly-read run.
-        buf.clear();
-        buf.reserve(16 * 1024);
-        let mut window = (&mut buf).limit(16 * 1024);
+        // #5419 step 4 — check a read buffer out of the process-wide
+        // freelist instead of allocating one per socket / reallocating one
+        // per read. `checkout` hands back an empty `BytesMut` with a ≥ 16 KiB
+        // writable window (recycling a pooled allocation in place once its
+        // prior chunk has drained; allocating only when none is reusable) —
+        // identical to the `BytesMut::with_capacity(16 KiB)` + `clear()` /
+        // `reserve()` the step-2 loop did, just amortized across reads and
+        // sockets. `read_buf` fills the uninitialized tail in place (no
+        // per-read zeroing) and `split_to(n)` carves the freshly-read bytes
+        // off as a refcounted `Bytes` view for the 'data' event. The per-read
+        // 16 KiB ceiling is still enforced by the `BufMut::limit` wrapper at
+        // the read site below, so read sizing and 'data' chunk boundaries are
+        // unchanged.
+        let mut buf = buffer_pool::checkout();
+
+        // Wrap the buffer in `BufMut::limit(16 KiB)` so a single `read_buf`
+        // reads the same per-call ceiling the old fixed `[u8; 16 KiB]` scratch
+        // did: `checkout` guarantees *at least* 16 KiB of spare capacity, but
+        // `BytesMut` may over-allocate and `read_buf` would otherwise fill all
+        // of it. The adapter only borrows `buf` for the read future;
+        // `read_buf` advances `buf` itself, so `buf.len() == n` afterwards and
+        // `split_to(n)` carves off exactly the freshly-read run.
+        let mut window = (&mut buf).limit(buffer_pool::READ_BUF_CAP);
         tokio::select! {
             read_result = t.read_buf(&mut window) => {
                 // Release the `Limit` borrow of `buf` before touching `buf`
@@ -1133,12 +1138,18 @@ pub(crate) async fn run_socket_task(
                     Ok(n) => {
                         // #2154 raw mode buffers for `poll_read`; else 'data'.
                         // `split_to(n)` hands out a zero-copy `Bytes` view of
-                        // the bytes just read and leaves `buf` empty for the
-                        // next `reserve`/`read_buf` cycle.
+                        // the bytes just read and leaves `buf` empty (still
+                        // backed by the pooled allocation, now shared with the
+                        // chunk) to return to the freelist below.
                         let chunk = buf.split_to(n).freeze();
                         if !raw_bridge::route_data(id, &chunk) {
                             push_event(PendingNetEvent::Data(id, chunk));
                         }
+                        // Return the buffer to the freelist. Its next checkout
+                        // reclaims this allocation in place once `chunk` has
+                        // drained + dropped (reallocates otherwise — never
+                        // corrupting the in-flight chunk).
+                        buffer_pool::checkin(buf);
                     }
                     Err(e) => {
                         let msg = format!("{}", e);
@@ -1152,6 +1163,11 @@ pub(crate) async fn run_socket_task(
                 }
             }
             cmd = rx.recv() => {
+                // The command arm never wrote to `buf`; return the untouched
+                // buffer to the freelist for the next read instead of dropping
+                // its capacity.
+                drop(window);
+                buffer_pool::checkin(buf);
                 match cmd {
                     Some(SocketCommand::Write(bytes)) => {
                         if let Err(e) = t.write_all(&bytes).await {
