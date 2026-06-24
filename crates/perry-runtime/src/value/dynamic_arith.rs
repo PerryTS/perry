@@ -117,6 +117,18 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return primitive;
     }
 
+    // A callable closure is NOT an `ObjectHeader`. The URL probe and the
+    // ordinary-object `valueOf`/`toString` machinery below all bit-cast `ptr`
+    // to an `ObjectHeader`; for a class-method closure
+    // (`"" + C.prototype.method`) the `valueOf` field lookup reads a bogus slot
+    // that it then calls → EXC_BAD_ACCESS. Resolve the function's ToPrimitive
+    // through the closure-aware path (own/inherited `valueOf` if primitive, else
+    // the `Function.prototype.toString` source form). `Symbol.toPrimitive` was
+    // already consulted by `js_to_primitive` above.
+    if crate::closure::is_closure_ptr(ptr) {
+        return crate::value::function_to_primitive_for_add(value);
+    }
+
     if crate::date::is_date_cell_addr(ptr) {
         let s = crate::date::js_date_to_string(value);
         return crate::value::js_nanbox_string(s as i64);

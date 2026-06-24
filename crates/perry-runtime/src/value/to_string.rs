@@ -294,6 +294,13 @@ pub(crate) unsafe fn ordinary_to_primitive_number_for_add(
                 joined as i64,
             ));
         }
+        // A callable closure is not an `ObjectHeader`; the `valueOf`/`toString`
+        // field lookups below bit-cast it and crash on class-method closures
+        // (see `function_to_primitive_for_add`). Resolve via the closure-aware
+        // path: own/inherited `valueOf` if primitive, else the function source.
+        if crate::closure::is_closure_ptr(addr) {
+            return OrdinaryToPrimitiveOutcome::Primitive(function_to_primitive_for_add(value));
+        }
     }
 
     match call_method_for_primitive(&scope, &value_handle, b"valueOf") {
@@ -445,6 +452,33 @@ unsafe fn call_function_method(
     crate::object::js_implicit_this_set(prev_this);
 
     FunctionMethodOutcome::Value(ret)
+}
+
+/// `OrdinaryToPrimitive` for a callable closure under the "number"/"default"
+/// hint (method order `valueOf` then `toString`) — used by the `+` operator
+/// and numeric coercion.
+///
+/// A function/closure is NOT an `ObjectHeader`: the ordinary-object
+/// `valueOf`/`toString` field lookups (`call_method_for_primitive` →
+/// `js_object_get_field_by_name`) bit-cast it as one and, for a class-method
+/// closure, read a bogus `valueOf` slot that they then *call* → EXC_BAD_ACCESS
+/// (`"" + C.prototype.method`). Resolve via the closure-aware lookup instead:
+/// honor an own/inherited `valueOf` (so `f.valueOf = () => 42; 1 + f` stays
+/// 43), else fall back to `Function.prototype.toString` (the function's source
+/// / native form) — exactly what OrdinaryToPrimitive yields for a function
+/// whose inherited `valueOf` returns the function itself (a non-primitive).
+pub(crate) unsafe fn function_to_primitive_for_add(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    if let FunctionMethodOutcome::Value(ret) =
+        call_function_method(&scope, &value_handle, b"valueOf")
+    {
+        if is_primitive_value(ret) {
+            return ret;
+        }
+    }
+    let s = js_jsvalue_to_string(value_handle.get_nanbox_f64());
+    crate::value::js_nanbox_string(s as i64)
 }
 
 unsafe fn function_method_value(
