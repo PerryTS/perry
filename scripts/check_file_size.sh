@@ -26,13 +26,13 @@
 # Allowlisted (real Rust source, deferred for a specific reason —
 # **each entry needs a one-line rationale**):
 #
-#   - crates/perry/src/commands/compile.rs — the deeply-coupled
-#     `par_iter` codegen closure inside `run_with_parse_cache`
-#     (~1,800 LOC, ~30 captured locals) needs extraction into a
-#     context-struct helper. High-risk surgery deferred to a
-#     follow-up PR; the rest of compile.rs was already split into
-#     compile/{types,bootstrap,bundle_apple,...} sub-modules
-#     (16 siblings in compile/).
+#   - crates/perry-hir/src/ir/expr.rs — a single `pub enum Expr`
+#     definition (~2,560 LOC of documented variants). A lone enum
+#     cannot be split across files, and decomposing it into nested
+#     sub-enums would touch every match site across the codegen +
+#     walker stack (a semantic refactor, not a file split). The
+#     auxiliary enums and impls were already peeled into siblings;
+#     the variant list itself is irreducible.
 #
 set -euo pipefail
 
@@ -40,41 +40,20 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 
 # Allowlist (one file per line; blank lines + `#` comments OK).
 ALLOWLIST=$(cat <<'EOF'
-crates/perry/src/commands/compile.rs
-# HIR `Expr` enum + dependency-walker arms; splitting would need parallel
-# updates across every variant of the walker traits. Tracked alongside #793.
+# Single `pub enum Expr` definition (~2,560 LOC of documented variants). A lone
+# enum can't be split across files; decomposing it into sub-enums would be a
+# semantic refactor touching every match site (codegen + walker), not a file
+# split. Auxiliary enums/impls already peeled into siblings; the rest is the
+# irreducible variant list.
 crates/perry-hir/src/ir/expr.rs
-# stdlib native dispatch table; current main crossed the threshold after
-# namespace-alias exposure work. Split tracked under #1435.
-crates/perry-stdlib/src/common/dispatch.rs
-# SQLite stdlib shim remains a generated-feel native adapter table; current
-# main crossed the threshold before this PR. Split tracked under #1435.
-crates/perry-stdlib/src/sqlite.rs
-# Shared stdlib dispatch bridge crossed the gate on current main; split per
-# dispatch family with the stdlib dispatch cleanup tracked in #1435.
-crates/perry-stdlib/src/common/dispatch.rs
-# sqlite stdlib remains a monolithic binding surface on current main; split
-# statements/sessions/backups/functions in the sqlite cleanup tracked in #1435.
-crates/perry-stdlib/src/sqlite.rs
-# perry-stdlib container module root — re-exports `perry_container_compose::*`
-# and the `js_container_*` / `js_compose_*` FFI dispatch surface (gated behind
-# the `container` feature). Splitting the FFI surface per command family is
-# tracked under #1435.
-crates/perry-stdlib/src/container/mod.rs
-# node:events bundled module (EventEmitter handle surface, once/on helpers,
-# AbortSignal wiring, AsyncResource). Crossed the 2000-line gate after the
-# `events.on(...)` real async-iterator rewrite (proper { next, return } over a
-# buffered/pending-promise queue, replacing the bare-array stub). Splitting the
-# on/once iterator machinery into the existing `events/` submodule is tracked
-# under #1435 with the other module-size cleanups.
-crates/perry-stdlib/src/events.rs
-# auto-optimize libs driver. Crossed the 2000-line gate after the
-# fresh-archive-reuse work (#4928) added the build-stamp + freshness probe
-# (`auto_optimized_archives_are_fresh` / `auto_optimized_build_stamp` /
-# `auto_optimized_cache_key`) and their regression tests next to the existing
-# `build_optimized_libs` driver + well-known resolution. Splitting the
-# freshness/well-known helpers into a sibling module is tracked under #1435.
-crates/perry/src/commands/compile/optimized_libs.rs
+# A single ~5,650-LOC function: `run_with_parse_cache`, the per-module `par_iter`
+# codegen pipeline with ~30 captured locals threaded through one closure. The
+# rest of the old 6,114-line compile.rs was split into compile/ siblings
+# (bootstrap/types/run_pipeline/optimized_libs/…); this trunk is now JUST that
+# one deeply-coupled function. Decomposing it means extracting a context struct
+# for the ~30 locals — high-risk surgery on the compiler's hot path, deferred to
+# a focused follow-up. Tracked under #1435.
+crates/perry/src/commands/compile/run_pipeline.rs
 EOF
 )
 

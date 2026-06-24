@@ -1,0 +1,313 @@
+use super::*;
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::SystemTime;
+
+use crate::commands::stdlib_features::{compute_required_features, features_to_cargo_arg};
+use crate::OutputFormat;
+
+use super::super::library_search::{find_harmonyos_sdk, harmonyos_cross_env};
+use super::super::{find_perry_workspace_root, rust_target_triple, CompilationContext};
+
+pub(crate) fn auto_optimized_archives_are_fresh(
+    workspace_root: &Path,
+    runtime_path: &Path,
+    stdlib_path: &Path,
+    tokio_using_bindings: &[(String, String, Option<String>)],
+    build_stamp_path: &Path,
+    expected_build_stamp: &str,
+) -> bool {
+    match fs::read_to_string(build_stamp_path) {
+        Ok(stamp) if stamp == expected_build_stamp => {}
+        _ => return false,
+    }
+
+    let Ok(runtime_mtime) = file_modified(runtime_path) else {
+        return false;
+    };
+    let Ok(stdlib_mtime) = file_modified(stdlib_path) else {
+        return false;
+    };
+    let archive_mtime = runtime_mtime.min(stdlib_mtime);
+
+    let mut inputs = vec![
+        workspace_root.join("Cargo.toml"),
+        workspace_root.join("Cargo.lock"),
+        workspace_root.join("crates/perry-runtime"),
+        workspace_root.join("crates/perry-stdlib"),
+    ];
+    for (krate, _lib, _tracking) in tokio_using_bindings {
+        inputs.push(workspace_root.join("crates").join(krate));
+    }
+
+    for input in inputs {
+        if input_newer_than(&input, archive_mtime).unwrap_or(true) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Cache key for the auto-optimize target dir + build stamp. Hashed into the
+/// `target/perry-auto-<hash>` dir name so each (features, panic-mode, target,
+/// runtime-gate, version) combination gets its own incremental cache. Kept in
+/// one place so `build_optimized_libs` and its freshness tests can never drift.
+pub(crate) fn auto_optimized_cache_key(
+    feature_arg: &str,
+    panic_abort_safe: bool,
+    target: Option<&str>,
+    ctx: &CompilationContext,
+) -> String {
+    let target_str = target.unwrap_or("host");
+    format!(
+        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|diag={}|dgram={}|v={}",
+        feature_arg,
+        panic_abort_safe,
+        target_str,
+        ctx.needs_wasm_runtime,
+        ctx.uses_regex,
+        ctx.uses_temporal,
+        ctx.uses_event_emitter,
+        ctx.uses_url,
+        ctx.uses_string_normalize,
+        ctx.uses_intl_segmenter,
+        ctx.uses_intl_locale,
+        ctx.uses_diagnostics,
+        ctx.uses_dgram,
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+pub(crate) fn auto_optimized_cross_features(
+    ctx: &CompilationContext,
+    features: &BTreeSet<&'static str>,
+    cli_features: &[String],
+) -> Vec<String> {
+    let mut cross_features: Vec<String> = vec![
+        // perry-runtime's "full" feature gates plugin + os.hostname/homedir.
+        // Auto-mode keeps it on so existing behavior is preserved; the
+        // panic mode is what shrinks the binary.
+        "perry-runtime/full".to_string(),
+    ];
+    for f in features {
+        cross_features.push(format!("perry-stdlib/{}", f));
+    }
+    // CLI `--features` values that target the runtime (game-loop entry-point
+    // shims gated behind `ios-game-loop` / `watchos-game-loop` in
+    // `perry-runtime/Cargo.toml`) need `perry-runtime/<f>` passed through, not
+    // `perry-stdlib/<f>` — they gate a Rust module, not an npm dep surface.
+    for f in cli_features {
+        if f == "ios-game-loop" || f == "watchos-game-loop" || f == "ohos-napi" {
+            cross_features.push(format!("perry-runtime/{}", f));
+        }
+    }
+    // Issue #76 — enable perry-runtime's `wasm-host` feature when the
+    // program references `WebAssembly.*`. Without this the shim TU stays
+    // out of libperry_runtime.a, so unrelated programs don't drag in
+    // unresolved `perry_wasm_host_*` references at link time.
+    if ctx.needs_wasm_runtime {
+        cross_features.push("perry-runtime/wasm-host".to_string());
+    }
+    // Binary-size feature gating (kept in sync with the inline list on `main`):
+    // each engine/table is linked only when the program actually uses it.
+    if ctx.uses_regex {
+        cross_features.push("perry-runtime/regex-engine".to_string());
+    }
+    if ctx.uses_temporal {
+        cross_features.push("perry-runtime/temporal".to_string());
+    }
+    if ctx.uses_url {
+        cross_features.push("perry-runtime/url-engine".to_string());
+    }
+    if ctx.uses_string_normalize {
+        cross_features.push("perry-runtime/string-normalize".to_string());
+    }
+    if ctx.uses_intl_segmenter {
+        cross_features.push("perry-runtime/intl-segmenter".to_string());
+    }
+    if ctx.uses_intl_locale {
+        cross_features.push("perry-runtime/intl-locale".to_string());
+    }
+    if ctx.uses_diagnostics {
+        cross_features.push("perry-runtime/diagnostics".to_string());
+    }
+    if ctx.uses_dgram {
+        cross_features.push("perry-runtime/mod-dgram".to_string());
+    }
+    cross_features
+}
+
+pub(crate) fn auto_optimized_build_stamp(
+    key_input: &str,
+    target: Option<&str>,
+    cross_features: &[String],
+    tokio_using_bindings: &[(String, String, Option<String>)],
+) -> String {
+    let mut stamp = String::new();
+    stamp.push_str("perry-auto-optimized-v1\n");
+    stamp.push_str("key=");
+    stamp.push_str(key_input);
+    stamp.push('\n');
+    stamp.push_str("target=");
+    stamp.push_str(target.unwrap_or("host"));
+    stamp.push('\n');
+    stamp.push_str("triple=");
+    stamp.push_str(rust_target_triple(target).unwrap_or("host"));
+    stamp.push('\n');
+    stamp.push_str("features=");
+    stamp.push_str(&cross_features.join(","));
+    stamp.push('\n');
+    stamp.push_str("tokio=");
+    for (index, (krate, lib, tracking)) in tokio_using_bindings.iter().enumerate() {
+        if index > 0 {
+            stamp.push(',');
+        }
+        stamp.push_str(krate);
+        stamp.push(':');
+        stamp.push_str(lib);
+        stamp.push(':');
+        stamp.push_str(tracking.as_deref().unwrap_or(""));
+    }
+    stamp.push('\n');
+    stamp
+}
+
+fn input_newer_than(path: &Path, archive_mtime: SystemTime) -> std::io::Result<bool> {
+    let meta = fs::metadata(path)?;
+    if meta.is_file() {
+        return Ok(meta.modified()? > archive_mtime);
+    }
+    if !meta.is_dir() {
+        return Ok(false);
+    }
+
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let child = entry.path();
+        let Some(name) = child.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name == "target" || name == ".git" {
+            continue;
+        }
+        if input_newer_than(&child, archive_mtime)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn file_modified(path: &Path) -> std::io::Result<SystemTime> {
+    let meta = fs::metadata(path)?;
+    if !meta.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "expected archive file",
+        ));
+    }
+    meta.modified()
+}
+
+pub(crate) fn resolve_auto_well_known_libs(
+    workspace_root: &Path,
+    release_dir: &Path,
+    tokio_using_bindings: &[(String, String, Option<String>)],
+    target: Option<&str>,
+    format: OutputFormat,
+) -> Vec<PathBuf> {
+    let mut well_known_libs = Vec::new();
+    for (krate, lib, _tracking) in tokio_using_bindings {
+        let lib_filename =
+            super::super::well_known::ext_staticlib_filename(lib, rust_target_triple(target));
+        let lib_path = release_dir.join(&lib_filename);
+        if lib_path.exists() {
+            well_known_libs.push(lib_path);
+            continue;
+        }
+
+        let fallback = if let Some(triple) = rust_target_triple(target) {
+            let triple_path = workspace_root
+                .join("target")
+                .join(triple)
+                .join("release")
+                .join(&lib_filename);
+            if triple_path.exists() {
+                triple_path
+            } else {
+                workspace_root
+                    .join("target")
+                    .join("release")
+                    .join(&lib_filename)
+            }
+        } else {
+            workspace_root
+                .join("target")
+                .join("release")
+                .join(&lib_filename)
+        };
+        if fallback.exists() {
+            if matches!(format, OutputFormat::Text) {
+                eprintln!(
+                    "  well-known: rebuild produced no `{}` in {} — \
+                     using workspace fallback (CONTEXT panic risk on tokio I/O)",
+                    lib_filename,
+                    release_dir.display()
+                );
+            }
+            well_known_libs.push(fallback);
+        } else if matches!(format, OutputFormat::Text) {
+            eprintln!(
+                "  well-known: rebuild produced no `{}` for `{}`; \
+                 skipping — link will likely fail with unresolved js_* symbols.",
+                lib_filename, krate
+            );
+        }
+    }
+    well_known_libs
+}
+
+/// True if this binding's wrapper crate has its own tokio dependency
+/// for I/O (TcpStream, hyper, reqwest, mongodb, sqlx, redis,
+/// tokio-tungstenite, lettre, …) and must therefore share a single
+/// tokio compilation with perry-stdlib's runtime.
+///
+/// Closes #507 — when these wrappers are built in a different
+/// target-dir than perry-stdlib, each gets its own private copy of
+/// tokio's `CONTEXT` thread-local. perry-stdlib's runtime sets one;
+/// the wrapper's `Handle::current()` reads the other (empty) one
+/// and panics with "there is no reactor running".
+///
+/// Wrappers that only use perry-ffi's `spawn_blocking` shim (bcrypt,
+/// argon2, sharp, …) route their async work through perry-stdlib's
+/// tokio and don't need this — their own crate has no tokio dep.
+pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
+    matches!(
+        module,
+        // Raw TCP / TLS sockets
+        "net"
+        // WebSocket client/server
+        | "ws"
+        // HTTP / HTTPS via reqwest/hyper
+        | "http"
+        | "https"
+        | "http2"
+        // HTTP clients (reqwest, hyper)
+        | "axios"
+        | "node-fetch"
+        | "fetch"
+        // HTTP server (hyper)
+        | "fastify"
+        // Database drivers (mongodb, sqlx, redis)
+        | "mongodb"
+        | "pg"
+        | "mysql2"
+        | "mysql2/promise"
+        | "ioredis"
+        | "redis"
+        // Mail (lettre)
+        | "nodemailer"
+    )
+}
