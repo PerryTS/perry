@@ -25,6 +25,14 @@
 //! enough for typical WebSocket usage. Cooperative `spawn_async` is
 //! a v0.6.0 followup.
 
+/// SIMD-widened WebSocket frame (un)masking (RFC 6455 §5.3). See
+/// [`mask::apply_mask`] / [`mask::apply_mask_from`]. The hot tungstenite
+/// read/write path masks internally with its own `u32`-blocked routine
+/// (private, no injection seam), so this module is the masker for any
+/// frame bytes perry handles itself — kept byte-identical to the scalar
+/// reference and validated by a property test.
+pub mod mask;
+
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
