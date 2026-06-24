@@ -345,6 +345,92 @@ fn block_lexical_names(stmts: &[ast::Stmt], out: &mut std::collections::HashSet<
     }
 }
 
+/// Does a statement list bind `name` *at function scope* — a top-level
+/// `function`/`let`/`const`/`class`/`var` declaration, or a `var` hoisted out of
+/// any nested block/loop/`try`/`switch`? (Block-scoped `let`/`const`/`catch`/
+/// `for`-head bindings in *nested* scopes don't reach function scope and are not
+/// counted.) Used to (1) bail the whole hoist when the eval body rebinds
+/// `globalThis` — the prelude reads/writes that receiver and a shadow/TDZ would
+/// break it — and (2) skip a function's self-rename when its body rebinds the
+/// function name (`function f(){ var f; return f; }` reads the inner `var f`,
+/// not the renamed block binding).
+fn binds_at_function_scope(stmts: &[ast::Stmt], name: &str) -> bool {
+    stmts.iter().any(|s| top_level_binds(s, name)) || var_hoisted_binds(stmts, name)
+}
+
+fn top_level_binds(stmt: &ast::Stmt, name: &str) -> bool {
+    let ast::Stmt::Decl(decl) = stmt else {
+        return false;
+    };
+    match decl {
+        ast::Decl::Fn(f) => f.ident.sym.as_ref() == name,
+        ast::Decl::Class(c) => c.ident.sym.as_ref() == name,
+        ast::Decl::Var(v) => {
+            let mut names = std::collections::HashSet::new();
+            for d in &v.decls {
+                collect_pattern_names(&d.name, &mut names);
+            }
+            names.contains(name)
+        }
+        _ => false,
+    }
+}
+
+/// Recursively scan for a `var` declaration binding `name` — `var` hoists out of
+/// every nested block/`if`/loop/`try`/`switch`/labeled statement to function
+/// scope.
+fn var_hoisted_binds(stmts: &[ast::Stmt], name: &str) -> bool {
+    fn stmt_has(stmt: &ast::Stmt, name: &str) -> bool {
+        use ast::Stmt;
+        match stmt {
+            Stmt::Decl(ast::Decl::Var(v)) if v.kind == ast::VarDeclKind::Var => {
+                let mut names = std::collections::HashSet::new();
+                for d in &v.decls {
+                    collect_pattern_names(&d.name, &mut names);
+                }
+                names.contains(name)
+            }
+            Stmt::Block(b) => var_hoisted_binds(&b.stmts, name),
+            Stmt::Labeled(l) => stmt_has(&l.body, name),
+            Stmt::If(i) => {
+                stmt_has(&i.cons, name) || i.alt.as_deref().is_some_and(|a| stmt_has(a, name))
+            }
+            Stmt::While(w) => stmt_has(&w.body, name),
+            Stmt::DoWhile(d) => stmt_has(&d.body, name),
+            Stmt::With(w) => stmt_has(&w.body, name),
+            Stmt::For(f) => {
+                matches!(&f.init, Some(ast::VarDeclOrExpr::VarDecl(v)) if v.kind == ast::VarDeclKind::Var && {
+                    let mut n = std::collections::HashSet::new();
+                    for d in &v.decls { collect_pattern_names(&d.name, &mut n); }
+                    n.contains(name)
+                }) || stmt_has(&f.body, name)
+            }
+            Stmt::ForIn(f) => for_head_var(&f.left, name) || stmt_has(&f.body, name),
+            Stmt::ForOf(f) => for_head_var(&f.left, name) || stmt_has(&f.body, name),
+            Stmt::Try(t) => {
+                var_hoisted_binds(&t.block.stmts, name)
+                    || t.handler
+                        .as_ref()
+                        .is_some_and(|h| var_hoisted_binds(&h.body.stmts, name))
+                    || t.finalizer
+                        .as_ref()
+                        .is_some_and(|f| var_hoisted_binds(&f.stmts, name))
+            }
+            Stmt::Switch(s) => s.cases.iter().any(|c| var_hoisted_binds(&c.cons, name)),
+            _ => false,
+        }
+    }
+    stmts.iter().any(|s| stmt_has(s, name))
+}
+
+fn for_head_var(head: &ast::ForHead, name: &str) -> bool {
+    matches!(head, ast::ForHead::VarDecl(v) if v.kind == ast::VarDeclKind::Var && {
+        let mut n = std::collections::HashSet::new();
+        for d in &v.decls { collect_pattern_names(&d.name, &mut n); }
+        n.contains(name)
+    })
+}
+
 /// Collect the identifier names bound by a binding pattern (a `let`/`const`
 /// declarator target, a `catch` parameter, or a `for` head) — covers plain
 /// idents, array/object destructuring, defaults, and rest elements.
@@ -467,14 +553,22 @@ impl GlobalEvalHoist {
                     // references in its body too, so the block-scoped binding
                     // stays independent of the published global var.
                     let hidden = self.fresh_hidden();
-                    // A parameter named `orig` shadows the function-name binding
-                    // in the body — don't rename through that shadow.
+                    // A parameter named `orig`, or a body-level `var orig` /
+                    // top-level `let`/`const`/`function orig`, shadows the
+                    // function-name binding throughout the body — its `orig`
+                    // references are that inner binding, so don't rename them.
                     let mut param_names = std::collections::HashSet::new();
                     for p in &fn_decl.function.params {
                         collect_pattern_names(&p.pat, &mut param_names);
                     }
+                    let body_shadows = param_names.contains(&orig)
+                        || fn_decl
+                            .function
+                            .body
+                            .as_ref()
+                            .is_some_and(|b| binds_at_function_scope(&b.stmts, &orig));
                     fn_decl.ident.sym = hidden.as_str().into();
-                    if !param_names.contains(&orig) {
+                    if !body_shadows {
                         if let Some(body) = fn_decl.function.body.as_mut() {
                             rename_ident_in_block(body, &orig, &hidden);
                         }
@@ -610,6 +704,14 @@ impl GlobalEvalHoist {
 /// the unmodified fold. Operates on a clone, so a mid-way bail never leaves a
 /// partially rewritten body.
 pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::Stmt>> {
+    // The create-if-absent prelude reads/writes the `globalThis` global; if the
+    // eval body rebinds that name at function scope (`var globalThis`, top-level
+    // `let`/`function globalThis`), the prelude — prepended into the same IIFE —
+    // would hit the shadow or its TDZ. Bail so the runtime fold preserves
+    // semantics for that (pathological) case.
+    if binds_at_function_scope(stmts, "globalThis") {
+        return None;
+    }
     let mut hoist = GlobalEvalHoist {
         counter: 0,
         prelude_names: Vec::new(),
@@ -792,6 +894,55 @@ mod global_eval_hoist_tests {
         // hoist — so a body with only a top-level function declines.
         let body = parse_body("function f() {}");
         assert!(apply_global_eval_hoist(&body).is_none());
+    }
+
+    #[test]
+    fn globalthis_rebind_declines_fold() {
+        // The prelude reads/writes `globalThis`; if the body rebinds that name,
+        // the hoist bails so the prelude can't hit the shadow / its TDZ.
+        for src in [
+            "var globalThis; { function f() {} }",
+            "let globalThis; { function f() {} }",
+            "function globalThis() {} { function f() {} }",
+        ] {
+            assert!(
+                apply_global_eval_hoist(&parse_body(src)).is_none(),
+                "should decline: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn body_var_shadow_keeps_self_reference() {
+        // `function f(){ var f; return f; }` — the body's `f` is the inner
+        // `var f`, not the function-name binding, so it must NOT be renamed.
+        let body = parse_body("{ function f() { var f; return f; } }");
+        let out = apply_global_eval_hoist(&body).expect("hoists");
+        fn return_ident(stmt: &ast::Stmt, out: &mut Vec<String>) {
+            match stmt {
+                ast::Stmt::Decl(ast::Decl::Fn(f)) => {
+                    if let Some(b) = &f.function.body {
+                        for s in &b.stmts {
+                            if let ast::Stmt::Return(r) = s {
+                                if let Some(ast::Expr::Ident(i)) = r.arg.as_deref() {
+                                    out.push(i.sym.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                ast::Stmt::Block(b) => b.stmts.iter().for_each(|s| return_ident(s, out)),
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        for s in &out {
+            return_ident(s, &mut names);
+        }
+        assert!(
+            names.iter().any(|n| n == "f"),
+            "shadowed self-reference must stay `f`: {names:?}"
+        );
     }
 
     #[test]
