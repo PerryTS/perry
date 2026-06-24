@@ -845,6 +845,28 @@ fn lower_manifest_param(
             lowered.push(ptr_val);
             arg_types.push(PTR);
         }
+        NativeAbiType::Json => {
+            // #5626: the JS argument (object/array/primitive) is serialized to
+            // a JSON string at the call site, then passed through the same
+            // single `string` ABI slot as `NativeAbiType::String`. The native
+            // side receives a `*const StringHeader` and `serde_json`-decodes it.
+            // `type_hint` 0 == TYPE_UNKNOWN (let the runtime classify the value).
+            let blk = ctx.block();
+            let raw_ptr = blk.call(I64, "js_json_stringify", &[(DOUBLE, val), (I32, "0")]);
+            let ptr_val = blk.inttoptr(I64, &raw_ptr);
+            let native = LoweredValue::native_handle(raw_ptr);
+            record_native_abi_param(
+                ctx,
+                descriptor,
+                js_argument_index,
+                abi_slot_index,
+                &native,
+                Some(("js_json_stringify", "json_serialized_string")),
+                "json.stringified_pointer",
+            );
+            lowered.push(ptr_val);
+            arg_types.push(PTR);
+        }
         NativeAbiType::Bool => {
             let raw = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, val)]);
             let native = LoweredValue::i32(raw.clone());

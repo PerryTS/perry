@@ -199,6 +199,7 @@ rejected in POD fields.
 |---|---|---|
 | `"jsvalue"` | `f64` | raw Perry NaN-boxed value |
 | `"string"` | `*const StringHeader` | `string` |
+| `"json"` | `*const StringHeader` | any JSON-serializable value (`JSON.stringify`d at the callsite) |
 | `"bool"` | `i32` truthy flag | `boolean` |
 | `"i32"` | `i32` | `number` truncated to signed 32-bit |
 | `"i64"` | `i64` | `number` converted to signed 64-bit |
@@ -242,11 +243,20 @@ rejected in POD fields.
 > it's `-> i64` and the value happens to be a `StringHeader` address
 > (closes [#222]).
 
-`"void"` is valid only as a return descriptor. `"buffer+len"` and
-`{ "kind": "pod", ... }` are valid only as parameter descriptors:
+`"void"` is valid only as a return descriptor. `"buffer+len"`, `"json"`,
+and `{ "kind": "pod", ... }` are valid only as parameter descriptors:
 `"buffer+len"` expands one JavaScript argument into two native ABI
 slots, while `pod` lowers one object-shaped argument to a pointer to
 verifier-backed C-layout storage.
+
+> Note on `"json"`: the callsite runs the JavaScript argument through
+> `JSON.stringify` and passes the resulting `*const StringHeader` in a
+> single ABI slot — the exact wire shape of a `"string"` param, so the
+> native side reads it with `read_string` and `serde_json`-deserializes
+> it unchanged (no binding Rust change versus a `"string"` param). Use it
+> for descriptor-object arguments where `"string"` would reject the live
+> object. It is opt-in and param-only, so real-string `"string"` params
+> keep their strict non-string-rejecting check.
 
 Native-only numeric descriptors (`f32`, `u32`, `u64`, `usize`,
 `buffer_len`) render as TypeScript `number`. Handles remain opaque

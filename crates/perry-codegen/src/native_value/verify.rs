@@ -675,6 +675,7 @@ fn valid_runtime_guard_helper(kind: &str, helper: &str) -> bool {
     match kind {
         "jsvalue" => false,
         "string" => helper == "js_native_abi_check_string_ptr",
+        "json" => helper == "js_json_stringify",
         "bool" => helper == "js_is_truthy",
         "i32" => helper == "js_native_abi_check_i32",
         "i64" | "i64_str" => helper == "js_native_abi_check_i64",

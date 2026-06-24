@@ -1916,6 +1916,56 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
     }
 }
 
+#[test]
+fn native_library_manifest_json_param_serializes_before_call() {
+    // #5626: a `"json"` manifest param JSON-serializes its JS argument at the
+    // call site (via `js_json_stringify`) and passes the resulting string
+    // pointer through a single `ptr` ABI slot — identical wire shape to a
+    // `"string"` param, so the native side `serde_json`-deserializes it
+    // unchanged. This is what lets descriptor-object bindings (e.g.
+    // `deviceCreateBuffer(d, { size, usage })`) work after #5621 rewrote the
+    // call site directly to the FFI symbol, bypassing the TS wrapper body that
+    // used to do the `JSON.stringify`.
+    let opts = native_library_opts(vec![("native_take_descriptor", vec!["i64", "json"], "i64")]);
+    let module = module(
+        "native_library_json_param.ts",
+        vec![Stmt::Return(Some(extern_call(
+            "native_take_descriptor",
+            vec![Expr::Number(7.0), Expr::Number(42.0)],
+            Type::Number,
+        )))],
+    );
+    let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
+
+    assert!(
+        ir.contains("call i64 @js_json_stringify(")
+            // The serialized descriptor occupies a `ptr` ABI slot, like `string`.
+            && ir.contains("declare i64 @native_take_descriptor(i64, ptr)"),
+        "expected json manifest param to stringify and pass a string pointer:\n{ir}"
+    );
+    // The strict string validator must NOT run for a json param — the whole
+    // point is to accept a non-string (object) argument. (It is always
+    // `declare`d as a runtime symbol; what must be absent is a *call* to it.)
+    assert!(
+        !ir.contains("call i64 @js_native_abi_check_string_ptr"),
+        "json param must not route through the strict string validator:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module_with_opts(module, opts);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "NativeLibraryParam"
+                && record["native_abi_type"]["display"] == "json"
+                && record["native_abi_type"]["direction"] == "param"
+                && record["native_abi_type"]["abi_slot_index"] == 1
+                && record["native_abi_type"]["abi_slot_count"] == 1
+                && record["native_abi_type"]["runtime_guard"]["helper"] == "js_json_stringify"
+        }),
+        "expected native-library json param ABI record:\n{artifact:#}"
+    );
+}
+
 #[path = "native_proof_regressions/pod_manifest.rs"]
 mod pod_manifest;
 
