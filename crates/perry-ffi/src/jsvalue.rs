@@ -21,6 +21,8 @@
 //! TAG_NULL      = 0x7FFC_0000_0000_0002
 //! TAG_FALSE     = 0x7FFC_0000_0000_0003
 //! TAG_TRUE      = 0x7FFC_0000_0000_0004
+//! SHORT_STRING_TAG = 0x7FF9  (SSO — inline string ≤5 bytes; len in
+//!                             bits 40..=47, data in bits 0..=39)
 //! BIGINT_TAG    = 0x7FFA  (lower 48 = ptr)
 //! POINTER_TAG   = 0x7FFD  (lower 48 = ptr to ObjectHeader / ArrayHeader / etc.)
 //! INT32_TAG     = 0x7FFE  (lower 32 = i32)
@@ -37,6 +39,7 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
+const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
@@ -133,10 +136,42 @@ impl JsValue {
         self.0 == TAG_TRUE || self.0 == TAG_FALSE
     }
 
-    /// True if the value is a JS string (`STRING_TAG`).
+    /// True if the value is a heap JS string (`STRING_TAG`) — i.e.
+    /// a real `*mut StringHeader`. This is the STRICT check: it does
+    /// NOT match inline SSO short strings (`SHORT_STRING_TAG`).
+    ///
+    /// ⚠ #1781 footgun — do NOT branch
+    /// `if v.is_string() { read ptr } else { reject / treat as pointer }`
+    /// on a value that could be *any* string. An inline SSO short
+    /// string (len 0..=5, `SHORT_STRING_TAG = 0x7FF9`) fails this
+    /// strict check and silently falls into the else-branch — so
+    /// `socket.write("hi")` and short HTTP bodies got dropped. When a
+    /// value may be any string representation, gate on
+    /// [`is_any_string`](Self::is_any_string) and materialize it with
+    /// `js_get_string_pointer_unified`, which turns either repr into a
+    /// real heap `*StringHeader`.
     #[inline]
     pub const fn is_string(self) -> bool {
         (self.0 & TAG_MASK) == STRING_TAG
+    }
+
+    /// True for any string representation — a heap `STRING_TAG`
+    /// pointer OR an inline `SHORT_STRING_TAG` SSO value. Use this
+    /// (not [`is_string`](Self::is_string)) for representation-agnostic
+    /// "is this a string?" checks, then materialize via
+    /// `js_get_string_pointer_unified` to read the bytes.
+    #[inline]
+    pub const fn is_any_string(self) -> bool {
+        let tag = self.0 & TAG_MASK;
+        tag == STRING_TAG || tag == SHORT_STRING_TAG
+    }
+
+    /// True iff the value is specifically an inline SSO short string
+    /// (`SHORT_STRING_TAG` — string of length 0..=5 stored in the
+    /// NaN-box payload, no heap allocation).
+    #[inline]
+    pub const fn is_short_string(self) -> bool {
+        (self.0 & TAG_MASK) == SHORT_STRING_TAG
     }
 
     /// True if the value is a heap object pointer (`POINTER_TAG` —

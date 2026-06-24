@@ -38,6 +38,13 @@ extern "C" {
     /// dereferenced as a heap object. Defined in
     /// `crates/perry-runtime/src/object/global_fetch.rs`.
     pub fn js_node_setheaders_entries_json(value: f64) -> *mut StringHeader;
+    /// #1781 — materialize ANY string representation (heap
+    /// `STRING_TAG` *or* inline `SHORT_STRING_TAG` SSO) to a real
+    /// `*const StringHeader`, returned as `i64`. SSO bytes are copied
+    /// onto the heap; a heap string returns its existing pointer.
+    /// Returns 0 for non-strings. Defined in
+    /// `crates/perry-runtime/src/value/nanbox.rs::js_get_string_pointer_unified`.
+    pub fn js_get_string_pointer_unified(value: f64) -> i64;
 }
 
 /// Opaque marker for the runtime's Promise struct — pass pointers
@@ -221,9 +228,15 @@ pub fn jsvalue_to_body_bytes(value: f64) -> Option<Vec<u8>> {
     if v.is_undefined() || v.is_null() {
         return None;
     }
-    if v.is_string() {
-        let bits = value.to_bits();
-        let ptr = (bits & PTR_MASK) as *mut StringHeader;
+    // JS string — heap STRING_TAG *or* inline SSO SHORT_STRING_TAG.
+    // #1781: the strict `is_string()` matched STRING_TAG only, so a
+    // short response body (`res.end("hi")`) fell through every branch
+    // to `None` and was silently dropped. Gate on `is_any_string()`
+    // and materialize via `js_get_string_pointer_unified`, which copies
+    // SSO bytes onto the heap (and returns the existing pointer for a
+    // heap string), so the `StringHeader` read works for both reprs.
+    if v.is_any_string() {
+        let ptr = unsafe { js_get_string_pointer_unified(value) } as *mut StringHeader;
         if ptr.is_null() {
             return None;
         }

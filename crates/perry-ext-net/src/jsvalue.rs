@@ -45,6 +45,13 @@ extern "C" {
     /// pointer-tagged non-buffer object). Defined in
     /// `crates/perry-runtime/src/buffer.rs::js_buffer_is_buffer`.
     fn js_buffer_is_buffer(ptr: i64) -> i32;
+    /// #1781 — materialize ANY string representation (heap
+    /// `STRING_TAG` *or* inline `SHORT_STRING_TAG` SSO) to a real
+    /// `*const StringHeader`, returned as `i64`. SSO bytes are copied
+    /// onto the heap; a heap string returns its existing pointer.
+    /// Returns 0 for non-strings. Defined in
+    /// `crates/perry-runtime/src/value/nanbox.rs::js_get_string_pointer_unified`.
+    fn js_get_string_pointer_unified(value: f64) -> i64;
 }
 
 /// Issue #1131 — read a NaN-boxed JS value as the raw bytes to put on
@@ -72,9 +79,16 @@ pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
     if v.is_undefined() || v.is_null() {
         return None;
     }
-    // JS string — STRING_TAG, `StringHeader` layout.
-    if v.is_string() {
-        let ptr = unbox_pointer(value) as *const StringHeader;
+    // JS string — heap STRING_TAG *or* inline SSO SHORT_STRING_TAG.
+    // #1781: the strict `is_string()` matches STRING_TAG only, so a
+    // short string (`socket.write("hi")`) used to fall through every
+    // branch to `None` and was silently dropped. Gate on
+    // `is_any_string()` and route through `js_get_string_pointer_unified`,
+    // which materializes the SSO bytes onto the heap (and returns the
+    // existing pointer for a heap string), so the `StringHeader` read
+    // below works for both representations.
+    if v.is_any_string() {
+        let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
         if ptr.is_null() {
             return None;
         }
@@ -257,4 +271,92 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
     js_object_set_field(obj, 0, v);
     let obj_v = JsValue::from_object_ptr(obj as *mut u8);
     f64::from_bits(obj_v.bits())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_ffi::alloc_string;
+
+    // The net lib references `perry_ffi_spawn_async` (declared extern in
+    // `perry-ffi`'s async runtime, normally provided by `perry-stdlib` /
+    // the prebuilt static archive at the final link). A bare
+    // `cargo test -p perry-ext-net` in a fresh checkout has no
+    // perry-stdlib edge, so the unit-test binary fails to link on this
+    // one symbol. None of these conversion tests touch the async runtime,
+    // so a no-op stub lets the test binary link without pulling in the
+    // staticlib. (Test-only; never compiled into the shipping crate.)
+    #[no_mangle]
+    extern "C" fn perry_ffi_spawn_async(_ctx: *mut std::ffi::c_void) {}
+
+    /// Encode `bytes` (len ≤ 5) as an inline SSO `SHORT_STRING_TAG`
+    /// NaN-box, mirroring the runtime's `JSValue::try_short_string`:
+    /// tag 0x7FF9, length in bits 40..=47, data little-endian in bits
+    /// 0..=39. This is exactly the representation codegen hands the
+    /// `socket.write` shim for a short string literal.
+    fn sso(bytes: &[u8]) -> f64 {
+        assert!(bytes.len() <= 5);
+        let mut payload: u64 = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            payload |= (b as u64) << (i * 8);
+        }
+        let bits = 0x7FF9_0000_0000_0000_u64 | ((bytes.len() as u64) << 40) | payload;
+        f64::from_bits(bits)
+    }
+
+    /// #1781 regression — a short string (`socket.write("hi")`) arrives
+    /// as an inline SSO value, not a `STRING_TAG` heap pointer. Before
+    /// the fix `jsvalue_to_socket_bytes` gated on the strict
+    /// `is_string()` (STRING_TAG only); the SSO value matched no branch
+    /// and the byte payload was silently dropped (returned `None`).
+    /// It must now convert to its UTF-8 bytes.
+    #[test]
+    fn socket_bytes_handles_sso_short_string() {
+        let bytes = unsafe { jsvalue_to_socket_bytes(sso(b"hi")) };
+        assert_eq!(
+            bytes.as_deref(),
+            Some(&b"hi"[..]),
+            "SSO short string must convert to its bytes, not be dropped (#1781)"
+        );
+        // Empty string and the 5-byte boundary are also SSO.
+        assert_eq!(
+            unsafe { jsvalue_to_socket_bytes(sso(b"")) }.as_deref(),
+            Some(&b""[..])
+        );
+        assert_eq!(
+            unsafe { jsvalue_to_socket_bytes(sso(b"hello")) }.as_deref(),
+            Some(&b"hello"[..])
+        );
+    }
+
+    /// A heap `STRING_TAG` string (length > 5) still converts — the fix
+    /// must not regress the long-string path.
+    #[test]
+    fn socket_bytes_handles_heap_string() {
+        let s = alloc_string("longer-than-sso");
+        let v = JsValue::from_string_ptr(s.as_raw());
+        let bytes = unsafe { jsvalue_to_socket_bytes(f64::from_bits(v.bits())) };
+        assert_eq!(bytes.as_deref(), Some(&b"longer-than-sso"[..]));
+    }
+
+    /// The clean non-string reject must still hold: a `POINTER_TAG`
+    /// heap object that is NOT a registered Buffer must produce `None`,
+    /// never be reinterpreted through `StringHeader` (the
+    /// object-memory-leak / garbage-on-the-wire path). Guards against
+    /// reintroducing the bug while widening the string branch.
+    #[test]
+    fn socket_bytes_rejects_non_buffer_object() {
+        let obj_f64 = unsafe { build_error_object("boom") };
+        assert!(JsValue::from_bits(obj_f64.to_bits()).is_pointer());
+        let bytes = unsafe { jsvalue_to_socket_bytes(obj_f64) };
+        assert!(
+            bytes.is_none(),
+            "a non-buffer heap object must not be read as bytes"
+        );
+        // null / undefined still yield no bytes.
+        assert!(unsafe { jsvalue_to_socket_bytes(f64::from_bits(JsValue::NULL.bits())) }.is_none());
+        assert!(
+            unsafe { jsvalue_to_socket_bytes(f64::from_bits(JsValue::UNDEFINED.bits())) }.is_none()
+        );
+    }
 }
