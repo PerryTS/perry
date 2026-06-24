@@ -46,14 +46,27 @@
 //! runtime (step 3, the shared reactor), so a task may check a buffer
 //! out on one reactor worker and — after migrating across an `.await`
 //! — check it back in on another. The freelist is therefore a
-//! `Mutex<Vec<BytesMut>>`, matching the other process-wide `statics`
-//! maps in this crate. The lock is held only for the O(1) `pop` /
-//! `push`; it is never held across an `.await`.
+//! `Mutex<VecDeque<BytesMut>>`, matching the other process-wide `statics`
+//! maps in this crate. The lock is held only for the O(1) `pop_front` /
+//! `push_back`; it is never held across an `.await`.
+//!
+//! # FIFO, not LIFO
+//!
+//! The freelist is a queue, not a stack: checkout takes from the front
+//! (`pop_front`), checkin returns to the back (`push_back`). A stack
+//! would hand the *most-recently* returned buffer straight back out —
+//! but that buffer's chunk was only just enqueued for the drain tick and
+//! is therefore still alive, so its `reserve(READ_BUF_CAP)` could not
+//! reclaim in place and would reallocate, defeating the pool on the hot
+//! read path. FIFO cycles the other parked buffers through first, giving
+//! a returned buffer's chunk time to drain + drop before that buffer is
+//! reused, so the reuse hits the in-place-reclaim path.
 //!
 //! [#5419]: https://github.com/PerryTS/perry/pull/5419
 //! [#5638]: https://github.com/PerryTS/perry/pull/5638
 
 use bytes::BytesMut;
+use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
 /// Per-read window size — kept in sync with the `BufMut::limit(16 KiB)`
@@ -72,22 +85,43 @@ pub(crate) const READ_BUF_CAP: usize = 16 * 1024;
 const MAX_POOLED: usize = 64;
 
 /// The process-wide freelist of idle read buffers.
-fn pool() -> &'static Mutex<Vec<BytesMut>> {
-    static POOL: OnceLock<Mutex<Vec<BytesMut>>> = OnceLock::new();
-    POOL.get_or_init(|| Mutex::new(Vec::new()))
+fn pool() -> &'static Mutex<VecDeque<BytesMut>> {
+    static POOL: OnceLock<Mutex<VecDeque<BytesMut>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
 /// Check out a read buffer: an empty `BytesMut` with at least
 /// [`READ_BUF_CAP`] bytes of writable capacity, ready for `read_buf`.
 ///
-/// Pops a recycled buffer from the freelist when one is available, else
-/// allocates a fresh one. `clear()` + `reserve(READ_BUF_CAP)` mean a
-/// recycled buffer whose prior chunk has already drained reclaims its
+/// Pops a recycled buffer from the **front** of the freelist when one is
+/// available, else allocates a fresh one. `clear()` + `reserve(READ_BUF_CAP)`
+/// mean a recycled buffer whose prior chunk has already drained reclaims its
 /// backing allocation in place (no allocation); a recycled buffer whose
 /// chunk is somehow still alive, or a fresh buffer, allocates — the same
 /// outcome the pre-pool `with_capacity` / `reserve` path produced.
 pub(crate) fn checkout() -> BytesMut {
-    let mut buf = pool().lock().unwrap().pop().unwrap_or_default();
+    checkout_from(pool())
+}
+
+/// Return a read buffer to the **back** of the freelist for reuse.
+///
+/// Called with the post-`split_to` remainder once the read loop has
+/// handed its chunk downstream. The buffer's backing storage may still
+/// be shared with that in-flight chunk; that is fine — the next
+/// `checkout` of this buffer will reclaim in place only once the chunk
+/// has drained, and reallocate otherwise (never corrupting the chunk).
+/// Returning to the back (FIFO) gives the chunk time to drain while other
+/// parked buffers cycle through first. Drops the buffer instead of parking
+/// it once the freelist is at [`MAX_POOLED`], keeping idle memory bounded.
+pub(crate) fn checkin(buf: BytesMut) {
+    checkin_to(pool(), buf);
+}
+
+/// `checkout` against an explicit freelist — the global pool in production,
+/// a test-local instance in unit tests (so pool-state tests never race the
+/// process-wide pool).
+fn checkout_from(pool: &Mutex<VecDeque<BytesMut>>) -> BytesMut {
+    let mut buf = pool.lock().unwrap().pop_front().unwrap_or_default();
     // `clear()` drops any (already split-off) contents; `reserve`
     // guarantees the 16 KiB writable window. On a recycled buffer with a
     // drained chunk this is an in-place reclaim; otherwise it allocates.
@@ -96,19 +130,11 @@ pub(crate) fn checkout() -> BytesMut {
     buf
 }
 
-/// Return a read buffer to the freelist for reuse.
-///
-/// Called with the post-`split_to` remainder once the read loop has
-/// handed its chunk downstream. The buffer's backing storage may still
-/// be shared with that in-flight chunk; that is fine — the next
-/// `checkout` of this buffer will reclaim in place only once the chunk
-/// has drained, and reallocate otherwise (never corrupting the chunk).
-/// Drops the buffer instead of parking it once the freelist is at
-/// [`MAX_POOLED`], keeping idle memory bounded.
-pub(crate) fn checkin(buf: BytesMut) {
-    let mut pool = pool().lock().unwrap();
+/// `checkin` against an explicit freelist — see [`checkout_from`].
+fn checkin_to(pool: &Mutex<VecDeque<BytesMut>>, buf: BytesMut) {
+    let mut pool = pool.lock().unwrap();
     if pool.len() < MAX_POOLED {
-        pool.push(buf);
+        pool.push_back(buf);
     }
     // else: drop `buf`, returning its allocation to the global allocator.
 }
@@ -123,12 +149,22 @@ mod tests {
     // defined once in `jsvalue.rs`'s `#[cfg(test)]` module (#5638) and
     // covers the whole test binary — these tests don't redefine it.
 
+    // Pool-data-structure tests run against a TEST-LOCAL freelist via
+    // `checkout_from` / `checkin_to`, never the process-wide `pool()`. That
+    // makes pointer-reuse and count assertions deterministic regardless of
+    // Rust's default parallel test execution — no test can observe or mutate
+    // another's pool, so no `#[serial]` / global guard is needed.
+    fn local_pool() -> Mutex<VecDeque<BytesMut>> {
+        Mutex::new(VecDeque::new())
+    }
+
     /// A fresh checkout (empty pool) hands back an empty buffer with the
     /// full 16 KiB write window — byte-for-byte the precondition the read
     /// loop relied on from `BytesMut::with_capacity(16 KiB)`.
     #[test]
     fn checkout_yields_empty_16k_window() {
-        let buf = checkout();
+        let pool = local_pool();
+        let buf = checkout_from(&pool);
         assert_eq!(buf.len(), 0, "checked-out buffer must start empty");
         assert!(
             buf.capacity() >= READ_BUF_CAP,
@@ -145,21 +181,113 @@ mod tests {
     /// step-4 win.
     #[test]
     fn drained_buffer_recycles_storage_in_place() {
+        let pool = local_pool();
         // Mirror the read loop: checkout, fill, split a chunk off, then
         // park the remainder once the chunk has drained.
-        let mut buf = checkout();
+        let mut buf = checkout_from(&pool);
         let base = buf.as_ptr() as usize;
         buf.extend_from_slice(&[0xAB; 256]);
         let chunk: Bytes = buf.split_to(256).freeze();
         drop(chunk); // consumer drained + dropped the chunk
-        checkin(buf);
+        checkin_to(&pool, buf);
 
-        let recycled = checkout();
+        let recycled = checkout_from(&pool);
         assert_eq!(
             recycled.as_ptr() as usize,
             base,
             "a drained, returned buffer must be reused in place, not reallocated"
         );
+    }
+
+    /// FIFO is load-bearing on the hot path: a buffer whose chunk is STILL
+    /// IN FLIGHT when it is checked in must not be the very next buffer
+    /// handed out — otherwise its `reserve` cannot reclaim in place and
+    /// reallocates. With FIFO the other parked buffers cycle through first,
+    /// so by the time the buffer comes back its chunk has drained and the
+    /// reuse is in-place (pointer-identity, no realloc). The companion
+    /// `lifo_reuses_too_soon_and_reallocates` proves a LIFO pool fails this
+    /// exact sequence, so the structure choice — not luck — is what restores
+    /// the reclaim.
+    #[test]
+    fn fifo_lets_in_flight_chunk_drain_before_reuse() {
+        let pool = local_pool();
+        // Steady state: two buffers already parked (a real read loop keeps a
+        // handful in flight). FIFO orders them front = P1, back = P2.
+        checkin_to(&pool, BytesMut::with_capacity(READ_BUF_CAP));
+        checkin_to(&pool, BytesMut::with_capacity(READ_BUF_CAP));
+
+        // Read 1: check out the front buffer (call it A), fill it, freeze a
+        // chunk that STAYS ALIVE (mirroring the pending-events queue), and
+        // return A to the back of the freelist. Pool: [P2, A].
+        let mut a = checkout_from(&pool);
+        let base_a = a.as_ptr() as usize;
+        a.extend_from_slice(&[0xCD; 512]);
+        let chunk_a: Bytes = a.split_to(512).freeze();
+        checkin_to(&pool, a); // A to the back; its chunk is still alive
+
+        // Read 2: the next checkout hands out the OTHER parked buffer (FIFO
+        // front), never A — so A sits parked while its chunk is in flight and
+        // is never reserved against a live chunk. Pool after check-in: [A, _].
+        let b = checkout_from(&pool);
+        assert_ne!(
+            b.as_ptr() as usize,
+            base_a,
+            "FIFO must hand out the older parked buffer, not the just-returned A"
+        );
+        checkin_to(&pool, b);
+
+        // The consumer drains + drops A's chunk on the next tick.
+        drop(chunk_a);
+
+        // Read 3 reaches A at the FIFO front. Its chunk has drained, so the
+        // `reserve` reclaims A's backing storage IN PLACE — same pointer, no
+        // reallocation. Under a LIFO pool A would have been re-handed at Read 2
+        // (chunk still alive → forced realloc), so this exact pointer-identity
+        // assertion fails; `lifo_reuses_too_soon_and_reallocates` shows that.
+        let recycled = checkout_from(&pool);
+        assert_eq!(
+            recycled.as_ptr() as usize,
+            base_a,
+            "A must reclaim its drained storage in place, not reallocate"
+        );
+    }
+
+    /// The failure the FIFO design fixes, made explicit: a LIFO pool
+    /// (`pop_back`) re-hands the just-returned buffer immediately, while its
+    /// chunk is still alive, so `reserve` cannot reclaim in place and the
+    /// buffer is REALLOCATED to a new address. This is the regression the
+    /// FIFO `pop_front` avoids — run the same sequence both ways and the
+    /// pointers diverge.
+    #[test]
+    fn lifo_reuses_too_soon_and_reallocates() {
+        // Same two-buffer steady state as the FIFO test.
+        let buf1 = BytesMut::with_capacity(READ_BUF_CAP);
+        let buf2 = BytesMut::with_capacity(READ_BUF_CAP);
+        let mut lifo: VecDeque<BytesMut> = VecDeque::new();
+        lifo.push_back(buf1);
+        lifo.push_back(buf2);
+
+        // Emulate the LIFO variant inline: take from the back, return to the
+        // back. Read 1 checks out A, queues a live chunk, returns A.
+        let mut a = lifo.pop_back().unwrap();
+        a.clear();
+        a.reserve(READ_BUF_CAP);
+        let base_a = a.as_ptr() as usize;
+        a.extend_from_slice(&[0xCD; 512]);
+        let chunk_a: Bytes = a.split_to(512).freeze();
+        lifo.push_back(a); // returned to the back; chunk still alive
+
+        // Read 2 with LIFO: `pop_back` hands A straight back — chunk alive —
+        // so `reserve` must allocate elsewhere. Pointer diverges from base_a.
+        let mut reused = lifo.pop_back().unwrap();
+        reused.clear();
+        reused.reserve(READ_BUF_CAP);
+        assert_ne!(
+            reused.as_ptr() as usize,
+            base_a,
+            "LIFO reuse while the chunk is alive must reallocate (pointer moves)"
+        );
+        drop(chunk_a);
     }
 
     /// Recycling never corrupts an in-flight chunk: even though a
@@ -169,14 +297,15 @@ mod tests {
     /// than reclaiming in this case — correctness over reuse.)
     #[test]
     fn checkin_preserves_live_chunk_bytes() {
-        let mut buf = checkout();
+        let pool = local_pool();
+        let mut buf = checkout_from(&pool);
         buf.extend_from_slice(b"first-message");
         let chunk: Bytes = buf.split_to(b"first-message".len()).freeze();
         // Return the remainder while the chunk is still "in the queue".
-        checkin(buf);
+        checkin_to(&pool, buf);
 
         // Next reader checks out and writes a different payload.
-        let mut next = checkout();
+        let mut next = checkout_from(&pool);
         next.extend_from_slice(b"second-message-payload");
         let chunk2 = next.split_to(b"second-message-payload".len()).freeze();
 
@@ -191,21 +320,15 @@ mod tests {
     /// exactly the pre-pool behavior.
     #[test]
     fn freelist_is_bounded() {
-        // Drain any buffers a sibling test parked, so the count is exact.
-        while pool().lock().unwrap().pop().is_some() {}
-
+        let pool = local_pool();
         for _ in 0..(MAX_POOLED + 16) {
-            checkin(BytesMut::with_capacity(READ_BUF_CAP));
+            checkin_to(&pool, BytesMut::with_capacity(READ_BUF_CAP));
         }
         assert_eq!(
-            pool().lock().unwrap().len(),
+            pool.lock().unwrap().len(),
             MAX_POOLED,
             "freelist must cap at MAX_POOLED idle buffers"
         );
-
-        // Drain back down so the global pool doesn't leak state into
-        // other tests in this binary.
-        while pool().lock().unwrap().pop().is_some() {}
     }
 
     // ─── Differential read-path test against a real socket ──────────────
@@ -238,15 +361,13 @@ mod tests {
 
         let (mut server, _) = listener.accept().await.unwrap();
 
-        // Let the writer push the *whole* payload (and FIN) into the OS
-        // receive buffer before the first read. That way the 16 KiB
-        // `BufMut::limit` window is the ONLY thing bounding each
-        // `read_buf` — making the per-read cap deterministically
-        // load-bearing for a >16 KiB payload (a missing cap would
-        // surface as one oversized chunk), instead of relying on TCP
-        // segmentation timing.
-        writer.await.unwrap();
-
+        // Read CONCURRENTLY with the writer — do NOT join the writer first.
+        // For payloads larger than the combined OS send + receive buffers,
+        // `write_all` cannot complete until the server drains the socket, so
+        // awaiting the writer up front would deadlock. The writer is joined
+        // after the read loop instead. The per-read 16 KiB `BufMut::limit`
+        // window is what bounds each chunk (asserted by the caller), so the
+        // boundary validation holds regardless of TCP segmentation timing.
         let mut chunks: Vec<Bytes> = Vec::new(); // kept alive like the queue
         let mut sizes = Vec::new();
         let mut joined = Vec::new();
@@ -265,6 +386,10 @@ mod tests {
             chunks.push(chunk); // outlives the iteration, as in the queue
             checkin(buf);
         }
+
+        // The read loop saw FIN, so the writer has finished and closed;
+        // join it to surface any send-side error and avoid a detached task.
+        writer.await.unwrap();
         (sizes, joined)
     }
 

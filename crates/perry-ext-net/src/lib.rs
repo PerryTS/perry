@@ -1125,6 +1125,10 @@ pub(crate) async fn run_socket_task(
                 drop(window);
                 match read_result {
                     Ok(0) => {
+                        // Return the untouched buffer to the freelist before
+                        // breaking, so a peer FIN doesn't leak its pooled
+                        // capacity (the success path checks in below).
+                        buffer_pool::checkin(buf);
                         // #2154 raw mode: signal EOF on the buffer, suppress
                         // JS events. Else (#1852) fire 'end' then 'close' per
                         // Node's default `allowHalfOpen: false` teardown order.
@@ -1152,6 +1156,10 @@ pub(crate) async fn run_socket_task(
                         buffer_pool::checkin(buf);
                     }
                     Err(e) => {
+                        // Return the buffer before breaking on a read error,
+                        // mirroring the EOF and success paths — a failed read
+                        // wrote nothing, so its pooled capacity is reusable.
+                        buffer_pool::checkin(buf);
                         let msg = format!("{}", e);
                         if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
                             push_event(PendingNetEvent::Error(id, msg));
