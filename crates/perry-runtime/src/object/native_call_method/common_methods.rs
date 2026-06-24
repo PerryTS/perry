@@ -563,8 +563,11 @@ pub(super) unsafe fn dispatch_common(
                 // the explicit `.apply(thisArg)` receiver (no-op for arrows /
                 // plain fns) — see the matching `call` arm.
                 let apply_target = crate::closure::rebind_explicit_this(object, this_arg);
-                let result =
-                    crate::closure::js_native_call_value(apply_target, call_args_ptr, call_args_len);
+                let result = crate::closure::js_native_call_value(
+                    apply_target,
+                    call_args_ptr,
+                    call_args_len,
+                );
                 if static_target {
                     super::static_this_disarm();
                 }
