@@ -5796,6 +5796,7 @@ dependencies = [
 name = "perry-ext-net"
 version = "0.5.1204"
 dependencies = [
+ "bytes",
  "perry-ffi",
  "perry-runtime",
  "rustls",

@@ -4,7 +4,8 @@
 //! stable surface as part of #466 Phase 5. Architecturally the same as the
 //! perry-stdlib copy: one tokio task per socket reads in a `select!` loop
 //! and drives an mpsc command channel for writes/end/destroy/upgrade. Read
-//! data is queued as raw `Vec<u8>` into `NET_PENDING_EVENTS` and converted
+//! data is queued as a zero-copy `Bytes` view (sliced out of the socket
+//! task's reused read buffer) into `NET_PENDING_EVENTS` and converted
 //! to `Buffer` on the main thread inside `js_net_process_pending` — the
 //! same arena-safety rule as perry-stdlib (JSValue construction MUST run
 //! on the main thread, never on a tokio worker).
@@ -32,6 +33,7 @@
 //! `tls = ["net", ...]` feature split is preserved on the perry-stdlib side
 //! for backwards compat; the well-known flip routes here.
 
+use bytes::{Bytes, BytesMut};
 use perry_ffi::{
     alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner_named,
     js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, BufferHeader,
@@ -308,7 +310,11 @@ pub(crate) enum SocketCommand {
 #[derive(Debug)]
 enum PendingNetEvent {
     Connect(i64),
-    Data(i64, Vec<u8>),
+    /// One chunk of read data. Carried as a refcounted `Bytes` — a zero-copy
+    /// view sliced out of the socket task's reused read buffer (`split_to`) —
+    /// so the path from the receive buffer to the main-thread drain handler
+    /// (which only borrows it as `&[u8]`) stays alloc-free per read.
+    Data(i64, Bytes),
     /// Issue #1852 — peer half-closed (FIN received, `read()` returned 0).
     /// Node fires `'end'` on the readable side *before* `'close'`; lots of
     /// net tests block on `socket.on('end', …)` to learn the peer is done,
@@ -1287,7 +1293,14 @@ pub(crate) async fn run_socket_task(
     rx: &mut mpsc::UnboundedReceiver<SocketCommand>,
 ) {
     let mut transport: Option<Transport> = Some(initial_transport);
-    let mut buf = vec![0u8; 16 * 1024];
+    // Zero-copy read buffer. `read_buf` fills the uninitialized tail of this
+    // `BytesMut` in place (no per-read zeroing), and `split_to(n)` carves the
+    // freshly-read bytes off as a refcounted `Bytes` view that the 'data'
+    // event carries to the drain handler — eliminating the `Vec<u8>` alloc +
+    // memcpy that the old `buf[..n].to_vec()` did on every read. `reserve`
+    // before each read keeps the per-read ceiling at 16 KiB, so read sizing
+    // and 'data' chunk boundaries are unchanged from the fixed-`Vec` path.
+    let mut buf = BytesMut::with_capacity(16 * 1024);
 
     loop {
         let t = match transport.as_mut() {
@@ -1295,8 +1308,14 @@ pub(crate) async fn run_socket_task(
             None => break,
         };
 
+        // Cap the writable window at 16 KiB so a single `read_buf` reads the
+        // same per-call ceiling the old fixed `[u8; 16 KiB]` scratch did, even
+        // if `BytesMut` over-allocated. `clear()` drops the (already split-off)
+        // contents and `reserve(16 KiB)` from empty gives exactly that window.
+        buf.clear();
+        buf.reserve(16 * 1024);
         tokio::select! {
-            read_result = t.read(&mut buf) => {
+            read_result = t.read_buf(&mut buf) => {
                 match read_result {
                     Ok(0) => {
                         // #2154 raw mode: signal EOF on the buffer, suppress
@@ -1311,8 +1330,12 @@ pub(crate) async fn run_socket_task(
                     }
                     Ok(n) => {
                         // #2154 raw mode buffers for `poll_read`; else 'data'.
-                        if !raw_bridge::route_data(id, &buf[..n]) {
-                            push_event(PendingNetEvent::Data(id, buf[..n].to_vec()));
+                        // `split_to(n)` hands out a zero-copy `Bytes` view of
+                        // the bytes just read and leaves `buf` empty for the
+                        // next `reserve`/`read_buf` cycle.
+                        let chunk = buf.split_to(n).freeze();
+                        if !raw_bridge::route_data(id, &chunk) {
+                            push_event(PendingNetEvent::Data(id, chunk));
                         }
                     }
                     Err(e) => {
