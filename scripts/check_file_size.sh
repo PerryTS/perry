@@ -60,13 +60,6 @@ crates/perry/src/commands/compile.rs
 # (dns) into siblings is a reasonable follow-up.
 crates/perry-runtime/src/dns.rs
 crates/perry-runtime/src/dgram.rs
-# Native-module dispatch table; one big match by (module, method, class).
-# Splitting per-namespace is tracked under the API-manifest refactor in #793.
-crates/perry-codegen/src/lower_call/native/mod.rs
-# Node-core native method table split out of `native/mod.rs`; still a single
-# per-module dispatch table and already over the limit on current main.
-# Splitting per namespace is tracked under the codegen cleanup in #1435.
-crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
 crates/perry-hir/src/ir/expr.rs
@@ -74,25 +67,10 @@ crates/perry-hir/src/ir/expr.rs
 # after the #1419 KeyObject/.export/.equals routing + main's process-module
 # additions. Splitting tracked under #1435.
 crates/perry-runtime/src/object/field_get_set.rs
-# Codegen `Call` dispatch tower; grew past the limit after #1419's crypto
-# fast-path gate refinements + main's process / fs / perf_hooks Expr
-# additions. Splitting per-builtin family tracked alongside #1435.
-crates/perry-codegen/src/expr/calls.rs
-# Codegen `Expr` lowering trunk (one big match over every `Expr` variant);
-# crossed the limit on current main after recent builtin-Expr additions.
-# Splitting per expression family is tracked alongside #1435.
-crates/perry-codegen/src/expr/mod.rs
 # Dynamic method-call dispatch tower (js_native_call_method); crossed the
 # limit by the 7-line WeakMap/WeakSet dispatch hook in #1757/#1758. Splitting
 # per receiver-kind family tracked alongside #1435.
 crates/perry-runtime/src/object/native_call_method.rs
-# Codegen driver: `compile_module` is a single ~2,100-LOC function (module
-# setup -> per-class field-layout -> per-fn codegen -> link). It crossed the
-# limit after #26's cross-module same-named-class disambiguation (the
-# class_field_counts / class_init_chains build, interleaved with the per-class
-# loop). Extracting that pass is high-risk surgery deferred to the codegen
-# split tracked under #1435.
-crates/perry-codegen/src/codegen/mod.rs
 # Global object bootstrap crossed the gate on current main; split constructor
 # tables/population helpers alongside the runtime object cleanup tracked in #1435.
 crates/perry-runtime/src/object/global_this.rs
@@ -123,9 +101,6 @@ crates/perry-runtime/src/object/native_module_dispatch.rs
 # globalThis constructor/namespace registry; current main crossed the threshold
 # after WebCrypto + DOM/Event global exposure landed. Split tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
-# Node core native-lowering table; current main crossed the threshold after
-# namespace alias exposure work. Split tracked under #1435.
-crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # fs directory glob/watch helpers; current main crossed the threshold after
 # namespace-alias exposure work. Split tracked under #1435 with the other
 # runtime file-size cleanups.
@@ -156,9 +131,6 @@ crates/perry-stdlib/src/common/dispatch.rs
 # sqlite stdlib remains a monolithic binding surface on current main; split
 # statements/sessions/backups/functions in the sqlite cleanup tracked in #1435.
 crates/perry-stdlib/src/sqlite.rs
-# Node core native table crossed the limit on current main after namespace
-# alias additions; split per namespace in the native-table cleanup tracked in #1435.
-crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # globalThis constructor/prototype registry is over the limit on current main;
 # splitting constructor tables from property dispatch is tracked under #1435.
 crates/perry-runtime/src/object/global_this.rs
@@ -198,17 +170,6 @@ crates/perry-stdlib/src/container/mod.rs
 # Crossed the 2000-line gate after the stream/web adapter additions. Splitting
 # classic constructors from the web adapters is tracked under #1435.
 crates/perry-runtime/src/node_stream_constructors.rs
-# Codegen property-get / method-dispatch lowering tower (one arm per builtin
-# accessor + collection/string/regex method). Crossed the 2000-line gate (2004
-# LOC) on main after recent dispatch-arm additions. Splitting per receiver-type
-# family is tracked under #1435.
-crates/perry-codegen/src/expr/property_get.rs
-# Codegen call-site method-dispatch tower (string/array/class/Map/Set/Promise +
-# static/instance method resolution). Sat at 1998 LOC on main; crossed the
-# 2000-line gate after the class static-accessor call route (test262
-# arguments-object cls-*-static-* getter calls). Splitting the per-receiver-type
-# dispatch helpers into sibling modules is tracked under #1435.
-crates/perry-codegen/src/lower_call/property_get.rs
 # TypedArray root — constructor/view-metadata/element load-store/iterator tower.
 # Crossed the 2000-line gate (2062 LOC) on current main after the #4702
 # %TypedArray%.prototype iterator brand-check + array-like/iterable constructor
@@ -221,14 +182,6 @@ crates/perry-runtime/src/typedarray/mod.rs
 # on/once iterator machinery into the existing `events/` submodule is tracked
 # under #1435 with the other module-size cleanups.
 crates/perry-stdlib/src/events.rs
-# Representation-aware type-lowering work (#5291). These crossed the 2000-line
-# gate as the raw-numeric fallback hardening + native-ABI hot-loop runtime gates
-# expanded the type-analysis surface and its native-region proof tests. Splitting
-# the per-concern analysis/verify helpers into sibling modules is tracked under
-# #1435 with the other codegen file-size cleanups.
-crates/perry-codegen/src/type_analysis.rs
-crates/perry-codegen/src/native_value/verify.rs
-crates/perry-codegen/tests/native_proof_regressions.rs
 # auto-optimize libs driver. Crossed the 2000-line gate after the
 # fresh-archive-reuse work (#4928) added the build-stamp + freshness probe
 # (`auto_optimized_archives_are_fresh` / `auto_optimized_build_stamp` /
@@ -236,14 +189,6 @@ crates/perry-codegen/tests/native_proof_regressions.rs
 # `build_optimized_libs` driver + well-known resolution. Splitting the
 # freshness/well-known helpers into a sibling module is tracked under #1435.
 crates/perry/src/commands/compile/optimized_libs.rs
-# Next.js app-router bring-up (PR #5438 / umbrella #793): these three crossed
-# the gate from the wall-fix additions (HIR destructuring var-decl handling,
-# `new <member>()`/anon-class lowering, and the stdlib FFI decl table) layered
-# on top of main's recent growth — each was at/just under 2000 on main
-# (2000/1991/1968) and is now a few-to-~90 LOC over. Topical split (by
-# destructuring-pattern family / new-callee shape / FFI namespace) is a
-# reasonable follow-up, deferred to keep the wall-fix PR focused.
-crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs
 # Closure call/apply/bind dispatch tower. Sat at 1998 LOC on main and crossed
 # the gate by the few-line class-ref `this`-coercion hook in #5515 (a class ref
 # must bind as `this` unboxed in `coerce_call_this`). Splitting the bound-
