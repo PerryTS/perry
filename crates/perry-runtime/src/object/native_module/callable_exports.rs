@@ -1420,8 +1420,16 @@ pub(crate) unsafe fn bound_native_callable_module_and_method(
         return None;
     }
     let closure = jv.as_pointer::<crate::closure::ClosureHeader>();
-    if closure.is_null()
-        || (*closure).type_tag != crate::closure::CLOSURE_MAGIC
+    // A POINTER-tagged value is not necessarily a heap closure: a Proxy is
+    // POINTER-tagged over a SMALL encoded id that lands in the handle band
+    // (`class X extends new Proxy(fn, …)`). Dereferencing its `type_tag` would
+    // read offset 0xc of a bogus ~handle-sized address and segfault. Classify
+    // through `is_closure_ptr`, which rejects the handle band AND every
+    // non-heap address on EVERY platform (the macOS-only `is_valid_obj_ptr`
+    // heap floor lets a `0xf0000`-band id through on Linux — the #5592 sweep
+    // host) before probing `CLOSURE_MAGIC`. Refs test262
+    // class/subclass/superclass-{arrow,async,generator,async-generator}-function.
+    if !crate::closure::is_closure_ptr(closure as usize)
         || (*closure).func_ptr != crate::closure::BOUND_METHOD_FUNC_PTR
     {
         return None;
