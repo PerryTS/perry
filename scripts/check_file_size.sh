@@ -70,10 +70,6 @@ crates/perry-codegen/src/lower_call/native_table/node_core.rs
 # HIR `Expr` enum + dependency-walker arms; splitting would need parallel
 # updates across every variant of the walker traits. Tracked alongside #793.
 crates/perry-hir/src/ir/expr.rs
-# HIR member-expression lowering tower; already over the line-count threshold
-# on main after the process allowed-flags additions. Split by member family is
-# tracked alongside the lower/codegen file-size cleanup in #1435.
-crates/perry-hir/src/lower/expr_member.rs
 # Object field get/set + handle/native dispatch shim; grew past the limit
 # after the #1419 KeyObject/.export/.equals routing + main's process-module
 # additions. Splitting tracked under #1435.
@@ -144,32 +140,6 @@ crates/perry-stdlib/src/common/dispatch.rs
 # SQLite stdlib shim remains a generated-feel native adapter table; current
 # main crossed the threshold before this PR. Split tracked under #1435.
 crates/perry-stdlib/src/sqlite.rs
-# Member-expression lowering tower (one big match over member/property/call
-# shapes, plus per-namespace literal builders). Crossed the limit at 2121 LOC
-# after #3161 inlined the full allowedNodeEnvironmentFlags string list into
-# `process_allowed_node_flags_literal`. Splitting the per-namespace literal
-# builders into a sibling module is tracked under #1435.
-crates/perry-hir/src/lower/expr_member.rs
-# Built-in call intrinsic-lowering tower. Crossed the 2000-line gate on current
-# main after the String.prototype generic-`this` + Array/Promise receiver-brand
-# parity arms (#4713/#4720/#4603). Splitting the per-builtin lowering helpers
-# into sibling modules is tracked under #1435.
-crates/perry-hir/src/lower/expr_call/intrinsics.rs
-# Expression lowering entry point — crossed the 2000-line gate when the
-# CJS-default-import allow-list grew to cover all node-core namespaces with
-# `default` namespace shims (#3903). Splitting the per-namespace dispatch
-# helpers into a sibling module is tracked under #1435.
-crates/perry-hir/src/lower/lower_expr.rs
-# Module-declaration lowering tower (import/export binding resolution, re-export
-# wiring, namespace shims). Crossed the 2000-line gate after exported
-# destructuring-binding support added the pattern-walk arms. Splitting the
-# export-binding helpers into a sibling module is tracked under #1435.
-crates/perry-hir/src/lower/module_decl.rs
-# Bare-callee intrinsics + CJS/UMD legacy-shape lowering (require/eval/Function
-# folds, IIFE rewrite, RegExp bare-call). Crossed the 2000-line gate (2010 LOC)
-# on current main, independent of this PR. Splitting the per-shape helpers into a
-# sibling module is tracked under #1435.
-crates/perry-hir/src/lower/expr_call/intrinsics.rs
 # node:process surface (env/argv/hrtime/cpuUsage/resourceUsage + EventEmitter
 # wiring + warning/deprecation emit). Crossed the limit at 2047 LOC after the
 # argument-validation batch landed on main without a split (#3493 setuid/setgid/
@@ -274,8 +244,6 @@ crates/perry/src/commands/compile/optimized_libs.rs
 # destructuring-pattern family / new-callee shape / FFI namespace) is a
 # reasonable follow-up, deferred to keep the wall-fix PR focused.
 crates/perry-codegen/src/runtime_decls/stdlib_ffi.rs
-crates/perry-hir/src/destructuring/var_decl.rs
-crates/perry-hir/src/lower/expr_new.rs
 # Closure call/apply/bind dispatch tower. Sat at 1998 LOC on main and crossed
 # the gate by the few-line class-ref `this`-coercion hook in #5515 (a class ref
 # must bind as `this` unboxed in `coerce_call_this`). Splitting the bound-
