@@ -523,6 +523,10 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
 /// Used by `Reflect.apply`. `thisArg` flows through `IMPLICIT_THIS` so free
 /// functions reading `this` observe it.
 fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
+    // A concise/object-literal method reads `this` from a baked capture slot,
+    // not IMPLICIT_THIS; rebind to the explicit `Reflect.apply` receiver so it
+    // is honored (no-op for arrows / plain fns / bound fns).
+    let f = crate::closure::rebind_explicit_this(f, this_arg);
     let closure = closure_from(f);
     if closure.is_null() {
         return throw_type_error("Reflect.apply target is not a function");

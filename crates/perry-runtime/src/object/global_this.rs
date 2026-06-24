@@ -1402,6 +1402,9 @@ extern "C" fn function_prototype_call_thunk(
         (args.as_ptr(), args.len())
     };
     let this_arg = crate::closure::coerce_call_this(target, this_arg);
+    // Concise/object-literal methods read `this` from a baked capture slot, not
+    // IMPLICIT_THIS; rebind so the explicit `.call(thisArg)` receiver is honored.
+    let target = crate::closure::rebind_explicit_this(target, this_arg);
     let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
     let result = unsafe { crate::closure::js_native_call_value(target, args_ptr, args_len) };
     IMPLICIT_THIS.with(|c| c.set(prev_this));
@@ -1763,6 +1766,9 @@ extern "C" fn function_prototype_apply_thunk(
         let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
         let args = function_apply_args(args_array);
         let this_arg = crate::closure::coerce_call_this(target, this_arg);
+        // Rebind a concise/object-literal method's baked `this` slot to the
+        // explicit `.apply(thisArg)` receiver (no-op for arrows / plain fns).
+        let target = crate::closure::rebind_explicit_this(target, this_arg);
         let prev_this = IMPLICIT_THIS.with(|c| c.replace(this_arg.to_bits()));
         let result = crate::closure::js_native_call_value(target, args.as_ptr(), args.len());
         IMPLICIT_THIS.with(|c| c.set(prev_this));

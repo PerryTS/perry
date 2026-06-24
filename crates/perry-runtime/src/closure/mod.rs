@@ -48,8 +48,8 @@ pub use dispatch::{
     js_function_bind, js_native_call_value, throw_not_callable,
 };
 pub(crate) use dispatch::{
-    coerce_call_this, reify_function_method_value, reset_throw_not_callable_counter,
-    resolve_call2_direct,
+    coerce_call_this, rebind_explicit_this, reify_function_method_value,
+    reset_throw_not_callable_counter, resolve_call2_direct,
 };
 pub use unbox::js_closure_unbox_callee_checked;
 
