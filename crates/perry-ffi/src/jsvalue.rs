@@ -424,6 +424,52 @@ mod tests {
         }
     }
 
+    /// #1781 — a JS string has TWO NaN-box representations: a heap
+    /// `STRING_TAG` (real `*StringHeader`) and an inline `SHORT_STRING_TAG`
+    /// SSO value (string ≤5 bytes packed into the payload). `is_any_string`
+    /// must match BOTH; the strict `is_string` matches only the heap repr.
+    /// The footgun the bug hit: branching on `is_string()` silently drops
+    /// SSO short strings, so `socket.write("hi")` / `res.end("hi")` emitted
+    /// nothing. `is_short_string` must distinguish the SSO repr specifically.
+    #[test]
+    fn is_any_string_matches_both_string_reprs() {
+        // An inline SSO value, built the way the runtime packs one: tag
+        // 0x7FF9, length in bits 40..=47, data little-endian in bits 0..=39.
+        // "hi" → len 2, payload 'h' | ('i' << 8).
+        let sso_bits = SHORT_STRING_TAG | (2u64 << 40) | (b'h' as u64) | ((b'i' as u64) << 8);
+        let sso = JsValue::from_bits(sso_bits);
+        assert!(sso.is_any_string(), "SSO short string is a string");
+        assert!(sso.is_short_string(), "SSO short string is the short repr");
+        assert!(
+            !sso.is_string(),
+            "strict is_string() must NOT match SSO — this is the #1781 footgun"
+        );
+        assert!(!sso.is_pointer(), "SSO is not a heap pointer");
+
+        // A heap STRING_TAG value (the payload pointer is never dereferenced
+        // by these predicates, so a sentinel address is fine).
+        let heap = JsValue::from_bits(STRING_TAG | 0x1234);
+        assert!(heap.is_any_string(), "heap string is a string");
+        assert!(heap.is_string(), "heap string matches strict is_string()");
+        assert!(
+            !heap.is_short_string(),
+            "a heap STRING_TAG value is not the SSO repr"
+        );
+
+        // Non-strings: neither predicate fires.
+        for (val, kind) in [
+            (JsValue::UNDEFINED, "undefined"),
+            (JsValue::NULL, "null"),
+            (JsValue::from_number(3.14), "number"),
+            (JsValue::TRUE, "bool"),
+            (JsValue::from_int32(42), "int32"),
+            (JsValue::from_bits(POINTER_TAG | 0x5678), "pointer"),
+        ] {
+            assert!(!val.is_any_string(), "{kind} is not any string");
+            assert!(!val.is_short_string(), "{kind} is not a short string");
+        }
+    }
+
     #[test]
     fn shape_hash_is_deterministic() {
         let (k1, s1) = build_object_shape(&["foo", "bar", "baz"]);

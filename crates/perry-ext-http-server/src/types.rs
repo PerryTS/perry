@@ -413,6 +413,60 @@ mod tests {
         );
     }
 
+    /// Encode `bytes` (len ≤ 5) as an inline SSO `SHORT_STRING_TAG`
+    /// NaN-box, mirroring the runtime's `JSValue::try_short_string`:
+    /// tag 0x7FF9, length in bits 40..=47, data little-endian in bits
+    /// 0..=39. This is the exact representation codegen hands the
+    /// `res.write` / `res.end` shim for a short string literal — the
+    /// repr `jsvalue_to_body_bytes` used to drop (#1781).
+    fn sso(bytes: &[u8]) -> f64 {
+        assert!(bytes.len() <= 5);
+        let mut payload: u64 = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            payload |= (b as u64) << (i * 8);
+        }
+        let bits = 0x7FF9_0000_0000_0000_u64 | ((bytes.len() as u64) << 40) | payload;
+        f64::from_bits(bits)
+    }
+
+    /// #1781 regression — a short response body (`res.end("hi")`) arrives
+    /// as an inline SSO value, not a `STRING_TAG` heap pointer. Before
+    /// the fix `jsvalue_to_body_bytes` gated on the strict `is_string()`
+    /// (STRING_TAG only); the SSO value matched no branch and the body was
+    /// silently dropped (returned `None`) — the wire response had an empty
+    /// body. It must now convert to its UTF-8 bytes, including the empty
+    /// string and the 5-byte SSO boundary.
+    #[test]
+    fn body_bytes_converts_sso_short_string() {
+        assert_eq!(
+            jsvalue_to_body_bytes(sso(b"hi")).as_deref(),
+            Some(&b"hi"[..]),
+            "SSO short body must convert to its bytes, not be dropped (#1781)"
+        );
+        assert_eq!(
+            jsvalue_to_body_bytes(sso(b"")).as_deref(),
+            Some(&b""[..]),
+            "empty SSO body should yield empty bytes, not None"
+        );
+        assert_eq!(
+            jsvalue_to_body_bytes(sso(b"hello")).as_deref(),
+            Some(&b"hello"[..]),
+            "the 5-byte SSO boundary must convert"
+        );
+    }
+
+    /// A heap `STRING_TAG` body (length > 5) still converts — the #1781
+    /// widening of the string branch must not regress the long-string
+    /// path that already worked.
+    #[test]
+    fn body_bytes_converts_heap_string() {
+        let v = JsValue::from_string_ptr(perry_ffi::alloc_string("longer-than-sso").as_raw());
+        assert_eq!(
+            jsvalue_to_body_bytes(f64::from_bits(v.bits())).as_deref(),
+            Some(&b"longer-than-sso"[..])
+        );
+    }
+
     #[test]
     fn listen_non_closure_pointer_is_not_mistaken_for_callback() {
         // The first arg of `listen(options)` / `listen(path-ish)` is a heap
