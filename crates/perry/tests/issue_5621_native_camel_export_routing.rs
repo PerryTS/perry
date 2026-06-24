@@ -46,20 +46,27 @@ fn build_static_lib(pkg_dir: &Path) -> Option<PathBuf> {
         .arg("-o")
         .arg(&obj)
         .output()
-        .ok()?; // cc not spawnable → skip
-    if !cc_out.status.success() {
-        return None;
-    }
+        .ok()?; // cc not spawnable → skip the test
+                // A non-zero exit is a real failure, not a skip — surface it.
+    assert!(
+        cc_out.status.success(),
+        "cc failed while building the test archive\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&cc_out.stdout),
+        String::from_utf8_lossy(&cc_out.stderr)
+    );
     let archive = pkg_dir.join("libfoo.a");
     let ar_out = Command::new("ar")
         .arg("rcs")
         .arg(&archive)
         .arg(&obj)
         .output()
-        .ok()?; // ar not spawnable → skip
-    if !ar_out.status.success() {
-        return None;
-    }
+        .ok()?; // ar not spawnable → skip the test
+    assert!(
+        ar_out.status.success(),
+        "ar failed while building the test archive\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&ar_out.stdout),
+        String::from_utf8_lossy(&ar_out.stderr)
+    );
     Some(archive)
 }
 

@@ -1449,7 +1449,18 @@ pub(crate) fn ergonomic_export_alias(module: &str, symbol: &str) -> Option<Strin
     }
     let prefix = format!("js_{pkg_token}_");
     let suffix = symbol.strip_prefix(&prefix)?;
-    if suffix.is_empty() {
+    // The convention is strictly `js_<pkg>_<snake_case>`: the suffix must be
+    // lowercase ASCII / digits / underscores, with at least one
+    // alphanumeric. Rejecting mixed-case suffixes (`js_webgpu_requestAdapter`)
+    // keeps the derivation conservative — a malformed manifest symbol isn't
+    // silently routed through the alias path; it falls back to exact match.
+    let is_snake_case = suffix
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && suffix
+            .chars()
+            .any(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !is_snake_case {
         return None;
     }
     Some(snake_to_camel(suffix))
@@ -1579,6 +1590,23 @@ mod ergonomic_alias_tests {
             ergonomic_export_alias("webgpu", "js_webgpu_request_adapter").as_deref(),
             Some("requestAdapter")
         );
+    }
+
+    #[test]
+    fn mixed_case_suffix_is_rejected() {
+        // The convention is strictly `js_<pkg>_<snake_case>`. A symbol that
+        // already carries a camelCase suffix is malformed and must not be
+        // routed through the alias path.
+        assert_eq!(
+            ergonomic_export_alias("@perryts/webgpu", "js_webgpu_requestAdapter"),
+            None
+        );
+        assert_eq!(
+            ergonomic_export_alias("@perryts/webgpu", "js_webgpu_Request_adapter"),
+            None
+        );
+        // Pure underscores (no alphanumeric) is not a real suffix either.
+        assert_eq!(ergonomic_export_alias("@scope/foo", "js_foo___"), None);
     }
 
     #[test]

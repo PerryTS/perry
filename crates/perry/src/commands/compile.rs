@@ -2773,22 +2773,53 @@ pub fn run_with_parse_cache(
                     //      (`js_webgpu_request_adapter`). Record the
                     //      alias so the call site rewrites the binding to
                     //      its manifest symbol; exact matches need no alias.
+                    //
+                    // The manifest is matched against the *exported* name
+                    // (the name the package surfaces), but the alias is
+                    // keyed by the *local* binding — call sites see the
+                    // local name, so `import { requestAdapter as
+                    // getAdapter }` must record `getAdapter → symbol`.
                     if let Some(nl) = native_library_for_import {
-                        let matched_symbol = nl.functions.iter().find_map(|f| {
-                            if f.name == exported_name {
-                                Some(f.name.clone())
-                            } else if ergonomic_export_alias(&nl.module, &f.name).as_deref()
-                                == Some(exported_name.as_str())
-                            {
-                                Some(f.name.clone())
-                            } else {
-                                None
-                            }
-                        });
+                        // Exact match (raw ambient symbol export, e.g.
+                        // `@perryts/storekit`) wins and needs no derivation.
+                        let exact_symbol = nl
+                            .functions
+                            .iter()
+                            .find(|f| f.name == exported_name)
+                            .map(|f| f.name.clone());
+                        // Otherwise collect ALL ergonomic matches so an
+                        // ambiguous manifest (two symbols deriving the same
+                        // camelCase name, e.g. `js_pkg_do_thing` +
+                        // `js_pkg_doThing`) is rejected rather than silently
+                        // bound to whichever happens to come first.
+                        let ergonomic_matches: Vec<String> = if exact_symbol.is_some() {
+                            Vec::new()
+                        } else {
+                            nl.functions
+                                .iter()
+                                .filter(|f| {
+                                    ergonomic_export_alias(&nl.module, &f.name).as_deref()
+                                        == Some(exported_name.as_str())
+                                })
+                                .map(|f| f.name.clone())
+                                .collect()
+                        };
+                        if ergonomic_matches.len() > 1 {
+                            return Err(format!(
+                                "native library `{}` has ambiguous ergonomic exports for \
+                                 `{}`: the manifest symbols {:?} all derive the same \
+                                 camelCase binding. Rename the symbols so each derives a \
+                                 distinct binding, or import one by its raw `js_*` name.",
+                                nl.module, exported_name, ergonomic_matches
+                            ));
+                        }
+                        let matched_symbol =
+                            exact_symbol.or_else(|| ergonomic_matches.into_iter().next());
                         if let Some(symbol) = matched_symbol {
-                            if symbol != exported_name {
-                                import_function_ffi_aliases
-                                    .insert(exported_name.clone(), symbol);
+                            // No alias needed when the binding already IS
+                            // the symbol (raw exact-match, unaliased).
+                            if symbol != local_name {
+                                import_function_ffi_aliases.insert(local_name.clone(), symbol);
                             }
                             continue;
                         }
