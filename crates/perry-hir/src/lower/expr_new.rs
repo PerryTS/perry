@@ -669,6 +669,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         return Ok(Expr::RegExpDynamic {
                             pattern: Box::new(pattern),
                             flags,
+                            // `new RegExp(x)` always constructs a fresh object —
+                            // never the identity shortcut (#5586).
+                            is_call: false,
                         });
                     }
                 }

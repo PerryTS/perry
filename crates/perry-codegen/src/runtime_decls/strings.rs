@@ -1055,6 +1055,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Full ECMAScript RegExp constructor: NaN-boxed pattern + flags in, handles
     // RegExp/undefined/object patterns and ToString-coerced flags.
     module.declare_function("js_regexp_construct", I64, &[DOUBLE, DOUBLE]);
+    // Function-call form `RegExp(x)`: identity shortcut (a RegExp arg + undefined
+    // flags returns the same object) then falls back to `js_regexp_construct`.
+    module.declare_function("js_regexp_construct_call", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_regexp_test", I32, &[I64, I64]);
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
     module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);

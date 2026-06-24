@@ -694,25 +694,36 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // flags fall back to interning an empty string at codegen so
         // `js_regexp_new` always sees a real `StringHeader*`. Followup
         // to #957 / PR #959.
-        Expr::RegExpDynamic { pattern, flags } => {
+        Expr::RegExpDynamic {
+            pattern,
+            flags,
+            is_call,
+        } => {
             // Route through the full ECMAScript constructor: it handles a RegExp
             // pattern (copy / flag override), an `undefined`/`null` pattern
             // (`ToString` → `""`/`"null"`), an object pattern, and ToString-
             // coerced flags (an object flags → `"[object Object]"` → SyntaxError).
             // Passing the NaN-boxed values verbatim (NOT `unbox_str_handle`,
             // which mis-reads a non-string pattern as a StringHeader → garbage).
+            //
+            // The function-call form `RegExp(re)` (is_call) routes through
+            // `js_regexp_construct_call`, which applies the ECMA-262 22.2.4.1
+            // identity shortcut (a RegExp pattern + undefined flags returns the
+            // argument unchanged) before falling back to the same constructor.
+            // `new RegExp(re)` keeps `js_regexp_construct` so it always copies.
             let pattern_box = lower_expr(ctx, pattern)?;
             let flags_box = if let Some(flags_expr) = flags {
                 lower_expr(ctx, flags_expr)?
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };
+            let ctor = if *is_call {
+                "js_regexp_construct_call"
+            } else {
+                "js_regexp_construct"
+            };
             let blk = ctx.block();
-            let result = blk.call(
-                I64,
-                "js_regexp_construct",
-                &[(DOUBLE, &pattern_box), (DOUBLE, &flags_box)],
-            );
+            let result = blk.call(I64, ctor, &[(DOUBLE, &pattern_box), (DOUBLE, &flags_box)]);
             Ok(nanbox_pointer_inline(blk, &result))
         }
 

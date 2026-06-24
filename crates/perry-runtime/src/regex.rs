@@ -579,6 +579,48 @@ pub extern "C" fn js_regexp_construct(pattern: f64, flags: f64) -> *mut RegExpHe
     js_regexp_new(pat_ptr, flags_ptr)
 }
 
+/// `RegExp(...)` invoked as a *function* (not `new`). ECMA-262 22.2.4.1 step 2:
+/// when `NewTarget` is undefined, `pattern` is a RegExp and `flags` is
+/// `undefined`, and `pattern.constructor` is the `RegExp` intrinsic, the call
+/// returns `pattern` **unchanged** (object identity) instead of constructing a
+/// copy. So `var r = /x/i; RegExp(r) === r` is `true`, and a property added to
+/// `r` is visible through the returned reference (test262
+/// `built-ins/RegExp/S15.10.3.1_A1_T*`, #5586).
+///
+/// Perry models no user-visible RegExp subclassing, so a registered RegExp's
+/// `constructor` resolves through `RegExp.prototype` to the intrinsic `RegExp`
+/// and the `SameValue` check holds — *unless* user code has installed an own
+/// `constructor` property (e.g. `re.constructor = null`), which makes the
+/// `SameValue` check fail and forces a fresh copy
+/// (`built-ins/RegExp/call_with_regexp_not_same_constructor.js`). Every other
+/// shape (string/object/undefined pattern, or any non-`undefined` flags —
+/// which forces a fresh copy with the new flags) likewise falls through to the
+/// general [`js_regexp_construct`] path.
+#[cfg(feature = "regex-engine")]
+#[no_mangle]
+pub extern "C" fn js_regexp_construct_call(pattern: f64, flags: f64) -> *mut RegExpHeader {
+    let pv = crate::value::JSValue::from_bits(pattern.to_bits());
+    let fv = crate::value::JSValue::from_bits(flags.to_bits());
+    if fv.is_undefined() && pv.is_pointer() {
+        let addr = pv.as_pointer::<u8>() as usize;
+        if is_registered_regex(addr)
+            // SameValue(RegExp, pattern.constructor): the identity shortcut only
+            // applies while `constructor` is still the inherited intrinsic. An
+            // own `constructor` override (the only way it can differ here) must
+            // copy instead.
+            && crate::object::exotic_expando::value_lookup(
+                crate::object::exotic_expando::ExoticKind::RegExp,
+                addr,
+                "constructor",
+            )
+            .is_none()
+        {
+            return pv.as_pointer::<RegExpHeader>() as *mut RegExpHeader;
+        }
+    }
+    js_regexp_construct(pattern, flags)
+}
+
 /// Test if a string matches the regex pattern
 /// regex.test(string) -> boolean
 #[cfg(feature = "regex-engine")]

@@ -1078,7 +1078,11 @@ where
             f(regex);
             f(string);
         }
-        Expr::RegExpDynamic { pattern, flags } => {
+        Expr::RegExpDynamic {
+            pattern,
+            flags,
+            is_call: _,
+        } => {
             f(pattern);
             if let Some(flags_box) = flags {
                 f(flags_box);

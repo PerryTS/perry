@@ -101,7 +101,7 @@ pub(crate) fn try_bare_regexp_call(
     call: &ast::CallExpr,
     has_spread: bool,
 ) -> Result<Option<Expr>> {
-    if !has_spread && !call.args.is_empty() && call.args.len() <= 2 {
+    if !has_spread && call.args.len() <= 2 {
         if let ast::Callee::Expr(callee_expr) = &call.callee {
             let mut callee_inner = callee_expr.as_ref();
             while let ast::Expr::Paren(p) = callee_inner {
@@ -112,7 +112,15 @@ pub(crate) fn try_bare_regexp_call(
                     && ctx.lookup_local("RegExp").is_none()
                     && ctx.lookup_func("RegExp").is_none()
                 {
-                    let pattern = lower_expr(ctx, &call.args[0].expr)?;
+                    // Zero-arg `RegExp()` is `RegExp(undefined)` → an empty
+                    // source `/(?:)/`. Without an explicit `Expr::Undefined`
+                    // pattern the call fell through to the bare-ident dispatch
+                    // and produced `null` (test262 S15.10.3.1_A1_T4, #5586).
+                    let pattern = if call.args.is_empty() {
+                        Expr::Undefined
+                    } else {
+                        lower_expr(ctx, &call.args[0].expr)?
+                    };
                     let flags = if call.args.len() == 2 {
                         Some(Box::new(lower_expr(ctx, &call.args[1].expr)?))
                     } else {
@@ -121,6 +129,9 @@ pub(crate) fn try_bare_regexp_call(
                     return Ok(Some(Expr::RegExpDynamic {
                         pattern: Box::new(pattern),
                         flags,
+                        // Function-call form `RegExp(x)`: eligible for the
+                        // ECMA-262 22.2.4.1 identity shortcut (#5586).
+                        is_call: true,
                     }));
                 }
             }

@@ -2143,6 +2143,14 @@ pub enum Expr {
     RegExpDynamic {
         pattern: Box<Expr>,
         flags: Option<Box<Expr>>,
+        /// `true` when this came from the *function-call* form `RegExp(x)`
+        /// (not `new RegExp(x)`). Per ECMA-262 22.2.4.1, calling `RegExp` as a
+        /// function with a RegExp `pattern` and `undefined` `flags` returns the
+        /// argument unchanged (object identity) rather than constructing a copy
+        /// — so the call form lowers to `js_regexp_construct_call` (identity
+        /// shortcut) while `new` keeps `js_regexp_construct` (always a fresh
+        /// object). See #5586.
+        is_call: bool,
     },
     /// regex.test(string) -> boolean
     RegExpTest {

@@ -547,7 +547,7 @@ impl SH for Expr {
             Expr::NewTarget => { tag(h, 12271); }
             Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
-            Expr::RegExpDynamic { pattern, flags } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } }
+            Expr::RegExpDynamic { pattern, flags, is_call } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } tag(h, if *is_call { 478 } else { 479 }); }
             Expr::RegExpTest { regex, string } => { tag(h, 384); regex.as_ref().hash(h); string.as_ref().hash(h); }
             Expr::StringMatch { string, regex } => { tag(h, 385); string.as_ref().hash(h); regex.as_ref().hash(h); }
             Expr::StringMatchAll { string, regex } => { tag(h, 386); string.as_ref().hash(h); regex.as_ref().hash(h); }
