@@ -48,3 +48,15 @@ console.log(adder.add.bind({ base: 100 }, 1)(2)); // 103
 
 // Reflect.apply on a concise method honors the explicit receiver
 console.log(Reflect.apply(proto.m, { v: 314 }, [])); // 314
+
+// accessors and symbol methods use the same baked-`this` capture shape, so the
+// explicit-receiver paths must rebind them too
+const sym = Symbol("m");
+const mixed: any = {
+  get value() { return (this as any).v; },
+  [sym]() { return (this as any).v; },
+};
+const getter = Object.getOwnPropertyDescriptor(mixed, "value")!.get as any;
+console.log(getter.call({ v: 8 }));                 // 8
+console.log(mixed[sym].call({ v: 11 }));            // 11
+console.log(Reflect.apply(getter, { v: 21 }, []));  // 21

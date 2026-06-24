@@ -181,7 +181,11 @@ pub(crate) fn rebind_explicit_this(target: f64, this_arg: f64) -> f64 {
         return target;
     }
     let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if ptr < 0x10000 {
+    // Reject the `[0, 0x100000)` native-handle band BEFORE probing the pointer:
+    // Fetch/http/axios/fastify ids (`0x40000+`) are NaN-boxed with POINTER_TAG
+    // but are not heap pointers — `closure_is_arrow` (and the downstream
+    // `clone_closure_rebind_this`) would dereference one and SIGSEGV (#4740).
+    if ptr < 0x100000 {
         return target;
     }
     // Arrows capture lexical `this`; an explicit receiver must not override it.
