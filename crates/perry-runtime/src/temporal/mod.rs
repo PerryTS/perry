@@ -210,6 +210,16 @@ pub fn alloc_temporal_cell(value: TemporalValue) -> f64 {
 /// then read the `GcHeader.obj_type`.
 #[inline]
 pub fn is_temporal_cell_addr(addr: usize) -> bool {
+    // #5625: small typed arrays and `Buffer`s are raw-`alloc`'d off the GC heap
+    // with NO `GcHeader` prefix, so the word at `addr - GC_HEADER_SIZE` is
+    // unrelated heap memory that can coincidentally hold the `GC_TYPE_TEMPORAL`
+    // tag (observed: a 4-element typed array whose stale back-read obj_type was
+    // 18 → `<TA>.slice()` mis-routed through Temporal dispatch and deref'd a
+    // garbage cell). They are never `TemporalCell`s; reject them via the side
+    // tables first, exactly as `crate::date::is_date_cell_addr` does.
+    if crate::typedarray::is_offheap_sidetable_alloc(addr) {
+        return false;
+    }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
         Some(header) => header.obj_type == crate::gc::GC_TYPE_TEMPORAL,
         None => false,
