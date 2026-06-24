@@ -55,9 +55,9 @@ use tokio_rustls::client::TlsStream;
 // 2000-line size gate. `tls` holds the rustls config + handshake; `ip`
 // holds the `net.isIP*` + auto-select-family helpers.
 mod ip;
-// #5419 step 4 — process-wide freelist of read buffers, so the socket
-// read loop recycles pooled 16 KiB capacity instead of allocating a
-// fresh `BytesMut` per read. See `buffer_pool.rs` for the rationale.
+// Process-wide freelist of read buffers, so the socket read loop
+// recycles pooled 16 KiB capacity instead of allocating a fresh
+// `BytesMut` per read. See `buffer_pool.rs` for the rationale.
 mod buffer_pool;
 mod tls;
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
@@ -1095,14 +1095,14 @@ pub(crate) async fn run_socket_task(
             None => break,
         };
 
-        // #5419 step 4 — check a read buffer out of the process-wide
-        // freelist instead of allocating one per socket / reallocating one
-        // per read. `checkout` hands back an empty `BytesMut` with a ≥ 16 KiB
-        // writable window (recycling a pooled allocation in place once its
-        // prior chunk has drained; allocating only when none is reusable) —
-        // identical to the `BytesMut::with_capacity(16 KiB)` + `clear()` /
-        // `reserve()` the step-2 loop did, just amortized across reads and
-        // sockets. `read_buf` fills the uninitialized tail in place (no
+        // Check a read buffer out of the process-wide freelist instead of
+        // allocating one per socket / reallocating one per read. `checkout`
+        // hands back an empty `BytesMut` with a ≥ 16 KiB writable window
+        // (recycling a pooled allocation in place once its prior chunk has
+        // drained; allocating only when none is reusable) — identical to a
+        // per-socket `BytesMut::with_capacity(16 KiB)` + per-read `clear()` /
+        // `reserve()`, just amortized across reads and sockets. `read_buf`
+        // fills the uninitialized tail in place (no
         // per-read zeroing) and `split_to(n)` carves the freshly-read bytes
         // off as a refcounted `Bytes` view for the 'data' event. The per-read
         // 16 KiB ceiling is still enforced by the `BufMut::limit` wrapper at

@@ -1,13 +1,13 @@
-//! Step 4 of the net perf quest (#5419) — a process-wide freelist of
-//! read buffers, so the socket read loop reuses pooled 16 KiB capacity
-//! instead of allocating a fresh `BytesMut` on every read.
+//! A process-wide freelist of read buffers, so the socket read loop
+//! reuses pooled 16 KiB capacity instead of allocating a fresh
+//! `BytesMut` on every read.
 //!
-//! # Why a pool, given step 2 already reuses one buffer per socket
+//! # Why a pool, given per-socket buffer reuse already exists
 //!
-//! Step 2 ([#5638]) replaced the per-read `Vec<u8>` + memcpy with a
-//! single reused `BytesMut` that `read_buf` fills in place and
-//! `split_to(n).freeze()` carves a zero-copy `Bytes` view out of. That
-//! removed the per-read *copy* — but not the per-read *allocation*. The
+//! The socket read loop already reuses a single `BytesMut` per socket
+//! (`read_buf` fills it in place and `split_to(n).freeze()` carves a
+//! zero-copy `Bytes` view out of it), so there is no per-read *copy* —
+//! but that does not remove the per-read *allocation*. The
 //! `Bytes` chunk handed to the `'data'` event is queued in the global
 //! pending-events vec and only converted to a JS `Buffer` (a real
 //! `copy_nonoverlapping`) on the next main-thread drain tick. So the
@@ -43,7 +43,7 @@
 //! # Concurrency
 //!
 //! Socket tasks run cooperatively on Perry's shared multi-thread tokio
-//! runtime (step 3, the shared reactor), so a task may check a buffer
+//! runtime, so a task may check a buffer
 //! out on one reactor worker and — after migrating across an `.await`
 //! — check it back in on another. The freelist is therefore a
 //! `Mutex<VecDeque<BytesMut>>`, matching the other process-wide `statics`
@@ -61,9 +61,6 @@
 //! read path. FIFO cycles the other parked buffers through first, giving
 //! a returned buffer's chunk time to drain + drop before that buffer is
 //! reused, so the reuse hits the in-place-reclaim path.
-//!
-//! [#5419]: https://github.com/PerryTS/perry/pull/5419
-//! [#5638]: https://github.com/PerryTS/perry/pull/5638
 
 use bytes::BytesMut;
 use std::collections::VecDeque;
@@ -146,8 +143,8 @@ mod tests {
 
     // NOTE: the `perry_ffi_spawn_async` no-op link stub that lets the
     // `perry-ext-net` test binary link without the perry-stdlib edge is
-    // defined once in `jsvalue.rs`'s `#[cfg(test)]` module (#5638) and
-    // covers the whole test binary — these tests don't redefine it.
+    // defined once in `jsvalue.rs`'s `#[cfg(test)]` module and covers
+    // the whole test binary — these tests don't redefine it.
 
     // Pool-data-structure tests run against a TEST-LOCAL freelist via
     // `checkout_from` / `checkin_to`, never the process-wide `pool()`. That
