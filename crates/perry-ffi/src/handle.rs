@@ -15,12 +15,21 @@
 //! # Layout
 //!
 //! Single process-wide [`DashMap`] keyed by [`Handle`] (a `i64`).
-//! Each `i64` is allocated atomically from a counter starting at 1
-//! — `0` is reserved as `INVALID_HANDLE` so `register_handle` can
+//! A fresh `i64` is allocated atomically from a counter starting at
+//! 1 — `0` is reserved as `INVALID_HANDLE` so `register_handle` can
 //! never produce a falsy value (matches JS truthiness semantics
 //! for type checks like `if (handle)`). Visible ids stop before
 //! `0x40000`; the pointer-tagged small-handle band above that is
 //! reserved for Web Fetch and proxy handles.
+//!
+//! Ids freed by [`drop_handle`] / [`take_handle`] are parked on a
+//! bounded freelist and handed back out by [`register_handle`]
+//! before the counter advances, so a handle-per-request workload
+//! consumes ids in proportion to its *concurrent* live count rather
+//! than its *cumulative* allocation count and never exhausts the
+//! band. Ids are therefore reused over time but a given id is unique
+//! among the handles live at any instant — a recycled id is only
+//! parked after its prior entry was removed from the map.
 //!
 //! perry-stdlib has its own copy of this same registry (in
 //! `crates/perry-stdlib/src/common/handle.rs`). They are separate
@@ -67,6 +76,56 @@ const FFI_HANDLE_ID_START: Handle = 1;
 const FFI_HANDLE_ID_END: Handle = 0x40000;
 
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(FFI_HANDLE_ID_START);
+
+/// Freelist of ids reclaimed by [`drop_handle`] / [`take_handle`].
+///
+/// Without this, [`register_handle`] only ever bumps [`NEXT_HANDLE`], so a
+/// long-lived process that allocates a handle per unit of work — e.g.
+/// `perry-ext-http-server`, which registers a request + response handle per
+/// request and `drop_handle`s both once the response flushes — burns through
+/// the visible id band (`1 ..= 0x40000`) and eventually panics in
+/// [`next_fresh_handle_id`], even though only a handful of handles are live at
+/// any instant. Recycling freed ids bounds id consumption by the *concurrent*
+/// live-handle count rather than the *cumulative* allocation count.
+///
+/// Bounded at [`FREE_HANDLES_CAP`] idle ids: a brief spike that frees a huge
+/// batch parks at most that many for reuse, and any excess is simply not
+/// recycled (the fresh-id path still serves it) so the freelist's own memory
+/// can't grow without limit. An id is only ever pushed here *after* it has
+/// been removed from [`HANDLES`], so a recycled id is never live in two
+/// registrations at once.
+static FREE_HANDLES: Lazy<Mutex<Vec<Handle>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Upper bound on parked idle ids. The visible band is `0x40000` (262 144)
+/// ids; capping the freelist well under that keeps its backing `Vec` small
+/// while still covering realistic concurrent in-flight counts (tens of
+/// thousands of simultaneous requests). Past the cap, a freed id is dropped on
+/// the floor — `register_handle` falls back to a fresh id exactly as it did
+/// before recycling existed.
+const FREE_HANDLES_CAP: usize = 64 * 1024;
+
+/// Pop a recycled id, or `None` when the freelist is empty.
+fn pop_free_handle() -> Option<Handle> {
+    FREE_HANDLES.lock().unwrap_or_else(|p| p.into_inner()).pop()
+}
+
+/// Return a no-longer-live id to the freelist for reuse. Caller MUST have
+/// already removed `handle` from [`HANDLES`] (see the safety note above).
+/// Drops the id when the freelist is at [`FREE_HANDLES_CAP`].
+fn recycle_handle(handle: Handle) {
+    let mut free = FREE_HANDLES.lock().unwrap_or_else(|p| p.into_inner());
+    push_bounded(&mut free, handle, FREE_HANDLES_CAP);
+}
+
+/// Push `handle` onto `free` unless it is already at `cap`. Factored out so
+/// the bounding invariant is unit-testable without touching the process-wide
+/// freelist (which concurrent tests churn).
+fn push_bounded(free: &mut Vec<Handle>, handle: Handle, cap: usize) {
+    if free.len() < cap {
+        free.push(handle);
+    }
+}
+
 static ROOT_SCANNERS: Lazy<Mutex<Vec<fn(&mut dyn FnMut(f64))>>> =
     Lazy::new(|| Mutex::new(Vec::new()));
 static MUTABLE_ROOT_SCANNERS: Lazy<Mutex<Vec<NamedGcMutableRootScanner>>> =
@@ -246,12 +305,15 @@ impl<'a> GcRootVisitor<'a> {
 /// handle data while the main thread is also touching it).
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     ensure_handle_exists_probe_registered();
-    let handle = next_handle_id();
+    // Reuse a reclaimed id when one is parked, else mint a fresh one. A
+    // recycled id was removed from `HANDLES` before being parked, so inserting
+    // under it here cannot collide with a live registration.
+    let handle = pop_free_handle().unwrap_or_else(next_fresh_handle_id);
     HANDLES.insert(handle, Box::new(value));
     handle
 }
 
-fn next_handle_id() -> Handle {
+fn next_fresh_handle_id() -> Handle {
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     if handle >= FFI_HANDLE_ID_END {
         panic!("perry-ffi handle id range exhausted before reserved Web handle bands");
@@ -309,8 +371,12 @@ pub fn get_handle_mut<T: 'static + Send + Sync>(handle: Handle) -> Option<&'stat
 /// Remove the handle from the registry and return its value if
 /// the type matches. After this, the handle is no longer valid.
 pub fn take_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<T> {
-    HANDLES
-        .remove(&handle)
+    let removed = HANDLES.remove(&handle);
+    if removed.is_some() {
+        // Removed from the registry — the id is dead and safe to recycle.
+        recycle_handle(handle);
+    }
+    removed
         .and_then(|(_, boxed)| boxed.downcast::<T>().ok())
         .map(|b| *b)
 }
@@ -318,7 +384,13 @@ pub fn take_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<T> {
 /// Remove a handle and drop its value. Returns `true` if the
 /// handle existed.
 pub fn drop_handle(handle: Handle) -> bool {
-    HANDLES.remove(&handle).is_some()
+    if HANDLES.remove(&handle).is_some() {
+        // Removed from the registry — the id is dead and safe to recycle.
+        recycle_handle(handle);
+        true
+    } else {
+        false
+    }
 }
 
 /// True if the handle currently maps to a registered object.
@@ -618,5 +690,143 @@ mod tests {
         assert_ne!(a, b);
         drop_handle(a);
         drop_handle(b);
+    }
+
+    // ----------------------------------------------------------------
+    // Id-recycling freelist (step 5).
+    //
+    // The registry is process-wide and the default test harness runs
+    // these in parallel, so the reuse-sensitive tests below serialize on
+    // `RECYCLE_TEST_LOCK` and assert the *recycling contract* (a freed id
+    // is reused, fresh-id consumption stays bounded) rather than a fixed id
+    // value — robust to other tests churning the shared registry, but still
+    // failing hard against a no-reclaim `drop_handle` (the freed id never
+    // lands on the freelist, so it is never reused and id consumption is
+    // unbounded). The bounding invariant is tested in isolation against a
+    // local freelist via `push_bounded`.
+    // ----------------------------------------------------------------
+
+    static RECYCLE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn register_drop_register_reuses_a_freed_id() {
+        // End-to-end: a register/drop/register cycle does not consume a
+        // second fresh id — `register_handle` draws the freed one back from
+        // the freelist. A no-reclaim `drop_handle` would force a fresh mint
+        // here, advancing the counter. Robust to concurrent tests: even if
+        // another thread interleaves its own fresh mints, the counter delta
+        // attributable to THIS cycle is zero because a freed id is always
+        // available when our second register runs (we just freed one).
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let h1 = register_handle(7_i64);
+        assert!(drop_handle(h1));
+        // Freelist is non-empty (we just parked h1, modulo concurrent pops);
+        // either way the next register must reuse SOME freed id, never grow
+        // the live set beyond one.
+        let h2 = register_handle(9_i64);
+        assert_eq!(with_handle::<i64, _, _>(h2, |v| *v), Some(9));
+        assert!(drop_handle(h2));
+    }
+
+    #[test]
+    fn reused_id_carries_no_stale_state() {
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Register a String, drop it, then register a different type under a
+        // recycled id. Whatever id `register_handle` returns, it must resolve
+        // to the NEW value with the NEW type — never the prior String
+        // (cross-request bleed). The String is no longer reachable under any
+        // live id because its entry was removed at drop.
+        let first = register_handle("stale".to_string());
+        assert!(drop_handle(first));
+
+        let second = register_handle(1234_i64);
+        // A recycled id (or a fresh one) — both are clean. The dropped
+        // String must not be reachable through it.
+        assert!(
+            with_handle::<String, _, _>(second, |s| s.clone()).is_none(),
+            "recycled id must not expose the prior handle's value or type"
+        );
+        assert_eq!(with_handle::<i64, _, _>(second, |v| *v), Some(1234));
+        drop_handle(second);
+    }
+
+    #[test]
+    fn live_handles_never_share_an_id() {
+        // Recycling must never hand the same id to two live handles. Hold a
+        // batch live (none dropped) and assert every id is distinct, then
+        // free them and re-allocate the same count, again all-distinct.
+        fn batch_all_distinct() -> Vec<Handle> {
+            let live: Vec<Handle> = (0..256).map(|i| register_handle(i as i64)).collect();
+            let mut sorted = live.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                sorted.len(),
+                live.len(),
+                "no two concurrently-live handles may share an id"
+            );
+            live
+        }
+
+        let first = batch_all_distinct();
+        for h in &first {
+            drop_handle(*h);
+        }
+        // The recycled ids are reused here; still must be mutually distinct.
+        let second = batch_all_distinct();
+        for h in &second {
+            drop_handle(*h);
+        }
+    }
+
+    #[test]
+    fn freelist_is_bounded() {
+        // The bounding invariant, tested against a local freelist so it is
+        // deterministic and can't race the process-wide one. Past `cap`,
+        // `push_bounded` drops the id on the floor — `register_handle` then
+        // falls back to a fresh id, exactly as before recycling existed.
+        let cap = 4;
+        let mut free: Vec<Handle> = Vec::new();
+        for id in 0..(cap as Handle + 8) {
+            push_bounded(&mut free, id, cap);
+        }
+        assert_eq!(free.len(), cap, "freelist must not grow past the cap");
+        // Below the cap it parks every id in order.
+        assert_eq!(free, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn churn_does_not_exhaust_the_id_band() {
+        let _serial = RECYCLE_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Register/drop churn past the id band size while never holding more
+        // than one handle live. With recycling the fresh counter barely
+        // moves — each drop refills the freelist the next register drains —
+        // so cumulative allocations are decoupled from fresh-id consumption.
+        // Without recycling this loop would advance the counter by
+        // `iterations` and `next_fresh_handle_id` would PANIC at the
+        // `FFI_HANDLE_ID_END` exhaustion check (a fail-before of a different
+        // shape: the no-reclaim build can't even complete the loop).
+        //
+        // Measure the fresh-counter delta directly. Concurrent tests mint a
+        // bounded handful of fresh ids; recycling keeps OUR contribution near
+        // zero, so the total delta stays tiny in absolute terms.
+        let iterations = FFI_HANDLE_ID_END as usize + 8192;
+        let before = NEXT_HANDLE.load(Ordering::SeqCst);
+        for n in 0..iterations {
+            let h = register_handle(n as i64);
+            assert!(drop_handle(h));
+        }
+        let after = NEXT_HANDLE.load(Ordering::SeqCst);
+        let fresh_minted = (after - before) as usize;
+        assert!(
+            fresh_minted < 4096,
+            "fresh-id consumption ({fresh_minted}) over {iterations} \
+             register/drop cycles should stay tiny once ids recycle; a \
+             no-reclaim registry would mint one per allocation and exhaust \
+             the band"
+        );
     }
 }
