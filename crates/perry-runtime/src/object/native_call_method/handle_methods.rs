@@ -891,10 +891,39 @@ pub(super) unsafe fn dispatch_handle(
                                     method_name.as_ptr(),
                                     method_name.len() as u32,
                                 );
+                                // An inherited method that resolves to an ACCESSOR
+                                // on the prototype must observe the instance as
+                                // `this` (spec `[[Get]](P, Receiver)`), not the
+                                // prototype object the getter lives on. Stash the
+                                // receiver so `invoke_accessor_getter` rebinds it.
+                                // Without this, a schema library's lazily-installed
+                                // `describe`/`clone` accessors — `Object.define-
+                                // Property(proto, k, { get() { const b = fn.bind(this);
+                                // Object.defineProperty(this, k, { value: b }); return b } })`
+                                // on the shared class prototype — run with
+                                // `this === prototype`, bake `this = prototype` into
+                                // the returned bound method, and cache it on the
+                                // prototype. Every downstream read of an
+                                // instance-only field via `this.<field>` then
+                                // returns `undefined` (`Cannot read properties of
+                                // undefined`) even though the instance has it.
+                                // Mirrors `resolve_proto_chain_field_with_receiver`
+                                // (the winston `get transports()` fix).
+                                let receiver_f64 = f64::from_bits(jsval.bits());
+                                let prev_this =
+                                    IMPLICIT_THIS.with(|c| c.replace(receiver_f64.to_bits()));
+                                let prev_override =
+                                    super::super::field_get_set::accessor_receiver_override_begin(
+                                        receiver_f64,
+                                    );
                                 let field_val = js_object_get_field_by_name(
                                     proto_obj as *const _,
                                     method_key as *const crate::StringHeader,
                                 );
+                                super::super::field_get_set::accessor_receiver_override_end(
+                                    prev_override,
+                                );
+                                IMPLICIT_THIS.with(|c| c.set(prev_this));
                                 if !field_val.is_undefined() && !field_val.is_null() {
                                     resolved_method = Some(ResolvedMethod::ProtoClosure {
                                         field_bits: field_val.bits(),
@@ -966,9 +995,17 @@ pub(super) unsafe fn dispatch_handle(
                     method_name.as_ptr(),
                     method_name.len() as u32,
                 );
-                if let Some(field_val) =
-                    resolve_proto_chain_field(class_id, method_key as *const crate::StringHeader)
-                {
+                // `_with_receiver` binds an inherited ACCESSOR getter's `this`
+                // to the instance (not the prototype it lives on), matching the
+                // ProtoClosure walk above and spec `[[Get]](P, Receiver)`. A
+                // prototype `Object.defineProperty(proto, k, { get })` reached
+                // through the registry-`None` (`Object.create(objLiteral)`) path
+                // would otherwise observe the prototype as `this`.
+                if let Some(field_val) = resolve_proto_chain_field_with_receiver(
+                    class_id,
+                    method_key as *const crate::StringHeader,
+                    f64::from_bits(jsval.bits()),
+                ) {
                     if !field_val.is_undefined() && !field_val.is_null() {
                         // #321 (effect Context/Layer/Scope): the closure we
                         // just resolved is an *inherited* method — by
