@@ -7,6 +7,7 @@ use super::*;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+#[cfg(not(feature = "external-fetch-symbols"))]
 const FETCH_REASON: &str =
     "fetch symbol from perry-stdlib not linked into this binary (runtime-only build)";
 
@@ -201,11 +202,69 @@ unsafe fn call_fetch_with_options(
     null_mut()
 }
 
+#[cfg(not(feature = "external-fetch-symbols"))]
 fn warn_unregistered_fetch_symbol(name: &'static str) -> f64 {
     crate::stub_diag::perry_stub_warn(name, FETCH_REASON, None);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+// When `external-fetch-symbols` is set, perry-stdlib's `web-fetch`
+// implementations are statically linked into this binary — the same invariant
+// `call_fetch_with_options` above relies on (and the same one perry's codegen
+// fast path uses when it emits a direct `js_headers_new` call). In that build
+// the fetch constructor wrappers below call those symbols directly instead of
+// routing through the `GLOBAL_FETCH_*` registry. This keeps the registry-backed
+// construction path (reflective `new Headers()` / `new Request()` via the class
+// registry) consistent with the direct codegen path, and avoids a startup
+// hazard where the registry pointer is observed null in the auto-optimized,
+// bundled-runtime build even though `js_stdlib_init_dispatch` already stored it.
+// The `not(external-fetch-symbols)` variants keep today's registry-load +
+// no-op-stub-warn behavior for runtime-only builds (where these externs are not
+// linked and a runtime stub provides the symbol instead).
+#[cfg(feature = "external-fetch-symbols")]
+unsafe extern "C" {
+    fn js_blob_new(parts: f64, type_value: f64) -> f64;
+    fn js_file_new(parts: f64, name: f64, type_value: f64, last_modified: f64) -> f64;
+    fn js_headers_new() -> f64;
+    fn js_headers_init_from_value(handle: f64, init: f64) -> f64;
+    fn js_request_new(
+        url_ptr: *const crate::StringHeader,
+        method_ptr: *const crate::StringHeader,
+        body_ptr: *const crate::StringHeader,
+        headers_handle: f64,
+        referrer_ptr: *const crate::StringHeader,
+        referrer_policy_ptr: *const crate::StringHeader,
+        mode_ptr: *const crate::StringHeader,
+        credentials_ptr: *const crate::StringHeader,
+        cache_ptr: *const crate::StringHeader,
+        redirect_ptr: *const crate::StringHeader,
+        integrity_ptr: *const crate::StringHeader,
+        keepalive: f64,
+        duplex_ptr: *const crate::StringHeader,
+        signal: f64,
+    ) -> f64;
+    fn js_response_new(
+        body_ptr: *const crate::StringHeader,
+        status: f64,
+        status_text_ptr: *const crate::StringHeader,
+        headers_handle: f64,
+    ) -> f64;
+    fn js_response_static_json(
+        value: f64,
+        init_status: f64,
+        init_status_text_ptr: *const crate::StringHeader,
+        headers_handle: f64,
+    ) -> f64;
+    fn js_response_static_redirect(url_ptr: *const crate::StringHeader, status: f64) -> f64;
+    fn js_response_static_error() -> f64;
+}
+
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
+    unsafe { js_blob_new(parts, type_value) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
     let f = GLOBAL_FETCH_BLOB_NEW.load(Ordering::Acquire);
     if !f.is_null() {
@@ -215,6 +274,17 @@ pub(super) fn call_global_blob_new(parts: f64, type_value: f64) -> f64 {
     warn_unregistered_fetch_symbol("js_blob_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_file_new(
+    parts: f64,
+    name: f64,
+    type_value: f64,
+    last_modified: f64,
+) -> f64 {
+    unsafe { js_file_new(parts, name, type_value, last_modified) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_file_new(
     parts: f64,
     name: f64,
@@ -229,6 +299,12 @@ pub(super) fn call_global_file_new(
     warn_unregistered_fetch_symbol("js_file_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_headers_new() -> f64 {
+    unsafe { js_headers_new() }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_headers_new() -> f64 {
     let f = GLOBAL_FETCH_HEADERS_NEW.load(Ordering::Acquire);
     if !f.is_null() {
@@ -238,6 +314,12 @@ pub(super) fn call_global_headers_new() -> f64 {
     warn_unregistered_fetch_symbol("js_headers_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64 {
+    unsafe { js_headers_init_from_value(handle, init) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_headers_init_from_value(handle: f64, init: f64) -> f64 {
     let f = GLOBAL_FETCH_HEADERS_INIT_FROM_VALUE.load(Ordering::Acquire);
     if !f.is_null() {
@@ -357,6 +439,44 @@ pub extern "C" fn js_node_setheaders_entries_json(value: f64) -> *mut crate::Str
     null_mut()
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_request_new(
+    url_ptr: *const crate::StringHeader,
+    method_ptr: *const crate::StringHeader,
+    body_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+    referrer_ptr: *const crate::StringHeader,
+    referrer_policy_ptr: *const crate::StringHeader,
+    mode_ptr: *const crate::StringHeader,
+    credentials_ptr: *const crate::StringHeader,
+    cache_ptr: *const crate::StringHeader,
+    redirect_ptr: *const crate::StringHeader,
+    integrity_ptr: *const crate::StringHeader,
+    keepalive: f64,
+    duplex_ptr: *const crate::StringHeader,
+    signal: f64,
+) -> f64 {
+    unsafe {
+        js_request_new(
+            url_ptr,
+            method_ptr,
+            body_ptr,
+            headers_handle,
+            referrer_ptr,
+            referrer_policy_ptr,
+            mode_ptr,
+            credentials_ptr,
+            cache_ptr,
+            redirect_ptr,
+            integrity_ptr,
+            keepalive,
+            duplex_ptr,
+            signal,
+        )
+    }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_request_new(
     url_ptr: *const crate::StringHeader,
     method_ptr: *const crate::StringHeader,
@@ -398,6 +518,17 @@ pub(super) fn call_global_request_new(
     warn_unregistered_fetch_symbol("js_request_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_new(
+    body_ptr: *const crate::StringHeader,
+    status: f64,
+    status_text_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+) -> f64 {
+    unsafe { js_response_new(body_ptr, status, status_text_ptr, headers_handle) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_new(
     body_ptr: *const crate::StringHeader,
     status: f64,
@@ -412,6 +543,17 @@ pub(super) fn call_global_response_new(
     warn_unregistered_fetch_symbol("js_response_new")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_static_json(
+    value: f64,
+    init_status: f64,
+    init_status_text_ptr: *const crate::StringHeader,
+    headers_handle: f64,
+) -> f64 {
+    unsafe { js_response_static_json(value, init_status, init_status_text_ptr, headers_handle) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_static_json(
     value: f64,
     init_status: f64,
@@ -426,6 +568,15 @@ pub(super) fn call_global_response_static_json(
     warn_unregistered_fetch_symbol("js_response_static_json")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_static_redirect(
+    url_ptr: *const crate::StringHeader,
+    status: f64,
+) -> f64 {
+    unsafe { js_response_static_redirect(url_ptr, status) }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_static_redirect(
     url_ptr: *const crate::StringHeader,
     status: f64,
@@ -438,6 +589,12 @@ pub(super) fn call_global_response_static_redirect(
     warn_unregistered_fetch_symbol("js_response_static_redirect")
 }
 
+#[cfg(feature = "external-fetch-symbols")]
+pub(super) fn call_global_response_static_error() -> f64 {
+    unsafe { js_response_static_error() }
+}
+
+#[cfg(not(feature = "external-fetch-symbols"))]
 pub(super) fn call_global_response_static_error() -> f64 {
     let f = GLOBAL_FETCH_RESPONSE_STATIC_ERROR.load(Ordering::Acquire);
     if !f.is_null() {
