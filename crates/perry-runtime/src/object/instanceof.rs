@@ -125,18 +125,13 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
         if !hi_sym.is_null() {
-            let hi_f64 =
-                f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
+            let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
             if unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) } {
                 let cb = unsafe { crate::symbol::js_object_get_symbol_property(type_ref, hi_f64) };
-                if value_is_callable(cb) {
-                    let args = [value];
-                    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
-                    return if crate::value::js_is_truthy(r) != 0 {
-                        f64::from_bits(crate::value::TAG_TRUE)
-                    } else {
-                        f64::from_bits(TAG_FALSE)
-                    };
+                // A present-but-non-callable own `@@hasInstance` throws; only a
+                // `null`/`undefined` value falls through to the default below.
+                if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, value) {
+                    return r;
                 }
             }
         }
@@ -511,6 +506,38 @@ fn throw_type_error(message: &[u8]) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Outcome of consulting an own `@@hasInstance` on the `instanceof` RHS.
+enum HasInstanceOutcome {
+    /// The own `@@hasInstance` was callable; this is the NaN-boxed boolean it
+    /// produced (already `ToBoolean`-normalized).
+    Result(f64),
+    /// No usable own `@@hasInstance` — the property held `undefined`/`null`, so
+    /// fall through to the ordinary `instanceof` algorithm.
+    Fallthrough,
+}
+
+/// Spec `InstanceofOperator` / `GetMethod(C, @@hasInstance)`: a `null`/`undefined`
+/// value means "no hook" (→ ordinary `instanceof`), but a present **non-callable**
+/// value is a `TypeError` rather than a silent fall-through. `cb` is the already
+/// resolved OWN `@@hasInstance` value; this never resolves the inherited
+/// `Function.prototype` default thunk, so there is no `instanceof` recursion.
+fn dispatch_own_has_instance(cb: f64, value: f64) -> HasInstanceOutcome {
+    let jv = crate::JSValue::from_bits(cb.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return HasInstanceOutcome::Fallthrough;
+    }
+    if !value_is_callable(cb) {
+        throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
+    }
+    let args = [value];
+    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
+    HasInstanceOutcome::Result(if crate::value::js_is_truthy(r) != 0 {
+        f64::from_bits(crate::value::TAG_TRUE)
+    } else {
+        f64::from_bits(crate::value::TAG_FALSE)
+    })
+}
+
 fn is_event_emitter_instance_value(value: f64) -> bool {
     if let Some(handle) = small_native_handle_id(value) {
         if let Some(probe) = crate::object::event_emitter_handle_probe() {
@@ -562,6 +589,53 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             depth += 1;
         }
     }
+    // User-defined `Symbol.hasInstance` takes precedence over the built-in
+    // prototype-chain walk — and over the ordinary class-chain fast path below.
+    // `new C() instanceof C` must run a class-level `@@hasInstance` rather than
+    // short-circuit on the chain (the hook can return `false` for a real
+    // instance), so both hook forms are consulted here, ahead of that walk.
+    //
+    // Form 1: the HIR lifts `static [Symbol.hasInstance](v)` to a top-level
+    // function `__perry_wk_hasinstance_<class>` and the LLVM backend registers a
+    // pointer to it against the class id at module init.
+    if let Some(func_ptr) = lookup_has_instance_hook(class_id) {
+        let hook: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(func_ptr as *const u8) };
+        let result = hook(value);
+        // Normalize: any truthy NaN-boxed bool stays as the TAG_TRUE/FALSE
+        // sentinel. User-written `return typeof v === "number" && ...`
+        // already returns a NaN-boxed bool, so this is usually a no-op.
+        let rbits = result.to_bits();
+        if rbits == TAG_TRUE || rbits == TAG_FALSE {
+            return result;
+        }
+        // Fallback: treat as truthy → TRUE, zero/undefined → FALSE.
+        if result.is_nan() && rbits & 0xFFFF_0000_0000_0000 == 0x7FFC_0000_0000_0000 {
+            return false_val;
+        }
+        if result == 0.0 || result.is_nan() {
+            return false_val;
+        }
+        return true_val;
+    }
+
+    // Form 2: the `Object.defineProperty(C, Symbol.hasInstance, { value: fn })`
+    // form (zod 4) stores the closure in the class static-symbol table. Read it
+    // off the class id (OWN lookup only — never resolves Function.prototype's
+    // default @@hasInstance thunk, so no recursion). A present-but-non-callable
+    // value throws; only `null`/`undefined` falls through to the chain.
+    {
+        let hi_sym = crate::symbol::well_known_symbol("hasInstance");
+        if !hi_sym.is_null() {
+            let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
+            if let Some(vb) = crate::symbol::class_static_symbol_lookup(class_id, hi_f64) {
+                let cb = f64::from_bits(vb);
+                if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, value) {
+                    return r;
+                }
+            }
+        }
+    }
+
     // Subclass-of-built-in: `class S extends Array {}` produces a real
     // ObjectHeader instance whose class-id chain reaches the built-in's
     // reserved class id (a parent edge registered at module init). The
@@ -734,57 +808,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         } else {
             false_val
         };
-    }
-
-    // User-defined `Symbol.hasInstance` takes precedence over the built-in
-    // prototype-chain walk. The HIR lifts `static [Symbol.hasInstance](v)`
-    // to a top-level function `__perry_wk_hasinstance_<class>` and the
-    // LLVM backend registers a pointer to it against the class's id at
-    // module init. If a hook is present, call it with the candidate value
-    // and return the boolean-shaped result directly.
-    if let Some(func_ptr) = lookup_has_instance_hook(class_id) {
-        let hook: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(func_ptr as *const u8) };
-        let result = hook(value);
-        // Normalize: any truthy NaN-boxed bool stays as the TAG_TRUE/FALSE
-        // sentinel. User-written `return typeof v === "number" && ...`
-        // already returns a NaN-boxed bool, so this is usually a no-op.
-        let rbits = result.to_bits();
-        if rbits == TAG_TRUE || rbits == TAG_FALSE {
-            return result;
-        }
-        // Fallback: treat as truthy → TRUE, zero/undefined → FALSE.
-        if result.is_nan() && rbits & 0xFFFF_0000_0000_0000 == 0x7FFC_0000_0000_0000 {
-            return false_val;
-        }
-        if result == 0.0 || result.is_nan() {
-            return false_val;
-        }
-        return true_val;
-    }
-
-    // `Object.defineProperty(C, Symbol.hasInstance, { value: fn })` form (zod 4):
-    // unlike `static [Symbol.hasInstance]` (a registered hook, handled above),
-    // this stores the closure in the class static-symbol table. Read it off the
-    // class id (OWN lookup only — never resolves Function.prototype's default
-    // @@hasInstance thunk, so no recursion) and call it with the candidate value.
-    {
-        let hi_sym = crate::symbol::well_known_symbol("hasInstance");
-        if !hi_sym.is_null() {
-            let hi_f64 =
-                f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
-            if let Some(vb) = crate::symbol::class_static_symbol_lookup(class_id, hi_f64) {
-                let cb = f64::from_bits(vb);
-                if value_is_callable(cb) {
-                    let args = [value];
-                    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
-                    return if crate::value::js_is_truthy(r) != 0 {
-                        true_val
-                    } else {
-                        false_val
-                    };
-                }
-            }
-        }
     }
 
     let bits = value.to_bits();
