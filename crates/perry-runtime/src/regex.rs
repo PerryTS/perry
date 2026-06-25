@@ -604,6 +604,13 @@ pub extern "C" fn js_regexp_construct_call(pattern: f64, flags: f64) -> *mut Reg
     if fv.is_undefined() && pv.is_pointer() {
         let addr = pv.as_pointer::<u8>() as usize;
         if is_registered_regex(addr)
+            // IsRegExp(pattern): the shortcut is gated on `IsRegExp`, which first
+            // consults `pattern[@@match]` — a registered RegExp with an own
+            // `re[Symbol.match] = false` is NOT regexp-like and must copy
+            // (`built-ins/RegExp/call_with_regexp_match_falsy.js`). Only when
+            // `@@match` is absent does it fall back to the [[RegExpMatcher]] slot
+            // (which every registered RegExp has).
+            && regexp_pattern_is_regexp_like(pattern)
             // SameValue(RegExp, pattern.constructor): the identity shortcut only
             // applies while `constructor` is still the inherited intrinsic. An
             // own `constructor` override (the only way it can differ here) must
@@ -619,6 +626,27 @@ pub extern "C" fn js_regexp_construct_call(pattern: f64, flags: f64) -> *mut Reg
         }
     }
     js_regexp_construct(pattern, flags)
+}
+
+/// `IsRegExp(pattern)` for an already-registered RegExp header: consult an own
+/// `pattern[@@match]` override (decisive via `ToBoolean`) and only fall back to
+/// the [[RegExpMatcher]] slot — which a registered RegExp always has — when no
+/// `@@match` property is present. Used to gate the `RegExp(re)` identity
+/// shortcut so `re[Symbol.match] = false` correctly forces a fresh copy.
+#[cfg(feature = "regex-engine")]
+fn regexp_pattern_is_regexp_like(pattern: f64) -> bool {
+    let match_sym = crate::symbol::well_known_symbol("match");
+    if match_sym.is_null() {
+        return true;
+    }
+    let sym_val = f64::from_bits(crate::value::JSValue::pointer(match_sym as *const u8).bits());
+    let m = unsafe { crate::symbol::js_object_get_symbol_property(pattern, sym_val) };
+    if crate::value::JSValue::from_bits(m.to_bits()).is_undefined() {
+        // No own/inherited @@match override → registered RegExp ([[RegExpMatcher]]).
+        true
+    } else {
+        crate::value::js_is_truthy(m) != 0
+    }
 }
 
 /// Test if a string matches the regex pattern

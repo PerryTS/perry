@@ -51,6 +51,16 @@ const tweaked = /(?:)/;
 (tweaked as any).constructor = null;
 ok("call-other-constructor-is-copy", RegExp(tweaked) !== tweaked);
 
+// The shortcut is also gated on IsRegExp, which consults `pattern[@@match]`:
+// a RegExp whose own `Symbol.match` is falsy is NOT regexp-like → fresh copy.
+const unmatched = /(?:)/;
+(unmatched as any)[Symbol.match] = false;
+ok("call-match-falsy-is-copy", RegExp(unmatched) !== unmatched);
+// A truthy `Symbol.match` override keeps it regexp-like → identity holds.
+const stillRe = /(?:)/;
+(stillRe as any)[Symbol.match] = true;
+ok("call-match-truthy-is-identity", RegExp(stillRe) === stillRe);
+
 // The copy is independent: mutating lastIndex on one must not affect the other.
 const g = /a/g;
 const gCopy = new RegExp(g);
