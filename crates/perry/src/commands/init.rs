@@ -39,6 +39,22 @@ out_dir = "dist"
 opt_level = 2
 "#;
 
+// package.json carries the npm-interop layer. Notably it is the *only* home for
+// `perry.compilePackages` (the list of npm packages to compile natively) — that
+// setting is read exclusively from here, never from perry.toml. We seed it empty
+// so the field is discoverable. `private: true` keeps tooling from treating the
+// scaffold as a publishable package, and `main` mirrors perry.toml's `entry`.
+const DEFAULT_PACKAGE_JSON: &str = r#"{
+  "name": "{name}",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/main.ts",
+  "perry": {
+    "compilePackages": []
+  }
+}
+"#;
+
 const DEFAULT_GITIGNORE: &str = r#"# Perry build outputs
 dist/
 *.o
@@ -103,6 +119,22 @@ pub fn run(args: InitArgs, format: OutputFormat, _use_color: bool) -> Result<()>
     } else {
         match format {
             OutputFormat::Text => println!("  Skipped perry.toml (already exists)"),
+            OutputFormat::Json => {}
+        }
+    }
+
+    // Create package.json (npm-interop layer; sole home for perry.compilePackages)
+    let package_json_path = project_path.join("package.json");
+    if !package_json_path.exists() {
+        let package_json_content = DEFAULT_PACKAGE_JSON.replace("{name}", &name);
+        fs::write(&package_json_path, package_json_content)?;
+        match format {
+            OutputFormat::Text => println!("  Created package.json"),
+            OutputFormat::Json => {}
+        }
+    } else {
+        match format {
+            OutputFormat::Text => println!("  Skipped package.json (already exists)"),
             OutputFormat::Json => {}
         }
     }
