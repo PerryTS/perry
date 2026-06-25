@@ -98,8 +98,8 @@ use resolve::{
 };
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
-    localize_stdlib_stub_symbols_for_windows, strip_duplicate_objects_from_lib,
-    strip_duplicate_objects_from_well_known_lib,
+    localize_stdlib_stub_symbols, localize_stdlib_stub_symbols_for_windows,
+    strip_duplicate_objects_from_lib, strip_duplicate_objects_from_well_known_lib,
 };
 use targets::{
     apple_sdk_version, find_visionos_swift_runtime, find_watchos_swift_runtime,

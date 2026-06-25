@@ -249,6 +249,11 @@ pub(crate) fn build_and_run_link(
         } else {
             // Native macOS/iOS via clang driver
             cmd.arg("-Wl,-dead_strip");
+            // PERRY_LINK_MAP=<path> — emit a linker map (which archive each
+            // symbol resolves from) for diagnosing dup-symbol / shadowing bugs.
+            if let Some(map) = std::env::var_os("PERRY_LINK_MAP") {
+                cmd.arg(format!("-Wl,-map,{}", map.to_string_lossy()));
+            }
         }
     } else {
         // MSVC link.exe / lld-link equivalents:
@@ -367,7 +372,21 @@ pub(crate) fn build_and_run_link(
                 // Also link runtime for symbols DCE'd from stdlib's bundled
                 // perry-runtime; on tier-3 it's first stripped of stdlib's objects.
                 if !is_android && !is_windows {
-                    cmd.arg(dedup_runtime_for_tier3(target, runtime_lib, stdlib));
+                    // #5000 (macOS/Linux): the standalone runtime archive is built
+                    // WITHOUT the `stdlib` feature, so it also defines the no-op
+                    // stdlib_stubs (js_fetch_with_options, js_headers_new,
+                    // js_request_new, js_ws_*, js_readline_*). With ELF/Mach-O
+                    // first-definition-wins those stubs can satisfy the user's
+                    // fetch ref before perry-stdlib's real impls, so `fetch()`
+                    // no-ops and a program awaiting it hangs. When this build
+                    // actually uses stdlib (fetch / ws / readline), localize those
+                    // stub symbols in a copy of the runtime so perry-stdlib wins.
+                    let runtime_for_link = if ctx.uses_fetch || ctx.needs_stdlib {
+                        localize_stdlib_stub_symbols(runtime_lib, stdlib)
+                    } else {
+                        runtime_lib.to_path_buf()
+                    };
+                    cmd.arg(dedup_runtime_for_tier3(target, &runtime_for_link, stdlib));
                 }
             } else {
                 if ctx.needs_stdlib {

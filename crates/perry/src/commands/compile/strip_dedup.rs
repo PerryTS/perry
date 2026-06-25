@@ -999,6 +999,166 @@ fn try_localize_stdlib_stub_symbols(runtime_lib: &Path, stdlib_lib: &Path) -> Re
     Ok(trimmed_lib)
 }
 
+/// macOS/Linux (#5000) equivalent of [`localize_stdlib_stub_symbols_for_windows`].
+///
+/// The prebuilt standalone `libperry_runtime.a` is built WITHOUT the `stdlib`
+/// Cargo feature, so it defines the no-op `stdlib_stubs` symbols. On the
+/// macOS/Linux link line it is linked alongside the auto-optimized perry-stdlib
+/// (which carries the REAL `js_fetch_with_options` / `js_headers_new` / `js_ws_*`
+/// / `js_readline_*`), and with archive first-definition-wins the runtime stub
+/// can satisfy the user's fetch reference first — so `fetch()` silently no-ops
+/// (`[perry] warning: js_headers_new is a no-op stub`) and a program awaiting the
+/// fetch hangs. Unlike COFF, ELF/Mach-O accept `--localize-symbol`, so localize
+/// (global→local) exactly those stub symbols the runtime defines AND perry-stdlib
+/// also provides; the now-local stub no longer satisfies the external reference,
+/// the linker resolves it from perry-stdlib, and `-dead_strip`/`--gc-sections`
+/// drops the unreferenced stub body. The stdlib cross-check guarantees a
+/// runtime-only symbol is never localized. Best-effort: returns `runtime_lib`
+/// unchanged on any failure, preserving pre-fix behavior.
+pub(super) fn localize_stdlib_stub_symbols(runtime_lib: &Path, stdlib_lib: &Path) -> PathBuf {
+    match try_localize_stdlib_stub_symbols_unix(runtime_lib, stdlib_lib) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[strip-dedup] runtime stdlib-stub localize skipped (non-fatal): {e}");
+            runtime_lib.to_path_buf()
+        }
+    }
+}
+
+fn try_localize_stdlib_stub_symbols_unix(runtime_lib: &Path, stdlib_lib: &Path) -> Result<PathBuf> {
+    let lib_name = runtime_lib
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("libperry_runtime.a");
+
+    // Mach-O requires a matched-LLVM `llvm-objcopy` for `--localize-symbol`
+    // (a mismatched one rejects it on Mach-O / `llvm-nm` mis-reads nightly
+    // bitcode), so prefer the nightly toolchain tool, mirroring
+    // `strip_duplicate_objects_from_well_known_lib`.
+    let llvm_ar = find_llvm_tool("llvm-ar")
+        .or_else(|| find_path_tool("ar"))
+        .ok_or_else(|| anyhow::anyhow!("llvm-ar not found"))?;
+    let objcopy = find_nightly_llvm_tool("llvm-objcopy")
+        .or_else(|| find_llvm_tool("llvm-objcopy"))
+        .or_else(|| find_path_tool("objcopy"))
+        .ok_or_else(|| anyhow::anyhow!("llvm-objcopy not found"))?;
+    let nm = find_nightly_llvm_tool("llvm-nm")
+        .or_else(|| find_llvm_tool("llvm-nm"))
+        .or_else(|| find_path_tool("nm"))
+        .ok_or_else(|| anyhow::anyhow!("llvm-nm not found"))?;
+
+    let abs_runtime = std::fs::canonicalize(runtime_lib)?;
+    let abs_stdlib = std::fs::canonicalize(stdlib_lib)?;
+
+    let stub_set: std::collections::HashSet<&str> = STDLIB_STUB_SYMBOLS.iter().copied().collect();
+
+    let runtime_member_syms = collect_archive_symbols_by_member(&nm, &abs_runtime)
+        .ok_or_else(|| anyhow::anyhow!("failed to inspect {lib_name} symbols"))?;
+    let mut candidates: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (member, syms) in &runtime_member_syms {
+        let hits: Vec<String> = syms
+            .iter()
+            .filter(|s| stub_set.contains(s.as_str()))
+            .cloned()
+            .collect();
+        if !hits.is_empty() {
+            candidates.insert(member.clone(), hits);
+        }
+    }
+    if candidates.is_empty() {
+        // Runtime built without the stubs (e.g. `stdlib` feature on).
+        return Ok(runtime_lib.to_path_buf());
+    }
+
+    // Cross-check against perry-stdlib: only localize a stub the real stdlib also
+    // provides, so we never turn a runtime-only symbol into an undefined ref.
+    let stdlib_syms = collect_archive_symbols_flat(&nm, &abs_stdlib);
+    if stdlib_syms.is_empty() {
+        return Err(anyhow::anyhow!(
+            "llvm-nm reported no symbols for {}",
+            abs_stdlib.display()
+        ));
+    }
+    let mut to_localize: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (member, hits) in candidates {
+        let mut kept: Vec<String> = hits
+            .into_iter()
+            .filter(|s| stdlib_syms.contains(s))
+            .collect();
+        if !kept.is_empty() {
+            kept.sort();
+            kept.dedup();
+            to_localize.insert(member, kept);
+        }
+    }
+    if to_localize.is_empty() {
+        return Ok(runtime_lib.to_path_buf());
+    }
+
+    let tmp_base = std::env::temp_dir().join(format!("perry_strip_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_base).ok();
+    let extract_dir = tmp_base.join(format!("_{lib_name}_stub_localize_extract"));
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    std::fs::create_dir_all(&extract_dir)?;
+    let trimmed_lib = tmp_base.join(format!("_{lib_name}_stub_localized.a"));
+    let _ = std::fs::remove_file(&trimmed_lib);
+    std::fs::copy(&abs_runtime, &trimmed_lib)?;
+
+    let mut localized = 0usize;
+    for (member, symbols) in &to_localize {
+        let extract_out = Command::new(&llvm_ar)
+            .arg("x")
+            .arg(&abs_runtime)
+            .arg(member)
+            .current_dir(&extract_dir)
+            .output()?;
+        if !extract_out.status.success() {
+            let stderr = String::from_utf8_lossy(&extract_out.stderr);
+            return Err(anyhow::anyhow!("failed to extract {member}: {stderr}"));
+        }
+        let member_path = extract_dir.join(member);
+        if !member_path.exists() {
+            continue;
+        }
+        let mut objcopy_cmd = Command::new(&objcopy);
+        for symbol in symbols {
+            objcopy_cmd.arg("--localize-symbol").arg(symbol);
+        }
+        let out = objcopy_cmd.arg(&member_path).output()?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            return Err(anyhow::anyhow!(
+                "failed to localize stub symbols in {member}: {stderr}"
+            ));
+        }
+        let replace_out = Command::new(&llvm_ar)
+            .arg("r")
+            .arg(&trimmed_lib)
+            .arg(&member_path)
+            .output()?;
+        if !replace_out.status.success() {
+            let stderr = String::from_utf8_lossy(&replace_out.stderr);
+            return Err(anyhow::anyhow!("failed to splice {member}: {stderr}"));
+        }
+        localized += symbols.len();
+    }
+
+    let index_out = Command::new(&llvm_ar).arg("s").arg(&trimmed_lib).output()?;
+    if !index_out.status.success() {
+        let stderr = String::from_utf8_lossy(&index_out.stderr);
+        return Err(anyhow::anyhow!("failed to reindex {lib_name}: {stderr}"));
+    }
+
+    eprintln!(
+        "[strip-dedup] {lib_name}: localized {localized} stdlib-stub symbol(s) \
+         so perry-stdlib wins the link (#5000, macOS/Linux)"
+    );
+    let _ = std::fs::remove_dir_all(&extract_dir);
+    Ok(trimmed_lib)
+}
+
 /// Tier-3 (tvOS/watchOS, no prebuilt std): perry-stdlib is built with
 /// `-Zbuild-std` and bundles its own copy of std's allocator/panic runtime
 /// shims, which duplicate the ones in runtime_lib (the canonical provider) →
