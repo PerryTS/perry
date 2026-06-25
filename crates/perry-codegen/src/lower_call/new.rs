@@ -1677,7 +1677,28 @@ fn lower_new_impl(
         // `expr/this_super_call.rs`: resolve the decl-time-registered parent
         // value and dispatch it on `this` via `js_fetch_or_value_super`, which
         // binds IMPLICIT_THIS to the instance for the duration of the call.
-        if !found_inherited_ctor && class.extends_expr.is_some() {
+        //
+        // #5657: a native BUILTIN base (`class X extends ArrayBuffer / Map /
+        // Promise / %TypedArray% / RegExp / Function / …`) is also captured as
+        // `extends_expr` (a bare `ArrayBuffer` Ident doesn't resolve through
+        // `lookup_class`), but its parent VALUE is a builtin constructor that
+        // rejects being *called* as a plain function — `js_fetch_or_value_super`
+        // would route it through `js_native_call_value`, throwing "X is not a
+        // function" / "Constructor X requires 'new'". Perry can't give a subclass
+        // instance the builtin's internal slots, so `super()` to such a base is a
+        // best-effort no-op (the instance is already allocated with the correct
+        // dynamic-parent prototype chain, so `instanceof` holds). Skip the
+        // dispatch for those names — mirroring the identical guard the explicit
+        // `Expr::SuperCall` arm already applies via `is_other_builtin_constructor_name`
+        // (`expr/this_super_call.rs`). Request/Response/Error are deliberately NOT
+        // in that set: they DO need the dispatch (native fetch-handle attach /
+        // callable error thunk), so they keep running it.
+        let parent_is_uncallable_builtin = class
+            .extends_name
+            .as_deref()
+            .map(crate::expr::is_other_builtin_constructor_name)
+            .unwrap_or(false);
+        if !found_inherited_ctor && class.extends_expr.is_some() && !parent_is_uncallable_builtin {
             if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
                 let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let parent_val = ctx.block().call(

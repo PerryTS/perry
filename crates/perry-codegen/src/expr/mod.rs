@@ -1065,5 +1065,6 @@ mod static_method;
 mod string_regex_proc;
 mod super_method;
 mod this_super_call;
+pub(crate) use this_super_call::is_other_builtin_constructor_name;
 mod unary;
 mod url_main;
