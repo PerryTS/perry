@@ -272,10 +272,18 @@ pub(crate) unsafe fn call_vtable_method(
     // arbitrary-arity all-f64 trampoline. A fixed `match`-arm-per-arity dispatch
     // previously capped at 64 and silently mis-called 130+-param synthesized
     // capture constructors (#5437).
-    debug_assert!(
-        param_count as usize <= MAX_VTABLE_DISPATCH_ARITY,
-        "call_vtable_method: param_count {} exceeds MAX_VTABLE_DISPATCH_ARITY",
-        param_count
+    // REAL runtime guard (all builds, not just debug): reject any arity past the
+    // dispatch cap BEFORE building the positional vec and invoking the
+    // trampoline. A `debug_assert!` alone is compiled out in release — exactly
+    // the bug class behind the original 64-cap miscompile (#5437), where an
+    // over-cap arity silently mis-called the fn pointer in release builds. Fail
+    // closed with a clear panic instead.
+    let param_count_usize = param_count as usize;
+    assert!(
+        param_count_usize <= MAX_VTABLE_DISPATCH_ARITY,
+        "call_vtable_method: param_count {} exceeds MAX_VTABLE_DISPATCH_ARITY ({})",
+        param_count,
+        MAX_VTABLE_DISPATCH_ARITY
     );
     let mut positional: Vec<f64> = Vec::with_capacity(param_count as usize);
     for i in 0..(param_count as usize) {

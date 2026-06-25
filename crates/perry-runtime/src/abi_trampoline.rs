@@ -33,11 +33,18 @@ pub(crate) unsafe fn call_all_f64(func_ptr: usize, args: &[f64]) -> f64 {
     {
         call_all_f64_aarch64(func_ptr, args)
     }
-    #[cfg(target_arch = "x86_64")]
+    // NOTE: gated to NON-Windows x86-64. The asm below is the SysV ABI (FP args
+    // in xmm0..xmm7, no shadow space). The Windows x64 ABI passes FP args in
+    // xmm0..xmm3 and requires a 32-byte shadow space, so the SysV asm would
+    // mis-pass 5+ args. Win64 falls through to the portable fallback instead.
+    #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
     {
         call_all_f64_x86_64(func_ptr, args)
     }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", not(target_os = "windows"))
+    )))]
     {
         call_all_f64_fallback(func_ptr, args)
     }
@@ -126,7 +133,7 @@ unsafe fn call_all_f64_aarch64(func_ptr: usize, args: &[f64]) -> f64 {
 /// hold the number of vector registers used for a (possibly) variadic callee;
 /// Perry callees are non-variadic, but setting `al` is harmless and matches the
 /// ABI requirement for safety.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 #[inline(never)]
 unsafe fn call_all_f64_x86_64(func_ptr: usize, args: &[f64]) -> f64 {
     use core::arch::asm;
@@ -203,10 +210,17 @@ unsafe fn call_all_f64_x86_64(func_ptr: usize, args: &[f64]) -> f64 {
     ret
 }
 
-/// Portable fallback for non-asm targets: fixed-arity dispatch up to 16 f64
-/// args. No current Perry host other than aarch64/x86-64 exercises high-arity
-/// dynamic ctor dispatch, so this bound is sufficient there.
-#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+/// Portable fallback for non-asm targets (incl. Windows x64, whose ABI differs
+/// from the SysV asm above): fixed-arity dispatch up to 16 f64 args. No current
+/// Perry host other than SysV aarch64/x86-64 exercises high-arity dynamic ctor
+/// dispatch, so this bound is sufficient there. Arities > 16 FAIL CLOSED: a
+/// fixed 16-arg `transmute` would mis-call the fn pointer with the wrong
+/// signature (reading register/stack garbage for the missing params), the exact
+/// silent-miscompile class that motivated #5437 — so we panic instead.
+#[cfg(not(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", not(target_os = "windows"))
+)))]
 #[inline(never)]
 unsafe fn call_all_f64_fallback(func_ptr: usize, args: &[f64]) -> f64 {
     #[inline(always)]
@@ -245,7 +259,15 @@ unsafe fn call_all_f64_fallback(func_ptr: usize, args: &[f64]) -> f64 {
         13 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
         14 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
         15 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
-        _ => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        16 => arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+        // FAIL CLOSED: do NOT transmute a >16-arg call to a 16-arg signature —
+        // the extra params would read register/stack garbage (#5437). This
+        // target has no asm trampoline; high-arity dynamic dispatch is
+        // unsupported here.
+        n => panic!(
+            "abi_trampoline: unsupported arity {n} on this target \
+             (no asm trampoline; portable fallback caps at 16 f64 args)"
+        ),
     }
 }
 
@@ -340,6 +362,13 @@ mod tests {
         acc
     }
 
+    // High-arity (>16) dynamic dispatch only works on the asm targets; the
+    // portable fallback fails closed (panics) above 16 args, so this test is
+    // gated to the SysV asm targets.
+    #[cfg(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", not(target_os = "windows"))
+    ))]
     #[test]
     fn trampoline_passes_70_args_in_order() {
         // args = [this=100, then 69 values 1..=69]. call_all_f64 takes the full
