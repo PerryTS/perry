@@ -761,17 +761,33 @@ async fn handle_fastify_websocket_upgrade(
         .unwrap())
 }
 
-/// Process one request — fire hooks, call route handler, send the
-/// response back through the oneshot channel.
-fn process_request(app_handle: Handle, pending: FastifyPendingRequest) {
-    let ctx = FastifyContext::new(
-        0,
+/// Build the per-request [`FastifyContext`], MOVING the pending request's
+/// headers/body/params out of `pending` (via `mem::take` / `Option::take`)
+/// rather than cloning them. Each is consumed exactly once, so cloning would
+/// fire three redundant per-request allocations (two `HashMap`s + one `Vec`,
+/// dominated by the O(headers) header-map clone) on the hot dispatch path.
+/// `method`/`path` stay cloned: `process_request` reuses them for the route
+/// match (`app.match_route(&pending.method, &pending.path)`) after the context
+/// is built. This is the single construction site `process_request` uses, so a
+/// regression test can drive it directly.
+pub(crate) fn build_context_from_pending(
+    request_id: u64,
+    pending: &mut FastifyPendingRequest,
+) -> FastifyContext {
+    FastifyContext::new(
+        request_id,
         pending.method.clone(),
         pending.path.clone(),
-        pending.headers.clone(),
-        pending.body.clone(),
-        pending.params.clone(),
-    );
+        std::mem::take(&mut pending.headers),
+        pending.body.take(),
+        std::mem::take(&mut pending.params),
+    )
+}
+
+/// Process one request — fire hooks, call route handler, send the
+/// response back through the oneshot channel.
+fn process_request(app_handle: Handle, mut pending: FastifyPendingRequest) {
+    let ctx = build_context_from_pending(0, &mut pending);
     let ctx_handle = register_handle(ctx);
 
     // Snapshot hooks + matched route (need to drop the borrow before

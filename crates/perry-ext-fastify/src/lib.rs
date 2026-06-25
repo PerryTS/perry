@@ -658,4 +658,62 @@ mod tests {
         assert_eq!(route.handler, 22);
         assert_eq!(params.get("id").map(String::as_str), Some("7"));
     }
+
+    /// Regression: the per-request dispatch in `process_request` must MOVE the
+    /// pending request's headers/body/params into `FastifyContext` (via
+    /// `mem::take` / `Option::take`) rather than clone them — each is consumed
+    /// exactly once, so cloning fires three redundant per-request allocations
+    /// (two `HashMap`s + one `Vec`, dominated by the O(headers) header-map clone).
+    ///
+    /// This drives `build_context_from_pending` — the *same* helper
+    /// `process_request` uses to construct the context — so the test fails if
+    /// that construction reverts to cloning: after the call the source `pending`
+    /// collections must be empty (a clone would leave them populated, the canary),
+    /// while `method`/`path` must survive (they're reused for the route match).
+    #[test]
+    fn process_request_moves_pending_fields_not_clone() {
+        use crate::server::{build_context_from_pending, FastifyPendingRequest};
+
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert("x-trace-id".to_string(), "abc-123".to_string());
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), "42".to_string());
+
+        // The response channel is irrelevant to context construction; a dropped
+        // receiver is fine — the helper never touches `response_tx`.
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        let mut pending = FastifyPendingRequest {
+            method: "POST".to_string(),
+            path: "/users/42".to_string(),
+            headers,
+            body: Some(b"{\"hello\":\"world\"}".to_vec()),
+            params,
+            response_tx,
+        };
+
+        // Exercise the production construction path.
+        let ctx = build_context_from_pending(7, &mut pending);
+
+        // (a) The context received the original values (incl. the request_id).
+        assert_eq!(ctx.request_id, 7);
+        assert_eq!(ctx.method, "POST");
+        assert_eq!(ctx.headers.len(), 2);
+        assert_eq!(
+            ctx.headers.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(ctx.params.get("id").map(String::as_str), Some("42"));
+        assert_eq!(ctx.body.as_deref(), Some(&b"{\"hello\":\"world\"}"[..]));
+
+        // (b) Move semantics — `pending`'s collections are empty post-construction.
+        // A clone-based helper would leave them populated, failing the test.
+        assert!(pending.headers.is_empty());
+        assert!(pending.params.is_empty());
+        assert!(pending.body.is_none());
+
+        // (c) method/path are intentionally NOT consumed — reused for the route match.
+        assert_eq!(pending.method, "POST");
+        assert_eq!(pending.path, "/users/42");
+    }
 }
