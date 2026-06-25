@@ -604,6 +604,22 @@ pub(crate) fn try_lower_instance_method_call(
             for a in args {
                 fallback_user_args.push(lower_expr(ctx, a)?);
             }
+            // #5391 path 4 (virtual tower): eligibility to collapse the
+            // per-overriding-subclass class-id switch to a single by-name
+            // dispatch (see the two return sites below). Requires overrides
+            // (the empty case is the compact override-check path) and no
+            // `perry_static_*` implementor (those need
+            // `js_class_static_method_call`). Computed up front so the
+            // rest-bearing case can return BEFORE the rest-array bundling below,
+            // which would otherwise materialize a dead js_array for the collapsed
+            // path (the by-name dispatch takes the raw, un-bundled args).
+            let can_collapse_virtual = crate::codegen::full_outline_ic_enabled()
+                && method_dispatch_collapse_enabled()
+                && !overrides.is_empty()
+                && !fallback_fn.starts_with("perry_static_")
+                && overrides
+                    .iter()
+                    .all(|(_, f)| !f.starts_with("perry_static_"));
             let mut lowered_args: Vec<String> = Vec::with_capacity(fallback_user_args.len() + 1);
             lowered_args.push(recv_box.clone());
             lowered_args.extend(fallback_user_args.iter().cloned());
@@ -665,6 +681,21 @@ pub(crate) fn try_lower_instance_method_call(
                     break;
                 }
                 rest_walk = ctx.classes.get(&cur).and_then(|c| c.extends_name.clone());
+            }
+            // Collapse a rest-bearing virtual dispatch HERE, before the rest
+            // array is materialized below — the by-name dispatch takes the raw
+            // `fallback_user_args` and does its own rest-bundling, so the bundle
+            // would be dead. (The non-rest collapse happens at the vdispatch
+            // site below, where there is no array to skip.)
+            if method_has_rest && can_collapse_virtual {
+                return Ok(Some(emit_collapsed_instance_dispatch(
+                    ctx,
+                    &recv_box,
+                    property,
+                    &fallback_user_args,
+                    call_byte_offset,
+                    /* with_override_probe */ false,
+                )?));
             }
             let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             if method_has_rest {
@@ -740,21 +771,15 @@ pub(crate) fn try_lower_instance_method_call(
                 )));
             }
 
-            // #5391 path 4 (virtual tower): oversized modules collapse the
-            // per-overriding-subclass class-id switch below to a single by-name
-            // dispatch, which resolves the same override through the runtime's
-            // (class_id, name) vtable registry. This switch — unlike the dynamic
-            // tower — has no own-property override probe, so the collapse is a
-            // bare `js_native_call_method` (with_override_probe = false) to stay
-            // behavior-identical. Skipped if the static fallback or any override
-            // is a `perry_static_*` class-object-static method.
-            if crate::codegen::full_outline_ic_enabled()
-                && method_dispatch_collapse_enabled()
-                && !fallback_fn.starts_with("perry_static_")
-                && overrides
-                    .iter()
-                    .all(|(_, f)| !f.starts_with("perry_static_"))
-            {
+            // #5391 path 4 (virtual tower): collapse the per-overriding-subclass
+            // class-id switch below to a single by-name dispatch, which resolves
+            // the same override through the runtime's (class_id, name) vtable
+            // registry. This switch — unlike the dynamic tower — has no
+            // own-property override probe, so the collapse is a bare
+            // `js_native_call_method` (with_override_probe = false) to stay
+            // behavior-identical. The rest-bearing case already collapsed above
+            // (before the rest bundling); this handles the non-rest case.
+            if can_collapse_virtual {
                 return Ok(Some(emit_collapsed_instance_dispatch(
                     ctx,
                     &recv_box,
