@@ -332,6 +332,44 @@ fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &perry_hir::Class) ->
         .contains_key(&(class.name.clone(), ctor_method_name))
 }
 
+/// #2768: true when the standalone `<class>_constructor` symbol's body reads
+/// `new.target` — either the class's OWN ctor body, or an ancestor ctor body
+/// it reaches through `super(...)`. The symbol is a separately compiled
+/// function whose only `new.target` source is the runtime cell, and a
+/// `super(...)` call inlines the parent ctor body into that same symbol, so an
+/// ancestor that reads `new.target` (e.g. an abstract-class guard in a base)
+/// still observes the cell. Gating the cell write on the WHOLE chain keeps
+/// `new Child()` correct when only the inherited body reads `new.target`, while
+/// a chain with no reader anywhere stays on the zero-overhead fast path. The
+/// walk follows `extends_name` through the codegen class map; an unresolved
+/// parent name just stops the walk, and a depth cap guards a cyclic graph.
+fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
+    let reads = |c: &perry_hir::Class| {
+        c.constructor
+            .as_ref()
+            .is_some_and(|f| ctor_body_uses_new_target(&f.body))
+    };
+    if reads(class) {
+        return true;
+    }
+    let mut parent = class.extends_name.as_deref();
+    let mut depth = 0;
+    while let Some(parent_name) = parent {
+        depth += 1;
+        if depth > 64 {
+            break;
+        }
+        let Some(pc) = ctx.classes.get(parent_name).copied() else {
+            break;
+        };
+        if reads(pc) {
+            return true;
+        }
+        parent = pc.extends_name.as_deref();
+    }
+    false
+}
+
 /// Emit a call to the shared standalone `<class>_constructor` symbol and
 /// return the raw value it produced. The standalone ctor function returns
 /// `undefined` for an ordinary constructor (implicit `return this`) or the
@@ -1104,14 +1142,15 @@ fn lower_new_impl(
         // `INT32_TAG | class_id` value `Expr::ClassRef` produces) around the
         // call and restore it after, but ONLY when the ctor actually reads
         // `new.target`, so the common ctor keeps the zero-overhead fast path.
+        // The gate spans the WHOLE super(...) chain, not just the leaf's own
+        // body: the symbol inlines `super(...)` into itself, so an ancestor
+        // ctor that reads `new.target` (e.g. an abstract-class guard in a base)
+        // observes the same cell — `new Child()` where only `Base` reads
+        // `new.target` would otherwise see `undefined` instead of `Child`.
         // ponytail: a throw inside the ctor skips the restore, leaving the cell
         // set — same edge case the runtime construct paths already have; fix
         // holistically if it bites.
-        let saved_new_target = if class
-            .constructor
-            .as_ref()
-            .is_some_and(|c| ctor_body_uses_new_target(&c.body))
-        {
+        let saved_new_target = if ctor_chain_uses_new_target(ctx, class) {
             ctx.class_ids.get(class_name).map(|&cid| {
                 let prev = ctx.block().call(DOUBLE, "js_new_target_get", &[]);
                 let class_ref = double_literal(f64::from_bits(

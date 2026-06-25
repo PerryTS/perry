@@ -852,7 +852,9 @@ pub unsafe extern "C" fn js_new_function_construct(
     // registered class id and replay the standalone constructor so field
     // initializers and `this.foo = ...` writes match static `new ClassName()`.
     if let Some(class_cid) = constructor_class_ref_id(func_value) {
-        return construct_registered_class_ref(class_cid, class_cid, func_value, args_ptr, args_len);
+        return construct_registered_class_ref(
+            class_cid, class_cid, func_value, args_ptr, args_len,
+        );
     }
     if is_arrow_function_value(func_value) {
         crate::fs::validate::throw_type_error_with_code(
