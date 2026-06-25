@@ -286,6 +286,24 @@ pub extern "C" fn js_object_define_property(
         // db.select().from(x)` saw `instance.then === undefined` and `await`
         // unwrapped the builder unchanged.
         if let Some(target_cid) = super::super::class_ref_id(obj_value) {
+            // `Object.defineProperty(C, Symbol.hasInstance, { value: fn })` (and
+            // any symbol-keyed static define on a class): `metadata_key_to_string`
+            // can't stringify a Symbol, so the value would be silently dropped.
+            // Route it into the class static-symbol table (CLASS_STATIC_SYMBOLS) —
+            // the same table `static [Symbol.hasInstance]` registers into and that
+            // `js_instanceof` consults — so `x instanceof C` honors the user hook
+            // (zod 4 installs its brand-check `@@hasInstance` exactly this way).
+            if crate::symbol::js_is_symbol(key_value) != 0 {
+                let value_field = desc_read_field(descriptor_value, b"value");
+                if !value_field.is_undefined() {
+                    crate::symbol::js_class_register_static_symbol(
+                        target_cid,
+                        key_value,
+                        f64::from_bits(value_field.bits()),
+                    );
+                }
+                return obj_value;
+            }
             if let Some(name) = super::super::metadata_key_to_string(key_value) {
                 let desc_ptr = extract_obj_ptr(descriptor_value);
                 if !desc_ptr.is_null() {
@@ -332,6 +350,47 @@ pub extern "C" fn js_object_define_property(
             }
         };
         if let Some(closure_ptr) = target_closure_ptr {
+            // A Symbol key on a function value (zod 4 installs its `instanceof`
+            // brand check via `Object.defineProperty(ZodTypeFn, Symbol.hasInstance,
+            // { value })`). Route into the SAME symbol side table
+            // (`SYMBOL_PROPERTIES`, keyed by the closure pointer) that
+            // `js_object_has_own_symbol` / `js_object_get_symbol_property` read —
+            // string-coercing the symbol (below) would file it under a
+            // "Symbol(...)" STRING key, unreachable by the symbol-keyed reader and
+            // breaking the function-RHS `@@hasInstance` instanceof hook. Mirrors
+            // the typed-array symbol-define branch below.
+            if crate::symbol::js_is_symbol(key_value) != 0 {
+                let desc_ptr = extract_obj_ptr(descriptor_value);
+                if !desc_ptr.is_null() {
+                    let has_get = desc_has_field(descriptor_value, b"get");
+                    let has_set = desc_has_field(descriptor_value, b"set");
+                    if has_get || has_set {
+                        let get_field = desc_read_field(descriptor_value, b"get");
+                        let set_field = desc_read_field(descriptor_value, b"set");
+                        let get_bits = if !has_get || get_field.is_undefined() {
+                            0
+                        } else {
+                            crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
+                        };
+                        let set_bits = if !has_set || set_field.is_undefined() {
+                            0
+                        } else {
+                            crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
+                        };
+                        crate::symbol::set_symbol_accessor_property(
+                            obj_value, key_value, get_bits, set_bits,
+                        );
+                    } else {
+                        let value_field = desc_read_field(descriptor_value, b"value");
+                        crate::symbol::js_object_set_symbol_property(
+                            obj_value,
+                            key_value,
+                            f64::from_bits(value_field.bits()),
+                        );
+                    }
+                }
+                return obj_value;
+            }
             let key_str = crate::builtins::js_string_coerce(key_value);
             if key_str.is_null() {
                 return obj_value;

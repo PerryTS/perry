@@ -132,9 +132,19 @@ pub fn try_lower_property_get_method_call(
             // through routes both to `js_native_call_method`, which
             // dispatches on the runtime type and handles string + array
             // (with content-aware element comparison). Refs #1341.
-            // startsWith / endsWith only exist on String — both 1-arg
-            // and 2-arg (searchString, position) forms route here.
-            "startsWith" | "endsWith" if args.len() == 1 || args.len() == 2 => true,
+            // startsWith / endsWith are NOT string-forced here: an Any-typed
+            // receiver may be a user/library object with its OWN same-named
+            // method that returns something other than the String builtin's
+            // boolean — e.g. Zod's `z.string().startsWith("./")` returns a
+            // refined ZodString schema, not a boolean. Forcing the static
+            // string path made `.startsWith()`/`.endsWith()` return a boolean,
+            // so a chained `.describe()`/`.optional()` threw
+            // `(boolean).describe is not a function` (broke the bundled-CLI TUI
+            // schema init). Falling through routes to `js_native_call_method`,
+            // which dispatches on the runtime type and still services a genuine
+            // Any-typed string receiver via its `jsval.is_string()` arm (the
+            // runtime grew full string-method arms in #421/#514). Refs #1341
+            // (the same fix already applied to indexOf/includes above).
             // `normalize` is NOT force-routed to the string path for Any-typed
             // receivers at any arity. User classes commonly define a 1-arg
             // `normalize(pathname)` method (Next.js route normalizers:
@@ -146,7 +156,10 @@ pub fn try_lower_property_get_method_call(
             // statically-typed-string fast path above (`is_string_expr`), and the
             // `jsval.is_string()` arm of `js_native_call_method` for Any-typed
             // strings. So nothing is lost by falling through here.
-            "lastIndexOf" if args.len() == 1 => true,
+            // `lastIndexOf` (number-returning) shares the startsWith/endsWith
+            // hazard above — an Any-typed object's own `lastIndexOf` would be
+            // clobbered by the String builtin. Fall through to the runtime,
+            // which services a genuine string receiver via `jsval.is_string()`.
             _ => false,
         };
         // Don't route buffer/Uint8Array methods through the string path —

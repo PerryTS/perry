@@ -115,6 +115,32 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             f64::from_bits(TAG_FALSE)
         };
     }
+    // Spec step (InstanceofOperator): consult the RHS's OWN `@@hasInstance`
+    // first. zod 4 builds `ZodType` as a plain FUNCTION and installs its brand
+    // check via `Object.defineProperty(ZodTypeFn, Symbol.hasInstance, { value })`,
+    // so the function RHS would otherwise fall through to the prototype-walk tail
+    // and return false. Read OWN only (`has_own` ⇒ `get` returns the own value,
+    // never the inherited Function.prototype default thunk → no recursion). Also
+    // catches a dynamic class-ref RHS (own @@hasInstance lives in CLASS_STATIC_SYMBOLS).
+    {
+        let hi_sym = crate::symbol::well_known_symbol("hasInstance");
+        if !hi_sym.is_null() {
+            let hi_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
+            if unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) } {
+                let cb = unsafe { crate::symbol::js_object_get_symbol_property(type_ref, hi_f64) };
+                if value_is_callable(cb) {
+                    let args = [value];
+                    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
+                    return if crate::value::js_is_truthy(r) != 0 {
+                        f64::from_bits(crate::value::TAG_TRUE)
+                    } else {
+                        f64::from_bits(TAG_FALSE)
+                    };
+                }
+            }
+        }
+    }
     let bits = type_ref.to_bits();
     let top16 = bits >> 48;
     if top16 == 0x7FFE {
@@ -734,6 +760,31 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             return false_val;
         }
         return true_val;
+    }
+
+    // `Object.defineProperty(C, Symbol.hasInstance, { value: fn })` form (zod 4):
+    // unlike `static [Symbol.hasInstance]` (a registered hook, handled above),
+    // this stores the closure in the class static-symbol table. Read it off the
+    // class id (OWN lookup only — never resolves Function.prototype's default
+    // @@hasInstance thunk, so no recursion) and call it with the candidate value.
+    {
+        let hi_sym = crate::symbol::well_known_symbol("hasInstance");
+        if !hi_sym.is_null() {
+            let hi_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
+            if let Some(vb) = crate::symbol::class_static_symbol_lookup(class_id, hi_f64) {
+                let cb = f64::from_bits(vb);
+                if value_is_callable(cb) {
+                    let args = [value];
+                    let r = unsafe { crate::closure::js_native_call_value(cb, args.as_ptr(), 1) };
+                    return if crate::value::js_is_truthy(r) != 0 {
+                        true_val
+                    } else {
+                        false_val
+                    };
+                }
+            }
+        }
     }
 
     let bits = value.to_bits();
