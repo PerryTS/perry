@@ -146,6 +146,31 @@ pub(crate) fn try_lower_instance_method_call(
             for a in args {
                 static_user_args.push(lower_expr(ctx, a)?);
             }
+            // #5391 path 4: oversized modules full-outline the class-id switch
+            // tower. The tower emits one icmp + case block per class implementing
+            // `property` (scaling __text with implementor count) whose default arm
+            // is already `js_native_call_method`; collapse the whole switch to that
+            // same by-name runtime dispatch (which resolves the user method via its
+            // (class_id, name) vtable registry). The own-property override probe is
+            // preserved inside the collapsed helper. Skipped when any implementor is
+            // a `perry_static_*` class-object-static method, which needs
+            // `js_class_static_method_call` and is NOT reproduced by the by-name
+            // dispatcher. Mirrors the GET/SET/array-literal full-outline paths.
+            if crate::codegen::full_outline_ic_enabled()
+                && method_dispatch_collapse_enabled()
+                && implementors
+                    .iter()
+                    .all(|(_, f)| !f.starts_with("perry_static_"))
+            {
+                let v = emit_collapsed_instance_dispatch(
+                    ctx,
+                    &recv_box,
+                    property,
+                    &static_user_args,
+                    call_byte_offset,
+                )?;
+                return Ok(Some(v));
+            }
             // #5437: each implementor of `property` has its OWN declared arity
             // and rest-ness. The rest-bundle (and default-param padding) MUST be
             // applied per-implementor, not once globally — otherwise a single
@@ -767,4 +792,137 @@ pub(crate) fn try_lower_instance_method_call(
         }
     }
     Ok(None)
+}
+
+/// Whether to collapse the instance method-dispatch tower in full-outline mode.
+/// On by default whenever full-outline is active; `PERRY_OUTLINE_METHOD_DISPATCH=0`
+/// / `off` / `false` keeps the inline class-id switch tower (escape hatch /
+/// differential-test isolation).
+fn method_dispatch_collapse_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_OUTLINE_METHOD_DISPATCH").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// #5391 path 4: full-outlined collapse of the instance method-dispatch tower
+/// (see the call site in `try_lower_instance_method_call`).
+///
+/// Emits the own-property override probe (unchanged semantics) and, on the
+/// non-override path, a SINGLE by-name `js_native_call_method` instead of the
+/// per-implementor class-id switch tower. `js_native_call_method` is the tower's
+/// own default arm and resolves the user-class method through its (class_id,
+/// name) vtable registry, so behavior is preserved while the per-site IR shrinks
+/// from ~6 + N blocks (N = implementor count) to a fixed 3 blocks. The raw user
+/// args are marshalled once into an entry-block array and shared by both arms;
+/// `js_native_call_method` / `js_native_call_value` apply their own arity / rest
+/// adaptation at runtime (the same contract the tower's default + override arms
+/// already rely on).
+fn emit_collapsed_instance_dispatch(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    property: &str,
+    static_user_args: &[String],
+    call_byte_offset: u32,
+) -> Result<String> {
+    let key_idx = ctx.strings.intern(property);
+    let entry = ctx.strings.entry(key_idx);
+    let bytes_global = format!("@{}", entry.bytes_global);
+    let name_len_str = entry.byte_len.to_string();
+
+    // Marshal the raw user args into an entry-block array once; both arms pass
+    // the same flat (ptr, len). `js_native_call_value` (override) and
+    // `js_native_call_method` (dispatch) each do their own rest-bundling /
+    // arity padding at runtime, so the un-bundled args are correct for both.
+    let n = static_user_args.len();
+    let (args_ptr, args_len) = if n == 0 {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+        for (i, a) in static_user_args.iter().enumerate() {
+            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
+            ctx.block().store(DOUBLE, a, &slot);
+        }
+        let ptr = ctx.block().next_reg();
+        ctx.block().emit_raw(format!(
+            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+            ptr, n, buf
+        ));
+        (ptr, n.to_string())
+    };
+
+    // Override probe: an own-property method override (e.g. hono SmartRouter
+    // rebinding `this.method = X`) wins over the class method.
+    let own_method = ctx.block().call(
+        DOUBLE,
+        "js_object_get_own_field_or_undef",
+        &[
+            (DOUBLE, recv_box),
+            (crate::types::PTR, &bytes_global),
+            (I64, &name_len_str),
+        ],
+    );
+    let own_bits = ctx.block().bitcast_double_to_i64(&own_method);
+    let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
+    let is_undef = ctx.block().icmp_eq(I64, &own_bits, &undef_bits_str);
+    let override_idx = ctx.new_block("idispc.override");
+    let dispatch_idx = ctx.new_block("idispc.dispatch");
+    let merge_idx = ctx.new_block("idispc.merge");
+    let override_label = ctx.block_label(override_idx);
+    let dispatch_label = ctx.block_label(dispatch_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&is_undef, &dispatch_label, &override_label);
+
+    // Override arm: bind IMPLICIT_THIS to the receiver and call the stored
+    // function value (#632 — a class-field non-arrow function reads `this`).
+    ctx.current_block = override_idx;
+    let prev_this = ctx
+        .block()
+        .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, recv_box)]);
+    let v_override = ctx.block().call(
+        DOUBLE,
+        "js_native_call_value",
+        &[
+            (DOUBLE, &own_method),
+            (crate::types::PTR, &args_ptr),
+            (I64, &args_len),
+        ],
+    );
+    ctx.block()
+        .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev_this)]);
+    let after_override = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    // Dispatch arm: one by-name runtime dispatch (replaces the class-id tower).
+    ctx.current_block = dispatch_idx;
+    // #5247: record the call location so a runtime "X is not a function" carries
+    // `at <file>:<line>`.
+    crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+    let v_dispatch = ctx.block().call(
+        DOUBLE,
+        "js_native_call_method",
+        &[
+            (DOUBLE, recv_box),
+            (crate::types::PTR, &bytes_global),
+            (I64, &name_len_str),
+            (crate::types::PTR, &args_ptr),
+            (I64, &args_len),
+        ],
+    );
+    let after_dispatch = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[
+            (v_override.as_str(), after_override.as_str()),
+            (v_dispatch.as_str(), after_dispatch.as_str()),
+        ],
+    ))
 }
