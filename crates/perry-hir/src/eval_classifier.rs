@@ -319,6 +319,22 @@ pub fn eval_override_enabled() -> bool {
     env_flag("PERRY_ALLOW_EVAL")
 }
 
+/// Whether `PERRY_EVAL_CSP` is set — present runtime dynamic-code generation as
+/// *unavailable* to capability probes. With it set, a trivial no-op
+/// `new Function("")` / `Function("")` (the canonical
+/// `try { new Function(""), true } catch { false }` feature-test — the same
+/// shape a CSP `unsafe-eval` policy blocks) throws at construction instead of
+/// const-folding to a no-op function. Libraries that probe this way (e.g. zod 4's
+/// object-validator JIT) then take their non-codegen interpreter fallback, which
+/// perry compiles normally. Default off (spec-compliant: Node returns an empty
+/// function); opt-in for ahead-of-time binaries that hit such a JIT. Only the
+/// trivial no-op shape is affected — real literal bodies (`new Function("return
+/// 42")`, the `return this` globalThis polyfill) still fold, so those idioms are
+/// unaffected.
+pub fn eval_csp_probe_unavailable() -> bool {
+    env_flag("PERRY_EVAL_CSP")
+}
+
 /// Whether `PERRY_ALLOW_UNIMPLEMENTED` is set — forces non-strict (defer) mode
 /// for recognized-but-unimplemented node/stdlib APIs (#5245), overriding any
 /// strict flag/config for a one-off build. This is the back-compat alias of the

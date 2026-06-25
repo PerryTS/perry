@@ -308,6 +308,26 @@ pub(crate) fn try_const_fold_function_construct_kind(
         None => (String::new(), String::new()),
     };
 
+    // CSP capability-probe handling (`PERRY_EVAL_CSP`). A trivial no-op
+    // `new Function("")` / `Function("")` is the canonical runtime-codegen
+    // feature-test (`try { new Function(""), true } catch { false }`). perry is
+    // ahead-of-time compiled and cannot generate code from a runtime string, so
+    // under CSP mode this probe must report "unavailable" — throw at
+    // *construction* (not when called), exactly as a CSP `unsafe-eval`-blocked
+    // environment does — so probing callers (e.g. zod 4's validator JIT) take
+    // their non-codegen interpreter fallback. Only the trivial empty-body no-op
+    // is refused; real literal bodies (`return 42`, the `return this` globalThis
+    // polyfill) still fold, preserving spec behavior by default.
+    if body_src.trim().is_empty() && crate::eval_classifier::eval_csp_probe_unavailable() {
+        return synth_throwing_iife(
+            ctx,
+            "throw new TypeError(\"Function: runtime dynamic code generation is \
+             unavailable in this ahead-of-time compiled binary\");",
+            span,
+        )
+        .map(Some);
+    }
+
     // Assemble the exact source text the spec's CreateDynamicFunction
     // prescribes: newlines around the body and *before the closing paren*
     // so a `//` comment in the params or body can't swallow a delimiter.
