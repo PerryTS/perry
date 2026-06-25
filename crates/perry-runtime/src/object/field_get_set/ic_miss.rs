@@ -334,6 +334,84 @@ pub extern "C" fn js_object_get_field_ic_miss(
     f64::from_bits(value.bits())
 }
 
+/// #5391 path 3: full-outlined generic property GET.
+///
+/// In oversized (full-outline) modules the inline generic-get diamond expands to
+/// ~60 IR instructions and ~13 basic blocks per property-get site: receiver-tag
+/// routing (SSO / INT32 class-ref / valid-pointer / nullish), a monomorphic
+/// inline cache (shape check + hit/miss), typed-feedback recording, and the
+/// nullish-throw. On a large minified bundle that is the single biggest
+/// contributor to generated `__text`. This helper collapses the whole site to one
+/// call by reproducing that branch ladder here, dispatching to the *exact same*
+/// runtime entries the inline code calls — so behavior is unchanged. The only
+/// thing dropped is the inline monomorphic fast-load: every read goes through the
+/// cache-priming slow path (`js_object_get_field_ic_miss`), trading a little speed
+/// for a large code-size win, the same trade the class-field GET/SET full-outline
+/// paths (`js_class_field_get_ic` / `js_class_field_set_ic`) already make.
+///
+/// Argument shapes mirror the inline site operands exactly:
+/// - `obj_bits`: the receiver's full (unmasked) NaN-box bits
+/// - `key`: the property-name `StringHeader`, already masked to a raw pointer
+/// - `site_id`: the typed-feedback site id
+/// - `cache`: the per-site monomorphic IC cache global (primed by `..._ic_miss`)
+#[no_mangle]
+pub extern "C" fn js_object_get_field_ic(
+    obj_bits: i64,
+    key: *const crate::StringHeader,
+    site_id: u64,
+    cache: *mut [i64; 2],
+) -> f64 {
+    // POINTER_MASK: lower 48 bits — strips the NaN-box tag to a raw heap pointer.
+    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let bits = obj_bits as u64;
+    let tag = bits >> 48;
+    // `obj_bits` reinterpreted as a pointer keeps the tag bits (the SSO / class-ref
+    // / by-name helpers need the unmasked value); `obj_handle` is the masked heap
+    // pointer the inline-cache miss handler + feedback observe expect.
+    let obj_unmasked = bits as usize as *const ObjectHeader;
+    let obj_handle = (bits & POINTER_MASK) as usize as *const ObjectHeader;
+
+    // SSO receiver (SHORT_STRING_TAG = 0x7FF9): the SSO-aware by-name helper reads
+    // `.length` from the NaN-box payload and returns undefined for other keys.
+    if tag == 0x7FF9 {
+        return js_object_get_field_by_name_f64(obj_unmasked, key);
+    }
+    // INT32-tagged class ref (0x7FFE): static-field / dynamic-prop / synthetic
+    // `constructor` lookup via the feedback-wrapped by-name helper. Passes the
+    // unmasked bits so the runtime can detect the INT32 tag.
+    if tag == 0x7FFE {
+        return crate::typed_feedback::js_typed_feedback_object_get_field_by_name_f64(
+            site_id,
+            obj_unmasked,
+            key,
+        );
+    }
+    // Valid heap pointer or string (masked tag 0x7FFD): record feedback, then route
+    // through the cache-priming inline-cache-miss handler — the same entry the
+    // inline diamond's miss arm calls (objects, closures, buffers, typed arrays,
+    // proxies, small handles all dispatch correctly there, and the per-site cache
+    // is primed for any future inline sites sharing this global).
+    if (tag & 0xFFFD) == 0x7FFD {
+        crate::typed_feedback::js_typed_feedback_observe_property_get(site_id, obj_handle, key);
+        return js_object_get_field_ic_miss(obj_handle, key, cache);
+    }
+    // Invalid (non-pointer) receiver. `undefined`/`null` throw a TypeError (#462 —
+    // matches the inline nullish path, which aborts with a node-shaped message);
+    // other primitives route through the by-name helper, which can still resolve
+    // typed-shape reads (e.g. Date `.constructor`).
+    if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
+        let is_null = u32::from(bits == crate::value::TAG_NULL);
+        let (ptr, len) = unsafe {
+            match super::super::has_own_helpers::str_from_string_header(key) {
+                Some(s) => (s.as_ptr(), s.len()),
+                None => (std::ptr::null(), 0),
+            }
+        };
+        crate::error::js_throw_type_error_property_access(is_null, ptr, len);
+    }
+    js_object_get_field_by_name_f64(obj_unmasked, key)
+}
+
 // Polymorphic numeric-key get/set (`js_object_get_index_polymorphic` /
 // `js_object_set_index_polymorphic`) live in `polymorphic_index.rs`:
 // they dispatch by GC type (array vs object vs closure vs buffer) rather

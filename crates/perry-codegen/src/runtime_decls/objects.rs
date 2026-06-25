@@ -253,6 +253,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_zlib", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
+    // #5391 path 3: full-outlined generic property GET. Collapses the inline
+    // receiver-routing + monomorphic-IC + feedback + nullish-throw diamond to a
+    // single call for oversized modules. Args: (obj_bits, key_handle, site_id,
+    // per-site IC cache global) -> field value.
+    module.declare_function("js_object_get_field_ic", DOUBLE, &[I64, I64, I64, PTR]);
     // Object rest destructuring: copy all properties from src except excluded keys.
     // Takes a src object ptr and an array of NaN-boxed strings (the excluded keys),
     // returns a new object pointer.

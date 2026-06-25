@@ -60,6 +60,38 @@ pub(crate) fn lower_generic_property_get(
         TypedFeedbackContract::object_get_by_name(),
     );
 
+    // #5391 path 3: oversized modules full-outline the entire generic-get diamond
+    // (receiver-tag routing + monomorphic IC + feedback + nullish-throw) to a
+    // single `js_object_get_field_ic(...)` call. This shrinks large minified user
+    // functions enough for clang to compile them at a tolerable size/time — the
+    // inline diamond is the biggest per-site __text contributor. The runtime helper
+    // reproduces the same branch ladder and calls the same entries, so behavior is
+    // unchanged; only the inline monomorphic fast-load is traded away. Mirrors the
+    // class-field GET/SET full-outline (#5334 lever B / #5391 path 2).
+    if crate::codegen::full_outline_ic_enabled() {
+        // Per-site monomorphic IC cache, allocated identically to the inline path
+        // (below) so the helper's `js_object_get_field_ic_miss` cache-priming is
+        // unchanged.
+        let cache_site = ctx.ic_site_counter;
+        ctx.ic_site_counter += 1;
+        let cache_name = format!("perry_ic_{}", cache_site);
+        ctx.pending_declares
+            .push((format!("__ic_decl_{}", cache_site), DOUBLE, vec![]));
+        ctx.ic_globals.push(cache_name.clone());
+        let cache_ref = format!("@{}", cache_name);
+        let val = ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_ic",
+            &[
+                (I64, &obj_bits),
+                (I64, &key_handle),
+                (I64, &feedback_site_id),
+                (PTR, &cache_ref),
+            ],
+        );
+        return Ok(val);
+    }
+
     // Issue #70/#73/#128: guard against non-pointer receivers
     // before the PIC deref. Tag-based check on the unmasked
     // NaN-box: real heap references have high-16-bits POINTER_TAG
