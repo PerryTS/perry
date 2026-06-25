@@ -21,6 +21,35 @@ pub(super) fn detect_optional_feature_usage(
         ctx.uses_fetch = true;
     }
 
+    // Robust fallback for fetch detection. The ~30 `ctx.uses_fetch` set-sites in
+    // perry-hir lowering are shape-specific; a minified bundle's `new Headers()`
+    // / `new Request()` / `fetch(...)` can reach codegen as `Expr::New { class_name:
+    // "Headers" }` / a `Fetch*` variant (codegen dispatches those to
+    // `js_headers_new` / `js_request_new` / `js_fetch_with_options`) WITHOUT having
+    // hit any set-site, leaving `hir_module.uses_fetch` false. The perry-stdlib
+    // `web-fetch` feature is then stripped, only the no-op runtime stub remains, and
+    // it returns garbage the caller derefs -> SIGSEGV in `js_object_get_class_id`.
+    // Mirror the EventEmitter / URL token-grep below: scan the final HIR for the
+    // fetch web-platform constructors + the dedicated fetch call variants. Over-
+    // matching only over-links `web-fetch` (a size cost); the rule is zero false
+    // negatives.
+    if !ctx.uses_fetch {
+        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        if hir_debug.contains("class_name: \"Headers\"")
+            || hir_debug.contains("class_name: \"Request\"")
+            || hir_debug.contains("class_name: \"Response\"")
+            || hir_debug.contains("class_name: \"FormData\"")
+            || hir_debug.contains("class_name: \"Blob\"")
+            || hir_debug.contains("class_name: \"File\"")
+            || hir_debug.contains("FetchWithOptions")
+            || hir_debug.contains("FetchGetWithAuth")
+            || hir_debug.contains("FetchPostWithAuth")
+        {
+            ctx.needs_stdlib = true;
+            ctx.uses_fetch = true;
+        }
+    }
+
     // Issue #76 — auto-link the wasmi host runtime when any module
     // references `WebAssembly.*`. Without this the user has to remember
     // `--enable-wasm-runtime`; with it the flag is only needed when they

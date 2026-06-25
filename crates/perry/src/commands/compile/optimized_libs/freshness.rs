@@ -137,6 +137,17 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_dgram {
         cross_features.push("perry-runtime/mod-dgram".to_string());
     }
+    // Compile OUT perry-runtime's no-op fetch stubs (`js_fetch_with_options` /
+    // `js_headers_new` / `js_request_new`, gated `#[cfg(not(feature =
+    // "external-fetch-symbols"))]`) whenever the program uses fetch — perry-stdlib's
+    // `web-fetch` then supplies the REAL impls. Without this both the stub
+    // (perry-runtime) and the real (perry-stdlib) symbols exist; on the fresh build
+    // path the stub has won the link and returned garbage the caller derefs ->
+    // SIGSEGV in `js_object_get_class_id`. Enabling the feature drops the stubs from
+    // libperry_runtime.a so only the real symbols remain.
+    if ctx.uses_fetch {
+        cross_features.push("perry-runtime/external-fetch-symbols".to_string());
+    }
     cross_features
 }
 
