@@ -178,6 +178,30 @@ pub(crate) fn lower_class_expr(
             parent_expr: p,
         });
     }
+    // #5437 (p-queue PQueue undefined-`.default` capture): a class EXPRESSION
+    // that captures enclosing-scope locals AND reaches the shared-template
+    // (`ClassRef`) path — i.e. one with heritage (`class extends t { … uses
+    // n … }`) or evaluated at module top — must snapshot its decl-site capture
+    // values, exactly like the class-DECLARATION path does
+    // (`lower_decl/body_stmt.rs`). The `ClassExprFresh` path above carries
+    // captures via `captured_args` at construction, but the shared-template
+    // path produces a stable `ClassRef` constructed later through the runtime
+    // construct path (`construct_registered_class_ref` →
+    // `replay_registered_class_constructor`), which fills the synthesized
+    // `__perry_cap_*` ctor params SOLELY from `CLASS_CAPTURE_VALUES`. Without a
+    // registered snapshot those params arrive `undefined`. The Next.js route
+    // bundle's p-queue `PQueue` (`c.default = class extends t { … queueClass:
+    // n.default … }`, instantiated via `new (tH())()` → the runtime construct
+    // path) read its captured module ref `n` (idx 1) as `undefined` and threw
+    // `Cannot read properties of undefined (reading 'default')`. Emitting the
+    // snapshot here mirrors the class-decl path's `RegisterClassCaptures` and
+    // closes the gap for every heritage/module-top capturing class expression.
+    if !captured_args.is_empty() {
+        seq.push(Expr::RegisterClassCaptures {
+            class_name: synthetic_name.clone(),
+            captures: captured_args.clone(),
+        });
+    }
     seq.extend(computed_member_registrations);
     for (k, v) in static_symbol_registrations {
         seq.push(Expr::RegisterClassStaticSymbol {
