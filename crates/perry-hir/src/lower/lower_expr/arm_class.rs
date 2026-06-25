@@ -196,6 +196,19 @@ pub(crate) fn lower_class_expr(
     // `Cannot read properties of undefined (reading 'default')`. Emitting the
     // snapshot here mirrors the class-decl path's `RegisterClassCaptures` and
     // closes the gap for every heritage/module-top capturing class expression.
+    //
+    // Known limitation (matches the class-DECLARATION path): the snapshot is
+    // keyed by `synthetic_name`, which is stable per source location, so it
+    // occupies a single `CLASS_CAPTURE_VALUES` slot. A heritage class
+    // expression re-evaluated with different captures (e.g. inside a function
+    // called more than once) overwrites the previous snapshot; a `ClassRef`
+    // from an earlier evaluation that is *constructed* after a later evaluation
+    // would observe the newer capture values. The shared-template `ClassRef`
+    // mechanism is name-keyed by design, so this is not made per-evaluation
+    // here — the captured-at-construction `ClassExprFresh` path above is the
+    // per-instance route. In practice the snapshot is written immediately
+    // before the class is registered/constructed, so the common case (build
+    // then construct, including the p-queue `PQueue` repro) is unaffected.
     if !captured_args.is_empty() {
         seq.push(Expr::RegisterClassCaptures {
             class_name: synthetic_name.clone(),
