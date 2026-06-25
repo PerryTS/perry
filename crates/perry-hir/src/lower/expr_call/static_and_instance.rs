@@ -75,7 +75,29 @@ pub(super) fn try_static_method_and_instance(
     if let ast::Expr::Member(member) = expr {
         if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
             let obj_name = obj_ident.sym.to_string();
-            if let Some((module_name, Some(class_name))) = ctx.lookup_native_module(&obj_name) {
+            // A bound LOCAL variable / parameter shadows any class, imported
+            // class, or native-module binding of the SAME name (JS lexical
+            // scoping). Minified bundles frequently reuse single-letter names:
+            // Next.js's `app-route-turbo` defines `class n { static has(e,t){…} }`
+            // at module scope AND a `let n = new Set` inside its implicit-tags
+            // builder. Without this guard, `n.has(key)` (Set.has) was lowered to
+            // `StaticMethodCall { class_name: "n", method: "has" }`, calling the
+            // class's static `has(e,t)` with `(key, undefined)` →
+            // `Reflect.has("…", undefined)` → "Reflect.has called on non-object"
+            // (Next.js dynamic/API routes 500'd). The local must win.
+            //
+            // Scope this guard to the STATIC-class / native-module-static arms
+            // below — NOT to the native-INSTANCE arm (line ~191), which is
+            // itself keyed on a local/param binding via `lookup_native_instance`
+            // (e.g. an upgrade handler's `wsId.send(...)` parameter) and must
+            // still dispatch.
+            let local_shadows_class = ctx.lookup_local(&obj_name).is_some();
+            if local_shadows_class {
+                // fall through past the static arms to native-instance / generic
+                // dispatch below.
+            } else if let Some((module_name, Some(class_name))) =
+                ctx.lookup_native_module(&obj_name)
+            {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.to_string();
                     let normalized_module =
@@ -127,7 +149,8 @@ pub(super) fn try_static_method_and_instance(
                     .next()
                     .map(|c| c.is_uppercase())
                     .unwrap_or(false);
-            if ctx.lookup_class(&obj_name).is_some() || is_imported_upper {
+            if !local_shadows_class && (ctx.lookup_class(&obj_name).is_some() || is_imported_upper)
+            {
                 match &member.prop {
                     ast::MemberProp::Ident(method_ident) => {
                         let method_name = method_ident.sym.to_string();
