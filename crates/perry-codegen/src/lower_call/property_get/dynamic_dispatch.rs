@@ -168,6 +168,7 @@ pub(crate) fn try_lower_instance_method_call(
                     property,
                     &static_user_args,
                     call_byte_offset,
+                    /* with_override_probe */ true,
                 )?;
                 return Ok(Some(v));
             }
@@ -739,6 +740,31 @@ pub(crate) fn try_lower_instance_method_call(
                 )));
             }
 
+            // #5391 path 4 (virtual tower): oversized modules collapse the
+            // per-overriding-subclass class-id switch below to a single by-name
+            // dispatch, which resolves the same override through the runtime's
+            // (class_id, name) vtable registry. This switch — unlike the dynamic
+            // tower — has no own-property override probe, so the collapse is a
+            // bare `js_native_call_method` (with_override_probe = false) to stay
+            // behavior-identical. Skipped if the static fallback or any override
+            // is a `perry_static_*` class-object-static method.
+            if crate::codegen::full_outline_ic_enabled()
+                && method_dispatch_collapse_enabled()
+                && !fallback_fn.starts_with("perry_static_")
+                && overrides
+                    .iter()
+                    .all(|(_, f)| !f.starts_with("perry_static_"))
+            {
+                return Ok(Some(emit_collapsed_instance_dispatch(
+                    ctx,
+                    &recv_box,
+                    property,
+                    &fallback_user_args,
+                    call_byte_offset,
+                    /* with_override_probe */ false,
+                )?));
+            }
+
             // Step 4: virtual dispatch via class_id switch.
             // Read class_id from the object header, then branch
             // to the right concrete method block.
@@ -867,6 +893,7 @@ fn emit_collapsed_instance_dispatch(
     property: &str,
     static_user_args: &[String],
     call_byte_offset: u32,
+    with_override_probe: bool,
 ) -> Result<String> {
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
@@ -893,6 +920,27 @@ fn emit_collapsed_instance_dispatch(
         ));
         (ptr, n.to_string())
     };
+
+    // The virtual-dispatch switch this collapses (overriding-subclass case) has
+    // NO own-property override probe, so its collapse must be a bare by-name
+    // dispatch to stay behavior-identical; the dynamic-dispatch tower DOES probe
+    // first, so its collapse keeps the probe. `with_override_probe` selects.
+    // `js_native_call_method` handles a non-pointer (primitive) receiver at
+    // runtime, so no codegen POINTER_TAG guard is needed on this path.
+    if !with_override_probe {
+        crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+        return Ok(ctx.block().call(
+            DOUBLE,
+            "js_native_call_method",
+            &[
+                (DOUBLE, recv_box),
+                (crate::types::PTR, &bytes_global),
+                (I64, &name_len_str),
+                (crate::types::PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        ));
+    }
 
     // Override probe: an own-property method override (e.g. hono SmartRouter
     // rebinding `this.method = X`) wins over the class method.
