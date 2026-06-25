@@ -1441,6 +1441,7 @@ where
             body,
             headers,
             headers_dynamic,
+            signal,
         } => {
             f(url);
             f(method);
@@ -1450,6 +1451,9 @@ where
             }
             if let Some(hd) = headers_dynamic {
                 f(hd);
+            }
+            if let Some(s) = signal {
+                f(s);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {

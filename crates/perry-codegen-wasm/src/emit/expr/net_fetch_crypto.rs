@@ -29,6 +29,9 @@ impl<'a> FuncEmitCtx<'a> {
                 body,
                 headers,
                 headers_dynamic,
+                // The WASM fetch backend has no AbortSignal cancellation (it is a
+                // separate target from the native binary), so the signal is unused.
+                signal: _,
             } => {
                 self.emit_expr(func, url);
                 self.emit_expr(func, method);

@@ -515,6 +515,7 @@ mod tests {
             body: Box::new(Expr::Undefined),
             headers: vec![],
             headers_dynamic: None,
+            signal: None,
         }));
         let v = audit_module_capabilities(
             &m,

@@ -147,6 +147,9 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_fetch_stream_status", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fetch_text", I64, &[I64]);
     module.declare_function("js_fetch_with_options", I64, &[I64, I64, I64, I64]);
+    // Stashes the `fetch(url, { signal })` AbortSignal for the next
+    // `js_fetch_with_options` so the request can be aborted.
+    module.declare_function("js_fetch_set_pending_signal", VOID, &[DOUBLE]);
     // Headers-aware JSON stringify for the `fetch(url, { headers })` request
     // path: takes the headers value (f64) and returns a `*const StringHeader`
     // (i64) holding `{name:value}` JSON, treating a `Headers` handle safely.

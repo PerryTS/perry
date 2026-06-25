@@ -341,6 +341,7 @@ pub(super) fn try_global_builtins(
                             let mut body = Expr::Undefined;
                             let mut headers_obj: Vec<(String, Expr)> = Vec::new();
                             let mut headers_dynamic: Option<Box<Expr>> = None;
+                            let mut signal: Option<Box<Expr>> = None;
 
                             for prop in &obj.props {
                                 if let ast::PropOrSpread::Prop(prop) = prop {
@@ -434,6 +435,10 @@ pub(super) fn try_global_builtins(
                                                         ));
                                                     }
                                                 }
+                                                "signal" => {
+                                                    signal =
+                                                        Some(Box::new(lower_expr(ctx, &kv.value)?));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -449,6 +454,7 @@ pub(super) fn try_global_builtins(
                                             match key.as_str() {
                                                 "method" => method = value,
                                                 "body" => body = value,
+                                                "signal" => signal = Some(Box::new(value)),
                                                 _ => {}
                                             }
                                         }
@@ -465,6 +471,7 @@ pub(super) fn try_global_builtins(
                                 body: Box::new(body),
                                 headers: headers_obj,
                                 headers_dynamic,
+                                signal,
                             }));
                         }
                     }
@@ -478,6 +485,7 @@ pub(super) fn try_global_builtins(
                     body: Box::new(Expr::Undefined),
                     headers: Vec::new(),
                     headers_dynamic: None,
+                    signal: None,
                 }));
             }
             _ => {} // Fall through to generic handling

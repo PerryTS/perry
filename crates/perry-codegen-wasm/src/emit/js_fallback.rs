@@ -354,6 +354,7 @@ impl WasmModuleEmitter {
                 body,
                 headers,
                 headers_dynamic,
+                signal: _,
             } => {
                 let url_js = self.emit_js_expr(url, locals);
                 let method_js = self.emit_js_expr(method, locals);

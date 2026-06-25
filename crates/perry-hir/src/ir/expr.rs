@@ -1475,6 +1475,10 @@ pub enum Expr {
         // serialized at runtime. When `Some`, it takes precedence over the
         // static `headers` pairs above. See #4932.
         headers_dynamic: Option<Box<Expr>>,
+        // The `init.signal` AbortSignal, when present, so the request can be
+        // aborted (`controller.abort()` / `AbortSignal.timeout`). Lowered to a
+        // `js_fetch_set_pending_signal` call emitted just before the fetch.
+        signal: Option<Box<Expr>>,
     },
     FetchGetWithAuth {
         // fetchWithAuth(url, authHeader) -> Promise<Response>
