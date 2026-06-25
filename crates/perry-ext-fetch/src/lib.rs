@@ -44,6 +44,17 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     perry_ffi::read_string(h).map(String::from)
 }
 
+/// Read a `StringHeader`'s raw bytes without UTF-8 validation — used for a
+/// request body, which may be arbitrary binary (`read_str` would drop a
+/// non-UTF-8 body). Mirrors `perry_ffi::read_bytes`.
+unsafe fn read_bytes_owned(ptr: *const StringHeader) -> Option<Vec<u8>> {
+    if ptr.is_null() {
+        return None;
+    }
+    let h = JsString::from_raw(ptr as *mut StringHeader);
+    perry_ffi::read_bytes(h).map(<[u8]>::to_vec)
+}
+
 /// Decode a Web Fetch handle (Response / Headers / Request / Blob) from
 /// the f64 the codegen passes across the FFI. Mirrors perry-stdlib's
 /// `handle_id` (refs #421 Phase 1 + #589 follow-up): accepts both the
@@ -200,7 +211,12 @@ struct BlobData {
 struct RequestData {
     url: String,
     method: String,
-    body: Option<String>,
+    // Raw body bytes, never a `String`: a binary request body
+    // (`new Request(url, { body: uint8array })`) is not valid UTF-8, so
+    // storing it as a `String` would drop it at construction (the
+    // UTF-8-validating `read_str`) and corrupt `arrayBuffer()`/`bytes()`.
+    // Mirrors the response-body byte fidelity and the perry-stdlib fix (#5483).
+    body: Option<Vec<u8>>,
     headers: HeadersStore,
     destination: String,
     referrer: String,
@@ -1500,7 +1516,7 @@ pub unsafe extern "C" fn js_request_new(
         throw_type_error(&format!("'{raw_method}' HTTP method is unsupported."));
     }
     let method = normalize_method(&raw_method);
-    let body = read_str(body_ptr);
+    let body = read_bytes_owned(body_ptr);
     if body.is_some() && (method == "GET" || method == "HEAD") {
         throw_type_error("Request with GET/HEAD method cannot have body.");
     }
@@ -1644,17 +1660,26 @@ pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
     let id = handle_id(handle);
     let g = REQUEST_HANDLES.lock().unwrap();
     match g.get(&id).and_then(|r| r.body.as_ref()) {
-        Some(s) => {
-            let ptr = alloc_string(s).as_raw();
+        Some(b) => {
+            let ptr = alloc_string(&String::from_utf8_lossy(b)).as_raw();
             f64::from_bits(STRING_TAG | (ptr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         None => f64::from_bits(TAG_UNDEFINED),
     }
 }
 
-/// Read a request's stored body (empty string for a bodiless request),
-/// or `None` for an invalid handle. (#1688)
+/// Read a request's stored body as text (empty string for a bodiless
+/// request), or `None` for an invalid handle. For the text-oriented
+/// accessors (`text`/`json`/`formData`); the binary accessors
+/// (`arrayBuffer`/`bytes`) read the raw bytes via `request_body_bytes`. (#1688)
 fn request_body_string(handle: f64) -> Option<String> {
+    request_body_bytes(handle).map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// Read a request's stored body as raw bytes (empty for a bodiless request),
+/// or `None` for an invalid handle. Byte-exact: never routed through a
+/// `String`, so a binary body survives `arrayBuffer()`/`bytes()` intact.
+fn request_body_bytes(handle: f64) -> Option<Vec<u8>> {
     let id = handle_id(handle);
     REQUEST_HANDLES
         .lock()
@@ -1694,8 +1719,9 @@ pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut Promise {
     raw
 }
 
-/// request.arrayBuffer() -> Promise. Resolves with the body bytes as a string
-/// (caller wraps in Uint8Array), matching `js_response_array_buffer`. (#1688)
+/// request.arrayBuffer() -> Promise<ArrayBuffer>. Resolves with a real Buffer
+/// over the raw body bytes (caller wraps in Uint8Array), matching
+/// `js_response_array_buffer`. Byte-exact for binary bodies. (#1688)
 ///
 /// # Safety
 /// `handle` must come from a previous `js_request_new`.
@@ -1703,8 +1729,8 @@ pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut Promise {
 pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
-    match request_body_string(handle) {
-        Some(s) => promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw())),
+    match request_body_bytes(handle) {
+        Some(b) => promise.resolve(body_to_buffer_value(&b)),
         None => promise.reject_string("Invalid request handle"),
     }
     raw
@@ -1722,7 +1748,7 @@ pub unsafe extern "C" fn js_request_blob(handle: f64) -> *mut Promise {
         Some(r) => {
             let content_type = r.headers.get("content-type").unwrap_or_default();
             let blob_id = store_blob(BlobData {
-                bytes: r.body.unwrap_or_default().into_bytes(),
+                bytes: r.body.unwrap_or_default(),
                 content_type,
             });
             promise.resolve(JsValue::from_number(blob_id as f64));
@@ -1738,11 +1764,8 @@ pub unsafe extern "C" fn js_request_blob(handle: f64) -> *mut Promise {
 pub unsafe extern "C" fn js_request_bytes(handle: f64) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
-    match request_body_string(handle) {
-        Some(s) => {
-            let buf = perry_ffi::alloc_buffer(s.as_bytes());
-            promise.resolve(JsValue::from_object_ptr(buf));
-        }
+    match request_body_bytes(handle) {
+        Some(b) => promise.resolve(body_to_buffer_value(&b)),
         None => promise.reject_string("Invalid request handle"),
     }
     raw

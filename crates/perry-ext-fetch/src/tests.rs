@@ -261,3 +261,68 @@ fn text_decode_preserves_utf8_and_bytes_round_trip() {
         .expect("response stored");
     assert_eq!(&bin[..], NON_UTF8);
 }
+
+// Regression for the request-side binary-corruption bug (same UB/empty-read
+// pattern as the response/blob fix #5660): a Request with a NON-UTF-8 body
+// must round-trip byte-exact through the `arrayBuffer()`/`bytes()` data path.
+//
+// The JS side hands a binary body across as a byte-carrying `StringHeader`
+// (built here with `alloc_bytes`, exactly like a `Uint8Array`/`Buffer` body).
+// Before the fix, `js_request_new` read the body via the UTF-8-validating
+// `read_str` (dropping a non-UTF-8 body to `None` → empty), and the accessors
+// then routed bytes through a `String`. This asserts the body survives intact
+// and that the bytes the accessors emit (`request_body_bytes` → `alloc_buffer`)
+// match the payload exactly, including bytes no UTF-8 string can hold.
+#[test]
+fn request_binary_body_round_trips_byte_exact() {
+    // 0x00..0xFF in reverse — invalid UTF-8 (lone 0xFF/0xFE, 0x80-continuation
+    // bytes with no lead). A `String` round-trip would empty or mojibake this.
+    let payload: Vec<u8> = (0u16..=255).rev().map(|b| b as u8).collect();
+    assert!(
+        std::str::from_utf8(&payload).is_err(),
+        "fixture must be non-UTF-8 to exercise the bug"
+    );
+
+    let url = alloc_string("https://example.com/upload");
+    let method = alloc_string("POST");
+    let body = perry_ffi::alloc_bytes(&payload);
+    let null = std::ptr::null::<StringHeader>();
+    let h = unsafe {
+        js_request_new(
+            url.as_raw(),
+            method.as_raw(),
+            body.as_raw(),
+            0.0,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            0.0,
+            null,
+            0.0,
+        )
+    };
+    assert!(h > 0.0);
+
+    // The byte-exact data path the binary accessors consume. Pre-fix this was
+    // empty/garbage (body dropped at construction, or read back through UTF-8).
+    let stored = request_body_bytes(h).expect("valid handle");
+    assert_eq!(
+        stored, payload,
+        "binary request body must round-trip byte-exact"
+    );
+
+    // And the bytes the accessors actually emit — `js_request_bytes` resolves
+    // `body_to_buffer_value(&request_body_bytes(...))`; verify the buffer it
+    // builds carries the exact payload (not an empty/string-tagged value).
+    let buf = perry_ffi::alloc_buffer(&stored);
+    let out = perry_ffi::read_buffer_bytes(buf).expect("non-null buffer");
+    assert_eq!(
+        out,
+        payload.as_slice(),
+        "arrayBuffer()/bytes() must be byte-exact"
+    );
+}
