@@ -45,6 +45,26 @@ List npm packages to compile natively instead of routing through the JavaScript 
 }
 ```
 
+> **Two-key opt-in.** Listing a package is not sufficient on its own. Compiling
+> third-party TypeScript into your binary is a privileged operation, so every
+> entry in `compilePackages` must *also* be matched by an entry in
+> `perry.allow.compilePackages` in the same `package.json` — otherwise the build
+> refuses. Patterns accept exact names, scope wildcards (`"@scope/*"`), or the
+> universal `"*"`:
+>
+> ```json
+> {
+>   "perry": {
+>     "compilePackages": ["@noble/curves", "@noble/hashes"],
+>     "allow": { "compilePackages": ["@noble/*"] }
+>   }
+> }
+> ```
+>
+> For one-off builds where editing `package.json` isn't an option, set
+> `PERRY_ALLOW_PERRY_FEATURES=1` to opt every name in (and `=0` to force the
+> refusal even when `package.json` opted in).
+
 When a package is listed here, Perry:
 1. Resolves the package in `node_modules/`
 2. Prefers TypeScript source (`src/index.ts`) over compiled JavaScript (`lib/index.js`)
