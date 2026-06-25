@@ -1147,36 +1147,68 @@ pub fn lower_class_decl(
 
         let declared_field_names: std::collections::HashSet<String> =
             fields.iter().map(|f| f.name.clone()).collect();
+        // Pull each top-level `this.<ident> = …` field name out of one ctor
+        // statement-expression. Minified bundles (Next.js `BaseNextRequest`'s
+        // `constructor(a,b,c){this.method=a,this.url=b,this.body=c}`) collapse
+        // every ctor assignment into ONE comma-`Seq` expression-statement, so a
+        // scan that only matched `Expr::Assign` detected ZERO fields — the
+        // parent's `method`/`url`/`body` never entered `packed_keys`, leaving
+        // the subclass instance allocated with too-few inline slots so the
+        // captured-class shape prepends `__perry_cap_*` over the (missing) real
+        // slots and `e.url` reads undefined ("Invalid URL" 500 on dynamic page
+        // routes). Descend through `Seq` (and the `Paren`/`Assign`-result-chain
+        // wrappers minifiers emit) so each comma-separated `this.x = …` is
+        // recognised the same as a standalone assignment statement.
+        fn collect_this_field_assigns(expr: &ast::Expr, out: &mut Vec<String>) {
+            match expr {
+                ast::Expr::Assign(assign) => {
+                    // A chained assignment's RHS can itself be `this.x = …`
+                    // (`this.a = this.b = v`): the inner `this.b = v` evaluates
+                    // (and creates `b`'s slot) BEFORE the outer assignment to
+                    // `this.a`, so collect the RHS first to keep Object.keys in
+                    // the same insertion order Node produces (`b` then `a`).
+                    collect_this_field_assigns(&assign.right, out);
+                    if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(mem)) =
+                        &assign.left
+                    {
+                        if let ast::Expr::This(_) = &*mem.obj {
+                            if let ast::MemberProp::Ident(prop_ident) = &mem.prop {
+                                out.push(prop_ident.sym.to_string());
+                            }
+                        }
+                    }
+                }
+                ast::Expr::Seq(seq) => {
+                    for e in &seq.exprs {
+                        collect_this_field_assigns(e, out);
+                    }
+                }
+                ast::Expr::Paren(p) => collect_this_field_assigns(&p.expr, out),
+                _ => {}
+            }
+        }
         for member in &class_decl.class.body {
             if let ast::ClassMember::Constructor(ctor) = member {
                 if let Some(ref body) = ctor.body {
                     for stmt in &body.stmts {
                         if let ast::Stmt::Expr(expr_stmt) = stmt {
-                            if let ast::Expr::Assign(assign) = &*expr_stmt.expr {
-                                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(
-                                    mem,
-                                )) = &assign.left
+                            let mut names: Vec<String> = Vec::new();
+                            collect_this_field_assigns(&expr_stmt.expr, &mut names);
+                            for fname in names {
+                                if !declared_field_names.contains(&fname)
+                                    && !inherited_field_names.contains(&fname)
+                                    && !accessor_names.contains_any(&fname)
+                                    && !method_names.contains(&fname)
                                 {
-                                    if let ast::Expr::This(_) = &*mem.obj {
-                                        if let ast::MemberProp::Ident(prop_ident) = &mem.prop {
-                                            let fname = prop_ident.sym.to_string();
-                                            if !declared_field_names.contains(&fname)
-                                                && !inherited_field_names.contains(&fname)
-                                                && !accessor_names.contains_any(&fname)
-                                                && !method_names.contains(&fname)
-                                            {
-                                                fields.push(ClassField {
-                                                    name: fname,
-                                                    key_expr: None,
-                                                    ty: Type::Any,
-                                                    init: None,
-                                                    is_private: false,
-                                                    is_readonly: false,
-                                                    decorators: Vec::new(),
-                                                });
-                                            }
-                                        }
-                                    }
+                                    fields.push(ClassField {
+                                        name: fname,
+                                        key_expr: None,
+                                        ty: Type::Any,
+                                        init: None,
+                                        is_private: false,
+                                        is_readonly: false,
+                                        decorators: Vec::new(),
+                                    });
                                 }
                             }
                         }
