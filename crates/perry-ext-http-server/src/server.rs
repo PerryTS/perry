@@ -43,6 +43,20 @@ use crate::types::{
     TAG_UNDEFINED,
 };
 
+/// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
+/// default, ON) to a freshly accepted TCP stream before it is served. Node
+/// disables Nagle on every accepted connection unless the server was created
+/// with `noDelay: false`. A single named call site for the option keeps the
+/// accept loops applying the server's *configured* value rather than each
+/// re-deriving it — the HTTPS and HTTP/2-secure accept loops had both regressed
+/// to a literal `true`, ignoring `noDelay: false` (the bug this helper + its
+/// test guard against). Covered by `https_server::nodelay_tests` over a real
+/// loopback accept. `set_nodelay` is best-effort: a failure to set the socket
+/// option is non-fatal (Node likewise ignores it), so the result is discarded.
+pub(crate) fn apply_accept_no_delay(stream: &tokio::net::TcpStream, no_delay: bool) {
+    let _ = stream.set_nodelay(no_delay);
+}
+
 /// Backing struct for an `http.Server` JS-side handle.
 pub struct HttpServer {
     /// User's `(req, res) => ...` handler. Stored as raw `i64`; the

@@ -466,6 +466,10 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
     }
     crate::cluster_bind::notify_listening(&host, actual_port);
 
+    // Capture `noDelay` (default true) under the same handle lock as the TLS
+    // config so the accept loop can apply it per connection. Mirrors the HTTP/1
+    // path in server.rs and the HTTPS path in https_server.rs.
+    let no_delay;
     let (tls_config, plaintext) =
         if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
             s.base.bound_port = actual_port;
@@ -473,6 +477,7 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
             s.base.listening = true;
             s.base.shutdown_tx = Some(shutdown_tx);
             s.base.request_rx = Some(request_rx);
+            no_delay = s.base.no_delay;
             (s.tls_config.clone(), s.plaintext)
         } else {
             return server_handle;
@@ -528,10 +533,11 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, peer)) => {
-                                // Node default: TCP_NODELAY on. Set it on the raw
-                                // TCP socket here, before the TLS or h2c branch —
-                                // the option persists through any wrapping.
-                                let _ = stream.set_nodelay(true);
+                                // Node default: TCP_NODELAY on. Honor the
+                                // server's `noDelay` on the raw TCP socket here,
+                                // before the TLS or h2c branch — the option
+                                // persists through any wrapping.
+                                crate::server::apply_accept_no_delay(&stream, no_delay);
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 tokio::spawn(async move {

@@ -188,12 +188,17 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
     }
     crate::cluster_bind::notify_listening(&host, actual_port);
 
+    // Capture `noDelay` (default true) under the same handle lock as the TLS
+    // config, so the accept loop can apply it per connection without re-locking
+    // the handle map. Mirrors the HTTP/1 + HTTP/2 paths in server.rs.
+    let no_delay;
     let tls_config = if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
         s.base.bound_port = actual_port;
         s.base.bound_host = host.clone();
         s.base.listening = true;
         s.base.shutdown_tx = Some(shutdown_tx);
         s.base.request_rx = Some(request_rx);
+        no_delay = s.base.no_delay;
         s.tls_config.clone()
     } else {
         return server_handle;
@@ -229,9 +234,10 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                         match accepted {
                             Ok((stream, peer)) => {
                                 // Node sets TCP_NODELAY on accepted connections by
-                                // default. Set it on the raw TCP socket before the
+                                // default. Honor the server's `noDelay` option
+                                // (default true) on the raw TCP socket before the
                                 // TLS handshake; the option persists through rustls.
-                                let _ = stream.set_nodelay(true);
+                                crate::server::apply_accept_no_delay(&stream, no_delay);
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 // #4905/#4971 — register the connection so
@@ -691,4 +697,60 @@ pub extern "C" fn js_node_https_server_set_timeout_method(
         }
     }
     handle
+}
+
+#[cfg(test)]
+mod nodelay_tests {
+    //! The server accept loops apply the *server's* `noDelay` to each accepted
+    //! TCP socket before any TLS handshake — they must NOT hardcode `true`, the
+    //! way the HTTP/1 path in `server.rs` honors `s.no_delay`. Before this fix
+    //! the HTTPS and HTTP/2-secure accept loops both called
+    //! `stream.set_nodelay(true)` unconditionally, so a server created with
+    //! `noDelay: false` still ran with Nagle disabled (#5658). Both now route
+    //! through `apply_accept_no_delay`; these tests drive it — the literal call
+    //! the accept loops make — over a real loopback accept and read
+    //! `TCP_NODELAY` back off the accepted stream, exercising the production
+    //! wiring rather than a stand-in. `noDelay`'s default is verified ON in
+    //! `lib.rs` (`http_server_seeds_node_timeout_defaults`), so a default
+    //! server continues to get `TCP_NODELAY` on.
+
+    use crate::server::apply_accept_no_delay;
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// Accept a loopback connection and return the SERVER-side stream — the
+    /// stream the HTTPS accept loop owns and applies `noDelay` to before the
+    /// TLS handshake. The client end is returned so the connection stays open
+    /// for the assertion.
+    async fn accept_loopback() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (server, client)
+    }
+
+    /// `noDelay: false` is honored on the HTTPS accept path: the accepted TLS
+    /// socket runs with `TCP_NODELAY` OFF (Nagle on). This is the regression —
+    /// the pre-fix hardcoded `true` left it ON and this assertion failed.
+    #[tokio::test]
+    async fn https_accept_honors_no_delay_false() {
+        let (server, _client) = accept_loopback().await;
+        apply_accept_no_delay(&server, false);
+        assert!(
+            !server.nodelay().unwrap(),
+            "https server created with noDelay:false must leave TCP_NODELAY off on accepted sockets"
+        );
+    }
+
+    /// The Node default (`noDelay: true`) keeps `TCP_NODELAY` ON, so default
+    /// HTTPS servers are unchanged by the fix.
+    #[tokio::test]
+    async fn https_accept_default_no_delay_true() {
+        let (server, _client) = accept_loopback().await;
+        apply_accept_no_delay(&server, true);
+        assert!(
+            server.nodelay().unwrap(),
+            "default HTTPS server (noDelay:true) must keep TCP_NODELAY on, matching Node"
+        );
+    }
 }
