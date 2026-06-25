@@ -150,11 +150,13 @@ unsafe fn call_all_f64_x86_64(func_ptr: usize, args: &[f64]) -> f64 {
 
     let ret: f64;
     asm!(
-        // Stash the pre-adjust rsp in rbx (CALLEE-SAVED, declared as a clobber
-        // below so the compiler saves/restores it). The callee preserves rbx, so
+        // Stash the pre-adjust rsp in r12 (CALLEE-SAVED, declared as a clobber
+        // below so the compiler saves/restores it). The callee preserves r12, so
         // the sp restore survives the callee clobbering every caller-saved
-        // register (including any holding `stack_bytes`).
-        "mov rbx, rsp",
+        // register (including any holding `stack_bytes`). We use r12 rather than
+        // rbx because LLVM reserves rbx internally and rejects it as an explicit
+        // inline-asm operand; r12 is an equivalent callee-saved scratch.
+        "mov r12, rsp",
         // Reserve space for spilled args, then force rsp 16-aligned so that the
         // `call` (which pushes the 8-byte return address) leaves the callee
         // entry with rsp ≡ 8 (mod 16), per SysV. `stack_bytes` is a 16-multiple,
@@ -173,14 +175,14 @@ unsafe fn call_all_f64_x86_64(func_ptr: usize, args: &[f64]) -> f64 {
         "jb 2b",
         "3:",
         "call {func}",
-        "mov rsp, rbx",
+        "mov rsp, r12",
         func = in(reg) func_ptr,
         src = in(reg) stacked.as_ptr(),
         cnt = in(reg) stacked_count,
         stack_bytes = in(reg) stack_bytes,
         i = out(reg) _,
         tmp = out(reg) _,
-        out("rbx") _,
+        out("r12") _,
         inout("xmm0") reg[0] => ret,
         inout("xmm1") reg[1] => _,
         inout("xmm2") reg[2] => _,
