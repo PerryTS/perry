@@ -265,15 +265,9 @@ pub(crate) fn try_lower_instance_method_call(
             }
 
             // Dispatch path: existing class-id switch tower.
-            ctx.current_block = probe_dispatch_idx;
-            let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cid = blk.call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
-
-            // Tower of icmp+br: each implementor's case calls
-            // its concrete method, default returns 0.0 (the
-            // closure-call fallback would also handle this but
-            // returning a sentinel is cheaper).
+            // Pre-create the tower blocks first so the POINTER_TAG guard below
+            // can branch the non-pointer (primitive) case to the default
+            // (runtime-dispatch) fallback.
             let mut case_idxs: Vec<usize> = Vec::with_capacity(implementors.len());
             for (i, _) in implementors.iter().enumerate() {
                 case_idxs.push(ctx.new_block(&format!("idispatch.case{}", i)));
@@ -281,6 +275,37 @@ pub(crate) fn try_lower_instance_method_call(
             let default_idx = ctx.new_block("idispatch.default");
             let merge_idx = ctx.new_block("idispatch.merge");
             let merge_label = ctx.block_label(merge_idx);
+
+            // A class-id switch is only valid for a real heap object
+            // (POINTER_TAG = 0x7FFD). For a non-pointer receiver — a string
+            // (STRING_TAG 0x7FFF / SSO), number, boolean — `unbox_to_i64` would
+            // mask garbage low-48 bits that `js_object_get_class_id` ->
+            // `is_valid_obj_ptr` can false-positive and dereference, crashing
+            // with EXC_BAD_ACCESS. Gate the tower on a POINTER_TAG check and send
+            // any non-pointer receiver to `idispatch.default`, whose
+            // `js_native_call_method` path dispatches primitives via the runtime.
+            // Idiom mirrors `expr/class_field_inline_guard.rs` (lshr 48; icmp eq
+            // 0x7FFD).
+            ctx.current_block = probe_dispatch_idx;
+            let tower_idx = ctx.new_block("idispatch.tower");
+            let tower_label = ctx.block_label(tower_idx);
+            let default_label_guard = ctx.block_label(default_idx);
+            {
+                let blk = ctx.block();
+                let recv_bits = blk.bitcast_double_to_i64(&recv_box);
+                let recv_tag = blk.lshr(I64, &recv_bits, "48");
+                let is_ptr = blk.icmp_eq(I64, &recv_tag, "32765"); // 0x7FFD POINTER_TAG
+                blk.cond_br(&is_ptr, &tower_label, &default_label_guard);
+            }
+
+            // Tower of icmp+br: each implementor's case calls
+            // its concrete method, default returns 0.0 (the
+            // closure-call fallback would also handle this but
+            // returning a sentinel is cheaper).
+            ctx.current_block = tower_idx;
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let cid = blk.call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
 
             for (i, (case_cid, _)) in implementors.iter().enumerate() {
                 let case_label = ctx.block_label(case_idxs[i]);
@@ -692,10 +717,6 @@ pub(crate) fn try_lower_instance_method_call(
             // Step 4: virtual dispatch via class_id switch.
             // Read class_id from the object header, then branch
             // to the right concrete method block.
-            let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
-            let cid = blk.call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
-
             // Pre-create blocks: one per override + default + merge.
             let mut case_idxs: Vec<usize> = Vec::with_capacity(overrides.len());
             for (i, _) in overrides.iter().enumerate() {
@@ -703,6 +724,28 @@ pub(crate) fn try_lower_instance_method_call(
             }
             let default_idx = ctx.new_block("vdispatch.default");
             let merge_idx = ctx.new_block("vdispatch.merge");
+
+            // POINTER_TAG (0x7FFD) guard: a receiver statically typed as a class
+            // can still hold a primitive at runtime (TS type-vs-value drift). For
+            // a non-pointer receiver, masking + `js_object_get_class_id` derefs
+            // garbage and crashes (EXC_BAD_ACCESS). Route non-pointers to the
+            // static fallback (`vdispatch.default`). Same idiom as
+            // `expr/class_field_inline_guard.rs` (lshr 48; icmp eq 0x7FFD).
+            let tower_idx = ctx.new_block("vdispatch.tower");
+            let tower_label = ctx.block_label(tower_idx);
+            let default_label_guard = ctx.block_label(default_idx);
+            {
+                let blk = ctx.block();
+                let recv_bits = blk.bitcast_double_to_i64(&recv_box);
+                let recv_tag = blk.lshr(I64, &recv_bits, "48");
+                let is_ptr = blk.icmp_eq(I64, &recv_tag, "32765"); // 0x7FFD POINTER_TAG
+                blk.cond_br(&is_ptr, &tower_label, &default_label_guard);
+            }
+
+            ctx.current_block = tower_idx;
+            let blk = ctx.block();
+            let recv_handle = unbox_to_i64(blk, &recv_box);
+            let cid = blk.call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
 
             // Default → fallback. We use a tower of icmp+br rather
             // than the LLVM `switch` instruction (which the IR
