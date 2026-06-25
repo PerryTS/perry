@@ -422,8 +422,29 @@ pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: 
             }
         }
     }
-    let obj = crate::object::js_object_alloc(0, 0);
-    crate::value::js_nanbox_pointer(obj as i64)
+    // Unrecognized dynamic-Function shape. Perry is ahead-of-time compiled and
+    // cannot compile a code string built from runtime data. THROW (rather than
+    // return a placeholder object) — this is the honest signal, and it lets
+    // feature-detecting libraries take their non-`Function` fallback. zod 4's
+    // JIT does `try { new Function(""), true } catch { false }` and switches to
+    // its interpreter when this throws, clearing the entire zod-object-validation
+    // wall with no native validator needed. (A placeholder made the feature-test
+    // *succeed*, forcing the JIT path that then crashes.) The eprintln names the
+    // offending library for diagnostics; it fires once per distinct feature-test.
+    let body = if args_len > 0 {
+        arg_str(args_len - 1)
+    } else {
+        String::new()
+    };
+    let preview: String = body.chars().take(160).collect();
+    eprintln!(
+        "[perry] dynamic Function refused (AOT) — {} arg(s); body[..160]={:?}",
+        args_len, preview
+    );
+    super::super::object_ops::throw_object_type_error(
+        b"Function: dynamic code generation from a runtime string is not supported \
+          in an ahead-of-time compiled binary",
+    )
 }
 
 /// depd `wrapfunction` outer `(fn, log, deprecate, message, site) => wrapper`.

@@ -915,6 +915,25 @@ pub unsafe extern "C" fn js_new_function_construct(
     // `js_native_call_value` dispatch on a verified closure pointer
     // here — otherwise `new <non-callable>()` would dereference an
     // arbitrary pointer as a `ClosureHeader` and crash.
+    //
+    // Reflective `Function.apply(self, scope, code)` (and `Reflect.construct`
+    // on Function) reach here with `func_value` = the reified Function
+    // constructor — a plain callable closure singleton, so
+    // `is_callable_function_value` below reports it callable and it would be
+    // CALLED as a value → "Function is not a function". The literal
+    // `new Function(...)` path routes to the Function-from-strings shim in
+    // codegen (`lower_call/new.rs`); route the reflective form to the SAME shim
+    // here. Identify the constructor by its intrinsic closure identity
+    // (`identify_global_builtin_constructor`, keyed on the builtin `func_ptr`) —
+    // robust to `globalThis.Function` reassignment, unlike reading the mutable
+    // global property. (User classes / other builtins / proxies were handled
+    // above and don't match.)
+    if matches!(
+        identify_global_builtin_constructor(func_value),
+        Some("Function")
+    ) {
+        return super::super::js_function_ctor_from_strings(args_ptr, args_len);
+    }
     if is_callable_function_value(func_value) {
         // Bind `this` to the new instance, dispatch the constructor,
         // then restore the previous IMPLICIT_THIS. The dispatch
