@@ -400,6 +400,28 @@ pub extern "C" fn js_object_get_field_by_name(
                     if let Some(v) = crate::temporal::dispatch::get_property(boxed, &name) {
                         return JSValue::from_bits(v.to_bits());
                     }
+                    // A prototype METHOD read as a value (`d.abs`, not `d.abs()`):
+                    // return a bound method that re-dispatches through
+                    // `js_native_call_method`. Needed because codegen lowers a
+                    // spread/dynamic call `d[m](...args)` to a property read + apply,
+                    // so the read must yield a callable. Only bind genuine method
+                    // names so an unknown property still reads as `undefined`. (#5587)
+                    if crate::temporal::dispatch::has_method(boxed, &name) {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)
+                                    .unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(
+                                key_bytes.as_ptr(),
+                                ptr,
+                                key_bytes.len(),
+                            );
+                            ptr
+                        };
+                        let bound = js_class_method_bind(boxed, heap_name, key_bytes.len());
+                        return JSValue::from_bits(bound.to_bits());
+                    }
                 }
             }
             return JSValue::undefined();

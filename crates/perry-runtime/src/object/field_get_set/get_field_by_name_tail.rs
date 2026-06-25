@@ -1857,6 +1857,44 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
+        // `class X extends Temporal.<Type>`: inherited accessor getters
+        // (`days`/`years`/`epochNanoseconds`/…) resolve via the Temporal brand on
+        // the underlying cell, not the JS prototype chain. Forward the read to
+        // the stashed cell when this object has one. Skip BOTH the temporal and
+        // fetch marker keys: reading a marker here would re-enter this tail and
+        // (cross-) trigger the other marker's reader, an infinite recursion that
+        // stack-overflows. Methods read as fused `inst.m(...)` calls are handled
+        // in `native_call_method.rs`. (#5587)
+        #[cfg(feature = "temporal")]
+        if !key.is_null()
+            && key_bytes != crate::object::TEMPORAL_SUBCLASS_CELL_FIELD
+            && key_bytes != FETCH_SUBCLASS_HANDLE_FIELD
+        {
+            if let Some(cell) = crate::object::temporal_subclass_cell(obj as usize) {
+                let name = String::from_utf8_lossy(key_bytes);
+                if let Some(v) = crate::temporal::dispatch::get_property(cell, &name) {
+                    return JSValue::from_bits(v.to_bits());
+                }
+                // A prototype METHOD read as a value (`sub.abs`, not `sub.abs()`):
+                // return a bound method that re-dispatches through
+                // `js_native_call_method` (whose Temporal-subclass arm forwards to
+                // the cell). Only bind genuine method names so an unknown property
+                // still reads as `undefined`. Mirrors the fetch body-method bind.
+                if crate::temporal::dispatch::has_method(cell, &name) {
+                    let this_f64 = crate::value::js_nanbox_pointer(obj as i64);
+                    let heap_name = {
+                        let layout =
+                            std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1).unwrap();
+                        let ptr = std::alloc::alloc(layout);
+                        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
+                        ptr
+                    };
+                    let bound = js_class_method_bind(this_f64, heap_name, key_bytes.len());
+                    return JSValue::from_bits(bound.to_bits());
+                }
+            }
+        }
+
         // Key not found
         JSValue::undefined()
     }

@@ -342,6 +342,57 @@ unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
     }
 }
 
+/// Stash the NaN-boxed Temporal cell (`cell_box`, what a `Temporal.<Type>`
+/// constructor thunk returns) on a `class X extends Temporal.<Type>` subclass
+/// instance's `this` under `__perry_temporal_cell__`. Stored as a real
+/// pointer-valued field so method/getter/instanceof dispatch can recover the
+/// cell (`temporal_subclass_cell`) and GC keeps it alive. (#5587)
+#[cfg(feature = "temporal")]
+unsafe fn attach_temporal_cell_to_this(this_box: f64, cell_box: f64) {
+    if let Some(obj) = subclass_this_object_ptr(this_box) {
+        let key = crate::string::js_string_from_bytes(
+            crate::object::TEMPORAL_SUBCLASS_CELL_FIELD.as_ptr(),
+            crate::object::TEMPORAL_SUBCLASS_CELL_FIELD.len() as u32,
+        );
+        crate::object::js_object_set_field_by_name(obj, key, cell_box);
+    }
+}
+
+/// `class X extends Temporal.<Type>` super-call handling, shared by the two
+/// `super()` lowerings: the flat-arg runtime-value dispatcher
+/// (`js_fetch_or_value_super`, the non-spread `super(a, b)` path) and the
+/// args-array `js_super_construct_apply` (the `super(...spread)` path). When
+/// `parent_val` is a Temporal constructor, run it (Temporal ctors return a
+/// fresh cell and never mutate the implicit `this`) and stash the returned cell
+/// on `this_box` so method / getter / instanceof dispatch can recover the
+/// Temporal brand. Returns `true` when handled. (#5587)
+#[cfg(feature = "temporal")]
+pub(crate) unsafe fn temporal_subclass_super(
+    parent_val: f64,
+    this_box: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> bool {
+    if super::temporal_ctor_kind(parent_val).is_none() {
+        return false;
+    }
+    // Several Temporal constructors (`PlainDate`/`PlainTime`/`Instant`/…) are
+    // `[[Construct]]`-only and throw "requires 'new'" when `new.target` is
+    // undefined. Invoking the parent here IS a construct, so set `new.target`
+    // to the parent ctor for the duration of the call (the cell it returns is
+    // re-homed onto the subclass `this`; the exact new.target identity is not
+    // observable to these native ctors beyond being defined). Restore after.
+    let prev_this = crate::object::js_implicit_this_set(this_box);
+    let prev_nt = crate::object::js_new_target_set(parent_val);
+    let cell = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
+    crate::object::js_new_target_set(prev_nt);
+    crate::object::js_implicit_this_set(prev_this);
+    if crate::temporal::is_temporal_value(cell) {
+        attach_temporal_cell_to_this(this_box, cell);
+    }
+    true
+}
+
 /// Attach a native fetch handle to a freshly dynamically-constructed
 /// Request/Response subclass instance, building it from the `new` arguments.
 /// `kind` is 1 (Request) or 2 (Response). Used by the runtime
@@ -423,6 +474,16 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     args_len: usize,
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
+    // constructor returns a fresh NaN-boxed cell and does NOT mutate the
+    // implicit `this`, so the ordinary dispatch below would drop that cell and
+    // leave the subclass instance an empty object with no Temporal brand. Stash
+    // the cell on `this` instead. The native ctor never calls the subclass
+    // constructor, so `called`-counter invariants hold. (#5587)
+    #[cfg(feature = "temporal")]
+    if temporal_subclass_super(parent_val, this_box, args_ptr, args_len) {
+        return undef;
+    }
     // Resolve the parent constructor kind from the value first. When the
     // `extends` expression is an alias of `global.Request`/`global.Response`
     // (`@hono/node-server`'s `class Request extends GlobalRequest`), the alias

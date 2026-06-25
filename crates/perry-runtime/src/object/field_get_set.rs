@@ -46,6 +46,49 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     }
 }
 
+/// Hidden own-field name under which a `class X extends Temporal.<Type>`
+/// instance stashes the NaN-boxed pointer to its underlying Temporal cell.
+/// Written by `js_fetch_or_value_super` (the runtime-value super dispatcher,
+/// global_this/fetch_globals.rs) when the resolved parent is a Temporal
+/// constructor; read here (getter forward), in `native_call_method.rs`
+/// (method forward), and in `instanceof.rs`. A Temporal value is a NaN-boxed
+/// cell that dispatches via brand arms, not a JS prototype chain, so a subclass
+/// instance (a plain heap object) can only reach its members through this
+/// stashed cell. Stored as a real pointer-valued field so GC keeps the cell
+/// alive and rewrites the slot on evacuation. (#5587)
+#[cfg(feature = "temporal")]
+pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__";
+
+/// If `obj` (a raw heap object address) is a `class X extends Temporal.<Type>`
+/// instance, return the NaN-boxed value of its stashed Temporal cell. Returns
+/// `None` for any non-object / non-subclass receiver (so callers fall through
+/// to their normal dispatch unchanged) or if the stashed value is somehow no
+/// longer a live Temporal cell.
+#[cfg(feature = "temporal")]
+pub(crate) unsafe fn temporal_subclass_cell(obj: usize) -> Option<f64> {
+    if obj < crate::gc::GC_HEADER_SIZE + 0x1000 || !is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let key = crate::string::js_string_from_bytes(
+        TEMPORAL_SUBCLASS_CELL_FIELD.as_ptr(),
+        TEMPORAL_SUBCLASS_CELL_FIELD.len() as u32,
+    );
+    let v = js_object_get_field_by_name(obj as *const ObjectHeader, key);
+    if v.is_undefined() {
+        return None;
+    }
+    let boxed = f64::from_bits(v.bits());
+    if crate::temporal::is_temporal_value(boxed) {
+        Some(boxed)
+    } else {
+        None
+    }
+}
+
 /// The Web-Fetch body-reading methods (`text`/`json`/`arrayBuffer`/`blob`/
 /// `bytes`/`formData`/`clone`). On a `class X extends Request/Response`
 /// instance these live on the underlying native handle, not the JS prototype

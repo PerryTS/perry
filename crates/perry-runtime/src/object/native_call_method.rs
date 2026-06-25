@@ -1329,6 +1329,21 @@ pub unsafe extern "C" fn js_native_call_method(
         }
     }
 
+    // `class X extends Temporal.<Type>`: the prototype methods (`add`/`abs`/
+    // `toString`/…) dispatch via the Temporal brand on the underlying cell, not
+    // the JS prototype chain. All user-defined dispatch (own fields, vtable,
+    // prototype walk) has missed by here, so a subclass override still wins;
+    // only genuinely inherited Temporal methods reach this forward. Route them
+    // to the stashed cell (`temporal_subclass_cell`). (#5587)
+    #[cfg(feature = "temporal")]
+    if jsval.is_pointer() {
+        let raw = crate::value::js_nanbox_get_pointer(object) as usize;
+        if let Some(cell) = crate::object::temporal_subclass_cell(raw) {
+            let args = refreshed_args();
+            return crate::temporal::dispatch::call_method(cell, method_name, &args);
+        }
+    }
+
     // #4973: inherits-pattern instances (`http.Server.call(this, …)`) forward
     // method calls that missed every user-defined dispatch layer (own fields,
     // vtable, prototype walk) to their aliased native handle, so

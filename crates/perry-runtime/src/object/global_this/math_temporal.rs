@@ -825,6 +825,49 @@ pub(crate) fn temporal_ctor_kind(_type_ref: f64) -> Option<crate::temporal::Temp
     None
 }
 
+/// Resolve `Temporal.<kind>.prototype` for a Temporal value's `kind` by
+/// navigating the live `globalThis.Temporal.<Name>.prototype` chain (the
+/// prototype object is stamped on each constructor closure's `prototype`
+/// dynamic prop at namespace-install time). Returns `undefined` if the
+/// namespace isn't reachable. Used by `Object.getPrototypeOf` on a Temporal
+/// cell — which has no `[[Prototype]]` link of its own (it dispatches via brand
+/// arms) but whose reflective prototype IS `Temporal.<Type>.prototype`. (#5587)
+#[cfg(feature = "temporal")]
+pub(crate) fn temporal_kind_prototype(kind: crate::temporal::TemporalKind) -> f64 {
+    use crate::temporal::TemporalKind::*;
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let name: &[u8] = match kind {
+        Duration => b"Duration",
+        Instant => b"Instant",
+        PlainDate => b"PlainDate",
+        PlainTime => b"PlainTime",
+        PlainDateTime => b"PlainDateTime",
+        PlainYearMonth => b"PlainYearMonth",
+        PlainMonthDay => b"PlainMonthDay",
+        ZonedDateTime => b"ZonedDateTime",
+    };
+    let g = super::js_get_global_this();
+    let gp = (g.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    if gp.is_null() {
+        return undef;
+    }
+    let tkey = crate::string::js_string_from_bytes(b"Temporal".as_ptr(), 8);
+    let temporal = js_object_get_field_by_name(gp, tkey);
+    if !temporal.is_pointer() {
+        return undef;
+    }
+    let tp = (temporal.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    let ckey = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let ctor = js_object_get_field_by_name(tp, ckey);
+    if !ctor.is_pointer() {
+        return undef;
+    }
+    let cp = (ctor.bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+    let pkey = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
+    let proto = js_object_get_field_by_name(cp, pkey);
+    f64::from_bits(proto.bits())
+}
+
 /// `Temporal.PlainDate.prototype` accessor getters and method shapes (#4691).
 #[cfg(feature = "temporal")]
 const PLAIN_DATE_GETTERS: &[&str] = &[

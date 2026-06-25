@@ -279,6 +279,35 @@ pub unsafe extern "C" fn js_super_construct_apply(
         cur = next;
         depth += 1;
     }
+    // No registered Perry ancestor constructor. A `class X extends
+    // Temporal.<Type>` heritage records its parent VALUE (the Temporal ctor
+    // closure) at decl time but no class-id edge, so the walk above finds
+    // nothing. Recover that value and, if it is a Temporal constructor, run it
+    // and stash the returned cell as the subclass instance's brand — the
+    // `super(...spread)` counterpart of the `js_fetch_or_value_super` branch
+    // that handles non-spread `super(a, b)`. (#5587)
+    #[cfg(feature = "temporal")]
+    {
+        let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
+        if crate::object::global_this::temporal_ctor_kind(parent_val).is_some() {
+            let this_box = crate::value::js_nanbox_pointer(this_raw);
+            let n = if arr.is_null() {
+                0
+            } else {
+                crate::array::js_array_length(arr)
+            } as usize;
+            let mut flat: Vec<f64> = Vec::with_capacity(n);
+            for i in 0..n {
+                flat.push(crate::array::js_array_get_f64(arr, i as u32));
+            }
+            crate::object::global_this::temporal_subclass_super(
+                parent_val,
+                this_box,
+                flat.as_ptr(),
+                flat.len(),
+            );
+        }
+    }
     undef
 }
 

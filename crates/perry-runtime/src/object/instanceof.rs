@@ -109,11 +109,26 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     // its kind and compare against the value's brand. A non-Temporal value, or
     // a Temporal value of a different kind, yields `false`.
     if let Some(kind) = super::global_this::temporal_ctor_kind(type_ref) {
-        return if crate::temporal::temporal_kind(value) == Some(kind) {
-            f64::from_bits(crate::value::TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        };
+        if crate::temporal::temporal_kind(value) == Some(kind) {
+            return f64::from_bits(crate::value::TAG_TRUE);
+        }
+        // `class X extends Temporal.<Type>` instance: a plain heap object whose
+        // [[Prototype]] chain reaches `Temporal.<Type>.prototype`. It carries
+        // the brand via a stashed cell rather than the Temporal-cell tag, so
+        // recover that cell and compare its kind. (#5587)
+        #[cfg(feature = "temporal")]
+        {
+            let bits = value.to_bits();
+            if (bits >> 48) == 0x7FFD {
+                let raw = (bits & crate::value::POINTER_MASK) as usize;
+                if let Some(cell) = unsafe { crate::object::temporal_subclass_cell(raw) } {
+                    if crate::temporal::temporal_kind(cell) == Some(kind) {
+                        return f64::from_bits(crate::value::TAG_TRUE);
+                    }
+                }
+            }
+        }
+        return f64::from_bits(TAG_FALSE);
     }
     let bits = type_ref.to_bits();
     let top16 = bits >> 48;

@@ -285,6 +285,88 @@ pub fn get_property(recv: f64, name: &str) -> Option<f64> {
     }
 }
 
+/// Whether `name` is an instance method of the Temporal value `recv`. Used by
+/// the `class X extends Temporal.<Type>` subclass getter forward to decide
+/// whether a non-getter property read should resolve to a (bound) callable
+/// instead of `undefined` — so `subInstance.abs` reads as a function, not just
+/// `subInstance.abs()` / `subInstance[name]()` dispatching. The name sets
+/// mirror each type's `call()` match arms (the authoritative dispatch). (#5587)
+pub fn has_method(recv: f64, name: &str) -> bool {
+    // Methods shared by (nearly) every Temporal type.
+    const COMMON: &[&str] = &["toString", "toJSON", "toLocaleString", "valueOf"];
+    if COMMON.contains(&name) {
+        return matches!(temporal_value_ref(recv), Some(_));
+    }
+    let names: &[&str] = match temporal_value_ref(recv) {
+        Some(TemporalValue::Duration(_)) => {
+            &["with", "negated", "abs", "add", "subtract", "round", "total"]
+        }
+        Some(TemporalValue::Instant(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "round",
+            "equals",
+            "toZonedDateTimeISO",
+        ],
+        Some(TemporalValue::PlainDate(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "equals",
+            "with",
+            "withCalendar",
+            "toPlainDateTime",
+            "toPlainMonthDay",
+            "toPlainYearMonth",
+            "toZonedDateTime",
+        ],
+        Some(TemporalValue::PlainTime(_)) => {
+            &["add", "subtract", "until", "since", "round", "equals", "with"]
+        }
+        Some(TemporalValue::PlainDateTime(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "round",
+            "equals",
+            "with",
+            "withCalendar",
+            "withPlainTime",
+            "toPlainDate",
+            "toPlainTime",
+            "toZonedDateTime",
+        ],
+        Some(TemporalValue::PlainYearMonth(_)) => {
+            &["add", "subtract", "until", "since", "equals", "with", "toPlainDate"]
+        }
+        Some(TemporalValue::PlainMonthDay(_)) => &["equals", "with", "toPlainDate"],
+        Some(TemporalValue::ZonedDateTime(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "round",
+            "equals",
+            "with",
+            "withCalendar",
+            "withPlainTime",
+            "withTimeZone",
+            "startOfDay",
+            "getTimeZoneTransition",
+            "toInstant",
+            "toPlainDate",
+            "toPlainTime",
+            "toPlainDateTime",
+        ],
+        None => return false,
+    };
+    names.contains(&name)
+}
+
 /// Dispatch an instance method (`duration.add(x)`, `instant.toString()`, …).
 /// The caller has already brand-checked `recv` as a Temporal value, so an
 /// unknown method name throws `TypeError` rather than returning `None`.
