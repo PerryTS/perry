@@ -295,8 +295,15 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             crate::js_net_socket_set_encoding(handle, enc_ptr);
             nanbox_handle(handle)
         }
-        "setNoDelay" | "setKeepAlive" | "pause" | "resume" | "ref" | "unref" | "cork"
-        | "uncork" | "setDefaultEncoding" => nanbox_handle(handle),
+        "setNoDelay" => {
+            // Node coerces a missing arg to `true` inside the FFI helper, so
+            // pass `undefined` through when called with no argument.
+            let arg = args.first().copied().unwrap_or_else(undefined);
+            crate::js_net_socket_set_no_delay(handle, arg.to_bits() as i64);
+            nanbox_handle(handle)
+        }
+        "setKeepAlive" | "pause" | "resume" | "ref" | "unref" | "cork" | "uncork"
+        | "setDefaultEncoding" => nanbox_handle(handle),
         _ => undefined(),
     };
     Some(result)

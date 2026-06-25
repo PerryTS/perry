@@ -228,6 +228,10 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, peer)) => {
+                                // Node sets TCP_NODELAY on accepted connections by
+                                // default. Set it on the raw TCP socket before the
+                                // TLS handshake; the option persists through rustls.
+                                let _ = stream.set_nodelay(true);
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 // #4905/#4971 — register the connection so

@@ -202,7 +202,11 @@ pub unsafe extern "C" fn js_node_http2_connect(
         runtime.block_on(async move {
             let addr = format!("{}:{}", host, port);
             let stream = match tokio::net::TcpStream::connect(&addr).await {
-                Ok(stream) => stream,
+                Ok(stream) => {
+                    // Node default: TCP_NODELAY on for a freshly-connected socket.
+                    let _ = stream.set_nodelay(true);
+                    stream
+                }
                 Err(err) => {
                     if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
                         session.connecting = false;

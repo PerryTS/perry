@@ -528,6 +528,10 @@ pub unsafe extern "C" fn js_node_http2_server_listen(server_handle: i64, args_ar
                     accepted = listener.accept() => {
                         match accepted {
                             Ok((stream, peer)) => {
+                                // Node default: TCP_NODELAY on. Set it on the raw
+                                // TCP socket here, before the TLS or h2c branch —
+                                // the option persists through any wrapping.
+                                let _ = stream.set_nodelay(true);
                                 let acceptor = acceptor.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 tokio::spawn(async move {

@@ -84,10 +84,13 @@ pub use adopt::{adopt_upgraded_tcp_stream, ensure_adopted_socket_dispatch};
 mod option_setters;
 pub use option_setters::{
     js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
-    js_net_socket_set_encoding, js_net_socket_set_timeout, js_net_socket_set_type_of_service,
+    js_net_socket_set_encoding, js_net_socket_set_no_delay, js_net_socket_set_timeout,
+    js_net_socket_set_type_of_service,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
 
+#[cfg(test)]
+mod nodelay_tests;
 mod server_state;
 #[cfg(test)]
 mod test_async_shims;
@@ -110,6 +113,29 @@ use crate::tls::do_tls_handshake;
 pub(crate) enum Transport {
     Plain(TcpStream),
     Tls(Box<TlsStream<TcpStream>>),
+}
+
+impl Transport {
+    /// Set `TCP_NODELAY` on the underlying TCP socket. For a TLS transport the
+    /// option lives on the wrapped TCP stream (`get_ref().0`), so reach through
+    /// the rustls wrapper to the kernel socket. Matches Node's `socket.setNoDelay`,
+    /// which toggles Nagle's algorithm on the raw connection regardless of TLS.
+    fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
+        match self {
+            Transport::Plain(s) => s.set_nodelay(nodelay),
+            Transport::Tls(s) => s.get_ref().0.set_nodelay(nodelay),
+        }
+    }
+
+    /// Read the current `TCP_NODELAY` state off the underlying socket.
+    /// Test-only observability seam for the nodelay command-path test.
+    #[cfg(test)]
+    fn nodelay(&self) -> io::Result<bool> {
+        match self {
+            Transport::Plain(s) => s.nodelay(),
+            Transport::Tls(s) => s.get_ref().0.nodelay(),
+        }
+    }
 }
 
 impl AsyncRead for Transport {
@@ -309,10 +335,44 @@ pub(crate) struct SocketState {
     pub(crate) server_id: Option<i64>,
 }
 
+#[cfg(test)]
+impl SocketState {
+    /// Minimal open socket state wired to a command channel — for the nodelay
+    /// command-path test, which only needs `cmd_tx` to reach `run_socket_task`.
+    pub(crate) fn for_test(cmd_tx: mpsc::UnboundedSender<SocketCommand>) -> Self {
+        SocketState {
+            cmd_tx,
+            pending_rx: None,
+            is_open: true,
+            local_addr: None,
+            raw: None,
+            destroyed: false,
+            bytes_read: 0,
+            bytes_written: 0,
+            timeout: None,
+            type_of_service: 0,
+            server_id: None,
+        }
+    }
+}
+
 pub(crate) enum SocketCommand {
     Write(Vec<u8>),
     End,
     Destroy,
+    /// `socket.setNoDelay(enable)` — applies `TCP_NODELAY` to the live socket.
+    /// Carried as a command (rather than a flag on `SocketState`) because the
+    /// owning `TcpStream`/TLS wrapper lives in `run_socket_task`, not in the
+    /// handle map. The channel is unbounded, so a `setNoDelay` issued on a
+    /// deferred-connect socket before it connects is buffered and applied once
+    /// the task starts — after the connect site has set the Node default ON,
+    /// so an explicit opt-out wins.
+    SetNoDelay(bool),
+    /// Test-only: report the live socket's `TCP_NODELAY` state back over a
+    /// oneshot, so the command-path test can observe `setNoDelay` taking
+    /// effect on the stream the task owns.
+    #[cfg(test)]
+    QueryNoDelay(oneshot::Sender<bool>),
     UpgradeTls {
         servername: String,
         verify: bool,
@@ -744,6 +804,11 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // the accepted stream.
                             let socket_id = next_id();
                             let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+                            // Node sets TCP_NODELAY on every accepted socket by
+                            // default (Nagle off). Match that so small writes
+                            // aren't delayed waiting to coalesce; a later
+                            // `socket.setNoDelay(false)` can re-enable Nagle.
+                            let _ = stream.set_nodelay(true);
                             // Issue #2131 — record the accepted
                             // stream's local address so `sock.address()`
                             // on the server-side socket reports the
@@ -973,6 +1038,8 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
                 }
             };
 
+            // Node default: TCP_NODELAY on for a freshly-connected socket.
+            let _ = tcp.set_nodelay(true);
             // Issue #2131 — record the local addr so `socket.address()`
             // returns the bound port/family on the deferred-connect path.
             let local = tcp.local_addr().ok();
@@ -1044,6 +1111,10 @@ pub(crate) fn spawn_socket_task(
                 }
             };
 
+            // Node default: TCP_NODELAY on. Set it on the raw TCP socket
+            // before any TLS handshake consumes the stream — the option lives
+            // on the kernel socket and persists through the rustls wrapper.
+            let _ = tcp.set_nodelay(true);
             // Issue #2131 — capture the local addr before we possibly
             // hand the stream to rustls (the TLS path consumes it).
             let local = tcp.local_addr().ok();
@@ -1190,6 +1261,15 @@ pub(crate) async fn run_socket_task(
                     }
                     Some(SocketCommand::End) => {
                         let _ = t.shutdown().await;
+                    }
+                    Some(SocketCommand::SetNoDelay(enable)) => {
+                        // Best-effort, matching Node: a failed setsockopt (e.g.
+                        // the peer already closed) does not error the socket.
+                        let _ = t.set_nodelay(enable);
+                    }
+                    #[cfg(test)]
+                    Some(SocketCommand::QueryNoDelay(reply)) => {
+                        let _ = reply.send(t.nodelay().unwrap_or(false));
                     }
                     Some(SocketCommand::Destroy) | None => {
                         if !raw_bridge::mark_terminal(id, None) {
