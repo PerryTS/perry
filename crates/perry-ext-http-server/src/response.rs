@@ -1667,6 +1667,34 @@ pub extern "C" fn js_node_http_res_detach_socket(handle: i64, _socket: f64) {
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callback: i64) -> i32 {
     let bytes = jsvalue_to_body_bytes(chunk);
+    // Honor streaming mode (after `res.flushHeaders()` / a prior streamed
+    // `res.write`) exactly like `js_node_http_res_write`: the chunk must go down
+    // the stream channel, NOT into `buffered_body`. Without this, a streamed
+    // response whose chunks arrive via the callback-aware dispatch arm
+    // (`res.write(chunk)` from Next's `pipeToNodeResponse` WritableStream)
+    // buffered every chunk while `.end()` took the stream-finalize path — which
+    // only sends the final `.end(chunk)` arg and drops `buffered_body` entirely,
+    // so the JSON API-route body never reached the wire (HTTP 200, 0 bytes).
+    // #5437 (Next.js app-route response pipe).
+    if let Some(b) = &bytes {
+        let ended = get_handle::<ServerResponse>(handle)
+            .map(|sr| sr.writable_ended)
+            .unwrap_or(true);
+        if !ended {
+            if let Some(below_hwm) = stream_write(handle, b) {
+                if callback != 0 {
+                    // The streamed bytes are already on the wire; fire the
+                    // write callback on the next pump tick (Node calls it once
+                    // the chunk is flushed). Queueing it keeps call ordering and
+                    // lets `.end()`'s callback drain run after it (#4904).
+                    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+                        sr.pending_write_callbacks.push(callback);
+                    }
+                }
+                return below_hwm as i32;
+            }
+        }
+    }
     // #4909 — real backpressure boolean (mirrors `js_node_http_res_write_full`
     // on the static path): `false` past the 16 KiB high-water mark, so dynamic
     // `while (res.write(buf, cb))` producer loops terminate.

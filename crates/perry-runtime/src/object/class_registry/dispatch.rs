@@ -134,6 +134,41 @@ pub(crate) unsafe fn vtable_ic_insert(
     });
 }
 
+/// Maximum positional arity `call_vtable_method` can invoke directly. The
+/// dispatch builds a fixed-arity `extern "C"` fn signature for each arity up to
+/// this cap (see `vtable_call_dispatch!`). Synthesized capture-stashing
+/// constructors (`synthesize_class_captures`) append one `__perry_cap_*` param
+/// per captured outer local; a giant minified bundle module (Next.js
+/// app-route-turbo's `rJ` route-module class) can capture 130+ IIFE-scope
+/// locals, so the cap must comfortably exceed that. Before #5437 the dispatch
+/// topped out at 64 and silently transmuted a 135-param ctor to a 64-arg
+/// signature in release builds (the `debug_assert!` was compiled out) — every
+/// param past the 64th received register/stack garbage, so a captured function
+/// (`r_`/`rQ`) arrived as a non-callable and `this.methods = r_(e)` threw
+/// "value is not a function", aborting Next route-module init → HTTP 500.
+pub(crate) const MAX_VTABLE_DISPATCH_ARITY: usize = 512;
+
+/// Call a `double(double this, double, …, double)` function pointer with `this`
+/// plus `nargs` f64 arguments read from `args` (missing slots → `undefined`),
+/// for an arbitrary `nargs` (bounded by [`MAX_VTABLE_DISPATCH_ARITY`]).
+///
+/// The dynamic vtable path can't form an arbitrary-arity Rust `fn` type at
+/// runtime, and hand-writing a `match` arm per arity caps out (the pre-#5437
+/// 64-arm cap silently mis-called 130+-param synthesized capture ctors). This
+/// uses a tiny architecture-specific trampoline: f64 args go in the FP argument
+/// registers (first 8) with the remainder spilled to the stack per the platform
+/// C ABI, exactly as a native call of that arity would. All Perry-generated
+/// method/ctor params are `f64`, so an all-f64 calling convention is faithful.
+#[inline]
+unsafe fn call_fn_with_f64_args(func_ptr: usize, this_f64: f64, args: &[f64]) -> f64 {
+    debug_assert!(args.len() <= MAX_VTABLE_DISPATCH_ARITY);
+    // Build the full argument vector: `this` followed by the positional args.
+    let mut all: Vec<f64> = Vec::with_capacity(args.len() + 1);
+    all.push(this_f64);
+    all.extend_from_slice(args);
+    crate::abi_trampoline::call_all_f64(func_ptr, &all)
+}
+
 /// Call a vtable method with the correct arity.
 /// All method params are f64, `this` is i64.
 pub(crate) unsafe fn call_vtable_method(
@@ -232,269 +267,21 @@ pub(crate) unsafe fn call_vtable_method(
         (args_ptr, args_len)
     };
 
-    match param_count {
-        0 => {
-            let f: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr);
-            f(this_f64)
-        }
-        1 => {
-            let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(this_f64, arg_or_undefined(call_args_ptr, call_args_len, 0))
-        }
-        2 => {
-            let f: extern "C" fn(f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-            )
-        }
-        3 => {
-            let f: extern "C" fn(f64, f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-            )
-        }
-        4 => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64) -> f64 = std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-                arg_or_undefined(call_args_ptr, call_args_len, 3),
-            )
-        }
-        5 => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-                arg_or_undefined(call_args_ptr, call_args_len, 3),
-                arg_or_undefined(call_args_ptr, call_args_len, 4),
-            )
-        }
-        6 => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-                arg_or_undefined(call_args_ptr, call_args_len, 3),
-                arg_or_undefined(call_args_ptr, call_args_len, 4),
-                arg_or_undefined(call_args_ptr, call_args_len, 5),
-            )
-        }
-        7 => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-                arg_or_undefined(call_args_ptr, call_args_len, 3),
-                arg_or_undefined(call_args_ptr, call_args_len, 4),
-                arg_or_undefined(call_args_ptr, call_args_len, 5),
-                arg_or_undefined(call_args_ptr, call_args_len, 6),
-            )
-        }
-        8 => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-                arg_or_undefined(call_args_ptr, call_args_len, 3),
-                arg_or_undefined(call_args_ptr, call_args_len, 4),
-                arg_or_undefined(call_args_ptr, call_args_len, 5),
-                arg_or_undefined(call_args_ptr, call_args_len, 6),
-                arg_or_undefined(call_args_ptr, call_args_len, 7),
-            )
-        }
-        9 => {
-            let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-                arg_or_undefined(call_args_ptr, call_args_len, 3),
-                arg_or_undefined(call_args_ptr, call_args_len, 4),
-                arg_or_undefined(call_args_ptr, call_args_len, 5),
-                arg_or_undefined(call_args_ptr, call_args_len, 6),
-                arg_or_undefined(call_args_ptr, call_args_len, 7),
-                arg_or_undefined(call_args_ptr, call_args_len, 8),
-            )
-        }
-        // Arities above the explicit arms: the generated method/ctor signature is
-        // `double(double this, double×param_count)`. Rust can't form a
-        // param_count-arity fn pointer dynamically, so transmute to a generous
-        // fixed arity (64) and pass `param_count` real args plus `undefined`
-        // padding (`arg_or_undefined` yields undefined past `call_args_len`).
-        // Passing MORE args than the callee declares is safe on every target —
-        // the arg area is caller-allocated and caller-cleaned, and the callee
-        // reads only its declared params. This is the runtime-dispatch counterpart
-        // to the codegen direct call, and matters for ctors/methods that take many
-        // params — notably a class capturing dozens of module-level `require`s
-        // (`__perry_cap_*` params), the wall-45 `Derived extends _mod.default`
-        // shape, where the pre-fix 10-arg cap silently dropped captures 10+.
-        // (The prior `_` arm called every >9-arity function as if it had 10
-        // params.) `debug_assert` flags the rare class that would still exceed
-        // the bound so it surfaces in tests rather than as silent corruption.
-        _ => {
-            debug_assert!(
-                param_count as usize <= 64,
-                "call_vtable_method: param_count {} exceeds fixed dispatch arity 64",
-                param_count
-            );
-            let f: extern "C" fn(
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-                f64,
-            ) -> f64 = std::mem::transmute(func_ptr);
-            f(
-                this_f64,
-                arg_or_undefined(call_args_ptr, call_args_len, 0),
-                arg_or_undefined(call_args_ptr, call_args_len, 1),
-                arg_or_undefined(call_args_ptr, call_args_len, 2),
-                arg_or_undefined(call_args_ptr, call_args_len, 3),
-                arg_or_undefined(call_args_ptr, call_args_len, 4),
-                arg_or_undefined(call_args_ptr, call_args_len, 5),
-                arg_or_undefined(call_args_ptr, call_args_len, 6),
-                arg_or_undefined(call_args_ptr, call_args_len, 7),
-                arg_or_undefined(call_args_ptr, call_args_len, 8),
-                arg_or_undefined(call_args_ptr, call_args_len, 9),
-                arg_or_undefined(call_args_ptr, call_args_len, 10),
-                arg_or_undefined(call_args_ptr, call_args_len, 11),
-                arg_or_undefined(call_args_ptr, call_args_len, 12),
-                arg_or_undefined(call_args_ptr, call_args_len, 13),
-                arg_or_undefined(call_args_ptr, call_args_len, 14),
-                arg_or_undefined(call_args_ptr, call_args_len, 15),
-                arg_or_undefined(call_args_ptr, call_args_len, 16),
-                arg_or_undefined(call_args_ptr, call_args_len, 17),
-                arg_or_undefined(call_args_ptr, call_args_len, 18),
-                arg_or_undefined(call_args_ptr, call_args_len, 19),
-                arg_or_undefined(call_args_ptr, call_args_len, 20),
-                arg_or_undefined(call_args_ptr, call_args_len, 21),
-                arg_or_undefined(call_args_ptr, call_args_len, 22),
-                arg_or_undefined(call_args_ptr, call_args_len, 23),
-                arg_or_undefined(call_args_ptr, call_args_len, 24),
-                arg_or_undefined(call_args_ptr, call_args_len, 25),
-                arg_or_undefined(call_args_ptr, call_args_len, 26),
-                arg_or_undefined(call_args_ptr, call_args_len, 27),
-                arg_or_undefined(call_args_ptr, call_args_len, 28),
-                arg_or_undefined(call_args_ptr, call_args_len, 29),
-                arg_or_undefined(call_args_ptr, call_args_len, 30),
-                arg_or_undefined(call_args_ptr, call_args_len, 31),
-                arg_or_undefined(call_args_ptr, call_args_len, 32),
-                arg_or_undefined(call_args_ptr, call_args_len, 33),
-                arg_or_undefined(call_args_ptr, call_args_len, 34),
-                arg_or_undefined(call_args_ptr, call_args_len, 35),
-                arg_or_undefined(call_args_ptr, call_args_len, 36),
-                arg_or_undefined(call_args_ptr, call_args_len, 37),
-                arg_or_undefined(call_args_ptr, call_args_len, 38),
-                arg_or_undefined(call_args_ptr, call_args_len, 39),
-                arg_or_undefined(call_args_ptr, call_args_len, 40),
-                arg_or_undefined(call_args_ptr, call_args_len, 41),
-                arg_or_undefined(call_args_ptr, call_args_len, 42),
-                arg_or_undefined(call_args_ptr, call_args_len, 43),
-                arg_or_undefined(call_args_ptr, call_args_len, 44),
-                arg_or_undefined(call_args_ptr, call_args_len, 45),
-                arg_or_undefined(call_args_ptr, call_args_len, 46),
-                arg_or_undefined(call_args_ptr, call_args_len, 47),
-                arg_or_undefined(call_args_ptr, call_args_len, 48),
-                arg_or_undefined(call_args_ptr, call_args_len, 49),
-                arg_or_undefined(call_args_ptr, call_args_len, 50),
-                arg_or_undefined(call_args_ptr, call_args_len, 51),
-                arg_or_undefined(call_args_ptr, call_args_len, 52),
-                arg_or_undefined(call_args_ptr, call_args_len, 53),
-                arg_or_undefined(call_args_ptr, call_args_len, 54),
-                arg_or_undefined(call_args_ptr, call_args_len, 55),
-                arg_or_undefined(call_args_ptr, call_args_len, 56),
-                arg_or_undefined(call_args_ptr, call_args_len, 57),
-                arg_or_undefined(call_args_ptr, call_args_len, 58),
-                arg_or_undefined(call_args_ptr, call_args_len, 59),
-                arg_or_undefined(call_args_ptr, call_args_len, 60),
-                arg_or_undefined(call_args_ptr, call_args_len, 61),
-                arg_or_undefined(call_args_ptr, call_args_len, 62),
-                arg_or_undefined(call_args_ptr, call_args_len, 63),
-            )
-        }
+    // All Perry method/ctor params are `f64`. Build the positional arg list
+    // (missing trailing args → `undefined` per spec) and invoke through the
+    // arbitrary-arity all-f64 trampoline. A fixed `match`-arm-per-arity dispatch
+    // previously capped at 64 and silently mis-called 130+-param synthesized
+    // capture constructors (#5437).
+    debug_assert!(
+        param_count as usize <= MAX_VTABLE_DISPATCH_ARITY,
+        "call_vtable_method: param_count {} exceeds MAX_VTABLE_DISPATCH_ARITY",
+        param_count
+    );
+    let mut positional: Vec<f64> = Vec::with_capacity(param_count as usize);
+    for i in 0..(param_count as usize) {
+        positional.push(arg_or_undefined(call_args_ptr, call_args_len, i));
     }
+    call_fn_with_f64_args(func_ptr, this_f64, &positional)
 }
 
 /// Walk the class parent chain looking for a recorded fetch-builtin parent

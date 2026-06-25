@@ -23,6 +23,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+pub mod abi_trampoline;
 pub mod app_group;
 pub mod arena;
 pub mod array;
