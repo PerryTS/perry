@@ -413,6 +413,22 @@ pub fn lower_class_decl(
                 // class) tag for the runtime shim).
                 (None, Some(parent_name), native_parent, None)
             } else {
+                // #5437 (Next.js NodeNextRequest cross-module heritage): a
+                // minified bundle declares the SAME class name in several
+                // turbopack factory closures (`class f{...}` appears 3× in one
+                // chunk). Phase-1.5 disambiguates the duplicate sibling by
+                // renaming it (`f` -> `f$0`) in this body's scope, and the
+                // class registers under that unique name — but the child's
+                // `extends f` was binding to the RAW name, which `lookup_class`
+                // resolves to the FIRST (wrong) `f`. The parent-chain walk then
+                // pulls the wrong class's fields into `packed_keys`, dropping
+                // the real parent's `method`/`url`/`body` (NodeNextRequest's
+                // `e.url` read undefined -> `Invalid URL` 500 on dynamic page
+                // routes). Resolve the parent name through the active
+                // scope-local renames so heritage binds to the same disambiguated
+                // class the parent decl registered under. Identity for
+                // non-colliding names, so unaffected classes keep their parent.
+                let parent_name = ctx.resolve_class_name(&parent_name);
                 let parent_cid = ctx.lookup_class(&parent_name);
                 if parent_cid.is_none() {
                     // Issue #711 part 2: the Ident doesn't resolve to
@@ -1392,6 +1408,11 @@ pub fn lower_class_from_ast(
             if native_parent.is_some() {
                 (None, Some(parent_name), native_parent, None)
             } else {
+                // #5437: resolve the parent through active scope-local class
+                // renames so a class EXPRESSION extending a disambiguated
+                // same-named sibling (`f` -> `f$0`) binds to the right class.
+                // See the matching fix in `lower_class_decl` above.
+                let parent_name = ctx.resolve_class_name(&parent_name);
                 let parent_cid = ctx.lookup_class(&parent_name);
                 if parent_cid.is_none() {
                     // Issue #711 part 2: see the parallel arm in
