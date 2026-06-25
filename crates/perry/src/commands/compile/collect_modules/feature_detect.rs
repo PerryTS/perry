@@ -34,7 +34,10 @@ pub(super) fn detect_optional_feature_usage(
     // matching only over-links `web-fetch` (a size cost); the rule is zero false
     // negatives.
     if !ctx.uses_fetch {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
+        let hir_debug: String = format!(
+            "{:?}{:?}{:?}",
+            &hir_module.init, &hir_module.functions, &hir_module.classes
+        );
         if hir_debug.contains("class_name: \"Headers\"")
             || hir_debug.contains("class_name: \"Request\"")
             || hir_debug.contains("class_name: \"Response\"")
@@ -48,6 +51,12 @@ pub(super) fn detect_optional_feature_usage(
             ctx.needs_stdlib = true;
             ctx.uses_fetch = true;
         }
+    }
+    if std::env::var_os("PERRY_FETCH_DIAG").is_some() {
+        eprintln!(
+            "[perry-fetch-diag] module hir.uses_fetch={} -> ctx.uses_fetch={}",
+            hir_module.uses_fetch, ctx.uses_fetch
+        );
     }
 
     // Issue #76 — auto-link the wasmi host runtime when any module
