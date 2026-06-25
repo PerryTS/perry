@@ -404,6 +404,55 @@ static KEEP_JS_REQUEST_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
 static KEEP_JS_RESPONSE_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
     js_response_subclass_init;
 
+/// #5657: native builtin constructors that REJECT being called as a plain
+/// function (`X is not a function` / `Constructor X requires 'new'`). A
+/// `class D extends <one of these> {}` must NOT run the parent as a function in
+/// `super()` — Perry can't give the instance the builtin's internal slots, so
+/// `super()` is a best-effort no-op (the instance is already allocated with the
+/// correct dynamic-parent prototype chain, so `instanceof` holds). This is the
+/// VALUE-based companion to codegen's name-based guard
+/// (`crate::expr::is_other_builtin_constructor_name` in
+/// `perry-codegen/src/expr/this_super_call.rs`); the two lists must stay in
+/// lockstep. Resolving by value (not textual name) also catches aliased parents
+/// — `const AB = ArrayBuffer; class X extends AB {}` — which the name guard
+/// can't see. `Request`/`Response` (native fetch-handle attach) and the `Error`
+/// family (callable error thunk) are deliberately EXCLUDED: they keep their
+/// dispatch.
+fn is_uncallable_builtin_super_parent(name: &str) -> bool {
+    matches!(
+        name,
+        "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Array"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "Boolean"
+            | "Number"
+            | "String"
+            | "Date"
+            | "RegExp"
+            | "Promise"
+            | "Function"
+            | "BigInt"
+            | "Symbol"
+            | "Object"
+            | "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+    )
+}
+
 /// `super(...)` for `class X extends <runtime-value constructor>` where the
 /// parent expression is an alias of the global `Request`/`Response` constructor
 /// — e.g. `@hono/node-server`'s `class Request extends GlobalRequest` with
@@ -442,6 +491,15 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 _ => None,
             }
         });
+    // #5657: a native builtin base that can't be called as a function (incl.
+    // ALIASED parents — `const AB = ArrayBuffer; class X extends AB {}` — which
+    // the codegen name guard can't see). No-op rather than throwing
+    // "X is not a function" / "Constructor X requires 'new'".
+    if let Some(name) = kind {
+        if is_uncallable_builtin_super_parent(name) {
+            return undef;
+        }
+    }
     match kind {
         Some("Request") | Some("Response") => {
             let arg0 = if args_len >= 1 && !args_ptr.is_null() {

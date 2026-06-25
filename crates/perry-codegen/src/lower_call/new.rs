@@ -1692,7 +1692,12 @@ fn lower_new_impl(
         // `Expr::SuperCall` arm already applies via `is_other_builtin_constructor_name`
         // (`expr/this_super_call.rs`). Request/Response/Error are deliberately NOT
         // in that set: they DO need the dispatch (native fetch-handle attach /
-        // callable error thunk), so they keep running it.
+        // callable error thunk), so they keep running it. This is a fast-path
+        // skip on the textual name; an ALIASED builtin parent (`const AB =
+        // ArrayBuffer; class X extends AB {}`) whose `extends_name` isn't a known
+        // builtin still emits the call, but the runtime backstops it by value —
+        // `js_fetch_or_value_super` no-ops the same builtin set via
+        // `is_uncallable_builtin_super_parent` (perry-runtime, kept in lockstep).
         let parent_is_uncallable_builtin = class
             .extends_name
             .as_deref()
