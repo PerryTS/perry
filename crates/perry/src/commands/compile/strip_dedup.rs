@@ -958,7 +958,13 @@ fn try_localize_stdlib_stub_symbols(runtime_lib: &Path, stdlib_lib: &Path) -> Re
         }
         let member_path = extract_dir.join(member);
         if !member_path.exists() {
-            continue;
+            // `llvm-ar x` returned success but produced no file (e.g. a member
+            // name that doesn't round-trip as a path). Don't silently skip: that
+            // would return a "localized" archive with this member's stubs still
+            // global. Fail so the caller falls back to the untouched runtime.
+            return Err(anyhow::anyhow!(
+                "failed to extract {member}: member file was not created"
+            ));
         }
         let mut objcopy_cmd = Command::new(&objcopy);
         for symbol in symbols {
@@ -1120,7 +1126,13 @@ fn try_localize_stdlib_stub_symbols_unix(runtime_lib: &Path, stdlib_lib: &Path) 
         }
         let member_path = extract_dir.join(member);
         if !member_path.exists() {
-            continue;
+            // `llvm-ar x` returned success but produced no file (e.g. a member
+            // name that doesn't round-trip as a path). Don't silently skip: that
+            // would return a "localized" archive with this member's stubs still
+            // global. Fail so the caller falls back to the untouched runtime.
+            return Err(anyhow::anyhow!(
+                "failed to extract {member}: member file was not created"
+            ));
         }
         let mut objcopy_cmd = Command::new(&objcopy);
         for symbol in symbols {

@@ -249,10 +249,25 @@ pub(crate) fn build_and_run_link(
         } else {
             // Native macOS/iOS via clang driver
             cmd.arg("-Wl,-dead_strip");
-            // PERRY_LINK_MAP=<path> — emit a linker map (which archive each
-            // symbol resolves from) for diagnosing dup-symbol / shadowing bugs.
-            if let Some(map) = std::env::var_os("PERRY_LINK_MAP") {
-                cmd.arg(format!("-Wl,-map,{}", map.to_string_lossy()));
+        }
+        // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
+        // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
+        // every non-Windows linker, not just native macOS. GNU ld (ELF) spells
+        // it `-Map=<file>`; ld64 (Apple) spells it `-map <file>`. The
+        // cross-Apple linkers are driven directly (no `-Wl,` prefix).
+        if let Some(map) = std::env::var_os("PERRY_LINK_MAP") {
+            let map = map.to_string_lossy();
+            if is_android || is_linux || is_harmonyos {
+                cmd.arg(format!("-Wl,-Map,{map}"));
+            } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
+                cmd.arg("-map").arg(map.as_ref());
+            } else if is_watchos || is_visionos {
+                cmd.arg("-Xlinker")
+                    .arg("-map")
+                    .arg("-Xlinker")
+                    .arg(map.as_ref());
+            } else {
+                cmd.arg(format!("-Wl,-map,{map}"));
             }
         }
     } else {
@@ -402,8 +417,28 @@ pub(crate) fn build_and_run_link(
                 cmd.arg(runtime_lib);
             }
         } else {
-            // Runtime-only linking — no stdlib needed
-            cmd.arg(runtime_lib);
+            // Runtime-only linking — no stdlib needed.
+            //
+            // #5000 (Linux GTK4 UI): a bare UI program has
+            // `ctx.needs_stdlib == false`, so perry-stdlib isn't linked above —
+            // but the GTK4 UI branch below force-links it with
+            // `--whole-archive --allow-multiple-definition` to satisfy glib
+            // trampolines that call js_stdlib_process_pending /
+            // js_promise_run_microtasks. With first-definition-wins, the
+            // unlocalized runtime stubs linked here would shadow stdlib's real
+            // impls, leaving those pumps as no-ops. Localize the runtime's stub
+            // symbols first so stdlib wins, mirroring the needs_stdlib path.
+            let force_stdlib_for_linux_ui =
+                is_linux && ctx.needs_ui && find_ui_library(target).is_some();
+            let runtime_for_link = if force_stdlib_for_linux_ui {
+                match stdlib_lib.clone().or_else(|| find_stdlib_library(target)) {
+                    Some(stdlib) => localize_stdlib_stub_symbols(runtime_lib, &stdlib),
+                    None => runtime_lib.to_path_buf(),
+                }
+            } else {
+                runtime_lib.to_path_buf()
+            };
+            cmd.arg(&runtime_for_link);
         }
     } else if ctx.needs_stdlib {
         // Android + UI: runtime is provided by UI lib, but stdlib must still be linked
