@@ -428,4 +428,88 @@ mod tests {
         drop_handle(incoming_handle);
         drop_handle(response_handle);
     }
+
+    /// CodeRabbit (flagged on #5663) — `requestTimeout` was stored as a
+    /// raw `f64` and later cast straight to `u64` to build the in-flight
+    /// deadline.
+    /// A non-finite or oversized value produced a garbage deadline:
+    /// `Infinity as u64` saturates to `u64::MAX` (never times out),
+    /// oversized finite values likewise. Sanitizing at the setter keeps
+    /// the stored value in Node's `validateInteger(0, MAX_SAFE_INTEGER)`
+    /// domain so the downstream cast is always sound — matching the
+    /// behavior probed against Node v22 (`createServer({ requestTimeout })`
+    /// rejects non-finite/negative/oversized with `ERR_OUT_OF_RANGE`;
+    /// lacking a throw path here we coerce to the nearest in-range value).
+    #[test]
+    fn request_timeout_is_sanitized_to_a_u64_safe_ms_count() {
+        use crate::server::sanitize_request_timeout;
+
+        // Non-finite falls back to Node's 300s default rather than
+        // saturating the cast.
+        assert_eq!(sanitize_request_timeout(f64::INFINITY), 300_000.0);
+        assert_eq!(sanitize_request_timeout(f64::NEG_INFINITY), 300_000.0);
+        assert_eq!(sanitize_request_timeout(f64::NAN), 300_000.0);
+        // Negative clamps to 0 (Node's "disabled" sentinel).
+        assert_eq!(sanitize_request_timeout(-1.0), 0.0);
+        // Oversized clamps to MAX_SAFE_INTEGER (Node's `kMaxRequestTimeout`).
+        assert_eq!(sanitize_request_timeout(1e300), 9_007_199_254_740_991.0);
+        assert_eq!(
+            sanitize_request_timeout(9_007_199_254_740_992.0),
+            9_007_199_254_740_991.0
+        );
+        // Valid inputs pass through untouched (fractional truncated to ms).
+        assert_eq!(sanitize_request_timeout(0.0), 0.0);
+        assert_eq!(sanitize_request_timeout(5_000.0), 5_000.0);
+        assert_eq!(sanitize_request_timeout(300_000.0), 300_000.0);
+        assert_eq!(sanitize_request_timeout(1.9), 1.0);
+
+        // The whole point: every sanitized value is a finite, non-negative
+        // ms count whose `as u64` cast yields a real `Duration` — never the
+        // `u64::MAX` overflow the raw `Infinity` would have produced.
+        for raw in [f64::INFINITY, f64::NAN, -1.0, 1e300, 5_000.0] {
+            let ms = sanitize_request_timeout(raw);
+            assert!(ms.is_finite() && (0.0..=9_007_199_254_740_991.0).contains(&ms));
+            assert!(
+                ms as u64 != u64::MAX,
+                "raw {raw} must not saturate the cast"
+            );
+        }
+    }
+
+    /// Both setter paths — the `server.requestTimeout = x` property
+    /// (FFI) and the `createServer({ requestTimeout })` option — store a
+    /// sanitized value. Pre-fix, both stored the raw `f64` verbatim.
+    #[test]
+    fn request_timeout_setter_paths_store_sanitized_values() {
+        // Property-setter path: `Infinity` previously stored verbatim.
+        let handle = register_handle(HttpServer::with_handler(0));
+        let ret = crate::server::js_node_http_server_set_request_timeout(handle, f64::INFINITY);
+        // The setter returns the assigned value (JS `a = b` evaluates to `b`)…
+        assert!(ret.is_infinite());
+        // …but the *stored* field is sanitized to the safe default.
+        assert_eq!(
+            crate::server::js_node_http_server_request_timeout(handle),
+            300_000.0
+        );
+        crate::server::js_node_http_server_set_request_timeout(handle, 7_500.0);
+        assert_eq!(
+            crate::server::js_node_http_server_request_timeout(handle),
+            7_500.0
+        );
+        drop_handle(handle);
+
+        // Option path through `apply_server_options`.
+        let _guard = GcTestGuard::new_with_slots(1);
+        let options_json =
+            perry_ffi::alloc_string(r#"{"requestTimeout":1e300,"headersTimeout":222}"#);
+        let options_ptr = options_json.as_raw() as *const perry_runtime::StringHeader;
+        let options = unsafe { perry_runtime::json::js_json_parse(options_ptr) };
+        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+
+        let mut server = HttpServer::with_handler(0);
+        crate::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+        // Oversized `requestTimeout` clamped; unrelated knob untouched.
+        assert_eq!(server.request_timeout, 9_007_199_254_740_991.0);
+        assert_eq!(server.headers_timeout, 222.0);
+    }
 }

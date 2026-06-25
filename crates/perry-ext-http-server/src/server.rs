@@ -372,6 +372,35 @@ pub unsafe extern "C" fn js_node_http_create_server_with_options(
     register_handle(server)
 }
 
+/// Largest `requestTimeout` Node accepts, mirroring its
+/// `kMaxRequestTimeout = MAX_SAFE_INTEGER` (`2**53 - 1`) ceiling in
+/// `lib/_http_server.js`.
+const MAX_REQUEST_TIMEOUT_MS: f64 = 9_007_199_254_740_991.0;
+
+/// Coerce a `requestTimeout` (ms) into the same finite, non-negative,
+/// integer, `MAX_SAFE_INTEGER`-bounded domain Node enforces via
+/// `validateInteger(value, 'requestTimeout', 0, kMaxRequestTimeout)`,
+/// so the value the in-flight reaper later casts to `u64` to build a
+/// `Duration` deadline can never overflow.
+///
+/// The bug this guards (CodeRabbit, #5663): an un-sanitized `f64`
+/// reaching `grace_ms as u64` produces a garbage deadline — Rust's
+/// saturating float→int cast turns `Infinity` into `u64::MAX` (a
+/// deadline that never fires) and an oversized finite value into a
+/// nonsensical one. Node rejects those at construction with
+/// `ERR_OUT_OF_RANGE`; lacking a throw path here, we coerce to the
+/// nearest in-range value instead — non-finite falls back to Node's
+/// 300s default, out-of-range clamps to `[0, MAX_SAFE_INTEGER]`, and
+/// the fractional part is truncated to an integer ms count. `0` is
+/// preserved (Node's "disabled" sentinel; the reaper maps it back to
+/// the default).
+pub(crate) fn sanitize_request_timeout(ms: f64) -> f64 {
+    if !ms.is_finite() {
+        return 300_000.0;
+    }
+    ms.trunc().clamp(0.0, MAX_REQUEST_TIMEOUT_MS)
+}
+
 /// Read each Node-documented timeout/socket knob off the options
 /// object and overwrite the server's default. Missing keys leave the
 /// default in place; non-numeric values silently no-op (matches
@@ -411,7 +440,7 @@ pub(crate) fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
         server.keep_alive_timeout_buffer = v;
     }
     if let Some(v) = as_num("requestTimeout") {
-        server.request_timeout = v;
+        server.request_timeout = sanitize_request_timeout(v);
     }
     if let Some(v) = as_num("timeout") {
         server.idle_timeout = v;
@@ -485,7 +514,20 @@ server_setter!(
     keep_alive_timeout_buffer
 );
 server_getter!(js_node_http_server_request_timeout, request_timeout);
-server_setter!(js_node_http_server_set_request_timeout, request_timeout);
+/// `server.requestTimeout = ms` — sanitized rather than macro-generated
+/// so the stored value is always a finite, non-negative, integer,
+/// `MAX_SAFE_INTEGER`-bounded ms count (see `sanitize_request_timeout`).
+/// This keeps the in-flight reaper's `grace_ms as u64` cast from
+/// overflowing on `Infinity`/oversized values regardless of which
+/// setter path (constructor option or this property) wrote the field.
+#[no_mangle]
+pub extern "C" fn js_node_http_server_set_request_timeout(handle: i64, value: f64) -> f64 {
+    let sanitized = sanitize_request_timeout(value);
+    if let Some(s) = get_handle_mut::<HttpServer>(handle) {
+        s.request_timeout = sanitized;
+    }
+    value
+}
 server_getter!(js_node_http_server_idle_timeout, idle_timeout);
 server_setter!(js_node_http_server_set_idle_timeout, idle_timeout);
 server_getter!(js_node_http_server_max_headers_count, max_headers_count);

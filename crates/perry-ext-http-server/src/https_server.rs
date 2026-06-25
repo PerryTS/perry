@@ -30,8 +30,8 @@ use crate::request::{
 };
 use crate::response::{alloc_server_response_for_request, HyperResponseShape, ResponseBody};
 use crate::server::{
-    signal_connections_close, HttpPendingRequest, HttpServer, ReadActivity, TrackedConnection,
-    CONNECTIONS, NEXT_CONNECTION_ID, PENDING_CONNECTION_EVENTS,
+    sanitize_request_timeout, signal_connections_close, HttpPendingRequest, HttpServer,
+    ReadActivity, TrackedConnection, CONNECTIONS, NEXT_CONNECTION_ID, PENDING_CONNECTION_EVENTS,
 };
 use crate::tls::{
     build_certless_server_config, build_server_config, has_pem_material, json_value_to_pem_bytes,
@@ -651,7 +651,18 @@ https_server_setter!(
     keep_alive_timeout_buffer
 );
 https_server_getter!(js_node_https_server_request_timeout, request_timeout);
-https_server_setter!(js_node_https_server_set_request_timeout, request_timeout);
+/// `httpsServer.requestTimeout = ms` — sanitized rather than
+/// macro-generated, mirroring the HTTP setter, so the stored value
+/// stays in Node's finite/non-negative/`MAX_SAFE_INTEGER` domain and
+/// the in-flight reaper's `as u64` cast can't overflow.
+#[no_mangle]
+pub extern "C" fn js_node_https_server_set_request_timeout(handle: i64, value: f64) -> f64 {
+    let sanitized = sanitize_request_timeout(value);
+    if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        s.base.request_timeout = sanitized;
+    }
+    value
+}
 https_server_getter!(js_node_https_server_idle_timeout, idle_timeout);
 https_server_setter!(js_node_https_server_set_idle_timeout, idle_timeout);
 https_server_getter!(js_node_https_server_max_headers_count, max_headers_count);
