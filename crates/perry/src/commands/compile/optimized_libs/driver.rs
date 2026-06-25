@@ -587,21 +587,30 @@ pub(crate) fn build_optimized_libs(
             &build_stamp,
         )
     {
-        let well_known_libs = resolve_auto_well_known_libs(
+        // The "archives fresh" fast-path must still carry the NON-tokio
+        // routed well-known libs collected by the routing loop above (e.g.
+        // perry-ext-zlib for `node:zlib`, perry-ext-events, …). They live in
+        // the outer `well_known_libs`; `resolve_auto_well_known_libs` only
+        // resolves the tokio-using bindings. Without merging them, the routed
+        // CPU-only ext staticlibs are dropped here and the link fails with
+        // undefined `js_ext_zlib_*` / `js_zlib_*` (and other non-tokio
+        // well-known) symbols — even though the archive is on disk.
+        let mut well_known_libs = well_known_libs;
+        well_known_libs.extend(resolve_auto_well_known_libs(
             &workspace_root,
             &release_dir,
             &tokio_using_bindings,
             target,
             format,
-        );
+        ));
         return OptimizedLibs {
             runtime: Some(runtime_path),
             stdlib: Some(stdlib_path),
             runtime_bc: None,
             stdlib_bc: None,
             extra_bc: Vec::new(),
+            prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
             well_known_libs,
-            prefer_well_known_before_stdlib: false,
         };
     }
 
