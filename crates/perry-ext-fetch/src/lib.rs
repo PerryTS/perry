@@ -8,6 +8,7 @@
 //! (closes #236), per-handle Response / Headers / Blob / Request /
 //! Stream pools.
 //!
+use bytes::Bytes;
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, get_handle, register_handle, spawn_blocking, JsClosure, JsPromise, JsString,
@@ -69,7 +70,14 @@ struct FetchResponse {
     status: u16,
     status_text: String,
     headers: HeadersStore,
-    body: Vec<u8>,
+    // `Bytes` (not `Vec<u8>`): the body is filled once from `reqwest`'s
+    // `response.bytes()` and then read by several accessors
+    // (`text`/`json`/`arrayBuffer`/`bytes`/`blob`/`formData`). With a
+    // `Vec<u8>` every accessor `.clone()`d the whole payload to drop the
+    // registry lock before allocating into the arena — a full body copy
+    // per read. `Bytes` is a refcounted slice, so that same `.clone()` is
+    // an O(1) atomic bump (zero copy); the decode is what allocates, once.
+    body: Bytes,
     type_name: String,
     url: String,
     redirected: bool,
@@ -423,7 +431,7 @@ fn do_fetch(
                     let response_url = response.url().to_string();
                     let redirected = response_url != url;
                     let headers = headers_from_header_map(response.headers());
-                    let body = response.bytes().await.unwrap_or_default().to_vec();
+                    let body = response.bytes().await.unwrap_or_default();
                     Ok(FetchResponse {
                         status,
                         status_text,
@@ -473,10 +481,6 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
     let promise = JsPromise::new();
     let raw = promise.as_raw();
     let Some(url) = read_str(url_ptr) else {
-        eprintln!(
-            "[ext-fetch GET-auth] url_ptr null/invalid (ptr={:?})",
-            url_ptr
-        );
         promise.reject_string("Invalid URL");
         return raw;
     };
@@ -486,11 +490,6 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
             headers.insert("Authorization".to_string(), auth);
         }
     }
-    eprintln!(
-        "[ext-fetch GET-auth] url='{}' headers.len={}",
-        &url[..url.len().min(80)],
-        headers.len()
-    );
     do_fetch("GET".to_string(), url, headers, None, promise);
     raw
 }
@@ -579,16 +578,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
 pub extern "C" fn js_fetch_response_status(handle: f64) -> f64 {
     let id = handle_id(handle);
     let map = FETCH_RESPONSES.lock().unwrap();
-    let result = map.get(&id).map(|r| r.status as f64).unwrap_or(0.0);
-    eprintln!(
-        "[ext-fetch resp.status] handle={} bits=0x{:016x} id={} keys={:?} -> {}",
-        handle,
-        handle.to_bits(),
-        id,
-        map.keys().collect::<Vec<_>>(),
-        result
-    );
-    result
+    map.get(&id).map(|r| r.status as f64).unwrap_or(0.0)
 }
 
 #[no_mangle]
@@ -652,8 +642,12 @@ pub unsafe extern "C" fn js_fetch_response_text(handle: f64) -> *mut Promise {
         .map(|r| r.body.clone());
     match body {
         Some(b) => {
-            let s = String::from_utf8_lossy(&b).to_string();
-            promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw()));
+            // `from_utf8_lossy` borrows when the body is already valid
+            // UTF-8 (the common case), so the decode adds no allocation;
+            // `alloc_string` then writes straight into the arena.
+            promise.resolve(JsValue::from_string_ptr(
+                alloc_string(&String::from_utf8_lossy(&b)).as_raw(),
+            ));
         }
         None => promise.reject_string("Invalid response handle"),
     }
@@ -676,9 +670,11 @@ pub unsafe extern "C" fn js_fetch_response_json(handle: f64) -> *mut Promise {
         Some(b) => {
             // Return the body as a JSON string — user code does
             // JSON.parse(text) on the JS side. Same shape as
-            // perry-stdlib's existing copy.
-            let s = String::from_utf8_lossy(&b).to_string();
-            promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw()));
+            // perry-stdlib's existing copy. `from_utf8_lossy` borrows on
+            // valid UTF-8, so the decode is allocation-free into the arena.
+            promise.resolve(JsValue::from_string_ptr(
+                alloc_string(&String::from_utf8_lossy(&b)).as_raw(),
+            ));
         }
         None => promise.reject_string("Invalid response handle"),
     }
@@ -1114,7 +1110,7 @@ pub unsafe extern "C" fn js_response_new(
         status,
         status_text,
         headers,
-        body,
+        body: Bytes::from(body),
         type_name: "default".to_string(),
         url: String::new(),
         redirected: false,
@@ -1143,6 +1139,18 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     }
 }
 
+/// Wrap arbitrary body bytes as the `JsValue` that `arrayBuffer()` /
+/// `bytes()` resolve with: a runtime Buffer (`POINTER_TAG`), byte-exact.
+///
+/// The body must NOT go through a `String`: `new Uint8Array(value)` on
+/// the JS side dispatches on the buffer tag, so a `STRING_TAG` value is
+/// read as an empty buffer — and `from_utf8_unchecked` on a non-UTF-8
+/// payload (a fetched PNG/protobuf) is both UB and lossy. Handing the
+/// raw bytes to `alloc_buffer` is the only correct shape.
+fn body_to_buffer_value(bytes: &[u8]) -> JsValue {
+    JsValue::from_object_ptr(perry_ffi::alloc_buffer(bytes))
+}
+
 /// # Safety
 /// `handle` must come from a previous fetch.
 #[no_mangle]
@@ -1156,12 +1164,7 @@ pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut Promise {
         .get(&id)
         .map(|r| r.body.clone());
     match body {
-        Some(b) => {
-            // Resolve with the bytes as a string (caller wraps in
-            // Uint8Array on JS side).
-            let s = unsafe { std::str::from_utf8_unchecked(&b) }.to_string();
-            promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw()));
-        }
+        Some(b) => promise.resolve(body_to_buffer_value(&b)),
         None => promise.reject_string("Invalid response handle"),
     }
     raw
@@ -1180,10 +1183,7 @@ pub unsafe extern "C" fn js_response_bytes(handle: f64) -> *mut Promise {
         .get(&id)
         .map(|r| r.body.clone());
     match body {
-        Some(b) => {
-            let buf = perry_ffi::alloc_buffer(&b);
-            promise.resolve(JsValue::from_object_ptr(buf));
-        }
+        Some(b) => promise.resolve(body_to_buffer_value(&b)),
         None => promise.reject_string("Invalid response handle"),
     }
     raw
@@ -1226,7 +1226,7 @@ pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut Promise {
                 .get("content-type")
                 .unwrap_or_else(|| "application/octet-stream".to_string());
             let blob_id = store_blob(BlobData {
-                bytes: r.body,
+                bytes: r.body.to_vec(),
                 content_type,
             });
             promise.resolve(JsValue::from_number(blob_id as f64));
@@ -1294,7 +1294,7 @@ pub unsafe extern "C" fn js_response_static_json(
         status,
         status_text,
         headers,
-        body: body.into_bytes(),
+        body: Bytes::from(body),
         type_name: "default".to_string(),
         url: String::new(),
         redirected: false,
@@ -1323,7 +1323,7 @@ pub unsafe extern "C" fn js_response_static_redirect(
         status: status as u16,
         status_text: String::new(),
         headers,
-        body: Vec::new(),
+        body: Bytes::new(),
         type_name: "default".to_string(),
         url: String::new(),
         redirected: false,
@@ -1336,7 +1336,7 @@ pub extern "C" fn js_response_static_error() -> f64 {
         status: 0,
         status_text: String::new(),
         headers: HeadersStore::default(),
-        body: Vec::new(),
+        body: Bytes::new(),
         type_name: "error".to_string(),
         url: String::new(),
         redirected: false,
@@ -1379,10 +1379,11 @@ pub unsafe extern "C" fn js_blob_array_buffer(handle: f64) -> *mut Promise {
         .get(&id)
         .map(|b| b.bytes.clone());
     match bytes {
-        Some(b) => {
-            let s = unsafe { std::str::from_utf8_unchecked(&b) }.to_string();
-            promise.resolve(JsValue::from_string_ptr(alloc_string(&s).as_raw()));
-        }
+        // Resolve a real Buffer object, not a string: the same non-UTF-8
+        // corruption the Response `arrayBuffer` path had — `blob.arrayBuffer()`
+        // (and `blob.bytes()`, which forwards here) must return the stored
+        // bytes byte-exact.
+        Some(b) => promise.resolve(body_to_buffer_value(&b)),
         None => promise.reject_string("Invalid blob handle"),
     }
     raw
@@ -1829,170 +1830,4 @@ fn _ensure_handle_imports() -> Option<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn response_count_starts_at_zero() {
-        let initial = js_fetch_response_count();
-        // Other tests may have populated, but it can't be negative.
-        assert!(initial >= 0);
-    }
-
-    #[test]
-    fn response_status_invalid_handle() {
-        assert_eq!(js_fetch_response_status(99_999_999.0), 0.0);
-    }
-
-    #[test]
-    fn headers_round_trip() {
-        let h = js_headers_new();
-        let key = alloc_string("Content-Type");
-        let value = alloc_string("application/json");
-        let set = unsafe { js_headers_set(h, key.as_raw(), value.as_raw()) };
-        assert_eq!(set, 1.0);
-        let got_ptr = unsafe { js_headers_get(h, key.as_raw()) };
-        let got = perry_ffi::read_string(unsafe { JsString::from_raw(got_ptr) }).expect("non-null");
-        assert_eq!(got, "application/json");
-        let has = unsafe { js_headers_has(h, key.as_raw()) };
-        assert_eq!(has, 1.0);
-        let del = unsafe { js_headers_delete(h, key.as_raw()) };
-        assert_eq!(del, 1.0);
-        let has2 = unsafe { js_headers_has(h, key.as_raw()) };
-        assert_eq!(has2, 0.0);
-    }
-
-    #[test]
-    fn headers_append_combines_values() {
-        let h = js_headers_new();
-        let key = alloc_string("X-Test");
-        let first = alloc_string("a");
-        let second = alloc_string("b");
-
-        let append_first = unsafe { js_headers_append(h, key.as_raw(), first.as_raw()) };
-        let append_second = unsafe { js_headers_append(h, key.as_raw(), second.as_raw()) };
-        assert_eq!(append_first, 1.0);
-        assert_eq!(append_second, 1.0);
-
-        let got_ptr = unsafe { js_headers_get(h, key.as_raw()) };
-        let got = perry_ffi::read_string(unsafe { JsString::from_raw(got_ptr) }).expect("non-null");
-        assert_eq!(got, "a, b");
-    }
-
-    #[test]
-    fn blob_slice_basic() {
-        let id = store_blob(BlobData {
-            bytes: b"hello, world".to_vec(),
-            content_type: "text/plain".to_string(),
-        });
-        let null = std::ptr::null::<StringHeader>();
-        let sliced = unsafe { js_blob_slice(id as f64, 7.0, 12.0, null) };
-        assert!(sliced > 0.0);
-        let size = js_blob_size(sliced);
-        assert_eq!(size, 5.0);
-    }
-
-    #[test]
-    fn request_round_trip() {
-        let url = alloc_string("https://example.com");
-        let method = alloc_string("POST");
-        let body = alloc_string(r#"{"x":1}"#);
-        let null = std::ptr::null::<StringHeader>();
-        let h = unsafe {
-            js_request_new(
-                url.as_raw(),
-                method.as_raw(),
-                body.as_raw(),
-                0.0,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                0.0,
-                null,
-                0.0,
-            )
-        };
-        assert!(h > 0.0);
-        let url_ptr = js_request_get_url(h);
-        let url_str =
-            perry_ffi::read_string(unsafe { JsString::from_raw(url_ptr) }).expect("non-null");
-        assert_eq!(url_str, "https://example.com");
-        let method_ptr = js_request_get_method(h);
-        let method_str =
-            perry_ffi::read_string(unsafe { JsString::from_raw(method_ptr) }).expect("non-null");
-        assert_eq!(method_str, "POST");
-    }
-
-    #[test]
-    fn response_static_json() {
-        let v = JsValue::from_string_ptr(alloc_string("hello").as_raw());
-        // No init: status defaults to 200, no statusText, no headers.
-        let resp = unsafe {
-            js_response_static_json(f64::from_bits(v.bits()), 0.0, std::ptr::null(), 0.0)
-        };
-        assert!(resp > 0.0);
-        let status = js_fetch_response_status(resp);
-        assert_eq!(status, 200.0);
-    }
-
-    // #1688: request.text()/.json()/.arrayBuffer() were unimplemented. The
-    // FFIs build a JsPromise (runtime symbols unavailable in the unittest
-    // binary, as with every other promise-returning fetch FFI), so this
-    // exercises the shared body data path they consume: a stored body
-    // round-trips, a bodiless request reads as "", and an invalid handle is
-    // None (→ the FFI rejects).
-    #[test]
-    fn request_body_data_path() {
-        let url = alloc_string("https://example.com");
-        let method = alloc_string("POST");
-        let body = alloc_string(r#"{"x":1}"#);
-        let null = std::ptr::null::<StringHeader>();
-        let h = unsafe {
-            js_request_new(
-                url.as_raw(),
-                method.as_raw(),
-                body.as_raw(),
-                0.0,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                0.0,
-                null,
-                0.0,
-            )
-        };
-        assert!(h > 0.0);
-        assert_eq!(request_body_string(h).as_deref(), Some(r#"{"x":1}"#));
-
-        let url2 = alloc_string("https://example.com/empty");
-        let h2 = unsafe {
-            js_request_new(
-                url2.as_raw(),
-                null,
-                null,
-                0.0,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                0.0,
-                null,
-                0.0,
-            )
-        };
-        assert_eq!(request_body_string(h2).as_deref(), Some(""));
-
-        assert_eq!(request_body_string(99_999_999.0), None);
-    }
-}
+mod tests;
