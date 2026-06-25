@@ -294,8 +294,12 @@ pub extern "C" fn js_object_define_property(
             // `js_instanceof` consults — so `x instanceof C` honors the user hook
             // (zod 4 installs its brand-check `@@hasInstance` exactly this way).
             if crate::symbol::js_is_symbol(key_value) != 0 {
-                let value_field = desc_read_field(descriptor_value, b"value");
-                if !value_field.is_undefined() {
+                // Gate on descriptor-field *presence*, not on the value being
+                // non-`undefined`: `Object.defineProperty(C, sym, { value: undefined })`
+                // must still register an own entry. A generic redefine like
+                // `{ enumerable: true }` (no `value`) leaves any existing entry intact.
+                if desc_has_field(descriptor_value, b"value") {
+                    let value_field = desc_read_field(descriptor_value, b"value");
                     crate::symbol::js_class_register_static_symbol(
                         target_cid,
                         key_value,
@@ -380,7 +384,12 @@ pub extern "C" fn js_object_define_property(
                         crate::symbol::set_symbol_accessor_property(
                             obj_value, key_value, get_bits, set_bits,
                         );
-                    } else {
+                    } else if desc_has_field(descriptor_value, b"value") {
+                        // Only write a value when the descriptor actually carries
+                        // one. A generic redefine like `{ enumerable: true }` must
+                        // preserve the existing `fn[sym]` rather than clobber it
+                        // with `undefined`. (`value: undefined` is honored — it is
+                        // a present field.)
                         let value_field = desc_read_field(descriptor_value, b"value");
                         crate::symbol::js_object_set_symbol_property(
                             obj_value,
