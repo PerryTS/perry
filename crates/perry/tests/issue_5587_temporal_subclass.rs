@@ -121,6 +121,36 @@ console.log("called-final:", called);                 // 1
 }
 
 #[test]
+fn temporal_duration_subclass_via_aliased_heritage() {
+    // `class X extends D` where `D` is an alias of `Temporal.Duration`. The
+    // non-spread `super(...)` path must recover the Temporal parent even when the
+    // immediate heritage value arrives stale, via the decl-time parent stash.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const D = Temporal.Duration;
+class X extends D {
+  constructor() {
+    super(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+  }
+}
+const x = new X();
+console.log("instanceof:", x instanceof Temporal.Duration);   // true
+console.log("days:", (x as any).days);                        // 4
+console.log("abs-proto:",
+  Object.getPrototypeOf((x as any).abs()) === Temporal.Duration.prototype);  // true
+"#,
+    );
+    assert_eq!(
+        stdout,
+        "instanceof: true\n\
+         days: 4\n\
+         abs-proto: true\n"
+    );
+}
+
+#[test]
 fn temporal_plain_date_subclass_dispatches() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(

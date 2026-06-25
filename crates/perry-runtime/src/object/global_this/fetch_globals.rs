@@ -480,9 +480,26 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // leave the subclass instance an empty object with no Temporal brand. Stash
     // the cell on `this` instead. The native ctor never calls the subclass
     // constructor, so `called`-counter invariants hold. (#5587)
+    //
+    // `parent_val` can arrive stale/undefined for an aliased heritage
+    // (`const D = Temporal.Duration; class X extends D`) when codegen re-evaluates
+    // the extends expression in constructor scope — exactly the case the
+    // Request/Response branch below recovers via the decl-time stash. Mirror that:
+    // when the immediate value isn't a Temporal ctor, fall back to the parent
+    // value recorded against this instance's class id at declaration time.
     #[cfg(feature = "temporal")]
-    if temporal_subclass_super(parent_val, this_box, args_ptr, args_len) {
-        return undef;
+    {
+        let temporal_parent = if super::temporal_ctor_kind(parent_val).is_some() {
+            parent_val
+        } else if let Some(obj) = subclass_this_object_ptr(this_box) {
+            let cid = crate::object::js_object_get_class_id(obj);
+            crate::object::class_registry::js_get_dynamic_parent_value(cid)
+        } else {
+            parent_val
+        };
+        if temporal_subclass_super(temporal_parent, this_box, args_ptr, args_len) {
+            return undef;
+        }
     }
     // Resolve the parent constructor kind from the value first. When the
     // `extends` expression is an alias of `global.Request`/`global.Response`

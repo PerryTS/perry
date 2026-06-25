@@ -295,12 +295,12 @@ pub fn has_method(recv: f64, name: &str) -> bool {
     // Methods shared by (nearly) every Temporal type.
     const COMMON: &[&str] = &["toString", "toJSON", "toLocaleString", "valueOf"];
     if COMMON.contains(&name) {
-        return matches!(temporal_value_ref(recv), Some(_));
+        return temporal_value_ref(recv).is_some();
     }
     let names: &[&str] = match temporal_value_ref(recv) {
-        Some(TemporalValue::Duration(_)) => {
-            &["with", "negated", "abs", "add", "subtract", "round", "total"]
-        }
+        Some(TemporalValue::Duration(_)) => &[
+            "with", "negated", "abs", "add", "subtract", "round", "total",
+        ],
         Some(TemporalValue::Instant(_)) => &[
             "add",
             "subtract",
@@ -323,9 +323,9 @@ pub fn has_method(recv: f64, name: &str) -> bool {
             "toPlainYearMonth",
             "toZonedDateTime",
         ],
-        Some(TemporalValue::PlainTime(_)) => {
-            &["add", "subtract", "until", "since", "round", "equals", "with"]
-        }
+        Some(TemporalValue::PlainTime(_)) => &[
+            "add", "subtract", "until", "since", "round", "equals", "with",
+        ],
         Some(TemporalValue::PlainDateTime(_)) => &[
             "add",
             "subtract",
@@ -340,9 +340,15 @@ pub fn has_method(recv: f64, name: &str) -> bool {
             "toPlainTime",
             "toZonedDateTime",
         ],
-        Some(TemporalValue::PlainYearMonth(_)) => {
-            &["add", "subtract", "until", "since", "equals", "with", "toPlainDate"]
-        }
+        Some(TemporalValue::PlainYearMonth(_)) => &[
+            "add",
+            "subtract",
+            "until",
+            "since",
+            "equals",
+            "with",
+            "toPlainDate",
+        ],
         Some(TemporalValue::PlainMonthDay(_)) => &["equals", "with", "toPlainDate"],
         Some(TemporalValue::ZonedDateTime(_)) => &[
             "add",

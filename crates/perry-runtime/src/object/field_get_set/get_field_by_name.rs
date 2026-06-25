@@ -412,11 +412,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                 std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)
                                     .unwrap();
                             let ptr = std::alloc::alloc(layout);
-                            std::ptr::copy_nonoverlapping(
-                                key_bytes.as_ptr(),
-                                ptr,
-                                key_bytes.len(),
-                            );
+                            std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), ptr, key_bytes.len());
                             ptr
                         };
                         let bound = js_class_method_bind(boxed, heap_name, key_bytes.len());

@@ -84,6 +84,8 @@ pub(crate) use ctor_thunks::{
     webcrypto_illegal_constructor_thunk, webcrypto_method_value, webcrypto_random_uuid_thunk,
     webcrypto_subtle_getter_thunk,
 };
+#[cfg(feature = "temporal")]
+pub(crate) use fetch_globals::temporal_subclass_super;
 pub(crate) use fetch_globals::{
     attach_fetch_handle_for_construction, global_this_blob_thunk, global_this_builtin_noop_thunk,
     global_this_date_thunk, global_this_eval_thunk, global_this_file_thunk,
@@ -91,8 +93,6 @@ pub(crate) use fetch_globals::{
     global_this_response_json_thunk, global_this_response_redirect_thunk,
     global_this_response_thunk,
 };
-#[cfg(feature = "temporal")]
-pub(crate) use fetch_globals::temporal_subclass_super;
 pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
     js_module_top_this, js_request_subclass_init, js_response_subclass_init,
@@ -115,9 +115,9 @@ pub(crate) use install_static::{
 };
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::install_temporal_namespace;
-pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::temporal_kind_prototype;
+pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
 pub(crate) use populate::{
     default_prepare_stack_trace_func_ptr, populate_global_this_builtins, ERROR_CONSTRUCTOR_PTR,
 };

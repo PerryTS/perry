@@ -115,12 +115,21 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         // `class X extends Temporal.<Type>` instance: a plain heap object whose
         // [[Prototype]] chain reaches `Temporal.<Type>.prototype`. It carries
         // the brand via a stashed cell rather than the Temporal-cell tag, so
-        // recover that cell and compare its kind. (#5587)
+        // recover that cell and compare its kind. The receiver reaches here both
+        // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
+        // how module-level object vars are stored) — accept both. (#5587)
         #[cfg(feature = "temporal")]
         {
             let bits = value.to_bits();
-            if (bits >> 48) == 0x7FFD {
-                let raw = (bits & crate::value::POINTER_MASK) as usize;
+            let top16 = bits >> 48;
+            let raw = if top16 == 0x7FFD {
+                (bits & crate::value::POINTER_MASK) as usize
+            } else if top16 == 0 {
+                bits as usize
+            } else {
+                0
+            };
+            if raw != 0 {
                 if let Some(cell) = unsafe { crate::object::temporal_subclass_cell(raw) } {
                     if crate::temporal::temporal_kind(cell) == Some(kind) {
                         return f64::from_bits(crate::value::TAG_TRUE);
