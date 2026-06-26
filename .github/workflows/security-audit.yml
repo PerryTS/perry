@@ -42,6 +42,14 @@ jobs:
         #   amplification + DoS surface; transitive via reqwest's
         #   tls-rustls path. Upstream hickory has a fix in main but
         #   not yet released; tracking.
+        # - RUSTSEC-2026-0187 (lopdf) — stack overflow via deeply nested
+        #   PDF objects. Fixed in lopdf >=0.42.0, but lopdf is transitive
+        #   via printpdf (perry-ext-pdf); printpdf's latest (0.9.1) still
+        #   pins lopdf ^0.39, so there is no actionable upstream bump yet.
+        #   perry-ext-pdf is a PDF *creation* API (createPdf/addText/…),
+        #   not a parser of untrusted PDFs, so the deeply-nested-input
+        #   surface is not reached. Tracking for a printpdf release that
+        #   moves to lopdf >=0.42.
         #
         # Previously the job ran `--deny warnings` which also
         # escalated every "unmaintained crate" notice into a hard
@@ -53,4 +61,5 @@ jobs:
           cargo audit \
             --ignore RUSTSEC-2023-0071 \
             --ignore RUSTSEC-2026-0118 \
-            --ignore RUSTSEC-2026-0119
+            --ignore RUSTSEC-2026-0119 \
+            --ignore RUSTSEC-2026-0187
