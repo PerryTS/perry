@@ -162,17 +162,37 @@ pub(crate) fn lower_member_tail(
                             &member.prop,
                             ast::MemberProp::Ident(p) if matches!(
                                 p.sym.as_ref(),
+                                // Keep in sync with the Object statics installed
+                                // on the reified constructor in
+                                // global_this/install_static.rs — every name
+                                // here resolves to a real native function object
+                                // (correct `typeof`/`.name`/`.length`) when read
+                                // as a value (`const f = Object.isExtensible`).
+                                // Omitting one collapses the read to the
+                                // intrinsic `GlobalGet(0).<name>` path, which has
+                                // no value form and yields `undefined` (#5588).
                                 "assign"
                                     | "create"
+                                    | "defineProperties"
                                     | "defineProperty"
                                     | "entries"
                                     | "freeze"
                                     | "fromEntries"
                                     | "getOwnPropertyDescriptor"
+                                    | "getOwnPropertyDescriptors"
                                     | "getOwnPropertyNames"
+                                    | "getOwnPropertySymbols"
                                     | "getPrototypeOf"
+                                    | "groupBy"
                                     | "hasOwn"
+                                    | "is"
+                                    | "isExtensible"
+                                    | "isFrozen"
+                                    | "isSealed"
                                     | "keys"
+                                    | "preventExtensions"
+                                    | "seal"
+                                    | "setPrototypeOf"
                                     | "values"
                             )
                         );
