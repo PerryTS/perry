@@ -380,6 +380,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             extends_name: ic.parent_name.clone(),
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields: ic
                 .field_names
                 .iter()

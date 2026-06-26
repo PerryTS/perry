@@ -169,3 +169,82 @@ console.log("r=" + inst.who());
          class with a destructuring constructor (#5437 p-queue PQueue HTTP-500)"
     );
 }
+
+/// #5437 (CodeRabbit follow-up): a local binding shadowing a BUILT-IN parent
+/// NAME (`Error`/`Request`/`Response`/`Event`/`CustomEvent`) must bind `super()`
+/// to the lexical local — codegen special-cases those names, so without the
+/// `heritage_lexically_shadowed` signal it would run the built-in initializer
+/// (e.g. Error sets `this.message`) instead of the local's constructor. The
+/// same program also extends the GENUINE built-in `Error` to prove that path is
+/// unregressed (still sets `.message` / is `instanceof Error`).
+#[test]
+fn local_shadowing_builtin_name_wins_but_genuine_builtin_unregressed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let entry = dir.path().join("main.ts");
+    let output = dir.path().join("main_bin");
+
+    std::fs::write(
+        &entry,
+        r#"
+// A FUNCTION-LOCAL class shadows the built-in `Error` NAME in this scope only.
+function withLocalError() {
+  const Error = class {
+    tag: string;
+    constructor() { this.tag = "local-error"; }
+  };
+  class Shadowed extends Error {
+    constructor() { super(); }
+  }
+  return new Shadowed();
+}
+const s: any = withLocalError();
+console.log("shadowed=" + s.tag);
+
+// At module scope `Error` is NOT shadowed — the genuine built-in Error.
+class Boom extends Error {
+  constructor(m: string) { super(m); }
+}
+const b: any = new Boom("kaboom");
+console.log("genuine=" + b.message);
+"#,
+    )
+    .expect("write entry");
+
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .arg("--no-cache")
+        .env("PERRY_NO_AUTO_OPTIMIZE", "1")
+        .env("PERRY_RUNTIME_DIR", runtime_dir())
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    // `Shadowed extends <function-local Error>` ran the local ctor (`this.tag`);
+    // the module-scope `Boom extends Error` ran the BUILT-IN Error ctor, so
+    // `super("kaboom")` set `b.message` — proving the built-in path still
+    // applies when the name is NOT shadowed.
+    assert_eq!(
+        stdout, "shadowed=local-error\ngenuine=kaboom\n",
+        "a local shadowing the built-in `Error` name must bind super() to the \
+         local ctor, while a genuine (unshadowed) `extends Error` keeps the \
+         built-in initializer (#5437 CodeRabbit follow-up)"
+    );
+}

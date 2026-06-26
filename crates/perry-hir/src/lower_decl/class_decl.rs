@@ -346,6 +346,19 @@ pub fn lower_class_decl(
     // Enter type parameter scope for resolving T, U, etc. in member types
     ctx.enter_type_param_scope(&type_params);
 
+    // #5437: does the parent Ident resolve to an in-scope lexical local that
+    // shadows a same-named native/built-in parent? Computed here (same `ctx`
+    // scope state the heritage routing below uses, before the body lowers any
+    // new locals) so codegen can prefer the dynamic local over a NAME-keyed
+    // built-in special case (Error/Request/Response/Event/CustomEvent/streams).
+    let heritage_lexically_shadowed = match class_decl.class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => {
+            let n = ident.sym.to_string();
+            !ctx.class_renames.contains_key(&n) && ctx.locals.lookup(&n).is_some()
+        }
+        _ => false,
+    };
+
     // Handle extends clause
     let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) =
         class_decl.class.super_class
@@ -1352,6 +1365,7 @@ pub fn lower_class_decl(
         extends_name,
         native_extends,
         extends_expr,
+        heritage_lexically_shadowed,
         fields,
         constructor,
         methods,
@@ -1414,6 +1428,17 @@ pub fn lower_class_from_ast(
         .unwrap_or_default();
 
     ctx.enter_type_param_scope(&type_params);
+
+    // #5437: parent Ident shadowed by an in-scope lexical local? (See the
+    // matching computation in `lower_class_decl`.) Lets codegen prefer the
+    // dynamic local over a NAME-keyed built-in special case.
+    let heritage_lexically_shadowed = match class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident)) => {
+            let n = ident.sym.to_string();
+            !ctx.class_renames.contains_key(&n) && ctx.locals.lookup(&n).is_some()
+        }
+        _ => false,
+    };
 
     let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) =
         class.super_class
@@ -1903,6 +1928,7 @@ pub fn lower_class_from_ast(
         extends_name,
         native_extends,
         extends_expr,
+        heritage_lexically_shadowed,
         fields,
         constructor,
         methods,

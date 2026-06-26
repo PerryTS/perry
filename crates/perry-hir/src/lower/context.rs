@@ -1011,6 +1011,7 @@ impl LoweringContext {
             extends_name: None,
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields,
             constructor: Some(constructor),
             methods: Vec::new(),

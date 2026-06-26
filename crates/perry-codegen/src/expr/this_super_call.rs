@@ -302,7 +302,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ) || (is_stream_family_name
                         && !has_extends_expr)
                         || is_other_builtin_constructor_name(parent_name.as_str()))
-                        && !(is_stream_family_name && has_extends_expr);
+                        && !(is_stream_family_name && has_extends_expr)
+                        // #5437: a parent NAME shadowed by an in-scope lexical
+                        // local is NOT the built-in — route it through the
+                        // dynamic `extends_expr` value so `super()` runs the
+                        // local's constructor (`const Error = class {…}; class X
+                        // extends Error {}`), not the built-in Error initializer.
+                        && !current_class.heritage_lexically_shadowed;
                     if !is_builtin_parent_name {
                         if let Some(extends_expr) = current_class.extends_expr.as_deref() {
                             // Lower the super-call args first so they get fresh slots
