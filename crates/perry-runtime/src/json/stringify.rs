@@ -210,6 +210,12 @@ pub(crate) unsafe fn stringify_buffer_pretty(
 
 #[inline]
 pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
+    // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream handle) is
+    // never a real ObjectHeader; reading its `keys_array` field would deref
+    // unmapped memory (#4904/#1843 pattern). Reject by magnitude before any load.
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
+        return false;
+    }
     let obj = ptr as *const crate::ObjectHeader;
     let potential_keys_ptr = (*obj).keys_array as u64;
     let top_16_bits = potential_keys_ptr >> 48;
@@ -667,11 +673,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
     }
 
     if let Some(ptr) = extract_pointer(bits) {
-        // #2154 — see stringify_value_depth: skip native handle ids (small
-        // POINTER_TAG values) that aren't real heap objects, so JSON.stringify
-        // of an object holding e.g. an `http.Agent` emits `null` instead of
-        // segfaulting on a low-memory deref.
-        if (ptr as usize) < 0x1000 {
+        // #2154 — see stringify_value_depth: skip native handle ids that aren't
+        // real heap objects, so JSON.stringify of an object holding e.g. an
+        // `http.Agent`, a fetch/zlib/stream handle, or a revocable-Proxy id
+        // emits `null` instead of segfaulting on the ArrayHeader/keys_array
+        // deref below. The whole small-handle band `[0, 0x100000)` is bogus, not
+        // just the `< 0x1000` low guard (#4904/#1843).
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
             buf.push_str("null");
             return;
         }
@@ -897,12 +905,14 @@ pub(crate) unsafe fn stringify_value_depth(
 
     if let Some(ptr) = extract_pointer(bits) {
         // #2154 — a POINTER_TAG value can carry a native *handle id* (a small
-        // integer like `2`, e.g. an `http.Agent` placed in an object literal)
-        // rather than a real heap pointer. Such values aren't JSON-serializable
-        // and dereferencing them (gc_obj_type → is_object_pointer / array probe)
-        // segfaults. Emit `null`, the same way closures are dropped. Real heap
-        // objects live far above this low-memory guard (matches gc_obj_type).
-        if (ptr as usize) < 0x1000 {
+        // integer like `2`, e.g. an `http.Agent` in an object literal, a fetch/
+        // zlib/stream handle, or a revocable-Proxy id) rather than a real heap
+        // pointer. Such values aren't JSON-serializable and dereferencing them
+        // (gc_obj_type → is_object_pointer / array probe) segfaults. Emit `null`,
+        // the same way closures are dropped. The whole small-handle band
+        // `[0, 0x100000)` is bogus, not just the `< 0x1000` low guard
+        // (#4904/#1843 — a Proxy id at 0xF0005 crashed Next.js render).
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
             buf.push_str("null");
             return;
         }
@@ -1186,11 +1196,14 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
                 std::ptr::null()
             };
             // #2154 — a POINTER_TAG field can be a native *handle id* (a small
-            // integer, e.g. an `http.Agent` stored in an object literal), not a
-            // real heap pointer. Reading the CLOSURE_MAGIC tag at offset 12 of
-            // such a value segfaults. Skip anything in the low-memory guard
-            // range (matches gc_obj_type); real closures live far above it.
-            if (ptr_candidate as usize) >= 0x1000 {
+            // integer, e.g. an `http.Agent` in an object literal, a fetch/zlib/
+            // stream handle, or a revocable-Proxy id), not a real heap pointer.
+            // Reading the CLOSURE_MAGIC tag at offset 12 of such a value
+            // segfaults. Skip the whole small-handle band `[0, 0x100000)` — not
+            // just the `< 0x1000` low guard (#4904/#1843 — a Proxy id at 0xF000D
+            // in a Next.js render object crashed exactly here). Real closures
+            // live far above the band.
+            if crate::value::addr_class::is_above_handle_band(ptr_candidate as usize) {
                 let type_tag = *(ptr_candidate.add(12) as *const u32);
                 if type_tag == crate::closure::CLOSURE_MAGIC {
                     found = true;
@@ -1712,6 +1725,10 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             first_bits as *const u8
         };
         if (tag == POINTER_TAG || is_raw_pointer(first_bits))
+            // A small-handle-band id (Proxy id, fetch/zlib/stream handle) is not
+            // an object; building a shape template from it would deref unmapped
+            // memory (#4904/#1843). Fall through to per-element handling.
+            && !crate::value::addr_class::is_handle_band(first_ptr as usize)
             // #2089: a Date element is a small `DateCell`, not an object with a
             // `keys_array` — don't build an object-shape template from it.
             && !crate::date::is_date_cell_addr((first_bits & POINTER_MASK) as usize)
@@ -1790,6 +1807,15 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             } else {
                 elem_bits as *const u8
             };
+            // A small-handle-band element (revocable-Proxy id, fetch/zlib/stream
+            // handle) is not a serializable heap value; the `gc_obj_type` /
+            // `is_object_pointer` / ArrayHeader-length probes below would deref
+            // unmapped memory. Emit "null" before any load (#4904/#1843 — a
+            // Proxy element in a Next.js render array crashed exactly here).
+            if crate::value::addr_class::is_handle_band(elem_ptr as usize) {
+                buf.push_str("null");
+                continue;
+            }
             // #3857: a boxed primitive wrapper element serializes as its
             // underlying primitive, not the empty wrapper object.
             if let Some(prim) = crate::builtins::boxed_primitive_json_value(elem) {
@@ -1873,6 +1899,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
 pub(crate) unsafe fn estimate_json_size(value: f64, type_hint: u32) -> usize {
     let bits = value.to_bits();
     if let Some(ptr) = extract_pointer(bits) {
+        // A small-handle-band id is not a heap object; reading its ArrayHeader
+        // length would deref unmapped memory. Use the scalar estimate.
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
+            return 4096;
+        }
         if type_hint == TYPE_ARRAY || (!is_object_pointer(ptr) && type_hint != TYPE_OBJECT) {
             let arr = ptr as *const crate::ArrayHeader;
             let len = (*arr).length as usize;

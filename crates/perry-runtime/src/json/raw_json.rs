@@ -47,7 +47,7 @@ fn is_valid_raw_json_text(text: &str) -> bool {
 /// If `value` is a raw-JSON wrapper, return its stored text bytes.
 pub(crate) unsafe fn raw_json_text_bytes(ptr: *const u8) -> Option<&'static [u8]> {
     let obj = ptr as *const ObjectHeader;
-    if obj.is_null() {
+    if obj.is_null() || crate::value::addr_class::is_handle_band(ptr as usize) {
         return None;
     }
     if (*obj).class_id != RAW_JSON_CLASS_ID {
@@ -73,7 +73,9 @@ pub(crate) unsafe fn raw_json_text_bytes(ptr: *const u8) -> Option<&'static [u8]
 /// and `js_json_is_raw_json`).
 pub(crate) unsafe fn ptr_is_raw_json_wrapper(ptr: *const u8) -> bool {
     let obj = ptr as *const ObjectHeader;
-    !obj.is_null() && (*obj).class_id == RAW_JSON_CLASS_ID
+    !obj.is_null()
+        && !crate::value::addr_class::is_handle_band(ptr as usize)
+        && (*obj).class_id == RAW_JSON_CLASS_ID
 }
 
 /// Cached `"rawJSON"` key string used for the wrapper's own property.

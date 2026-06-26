@@ -513,14 +513,26 @@ pub(crate) unsafe fn extract_pointer(bits: u64) -> Option<*const u8> {
 
 /// Read the GC header's object type tag for a user-space heap pointer.
 /// The GcHeader sits 8 bytes before `ptr`; its first byte is `obj_type`.
-/// Returns 0 when `ptr` is null or in the low-memory guard range.
+/// Returns 0 when `ptr` is null, in the low-memory guard range, or a value
+/// that is not a plausible heap address (a small-handle-band id, e.g. a
+/// revocable-Proxy id / fetch / zlib / stream handle, or NaN-box tag remnant).
+///
+/// The handle-band guard is load-bearing: a `POINTER_TAG`/raw-pointer-shaped
+/// field can carry a registry handle id (Next.js render reaches
+/// `JSON.stringify(value, replacer)` over an object holding a revocable-Proxy
+/// id in the `[0xF0000, 0x100000)` band). Dereferencing `id - 8` as a GcHeader
+/// segfaults, so classify by magnitude FIRST. Mirrors the plain-stringify
+/// path's `is_closure_value` / `is_handle_band` guards (#4904, #1843) and the
+/// canonical `addr_class::try_read_gc_header` contract.
 #[inline]
 pub(crate) unsafe fn gc_obj_type(ptr: *const u8) -> u8 {
     if ptr.is_null() || (ptr as usize) < 0x1000 {
         return 0;
     }
-    // GcHeader.obj_type is at offset 0 (see crate::gc::GcHeader layout).
-    *(ptr.sub(crate::gc::GC_HEADER_SIZE))
+    match crate::value::addr_class::try_read_gc_header(ptr as usize) {
+        Some(header) => header.obj_type,
+        None => 0,
+    }
 }
 
 /// NaN-box a string pointer as f64 (STRING_TAG)

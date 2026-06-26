@@ -157,6 +157,17 @@ unsafe fn dispatch_pointer_with_replacer(
     indent: &str,
     depth: usize,
 ) {
+    // A POINTER_TAG / raw-pointer-shaped field can carry a small-handle-band id
+    // (revocable-Proxy id, fetch/zlib/stream handle), never a dereferenceable
+    // heap pointer. Next.js render reaches `JSON.stringify(value, replacer)`
+    // over an object holding such an id; deref'ing `id - 8` as a GcHeader (or
+    // its `keys_array` in `is_object_pointer`) segfaults. Classify by magnitude
+    // FIRST and emit "null" (the field is not a serializable object), matching
+    // the plain-stringify path's `is_handle_band` guards (#4904/#1843).
+    if crate::value::addr_class::is_handle_band(ptr as usize) {
+        buf.push_str("null");
+        return;
+    }
     // Buffer / Uint8Array have no GcHeader — detect before gc_obj_type so the
     // tag read doesn't deref unrelated memory (issue #639 pattern). This
     // dispatch serves both compact (indent == "") and pretty replacer walks,
@@ -569,6 +580,16 @@ pub(crate) unsafe fn stringify_value_pretty(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream handle)
+        // is never a serializable heap value. Reading its ArrayHeader/keys_array
+        // below (the `(*arr).length` probe and `is_object_pointer`) would deref
+        // unmapped memory — Next.js render reaches here via the array-replacer
+        // fall-through with a Proxy id in the `[0xF0000,0x100000)` band. Reject
+        // by magnitude first and emit "null" (#4904/#1843 pattern).
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
+            buf.push_str("null");
+            return;
+        }
         // #3857: a boxed primitive wrapper (`new String`/`Number`/`Boolean`,
         // `Object(1n)`) serializes as its underlying primitive. Must run before
         // the `is_object_pointer` probes below, which would deref the wrapper
@@ -1117,6 +1138,11 @@ unsafe fn json_property_list_key(elem: f64) -> Option<String> {
 #[inline]
 pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
     if let Some(ptr) = extract_pointer(bits) {
+        // A small-handle-band id is neither array nor object; deref'ing its
+        // ArrayHeader would fault (#4904/#1843).
+        if crate::value::addr_class::is_handle_band(ptr as usize) {
+            return false;
+        }
         if is_object_pointer(ptr) {
             return false;
         }
