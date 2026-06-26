@@ -61,7 +61,7 @@ pub(crate) use builtin_thunks::{
     global_this_btoa_thunk, global_this_decode_uri_component_thunk, global_this_decode_uri_thunk,
     global_this_encode_uri_component_thunk, global_this_encode_uri_thunk,
     global_this_error_capture_stack_trace_thunk, global_this_error_is_error_thunk,
-    global_this_error_prepare_stack_trace_thunk, global_this_escape_thunk,
+    global_this_error_prepare_stack_trace_thunk, global_this_escape_thunk, global_this_gc_thunk,
     global_this_is_finite_thunk, global_this_is_nan_thunk, global_this_number_thunk,
     global_this_object_thunk, global_this_parse_float_thunk, global_this_parse_int_thunk,
     global_this_string_thunk, global_this_structured_clone_thunk, global_this_unescape_thunk,

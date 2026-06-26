@@ -425,6 +425,10 @@ pub(crate) fn populate_global_this_builtins(singleton: *mut ObjectHeader) {
                 false,
                 true,
             ),
+            // `gc([force])` — value form of the bare `gc()` call-intrinsic.
+            // Non-enumerable (a debug/diagnostic global). The optional `force`
+            // arg is accepted (arity 1) but ignored — Perry's gc is full.
+            "gc" => (global_this_gc_thunk as *const u8, 1, false, false),
             // #2905: standard global helper functions.
             "parseInt" => (global_this_parse_int_thunk as *const u8, 2, false, false),
             "parseFloat" => (global_this_parse_float_thunk as *const u8, 1, false, false),

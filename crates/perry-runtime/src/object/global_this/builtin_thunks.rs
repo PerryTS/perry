@@ -276,6 +276,20 @@ pub(crate) extern "C" fn global_this_is_nan_thunk(
     crate::builtins::js_is_nan(value)
 }
 
+/// `globalThis.gc([force])` — request a garbage collection. This is the value
+/// form of the same builtin the bare `gc()` call-intrinsic routes to, so
+/// `globalThis.gc()`, `global.gc?.()`, `if (globalThis.gc) gc()`, and
+/// `const f = gc; f()` all run a real collection. Perry's collector treats
+/// `gc()` as a full collection, so Node's optional `force` argument is accepted
+/// but ignored. Returns `undefined`.
+pub(crate) extern "C" fn global_this_gc_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _force: f64,
+) -> f64 {
+    crate::gc::js_gc_collect();
+    f64::from_bits(crate::value::JSValue::undefined().bits())
+}
+
 pub(crate) extern "C" fn global_this_is_finite_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
