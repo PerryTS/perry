@@ -5671,6 +5671,7 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "serde_json",
+ "socket2",
  "tokio",
  "tokio-tungstenite",
 ]

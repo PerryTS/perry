@@ -62,6 +62,7 @@ use std::sync::Once;
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
 mod app;
+mod cluster_bind;
 mod context;
 mod router;
 mod server;

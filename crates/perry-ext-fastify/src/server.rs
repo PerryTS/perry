@@ -229,6 +229,31 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     // Extract port — accepts `{ port: 3000 }`, a bare number, or
     // falls back to 3000.
     let port = extract_port(opts);
+    // Honor an explicit `{ reusePort: true }` (the Node/Bun listen option) in
+    // addition to auto-enabling SO_REUSEPORT for cluster workers.
+    let reuse_port = extract_reuse_port(opts);
+
+    // Bind synchronously, BEFORE registering the server or firing the success
+    // callback, so a bind failure (e.g. EADDRINUSE) reaches the `(err, address)`
+    // callback as an error instead of being silently dropped inside the accept
+    // task while the caller has already been told listening succeeded. Only
+    // `from_std` needs a runtime context, so it stays in the spawned task below;
+    // the bind + `set_nonblocking` that actually fail on a port clash run here.
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let std_listener = match crate::cluster_bind::bind_listener(addr, reuse_port) {
+        Ok(l) => l,
+        Err(e) => {
+            fire_listen_error(callback, &e, port);
+            return;
+        }
+    };
+    if let Err(e) = std_listener.set_nonblocking(true) {
+        fire_listen_error(callback, &e, port);
+        return;
+    }
+    // `listen(0)` asks the OS for an ephemeral port; read the real one back so
+    // the registered handle + callback report the actual bound port.
+    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
 
     let (request_tx, request_rx) = mpsc::channel::<FastifyPendingRequest>(1024);
     // #1113 — separate channel for WebSocket upgrade events so a busy
@@ -276,11 +301,16 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     // from within a runtime" inside the worker task; spawn instead.)
     perry_ffi::spawn_blocking_with_reactor(move || {
         tokio::spawn(async move {
-            let addr = SocketAddr::from(([0, 0, 0, 0], port));
-            let listener = match TcpListener::bind(addr).await {
+            // The bind already succeeded on the caller thread (so a port clash
+            // was reported to the listen callback). Here we only report the
+            // bound address for `cluster.on('listening')` and adopt the std
+            // listener into the tokio reactor — `from_std` is the one step that
+            // needs the runtime context this task provides.
+            crate::cluster_bind::notify_listening("0.0.0.0", actual_port);
+            let listener = match TcpListener::from_std(std_listener) {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("Failed to bind to port {}: {}", port, e);
+                    eprintln!("[fastify] adopting listener failed: {}", e);
                     return;
                 }
             };
@@ -339,7 +369,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
     // handle so the pump (driven from perry-stdlib's main loop) can
     // drain it after `listen()` returns.
     let _server_handle = register_handle(FastifyServerHandle {
-        port,
+        port: actual_port,
         app_handle,
         shutdown_tx: Some(shutdown_tx),
         request_rx: Mutex::new(Some(request_rx)),
@@ -355,7 +385,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         } else {
             callback as *const RawClosureHeader
         };
-        let address = format!("http://0.0.0.0:{}", port);
+        let address = format!("http://0.0.0.0:{}", actual_port);
         let addr_str = alloc_string(&address);
         let addr_val = JsValue::from_string_ptr(addr_str.as_raw());
         let null_val = f64::from_bits(TAG_NULL);
@@ -365,7 +395,7 @@ pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callba
         }
     }
 
-    println!("Server listening on http://0.0.0.0:{}", port);
+    println!("Server listening on http://0.0.0.0:{}", actual_port);
 
     // `listen()` is now non-blocking — the accept loop is already
     // spawned above, and `js_fastify_process_pending` drains pending
@@ -1470,6 +1500,66 @@ unsafe fn extract_port(opts: f64) -> u16 {
         }
     }
     3000
+}
+
+/// Read `reusePort: true` from a `{ port, reusePort }` listen-options object.
+/// `reusePort` is a real Node (`net` / `http` `listen`) and Bun (`Bun.serve`)
+/// option that sets SO_REUSEPORT so multiple processes can share one port;
+/// honoring it lets a non-cluster program opt into port sharing directly.
+/// Defaults to false for a bare-number `listen(port)` or a missing option.
+unsafe fn extract_reuse_port(opts: f64) -> bool {
+    let v = JsValue::from_bits(opts.to_bits());
+    if v.is_pointer() {
+        if let Some(json) = perry_ffi::json_stringify(v) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
+                return parsed
+                    .get("reusePort")
+                    .and_then(|p| p.as_bool())
+                    .unwrap_or(false);
+            }
+        }
+    }
+    false
+}
+
+/// Hand a failed bind to the `(err, address)` listen callback as a Node-style
+/// system `Error` (`.code` / `.syscall` / `.errno`), so user code branching on
+/// `err.code === 'EADDRINUSE'` sees the failure instead of being told the
+/// server is listening. Called before any server registration or success
+/// callback, so a port clash can no longer masquerade as a successful listen.
+unsafe fn fire_listen_error(callback: i64, e: &std::io::Error, port: u16) {
+    eprintln!("[fastify] listen on 0.0.0.0:{} failed: {}", port, e);
+    if callback == 0 {
+        return;
+    }
+    let raw = if (callback as u64 & 0xFFFF_0000_0000_0000) == POINTER_TAG {
+        (callback as u64 & PTR_MASK) as *const RawClosureHeader
+    } else {
+        callback as *const RawClosureHeader
+    };
+    let closure = JsClosure::from_raw(raw);
+    if closure.is_null() {
+        return;
+    }
+    let code: std::borrow::Cow<'static, str> = match e.kind() {
+        std::io::ErrorKind::AddrInUse => "EADDRINUSE".into(),
+        std::io::ErrorKind::PermissionDenied => "EACCES".into(),
+        std::io::ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL".into(),
+        // Any other bind/setup errno: carry it through as `E<errno>` so the
+        // error stays truthy and inspectable rather than being mislabeled.
+        _ => match e.raw_os_error() {
+            Some(n) => format!("E{}", n).into(),
+            None => "EUNKNOWN".into(),
+        },
+    };
+    // Node/libuv reports the negated OS errno.
+    let errno = e.raw_os_error().map(|n| -(n as i64)).unwrap_or(0);
+    let msg = format!("listen {} 0.0.0.0:{}", code, port);
+    let err_val = perry_ffi::system_error_value(&msg, &code, "listen", errno);
+    let _ = closure.call2(
+        f64::from_bits(err_val.bits()),
+        f64::from_bits(TAG_UNDEFINED),
+    );
 }
 
 // `js_promise_reason` is declared so wrappers that want to surface
