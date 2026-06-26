@@ -126,10 +126,11 @@ fn scan_fastify_roots(visitor: &mut GcRootVisitor<'_>) {
         }
     });
 
-    // Per-request `req.params` / `req.query` JS objects are cached on each live
-    // FastifyContext (`params_object_cache` / `query_object_cache`). Visit them
-    // as NaN-boxed value slots so a copying GC between the first accessor build
-    // and a later read keeps the object alive AND relocates the cached pointer.
+    // Per-request `req.params` / `req.query` / `req.headers` JS objects are
+    // cached on each live FastifyContext (`params_object_cache` /
+    // `query_object_cache` / `headers_object_cache`). Visit them as NaN-boxed
+    // value slots so a copying GC between the first accessor build and a later
+    // read keeps the object alive AND relocates the cached pointer.
     // `0` means uncached; only a real object pointer (POINTER_TAG `0x7FFD`) is
     // visited. `get_mut()` is sound here — the GC scan has exclusive access to
     // each handle.
@@ -141,6 +142,10 @@ fn scan_fastify_roots(visitor: &mut GcRootVisitor<'_>) {
         let query_slot = ctx.query_object_cache.get_mut();
         if *query_slot >> 48 == 0x7FFD {
             visitor.visit_nanbox_u64_slot(query_slot);
+        }
+        let headers_slot = ctx.headers_object_cache.get_mut();
+        if *headers_slot >> 48 == 0x7FFD {
+            visitor.visit_nanbox_u64_slot(headers_slot);
         }
     });
 }
@@ -246,6 +251,7 @@ mod tests {
         );
         assert_eq!(ctx.params_object_cache.load(Ordering::Acquire), 0);
         assert_eq!(ctx.query_object_cache.load(Ordering::Acquire), 0);
+        assert_eq!(ctx.headers_object_cache.load(Ordering::Acquire), 0);
 
         // Round-trip a synthetic NaN-boxed object pointer through each slot, so a
         // wiring regression in either cache is caught.
@@ -254,21 +260,26 @@ mod tests {
         assert_eq!(ctx.params_object_cache.load(Ordering::Acquire), nan_boxed);
         ctx.query_object_cache.store(nan_boxed, Ordering::Release);
         assert_eq!(ctx.query_object_cache.load(Ordering::Acquire), nan_boxed);
+        ctx.headers_object_cache.store(nan_boxed, Ordering::Release);
+        assert_eq!(ctx.headers_object_cache.load(Ordering::Acquire), nan_boxed);
     }
 
-    /// The `req.params` / `req.query` object accessors build the object once and
-    /// return the cached NaN-boxed pointer on subsequent calls within a request.
+    /// The `req.params` / `req.query` / `req.headers` object accessors build the
+    /// object once and return the cached NaN-boxed pointer on subsequent calls
+    /// within a request.
     #[test]
     fn req_object_accessors_cache_within_request() {
         use std::sync::atomic::Ordering;
         let _guard = GcTestGuard::new();
         let mut params = HashMap::new();
         params.insert("id".to_string(), "42".to_string());
+        let mut headers = HashMap::new();
+        headers.insert("host".to_string(), "example.com".to_string());
         let ctx = FastifyContext::new(
             0,
             "GET".to_string(),
             "/users/42?trace=1".to_string(),
-            HashMap::new(),
+            headers,
             None,
             params,
         );
@@ -308,6 +319,30 @@ mod tests {
                 c.to_bits(),
                 "query cache holds the returned object"
             );
+
+            // headers: same caching behaviour, a third distinct slot.
+            let e = js_fastify_req_headers(h);
+            let f = js_fastify_req_headers(h);
+            assert_eq!(e, f, "second headers read is cached");
+            assert_eq!((e as u64) >> 48, 0x7FFD, "headers object is POINTER_TAG'd");
+            assert_ne!(
+                e as u64,
+                a.to_bits(),
+                "headers cache must not reuse the params object"
+            );
+            assert_ne!(
+                e as u64,
+                c.to_bits(),
+                "headers cache must not reuse the query object"
+            );
+            let cached_h = get_handle::<FastifyContext>(h)
+                .unwrap()
+                .headers_object_cache
+                .load(Ordering::Acquire);
+            assert_eq!(
+                cached_h, e as u64,
+                "headers cache holds the returned object"
+            );
         }
         drop_handle(h);
     }
@@ -325,6 +360,7 @@ mod tests {
 
         let params_obj = young_gc_root();
         let query_obj = young_gc_root();
+        let headers_obj = young_gc_root();
         let nanbox = |addr: i64| 0x7FFD_0000_0000_0000u64 | (addr as u64 & 0x0000_FFFF_FFFF_FFFF);
         let mask = 0x0000_FFFF_FFFF_FFFFu64;
 
@@ -340,6 +376,8 @@ mod tests {
             .store(nanbox(params_obj), Ordering::Release);
         ctx.query_object_cache
             .store(nanbox(query_obj), Ordering::Release);
+        ctx.headers_object_cache
+            .store(nanbox(headers_obj), Ordering::Release);
         let handle = register_handle(ctx);
 
         let _ = perry_runtime::gc::gc_collect_minor();
@@ -349,12 +387,19 @@ mod tests {
                 get_handle::<FastifyContext>(handle).expect("context handle should remain live");
             let p = ctx.params_object_cache.load(Ordering::Acquire);
             let q = ctx.query_object_cache.load(Ordering::Acquire);
+            let hdr = ctx.headers_object_cache.load(Ordering::Acquire);
             // Tag preserved (visit_nanbox_u64_slot, not visit_i64_slot).
             assert_eq!(p >> 48, 0x7FFD, "params cache keeps POINTER_TAG after GC");
             assert_eq!(q >> 48, 0x7FFD, "query cache keeps POINTER_TAG after GC");
+            assert_eq!(
+                hdr >> 48,
+                0x7FFD,
+                "headers cache keeps POINTER_TAG after GC"
+            );
             // Address relocated to the moved object, still in the nursery.
             assert_rewritten(params_obj, (p & mask) as i64);
             assert_rewritten(query_obj, (q & mask) as i64);
+            assert_rewritten(headers_obj, (hdr & mask) as i64);
         }
         drop_handle(handle);
     }

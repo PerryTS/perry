@@ -101,6 +101,11 @@ pub struct FastifyContext {
     /// Cached `request.query` JS object. Same encoding and invariants as
     /// `params_object_cache`.
     pub query_object_cache: AtomicU64,
+    /// Cached `request.headers` JS object. Same encoding and invariants as
+    /// `params_object_cache`. Handlers commonly read several headers per request,
+    /// so caching the constructed object after the first read makes later reads an
+    /// atomic load.
+    pub headers_object_cache: AtomicU64,
 }
 
 impl FastifyContext {
@@ -132,6 +137,7 @@ impl FastifyContext {
             user_data: TAG_UNDEFINED,
             params_object_cache: AtomicU64::new(0),
             query_object_cache: AtomicU64::new(0),
+            headers_object_cache: AtomicU64::new(0),
         }
     }
 
@@ -378,11 +384,19 @@ pub unsafe extern "C" fn js_fastify_req_json(ctx_handle: Handle) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// `request.headers` — full headers as a NaN-boxed object.
+/// `request.headers` — full headers as a NaN-boxed object. Cached on the
+/// `FastifyContext` on first access — same mechanism as
+/// `js_fastify_req_params_object`.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_headers(ctx_handle: Handle) -> i64 {
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
+        let cached = ctx.headers_object_cache.load(Ordering::Acquire);
+        if cached != 0 {
+            return cached as i64;
+        }
         if let Some(obj_f64) = build_string_map_object(&ctx.headers) {
+            ctx.headers_object_cache
+                .store(obj_f64.to_bits(), Ordering::Release);
             return obj_f64.to_bits() as i64;
         }
     }
