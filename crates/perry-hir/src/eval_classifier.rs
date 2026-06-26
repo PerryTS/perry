@@ -615,7 +615,24 @@ pub fn check_site(
 mod tests {
     use super::*;
     use crate::ir::{clear_current_module_source, set_current_module_source};
+    use std::sync::Mutex;
     use swc_common::{BytePos, Span};
+
+    /// Serializes the tests that drain the process-global deferred-eval-site
+    /// sink. `take_deferred_eval_sites()` is destructive (it drains the WHOLE
+    /// sink), so two such tests running concurrently under the parallel
+    /// `cargo test` harness steal each other's recorded sites — which flaked
+    /// `unimplemented_defers_by_default_and_records_site` ("exactly one recorded
+    /// site"). Each sink-touching test holds this lock across its push→take.
+    static EVAL_SITE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Acquire [`EVAL_SITE_TEST_LOCK`], tolerating poisoning from an unrelated
+    /// panicking test — we only need the mutual exclusion, not protected data.
+    fn lock_eval_sink() -> std::sync::MutexGuard<'static, ()> {
+        EVAL_SITE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
 
     fn str_lit(s: &str) -> ast::Expr {
         ast::Expr::Lit(ast::Lit::Str(ast::Str {
@@ -790,6 +807,7 @@ mod tests {
     /// throw-on-reach value AND is recorded for the end-of-compile notice.
     #[test]
     fn default_mode_defers_runtime_unknown_and_records_site() {
+        let _sink_guard = lock_eval_sink();
         set_eval_strict_mode(false);
         // Use a unique path so this test's recorded site is identifiable even
         // if other tests push to the process-global sink concurrently.
@@ -813,6 +831,7 @@ mod tests {
     /// Strict-eval mode: a runtime-unknown site is a hard compile-time error.
     #[test]
     fn strict_mode_refuses_runtime_unknown() {
+        let _sink_guard = lock_eval_sink();
         // PERRY_ALLOW_EVAL would force non-strict; only assert when unset.
         if eval_override_enabled() {
             return;
@@ -867,6 +886,7 @@ mod tests {
     /// the `"unimplemented API"` kind.
     #[test]
     fn unimplemented_defers_by_default_and_records_site() {
+        let _sink_guard = lock_eval_sink();
         // PERRY_ALLOW_UNIMPLEMENTED forces defer regardless — fine for this
         // (defer) assertion either way, so no skip needed.
         set_unimplemented_strict_mode(false);
@@ -897,6 +917,7 @@ mod tests {
     /// caller raises the hard `#463` error) and records no notice site.
     #[test]
     fn unimplemented_refuses_in_strict_mode() {
+        let _sink_guard = lock_eval_sink();
         // PERRY_ALLOW_UNIMPLEMENTED would force defer; only assert when unset.
         if unimplemented_override_enabled() {
             return;
