@@ -106,6 +106,7 @@ fn module_with_declared_field_class() -> Module {
             extends_name: None,
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields: vec![field("x"), field("y"), field("z")],
             constructor: None,
             methods: Vec::new(),

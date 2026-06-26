@@ -543,6 +543,7 @@ mod tests {
             extends_name: None,
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields,
             constructor: None,
             methods: Vec::new(),

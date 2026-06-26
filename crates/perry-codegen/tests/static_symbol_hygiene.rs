@@ -102,6 +102,7 @@ fn class_with_static(id: u32, value: f64) -> Class {
         extends_name: None,
         native_extends: None,
         extends_expr: None,
+        heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: None,
         methods: Vec::new(),

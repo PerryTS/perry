@@ -442,6 +442,7 @@ mod tests {
             extends_name: extends_name.map(str::to_string),
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields: Vec::new(),
             constructor: None,
             methods: Vec::new(),

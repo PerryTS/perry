@@ -237,6 +237,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         extends_name: None,
         native_extends: None,
         extends_expr: None,
+        heritage_lexically_shadowed: false,
         fields,
         constructor: None,
         methods: Vec::new(),

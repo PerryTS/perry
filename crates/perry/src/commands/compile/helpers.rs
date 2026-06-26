@@ -238,6 +238,7 @@ mod tests {
             extends_name: None,
             native_extends: None,
             extends_expr: None,
+            heritage_lexically_shadowed: false,
             fields: Vec::new(),
             constructor: None,
             methods: Vec::new(),
