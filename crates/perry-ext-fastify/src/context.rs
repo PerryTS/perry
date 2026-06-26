@@ -13,6 +13,14 @@ use perry_ffi::{
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
+/// Mirror of `perry_runtime::string::STRING_FLAG_HAS_LONE_SURROGATES` — the
+/// `StringHeader::flags` bit marking a WTF-8 string that holds lone surrogates
+/// (so it isn't well-formed UTF-8). Defined locally because this crate's
+/// library code links only `perry-ffi`, not `perry-runtime` (same local-mirror
+/// pattern as the `extern "C"` runtime symbols below); the value is part of the
+/// stable runtime ABI.
+const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
+
 // Runtime symbols that perry-ffi hasn't yet wrapped — these are
 // stable `extern "C"` exports from perry-runtime. Declaring them
 // locally is the same pattern perry-ext-{net,http,ws} use for the
@@ -637,6 +645,35 @@ pub unsafe extern "C" fn js_fastify_ctx_redirect(ctx_handle: Handle, url: i64, s
 pub(crate) unsafe fn jsvalue_to_response_body(value: f64) -> (Vec<u8>, BodyKind) {
     let jsv = JsValue::from_bits(value.to_bits());
     if jsv.is_string() {
+        // Fast path: copy the StringHeader's bytes straight into the response
+        // Vec, skipping the `extract_jsvalue_string` round-trip
+        // (`String::from_utf8_lossy(..).to_string().into_bytes()` — one extra
+        // heap allocation plus a redundant UTF-8 validity scan). The body
+        // writer streams the bytes out unchanged, so the intermediate `String`
+        // buys nothing on the common text-response path. The pointer math
+        // mirrors `string_from_header`.
+        //
+        // Only well-formed UTF-8 is safe to copy verbatim. Perry strings are
+        // WTF-8 and may carry lone surrogates (flagged
+        // `STRING_FLAG_HAS_LONE_SURROGATES`); copying those raw would emit
+        // invalid UTF-8 in the response. For flagged strings fall through to
+        // the `extract_jsvalue_string` path, whose `from_utf8_lossy` substitutes
+        // U+FFFD — preserving the pre-fast-path output.
+        let ptr = js_get_string_pointer_unified(value);
+        if ptr != 0 {
+            let header = ptr as *const StringHeader;
+            let well_formed = (*header).flags & STRING_FLAG_HAS_LONE_SURROGATES == 0;
+            if well_formed {
+                let len = (*header).byte_len as usize;
+                let data_ptr = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+                let mut bytes = Vec::with_capacity(len);
+                bytes.extend_from_slice(std::slice::from_raw_parts(data_ptr, len));
+                return (bytes, BodyKind::TextOrJson);
+            }
+        }
+        // Fallback to the lossy `String` round-trip — taken for WTF-8 strings
+        // with lone surrogates, and defensively if the unified pointer accessor
+        // returns 0 (should not happen for an `is_string()` value).
         if let Some(s) = extract_jsvalue_string(value) {
             return (s.into_bytes(), BodyKind::TextOrJson);
         }

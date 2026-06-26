@@ -801,4 +801,70 @@ mod tests {
         assert_eq!(pending.method, "POST");
         assert_eq!(pending.path, "/users/42");
     }
+
+    /// The string fast path in `jsvalue_to_response_body` copies the
+    /// `StringHeader` bytes directly, bypassing the `extract_jsvalue_string`
+    /// round-trip. It must reproduce the source bytes exactly — including
+    /// multi-byte UTF-8 — and tag the body `TextOrJson`.
+    #[test]
+    fn jsvalue_to_response_body_string_fast_path() {
+        let _guard = GcTestGuard::new();
+        // SAFETY: `alloc_string` returns a live `StringHeader`; we NaN-box it and
+        // read it back synchronously with no intervening GC.
+        unsafe {
+            for sample in ["Status: UP [200]", "héllo → 世界 🚀", ""] {
+                let s = perry_ffi::alloc_string(sample);
+                assert!(!s.is_null(), "alloc_string returned null for {sample:?}");
+                let value = f64::from_bits(perry_ffi::nanbox_string_bits(s.as_raw()));
+
+                let (bytes, kind) = crate::context::jsvalue_to_response_body(value);
+                assert_eq!(bytes, sample.as_bytes(), "byte-exact round-trip");
+                assert_eq!(kind, crate::context::BodyKind::TextOrJson);
+            }
+        }
+    }
+
+    /// A WTF-8 string carrying a lone surrogate must NOT take the verbatim-copy
+    /// fast path (that would emit invalid UTF-8). It has to fall back to the
+    /// lossy `String` round-trip, substituting U+FFFD — exactly the
+    /// pre-fast-path behaviour.
+    #[test]
+    fn jsvalue_to_response_body_lone_surrogate_falls_back_to_lossy() {
+        let _guard = GcTestGuard::new();
+        unsafe {
+            // "hi" + lone surrogate U+D800 (WTF-8: ED A0 80) + "!".
+            let wtf8: &[u8] = b"hi\xED\xA0\x80!";
+            let ptr =
+                perry_runtime::string::js_string_from_wtf8_bytes(wtf8.as_ptr(), wtf8.len() as u32);
+            assert!(!ptr.is_null());
+            // The constructor flags the string as carrying lone surrogates, so the
+            // fast path must skip it (otherwise this test wouldn't exercise the guard).
+            assert_ne!(
+                (*ptr).flags & perry_runtime::string::STRING_FLAG_HAS_LONE_SURROGATES,
+                0,
+                "expected js_string_from_wtf8_bytes to flag the lone surrogate"
+            );
+            // The two `StringHeader` types are layout-identical across crates.
+            let value = f64::from_bits(perry_ffi::nanbox_string_bits(
+                ptr as *mut perry_ffi::StringHeader,
+            ));
+
+            let (bytes, kind) = crate::context::jsvalue_to_response_body(value);
+            // Output is the lossy form (valid UTF-8), not the raw WTF-8 bytes.
+            assert_eq!(
+                bytes,
+                String::from_utf8_lossy(wtf8).into_owned().into_bytes()
+            );
+            assert!(
+                std::str::from_utf8(&bytes).is_ok(),
+                "response body must be valid UTF-8"
+            );
+            assert_ne!(
+                bytes.as_slice(),
+                wtf8,
+                "raw WTF-8 bytes must not be emitted verbatim"
+            );
+            assert_eq!(kind, crate::context::BodyKind::TextOrJson);
+        }
+    }
 }
