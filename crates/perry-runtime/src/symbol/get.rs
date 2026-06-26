@@ -61,6 +61,46 @@ pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f
     None
 }
 
+/// #5437: resolve a symbol-keyed read against the underlying native handle a
+/// request wrapper aliases via its `_req` field. Returns `None` unless the
+/// receiver is a heap object whose `_req` is a small handle (POINTER-tagged,
+/// not a heap object) that holds the requested symbol in the side table.
+unsafe fn req_handle_symbol_fallback(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    let bits = obj_f64.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let raw = (bits & POINTER_MASK) as usize;
+    // Only heap-object wrappers carry a `_req` field; skip handle receivers.
+    if crate::value::addr_class::is_small_handle(raw)
+        || !crate::object::is_valid_obj_ptr(raw as *const u8)
+    {
+        return None;
+    }
+    let key = b"_req";
+    let kh = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let req = crate::object::js_object_get_field_by_name_f64(
+        raw as *const crate::object::ObjectHeader,
+        kh as *const crate::StringHeader,
+    );
+    let rbits = req.to_bits();
+    if (rbits >> 48) != 0x7FFD {
+        return None;
+    }
+    let rraw = (rbits & POINTER_MASK) as usize;
+    // The `_req` must be a small native handle, never another heap object — a
+    // heap `_req` would be served by its own normal symbol path, and recursing
+    // into it risks loops.
+    if !crate::value::addr_class::is_small_handle(rraw)
+        || crate::object::is_valid_obj_ptr(rraw as *const u8)
+    {
+        return None;
+    }
+    // Read only what the handle actually holds in the side table (no deref of
+    // the handle id as a heap object).
+    own_symbol_property(req, sym_f64)
+}
+
 unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
     let top16 = bits >> 48;
     let raw = if top16 == 0x7FFD {
@@ -369,6 +409,21 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         return accessors::invoke_symbol_accessor_getter(acc.get, obj_f64);
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+        return v;
+    }
+    // #5437 (Next.js): a heap request *wrapper* whose own symbol entry misses
+    // may be one of several `NodeNextRequest`s wrapping the SAME underlying
+    // native IncomingMessage handle (stored in its `_req` field). Node shares
+    // one per-request metadata object by reference across every such wrapper —
+    // the wrapper's ctor does `this[SYM] = this._req[SYM] || {}`. When that
+    // share didn't land on this particular wrapper (a late SSR-bundled copy
+    // never had its `[SYM]` seeded), fall through to the underlying handle's
+    // symbol meta so the read still observes the shared object, matching Node.
+    // Gated tightly: only fires on a side-table MISS, only when `_req` resolves
+    // to a small native handle (POINTER-tagged, below HANDLE_BAND_MAX, not a
+    // real heap object), and only returns a value the handle actually holds —
+    // so ordinary objects (no `_req`, or a heap `_req`) are unaffected.
+    if let Some(v) = req_handle_symbol_fallback(obj_f64, sym_f64) {
         return v;
     }
     let sym_key = sym_key_from_f64(sym_f64);
@@ -695,4 +750,100 @@ fn class_chain_has_method(class_id: u32, name: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod handle_meta_share_tests {
+    //! #5437: a native handle's symbol-keyed metadata must be shared by
+    //! reference across heap wrappers that alias it (Next.js NodeNextRequest
+    //! over an IncomingMessage), and must survive an `undefined` write-back.
+    use super::*;
+
+    const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
+
+    // A registered `Symbol.for(key)` as a NaN-boxed f64.
+    unsafe fn registered_symbol(key: &str) -> f64 {
+        let kh = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let key_f64 = crate::value::js_nanbox_string(kh as i64);
+        super::constructors::js_symbol_for(key_f64)
+    }
+
+    // A small native handle id NaN-boxed as POINTER (e.g. an IncomingMessage).
+    fn handle_value(id: u64) -> f64 {
+        f64::from_bits(POINTER_TAG_BITS | id)
+    }
+
+    #[test]
+    fn wrapper_reads_share_underlying_handle_meta() {
+        unsafe {
+            let sym = registered_symbol("NextInternalRequestMeta@@test_share");
+            // Pick a handle id well inside the small-handle band but unlikely to
+            // collide with another test's side-table entry.
+            let handle = handle_value(0x4321);
+
+            // The per-request metadata object lives on the handle.
+            let meta = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+            super::properties::js_object_set_symbol_property(handle, sym, meta);
+
+            // A heap wrapper that aliases the handle via `_req` but never had
+            // its own `[sym]` seeded.
+            let wrapper_obj = crate::object::js_object_alloc(0, 1);
+            assert!(!wrapper_obj.is_null());
+            let req_key = js_string_from_bytes(b"_req".as_ptr(), 4);
+            crate::object::js_object_set_field_by_name(wrapper_obj, req_key, handle);
+            let wrapper = crate::value::js_nanbox_pointer(wrapper_obj as i64);
+
+            // Reading the symbol off the wrapper falls through to the handle's
+            // shared meta — the exact Node-by-reference semantics.
+            let got = js_object_get_symbol_property(wrapper, sym);
+            assert_eq!(
+                got.to_bits(),
+                meta.to_bits(),
+                "wrapper symbol read should share the handle's meta object"
+            );
+        }
+    }
+
+    #[test]
+    fn undefined_write_does_not_clobber_handle_meta() {
+        unsafe {
+            let sym = registered_symbol("NextInternalRequestMeta@@test_wipe");
+            let handle = handle_value(0x5678);
+            let meta = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+            super::properties::js_object_set_symbol_property(handle, sym, meta);
+
+            // The `this._req[SYM] = this[SYM]` write-back where `this[SYM]` is
+            // undefined must NOT erase the handle's existing meta.
+            let undef = f64::from_bits(TAG_UNDEFINED);
+            super::properties::js_object_set_symbol_property(handle, sym, undef);
+
+            let got = js_object_get_symbol_property(handle, sym);
+            assert_eq!(
+                got.to_bits(),
+                meta.to_bits(),
+                "an undefined write must not clobber a handle's existing meta"
+            );
+        }
+    }
+
+    #[test]
+    fn undefined_write_to_plain_heap_object_still_clears() {
+        unsafe {
+            // The wipe-guard is gated to handle-band receivers; a normal heap
+            // object setting a symbol prop to undefined must still take effect.
+            let sym = registered_symbol("plainObjSym@@test_clear");
+            let obj_ptr = crate::object::js_object_alloc(0, 0);
+            let obj = crate::value::js_nanbox_pointer(obj_ptr as i64);
+            let v = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+            super::properties::js_object_set_symbol_property(obj, sym, v);
+            let undef = f64::from_bits(TAG_UNDEFINED);
+            super::properties::js_object_set_symbol_property(obj, sym, undef);
+            let got = js_object_get_symbol_property(obj, sym);
+            assert_eq!(
+                got.to_bits(),
+                TAG_UNDEFINED,
+                "heap-object symbol prop set to undefined must read undefined"
+            );
+        }
+    }
 }

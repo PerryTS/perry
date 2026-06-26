@@ -232,6 +232,37 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
+    // #5437 (Next.js): a native HANDLE (small-id NaN-boxed POINTER, e.g. the
+    // node:http IncomingMessage) carries per-request metadata in the symbol
+    // side table keyed by its handle id. Node shares one metadata object by
+    // reference across every wrapper that re-`new`s around the same
+    // IncomingMessage, so a wrapper write-back like
+    // `this._req[NEXT_REQUEST_META] = this[NEXT_REQUEST_META]` is harmless when
+    // `this[...]` is the shared object. In Perry a late-bundled wrapper can
+    // reach that write-back with an *undefined* `this[...]`, which would CLOBBER
+    // the handle's existing (non-undefined) metadata — wiping
+    // `resolvedPathname` and tripping Next's `resolvedPathname must be set`
+    // invariant. Treat an `undefined` write onto a handle-band receiver that
+    // already holds a non-undefined entry as a no-op: it never *adds*
+    // information, and the by-reference object the handle still points at is
+    // exactly what Node would keep. Gated to handle-band receivers (id below
+    // HANDLE_BAND_MAX and not a real heap object) so ordinary heap-object
+    // symbol props — including legitimately setting a prop to `undefined` — are
+    // untouched.
+    {
+        let raw = (obj_f64.to_bits() & crate::value::POINTER_MASK) as usize;
+        if (obj_f64.to_bits() >> 48) == 0x7FFD
+            && crate::value::addr_class::is_small_handle(raw)
+            && !crate::object::is_valid_obj_ptr(raw as *const u8)
+            && value_f64.to_bits() == TAG_UNDEFINED
+        {
+            if let Some(existing) = symbol_property_root_bits(obj_key, sym_key) {
+                if existing != TAG_UNDEFINED {
+                    return value_f64;
+                }
+            }
+        }
+    }
     // `Array.prototype[Symbol.iterator] = fn` disables the array fast path in
     // `js_get_iterator` so destructuring / GetIterator see the patched method.
     crate::array::note_array_proto_iterator_write(obj_key, sym_key);
