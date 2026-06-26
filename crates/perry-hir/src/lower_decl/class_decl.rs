@@ -404,7 +404,16 @@ pub fn lower_class_decl(
                 }
                 _ => None,
             };
-            if native_parent.is_some() {
+            // A lexical local shadowing the parent name must win over the native
+            // parent — the in-scope local IS the real parent value. Check it
+            // BEFORE `native_parent` so `const EventEmitter = …; class X extends
+            // EventEmitter {}` binds to the local via the dynamic `extends_expr`
+            // path, not the native `events` parent. ESM imports are not in
+            // `ctx.locals`, so genuine native subclassing is unchanged. Mirrors
+            // the class-expression arm below.
+            let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
+                && ctx.locals.lookup(&parent_name).is_some();
+            if native_parent.is_some() && !locally_shadowed {
                 // Keep `extends_name` populated alongside `native_extends`
                 // so SuperCall codegen + downstream chain walks still
                 // see the parent name (mirrors how stream-class
@@ -412,6 +421,15 @@ pub fn lower_class_decl(
                 // path while the native_extends carries the (module,
                 // class) tag for the runtime shim).
                 (None, Some(parent_name), native_parent, None)
+            } else if locally_shadowed {
+                // Lexical local shadow → dynamic parent via `extends_expr` (the
+                // in-scope local value), invoked by `super()` through
+                // `js_fetch_or_value_super`. See the class-expression arm below
+                // for the full rationale (Next.js p-queue `PQueue`).
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (None, Some(parent_name), None, None),
+                }
             } else {
                 // #5437 (Next.js NodeNextRequest cross-module heritage): a
                 // minified bundle declares the SAME class name in several
@@ -1437,11 +1455,18 @@ pub fn lower_class_from_ast(
                 }
                 _ => None,
             };
-            if native_parent.is_some() {
+            // A lexical local binding shadowing the parent name must win over the
+            // native/static parent — the in-scope local IS the real parent value.
+            // Check it BEFORE `native_parent` so e.g. `const EventEmitter = …;
+            // const C = class extends EventEmitter {}` routes through the dynamic
+            // `extends_expr` path (the local) instead of recording the native
+            // `events` parent. ESM imports are NOT in `ctx.locals`, so genuine
+            // `extends EventEmitter` (imported) still takes the native path.
+            let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
+                && ctx.locals.lookup(&parent_name).is_some();
+            if native_parent.is_some() && !locally_shadowed {
                 (None, Some(parent_name), native_parent, None)
-            } else if !ctx.class_renames.contains_key(&parent_name)
-                && ctx.locals.lookup(&parent_name).is_some()
-            {
+            } else if locally_shadowed {
                 // #5437 (Next.js p-queue `PQueue` inside a minified bundle): a
                 // class EXPRESSION whose parent Ident is an IN-SCOPE LOCAL
                 // (`const t = require("events"); … class extends t {…}`) must
