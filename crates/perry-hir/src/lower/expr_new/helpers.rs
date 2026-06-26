@@ -201,6 +201,18 @@ pub(crate) fn callee_is_generic_construct_shape(ctx: &LoweringContext, callee: &
         if ctx.lookup_local(ident.sym.as_ref()).is_some() {
             return true;
         }
+        // A bare-identifier callee naming a known USER CLASS (`class S {…}`;
+        // `new S(...args)`). The dedicated static-class `new` lowering maps over
+        // `a.expr` and DROPS the `a.spread` marker, collapsing `new S(...arr)`
+        // into a single array argument (`this.field = arr` instead of `arr[0]`),
+        // which SIGBUSes on the first method call (NestJS DI:
+        // `new Provider(...resolvedDeps)`). Route it through `NewDynamicSpread`
+        // so the spread positions survive; the generic apply path allocates the
+        // instance with the class's registered inline-keys shape and replays the
+        // constructor, so the result is identical to the fixed-arity `new S(arg)`.
+        if ctx.lookup_class(ident.sym.as_ref()).is_some() {
+            return true;
+        }
     }
     matches!(
         callee,
