@@ -496,6 +496,46 @@ mod tests {
         assert_eq!(unsafe { js_ext_fastify_is_context_handle(ctx_handle) }, 0);
     }
 
+    /// Regression: the per-request dispatcher (`process_request` in `server.rs`)
+    /// registers a fresh `FastifyContext` in the handle registry for every
+    /// request and must drop that handle once the response is sent. Without the
+    /// trailing `drop_handle`, every served request would leak one context — its
+    /// headers map, body, params, and response state — into the global registry,
+    /// growing unbounded under sustained load until allocation fails. This pins
+    /// the register → drop → gone invariant: a change that removed the cleanup at
+    /// the tail of `process_request` would leave the handle live and fail here.
+    #[test]
+    fn context_handle_dropped_after_dispatch() {
+        let ctx = FastifyContext::new(
+            42,
+            "GET".to_string(),
+            "/health".to_string(),
+            HashMap::new(),
+            None,
+            HashMap::new(),
+        );
+        let ctx_handle = register_handle(ctx);
+
+        // Live immediately after registration.
+        assert!(
+            get_handle::<FastifyContext>(ctx_handle).is_some(),
+            "handle should be live after register_handle"
+        );
+
+        // The dispatcher drops the handle at the end of `process_request`.
+        let removed = drop_handle(ctx_handle);
+        assert!(
+            removed,
+            "drop_handle should report a live handle as removed"
+        );
+
+        // Gone from the registry — no per-request leak.
+        assert!(
+            get_handle::<FastifyContext>(ctx_handle).is_none(),
+            "FastifyContext handle leaked: still present after drop_handle"
+        );
+    }
+
     #[test]
     fn port_extraction_safe_defaults() {
         // Object literal pattern verified through the wider unit
