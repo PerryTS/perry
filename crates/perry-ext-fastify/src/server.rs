@@ -891,7 +891,7 @@ pub(crate) fn build_context_from_pending(
 
 /// Process one request — fire hooks, call route handler, send the
 /// response back through the oneshot channel.
-fn process_request(app_handle: Handle, mut pending: FastifyPendingRequest) {
+pub(crate) fn process_request(app_handle: Handle, mut pending: FastifyPendingRequest) -> Handle {
     let ctx = build_context_from_pending(0, &mut pending);
     let ctx_handle = register_handle(ctx);
 
@@ -1053,6 +1053,13 @@ fn process_request(app_handle: Handle, mut pending: FastifyPendingRequest) {
 
     // Free the context handle so it doesn't leak.
     perry_ffi::drop_handle(ctx_handle);
+
+    // Return the (now-freed) context handle so the register → drop lifecycle
+    // is observable: the `context_handle_dropped_after_dispatch` regression
+    // test drives a real request through this function and asserts the handle
+    // is gone, which a missing `drop_handle` above would fail. The live
+    // dispatch loop calls this as a statement and discards the value.
+    ctx_handle
 }
 
 /// Call a hook closure, await any returned Promise, and report whether it
