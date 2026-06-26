@@ -149,6 +149,7 @@ fn duplicate_static_module() -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 
@@ -185,6 +186,7 @@ fn class_with_instance_and_static_method() -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 

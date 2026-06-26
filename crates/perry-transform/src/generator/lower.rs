@@ -894,6 +894,18 @@ pub fn transform_generator_function_with_extra_captures(
             next_catch_id,
             is_async_generator,
         );
+        // The next/return/throw step closures capture the generator body's
+        // `this` lexically (slot `captures.len()`); record them so codegen
+        // marks them `this`-rebind-immune (see `module.generator_step_closures`).
+        // Without this, `yield* gen` — desugared to `next.call(iter, v)` — would
+        // clobber the captured body-`this` with the iterator object via
+        // `clone_closure_rebind_this`, so a generator method that reads `this`
+        // delegated through `yield*` saw the wrong receiver.
+        if captures_this {
+            super::record_generator_step_closure(return_func_id_val);
+            super::record_generator_step_closure(throw_func_id_val);
+            super::record_generator_step_closure(next_func_id_val);
+        }
         let next_closure = Expr::Closure {
             func_id: next_func_id_val,
             params: vec![perry_hir::Param {

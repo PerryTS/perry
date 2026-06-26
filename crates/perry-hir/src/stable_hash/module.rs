@@ -38,6 +38,7 @@ impl SH for Module {
             closure_source_text,
             async_generator_funcs,
             gen_param_prologue_len,
+            generator_step_closures,
         } = self;
         name.hash(h);
         imports.hash(h);
@@ -102,6 +103,11 @@ impl SH for Module {
             id.hash(h);
             (len as u64).hash(h);
         }
+        // Generator step-closure func_ids drive the `js_register_closure_no_this_rebind`
+        // registration in codegen, so they participate in the stable hash.
+        let mut step_ids: Vec<u32> = generator_step_closures.iter().copied().collect();
+        step_ids.sort_unstable();
+        step_ids.hash(h);
     }
 }
 

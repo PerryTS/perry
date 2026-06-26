@@ -1690,6 +1690,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         &user_fn_wrapper_strict,
         &user_fn_display_names,
         &user_fn_source,
+        &hir.generator_step_closures,
     );
 
     Ok(())

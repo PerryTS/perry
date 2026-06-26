@@ -182,6 +182,11 @@ pub(super) fn emit_string_pool(
     // `js_register_function_source` call in `__perry_init_strings_<prefix>`
     // so `fn.toString()` can reconstruct the source.
     user_fn_source: &[(String, String)],
+    // Closure body func_ids of generator state-machine step closures
+    // (`next`/`return`/`throw`). Registered as `this`-rebind-immune so a
+    // `yield*`-delegated `next.call(iter, v)` keeps the generator body's
+    // lexically-captured `this`.
+    generator_step_closures: &std::collections::HashSet<u32>,
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -1099,6 +1104,19 @@ pub(super) fn emit_string_pool(
         let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
         let func_ref = format!("@{}", closure_sym);
         blk.call_void("js_register_closure_arrow_function", &[(PTR, &func_ref)]);
+    }
+
+    // Generator state-machine step closures: register their body func_ptr as
+    // `this`-rebind-immune. Their lexically-captured generator-body `this` must
+    // survive a `yield*`-delegated `next.call(iter, v)` (#yield-star-this).
+    let mut sorted_no_rebind: Vec<u32> = generator_step_closures.iter().copied().collect();
+    sorted_no_rebind.sort_unstable();
+    for fid in sorted_no_rebind {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
+        let func_ref = format!("@{}", closure_sym);
+        blk.call_void("js_register_closure_no_this_rebind", &[(PTR, &func_ref)]);
     }
 
     // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user

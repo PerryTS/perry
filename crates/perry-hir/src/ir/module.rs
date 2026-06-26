@@ -127,6 +127,18 @@ pub struct Module {
     /// zero means no prologue (the common case — fully inert). Populated by
     /// lowering (`lower_fn_decl` / `lower_fn_expr`).
     pub gen_param_prologue_len: std::collections::HashMap<perry_types::FuncId, usize>,
+    /// func_ids of the synthesized generator state-machine step closures
+    /// (`next`/`return`/`throw`) produced by the generator transform. These
+    /// closures capture the generator BODY's `this` lexically (at slot
+    /// `captures.len()`), exactly like an arrow — it is fixed at
+    /// generator-creation time and must NOT be re-bound when the closure is
+    /// invoked via `Function.prototype.call` / method dispatch. The `yield*`
+    /// delegation desugar calls the inner generator's `next` as
+    /// `next.call(iter, v)`, which would otherwise clobber the captured `this`
+    /// with the iterator object (`clone_closure_rebind_this`). Codegen
+    /// registers each func_id's `perry_closure_*` symbol via
+    /// `js_register_closure_no_this_rebind` so the runtime skips the rebind.
+    pub generator_step_closures: std::collections::HashSet<perry_types::FuncId>,
 }
 
 impl Module {
@@ -160,6 +172,7 @@ impl Module {
             closure_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
             gen_param_prologue_len: std::collections::HashMap::new(),
+            generator_step_closures: std::collections::HashSet::new(),
         }
     }
 }

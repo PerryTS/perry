@@ -839,6 +839,15 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         if raw_count & CAPTURES_THIS_FLAG == 0 {
             return closure_bits;
         }
+        // Generator state-machine step closures (`next`/`return`/`throw`) capture
+        // the generator BODY's `this` lexically — it is fixed at generator
+        // creation and must NOT be re-bound by `.call`/method dispatch. The
+        // `yield* gen` desugar calls `next.call(iter, v)`; rebinding here would
+        // clobber the captured body-`this` with the iterator object.
+        let func_ptr = crate::closure::get_valid_func_ptr(header);
+        if crate::closure::is_registered_no_this_rebind(func_ptr) {
+            return closure_bits;
+        }
         let count = real_capture_count(raw_count) as usize;
         if count == 0 {
             return closure_bits;

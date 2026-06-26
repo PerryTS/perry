@@ -65,6 +65,22 @@ thread_local! {
     // by the function it actually transforms.
     static GEN_PROLOGUE_LENS: std::cell::RefCell<std::collections::HashMap<FuncId, usize>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    // func_ids of the synthesized generator state-machine step closures
+    // (`next`/`return`/`throw`). They capture the generator body's `this`
+    // lexically, so the runtime must not re-bind their `this` slot on a
+    // `.call`/method dispatch. Drained into `module.generator_step_closures` at
+    // the end of `transform_generators`. Same thread-isolation rationale as
+    // `ASYNC_GENERATOR_FUNC_IDS`.
+    static GENERATOR_STEP_CLOSURE_IDS: std::cell::RefCell<std::collections::HashSet<FuncId>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Record a synthesized generator step-closure func_id (next/return/throw) so
+/// codegen can register it as `this`-rebind-immune.
+pub(crate) fn record_generator_step_closure(id: FuncId) {
+    GENERATOR_STEP_CLOSURE_IDS.with(|s| {
+        s.borrow_mut().insert(id);
+    });
 }
 
 /// Read (and for closures, alias) the recorded param-prologue length for a
@@ -99,6 +115,7 @@ fn record_async_generator_func(id: FuncId) {
 pub fn transform_generators(module: &mut Module) {
     // #3664: reset the per-thread async-generator accumulator for this module.
     ASYNC_GENERATOR_FUNC_IDS.with(|s| s.borrow_mut().clear());
+    GENERATOR_STEP_CLOSURE_IDS.with(|s| s.borrow_mut().clear());
     // Load the param-prologue lengths recorded by lowering so the transform can
     // lift generator param binding into the outer wrapper (run at call time).
     GEN_PROLOGUE_LENS.with(|m| {
@@ -215,6 +232,12 @@ pub fn transform_generators(module: &mut Module) {
     ASYNC_GENERATOR_FUNC_IDS.with(|s| {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
+    });
+    // Drain the generator step-closure func_ids so codegen can register them as
+    // `this`-rebind-immune (their captured `this` is lexical, like an arrow).
+    GENERATOR_STEP_CLOSURE_IDS.with(|s| {
+        let collected = std::mem::take(&mut *s.borrow_mut());
+        module.generator_step_closures.extend(collected);
     });
 }
 

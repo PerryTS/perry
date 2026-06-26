@@ -91,6 +91,17 @@ thread_local! {
         RefCell<crate::fast_hash::PtrHashMap<usize, ()>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// Side-table marking closure body `func_ptr`s whose captured `this` slot is
+    /// lexical and must NOT be re-bound by `Function.prototype.call` / method
+    /// dispatch (`clone_closure_rebind_this`). Populated by codegen for the
+    /// generator state-machine `next`/`return`/`throw` step closures: their
+    /// `this` is the generator BODY's receiver, fixed at generator-creation
+    /// time. The `yield*` delegation desugar invokes the inner generator's
+    /// `next` as `next.call(iter, v)`, whose rebind would otherwise overwrite
+    /// the captured body-`this` with the iterator object.
+    static CLOSURE_NO_THIS_REBIND_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, ()>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
     /// Unified dispatch lookup, populated lazily on first call to a func_ptr.
     /// Cuts the per-call cost from TWO RefCell::borrow + HashMap::get
     /// (one each for rest and arity) down to ONE — material on hot paths
@@ -332,6 +343,33 @@ pub fn is_registered_arrow_function(func_ptr: *const u8) -> bool {
         return false;
     }
     CLOSURE_ARROW_FUNCTION_REGISTRY.with(|r| r.borrow().contains_key(&(func_ptr as usize)))
+}
+
+/// Register a compiled function address whose captured `this` slot is lexical
+/// and must not be re-bound on `.call`/method dispatch. Emitted from module
+/// init for the generator state-machine step closures.
+#[no_mangle]
+pub extern "C" fn js_register_closure_no_this_rebind(func_ptr: *const u8) {
+    if func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_NO_THIS_REBIND_REGISTRY.with(|r| {
+        r.borrow_mut().insert(func_ptr as usize, ());
+    });
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build — the
+/// registration is emitted only from generated module-init code.
+#[used]
+static KEEP_JS_REGISTER_CLOSURE_NO_THIS_REBIND: extern "C" fn(*const u8) =
+    js_register_closure_no_this_rebind;
+
+#[inline(always)]
+pub fn is_registered_no_this_rebind(func_ptr: *const u8) -> bool {
+    if func_ptr.is_null() {
+        return false;
+    }
+    CLOSURE_NO_THIS_REBIND_REGISTRY.with(|r| r.borrow().contains_key(&(func_ptr as usize)))
 }
 
 /// Register a compiled function address as strict-mode code. Emitted from

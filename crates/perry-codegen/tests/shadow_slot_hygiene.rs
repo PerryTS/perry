@@ -130,6 +130,7 @@ fn shadow_hygiene_module() -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 
@@ -186,6 +187,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 
@@ -271,6 +273,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 
@@ -329,6 +332,7 @@ fn reassigned_any_shadow_module() -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 
@@ -402,6 +406,7 @@ fn mixed_any_alias_shadow_module() -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 
@@ -483,6 +488,7 @@ fn closure_captured_write_shadow_module() -> Module {
         closure_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
         gen_param_prologue_len: std::collections::HashMap::new(),
+        generator_step_closures: std::collections::HashSet::new(),
     }
 }
 
