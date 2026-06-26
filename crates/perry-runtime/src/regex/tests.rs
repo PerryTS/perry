@@ -348,3 +348,40 @@ fn colors_escape_string_regexp_char_class() {
     let re2 = js_regexp_new(out, make_string("g"));
     assert!(!re2.is_null(), "escaped output `\\x1b\\[0m` must construct");
 }
+
+/// Regression: emoji-regex (npm `emoji-regex`, used by `string-width` → ink,
+/// #348) factors a shared high surrogate out before a non-capturing group, so
+/// the high half is no longer directly adjacent to its low half. Before
+/// `distribute_high_over_group` the lone `\uD83C`/`\uD83D`/`\uD83E` reached the
+/// `regex` crate as a surrogate scalar and the whole pattern was rejected as
+/// `invalid pattern` (importing `string-width` then threw at module init).
+#[test]
+fn high_surrogate_distributes_over_group() {
+    // Each shape must now translate to a buildable Rust-regex pattern.
+    let patterns = [
+        // plain group, alts led by a low-surrogate single or pair
+        r"\uD83C(?:\uDDE6\uD83C[\uDDE8-\uDDEC]|\uDDE7🇴)",
+        // plain group, alt led by a low-surrogate class
+        r"\uD83E(?:[\uDD0C\uDD0F]️?|[\uDD18-\uDD1F])",
+        // optional group then a trailing low unit (ZWJ "kiss"/"family" idiom)
+        r"\uD83D(?:\uDC8B‍\uD83D)?[\uDC68\uDC69]",
+    ];
+    for p in patterns {
+        let translated = js_regex_to_rust(p);
+        assert!(
+            build_std_regex(&translated).is_ok(),
+            "should compile: {p}\n -> {translated}"
+        );
+    }
+
+    // Semantics are preserved: the rewrite matches the astral scalars (and the
+    // ZWJ sequence), not lone surrogates.
+    let re = build_std_regex(&js_regex_to_rust(r"\uD83D(?:\uDC8B‍\uD83D)?[\uDC68\uDC69]")).unwrap();
+    assert!(re.is_match("\u{1F468}"), "matches man (U+1F468)");
+    assert!(re.is_match("\u{1F469}"), "matches woman (U+1F469)");
+    assert!(
+        re.is_match("\u{1F48B}\u{200D}\u{1F469}"),
+        "matches kiss-ZWJ-woman"
+    );
+    assert!(!re.is_match("AB"), "does not match plain ASCII");
+}

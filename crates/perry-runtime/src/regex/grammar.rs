@@ -525,6 +525,26 @@ fn fold_surrogate_pairs(pattern: &str) -> String {
                             continue;
                         }
                     }
+                    // Distribute a high-surrogate unit over an immediately
+                    // following non-capturing group: `H(?:A|B)` ≡ `(?:HA|HB)`.
+                    // emoji-regex (and string-width / ink, #348) factor the
+                    // leading high surrogate out before a group of
+                    // low-surrogate-led alternatives, e.g.
+                    // `\uD83C(?:[\uDC04…]️?|\uDDE6\uD83C[\uDDE8…]|…)`, so
+                    // the high surrogate is no longer directly adjacent to its
+                    // low half and the pair fold above can't see it — the lone
+                    // `\uD83C` then reaches the `regex` crate as a surrogate
+                    // scalar and the whole pattern is rejected as `invalid
+                    // pattern`. Re-prepend H to each alternative and recurse,
+                    // restoring adjacency so each `HA` folds normally. Only
+                    // fires when every alternative begins with a low-surrogate
+                    // unit and the group is unquantified, so patterns that
+                    // compile today are byte-for-byte unaffected.
+                    if let Some((rebuilt, next)) = distribute_high_over_group(&chars, i, j) {
+                        out.push_str(&fold_surrogate_pairs(&rebuilt));
+                        i = next;
+                        continue;
+                    }
                 }
             }
         }
@@ -532,6 +552,161 @@ fn fold_surrogate_pairs(pattern: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Whether `s` begins with a low-surrogate unit (a `\uDCxx` escape or a `[…]`
+/// class of only low-surrogate escapes).
+fn starts_with_low_unit(s: &str) -> bool {
+    let c: Vec<char> = s.chars().collect();
+    matches!(
+        parse_surrogate_unit(&c, 0),
+        Some((ref r, _)) if r.iter().all(|(a, b)| is_low_surrogate(*a) && is_low_surrogate(*b))
+    )
+}
+
+/// Parse a low-surrogate unit at `chars[p]` (single escape or class). Returns its
+/// source text and the index just past it, or `None` if it is not a low unit.
+fn take_low_unit(chars: &[char], p: usize) -> Option<(String, usize)> {
+    let (r, end) = parse_surrogate_unit(chars, p)?;
+    r.iter()
+        .all(|(a, b)| is_low_surrogate(*a) && is_low_surrogate(*b))
+        .then(|| (chars[p..end].iter().collect(), end))
+}
+
+/// Distribute the high-surrogate unit `chars[i..j]` into an immediately following
+/// non-capturing group so each low half becomes adjacent to it (the existing
+/// pair fold then collapses them to astral scalars). emoji-regex / string-width
+/// (ink, #348) factor a shared high surrogate out before a group of
+/// low-surrogate-led alternatives:
+///
+/// * plain group `H(?:A|B)` ≡ `(?:HA|HB)` — H pairs inside the group;
+/// * optional group followed by a low unit `H(?:G)?L` ≡ `(?:HGL|HL)` — H pairs
+///   with the group's first low half (when present) or with `L` (when absent),
+///   as in the ZWJ "kiss"/"family" sequences `\uD83D(?:\uDC8B‍\uD83D)?[\uDC68\uDC69]`.
+///
+/// Returns the rewritten `(?:…)` and the index to resume scanning at, or `None`
+/// (leaving the segment byte-for-byte unchanged) when the shape does not match —
+/// so patterns that compile today are unaffected. The rewrite is re-folded by the
+/// caller, which resolves any nested high-surrogate groups recursively.
+fn distribute_high_over_group(chars: &[char], i: usize, j: usize) -> Option<(String, usize)> {
+    if chars.get(j) != Some(&'(')
+        || chars.get(j + 1) != Some(&'?')
+        || chars.get(j + 2) != Some(&':')
+    {
+        return None;
+    }
+    let close = matching_paren(chars, j)?;
+    let alts = split_alternatives(chars, j + 3, close);
+    if alts.is_empty() || !alts.iter().all(|a| starts_with_low_unit(a)) {
+        return None;
+    }
+    let high_src: String = chars[i..j].iter().collect();
+    match chars.get(close + 1) {
+        // Optional group: pull a trailing low unit into both branches.
+        Some('?') => {
+            let (low_src, after) = take_low_unit(chars, close + 2)?;
+            let mut rebuilt = String::from("(?:");
+            for a in &alts {
+                rebuilt.push_str(&high_src);
+                rebuilt.push_str(a);
+                rebuilt.push_str(&low_src);
+                rebuilt.push('|');
+            }
+            rebuilt.push_str(&high_src);
+            rebuilt.push_str(&low_src);
+            rebuilt.push(')');
+            Some((rebuilt, after))
+        }
+        // Other quantifiers can't be hoisted into the group; bail.
+        Some('*' | '+' | '{') => None,
+        // Plain group: H pairs with each alternative's leading low half.
+        _ => {
+            let mut rebuilt = String::from("(?:");
+            for (idx, a) in alts.iter().enumerate() {
+                if idx > 0 {
+                    rebuilt.push('|');
+                }
+                rebuilt.push_str(&high_src);
+                rebuilt.push_str(a);
+            }
+            rebuilt.push(')');
+            Some((rebuilt, close + 1))
+        }
+    }
+}
+
+/// Index of the `)` matching the `(` at `chars[open]`, scanning depth-aware and
+/// skipping `\`-escapes and `[…]` classes. `None` if unbalanced.
+fn matching_paren(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_class = false;
+    let mut k = open;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' {
+            k += 2;
+            continue;
+        }
+        if in_class {
+            if c == ']' {
+                in_class = false;
+            }
+        } else if c == '[' {
+            in_class = true;
+        } else if c == '(' {
+            depth += 1;
+        } else if c == ')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(k);
+            }
+        }
+        k += 1;
+    }
+    None
+}
+
+/// Split `chars[start..end]` into its top-level `|`-separated alternatives,
+/// honoring `\`-escapes, `[…]` classes, and `(…)` nesting.
+fn split_alternatives(chars: &[char], start: usize, end: usize) -> Vec<String> {
+    let mut alts = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    let mut in_class = false;
+    let mut k = start;
+    while k < end {
+        let c = chars[k];
+        if c == '\\' {
+            cur.push(c);
+            if k + 1 < end {
+                cur.push(chars[k + 1]);
+            }
+            k += 2;
+            continue;
+        }
+        if in_class {
+            cur.push(c);
+            if c == ']' {
+                in_class = false;
+            }
+        } else if c == '[' {
+            in_class = true;
+            cur.push(c);
+        } else if c == '(' {
+            depth += 1;
+            cur.push(c);
+        } else if c == ')' {
+            depth -= 1;
+            cur.push(c);
+        } else if c == '|' && depth == 0 {
+            alts.push(std::mem::take(&mut cur));
+        } else {
+            cur.push(c);
+        }
+        k += 1;
+    }
+    alts.push(cur);
+    alts
 }
 
 /// Parse a `\p{...}` / `\P{...}` Unicode property escape starting at `chars[i]`
