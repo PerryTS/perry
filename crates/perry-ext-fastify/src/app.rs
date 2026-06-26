@@ -55,6 +55,14 @@ pub struct Plugin {
 /// configuration.
 pub struct FastifyApp {
     pub routes: Vec<Route>,
+    /// O(1) index over the subset of `routes` whose pattern is fully static
+    /// (no `Param`/`Wildcard` segments). Key: `"{METHOD} {full_path}"` (matching
+    /// what `match_route` builds at lookup time); value: the index into `routes`.
+    /// Built incrementally in `add_route`; parametric/wildcard routes fall
+    /// through to the linear scan. Purely additive — `routes` (and the GC
+    /// scanner's walk over it) is unchanged — turning the dominant static-route
+    /// lookup from O(N) per request into one hash + comparison.
+    pub static_index: HashMap<String, usize>,
     pub hooks: Hooks,
     pub error_handler: Option<ClosurePtr>,
     pub plugins: Vec<Plugin>,
@@ -82,10 +90,42 @@ pub struct FastifyConfig {
     pub body_limit: Option<usize>,
 }
 
+/// Canonicalize a path into the normalized, leading-slash form the route
+/// matcher compares against: drop any query string, then keep only the
+/// non-empty `/`-separated segments (so `/api//users`, `api/users`, and
+/// `/api/users/` all collapse to `/api/users`, and `/` / `` collapse to `/`).
+/// `static_index` keys and lookups both go through this, so the index can never
+/// diverge from `RoutePattern`'s own segment view — which likewise ignores
+/// empty segments — and a route registered with redundant slashes still
+/// resolves through the O(1) fast path instead of falling back to the scan.
+fn canonical_path(path: &str) -> String {
+    let path = path.split('?').next().unwrap_or(path);
+    // Fast path: an already-canonical `/a/b/c` (leading slash, no empty
+    // segments, no trailing slash) is by far the common case — copy it as-is
+    // with a single allocation and skip the segment rebuild. Only paths with
+    // missing/redundant/trailing slashes fall through to normalization.
+    if path.len() > 1 && path.starts_with('/') && !path.ends_with('/') && !path.contains("//") {
+        return path.to_string();
+    }
+    // The normalized form only ever drops bytes (query string, redundant
+    // slashes), so the input length is a safe upper bound — pre-size to keep
+    // this to a single allocation too.
+    let mut out = String::with_capacity(path.len() + 1);
+    for part in path.split('/').filter(|p| !p.is_empty()) {
+        out.push('/');
+        out.push_str(part);
+    }
+    if out.is_empty() {
+        out.push('/');
+    }
+    out
+}
+
 impl FastifyApp {
     pub fn new() -> Self {
         Self {
             routes: Vec::new(),
+            static_index: HashMap::new(),
             hooks: Hooks::default(),
             error_handler: None,
             plugins: Vec::new(),
@@ -101,17 +141,51 @@ impl FastifyApp {
         app
     }
 
+    /// Register a route. The method is upper-cased and the path is parsed into a
+    /// [`RoutePattern`]. Fully-static routes (no `Param`/`Wildcard` segments) are
+    /// additionally recorded in `static_index` for O(1) lookup in `match_route`,
+    /// but *only* when doing so cannot change which handler `match_route` returns
+    /// (see below); everything else resolves through the linear scan.
     pub fn add_route(&mut self, method: &str, path: &str, handler: ClosurePtr) {
         let full_path = if self.prefix.is_empty() {
             path.to_string()
         } else {
             format!("{}{}", self.prefix, path)
         };
+        let method_upper = method.to_uppercase();
+        let pattern = RoutePattern::parse(&full_path);
+        let is_static = pattern
+            .segments
+            .iter()
+            .all(|s| matches!(s, crate::router::Segment::Static(_)));
+        let new_idx = self.routes.len();
         self.routes.push(Route {
-            method: method.to_uppercase(),
-            pattern: RoutePattern::parse(&full_path),
+            method: method_upper,
+            pattern,
             handler,
         });
+        if is_static {
+            // Normalize the path through the same `canonical_path` the lookup
+            // side uses, so the key matches regardless of leading/redundant
+            // slashes (`/foo`, `foo`, `/foo//bar`).
+            let method_for_key = self.routes[new_idx].method.clone();
+            let canon_path = canonical_path(&full_path);
+            let key = format!("{} {}", method_for_key, canon_path);
+            // Precedence guard: `match_route` consults the index *before* the
+            // linear scan, so only index this static route if no earlier-
+            // registered route (another static, or a parametric/wildcard pattern
+            // like `/:slug` or `/static/*`) already matches the same path. When
+            // one does, skip the index so the lookup falls through to the scan and
+            // the first-registered route still wins — preserving the adapter's
+            // existing first-match semantics. `or_insert` keeps the first static
+            // registration on exact-duplicate keys for the same reason.
+            let shadowed_by_prior = self.routes[..new_idx].iter().any(|route| {
+                route.method == method_for_key && route.pattern.match_path(&canon_path).is_some()
+            });
+            if !shadowed_by_prior {
+                self.static_index.entry(key).or_insert(new_idx);
+            }
+        }
     }
 
     pub fn add_hook(&mut self, hook_name: &str, handler: ClosurePtr) {
@@ -132,13 +206,43 @@ impl FastifyApp {
         self.error_handler = Some(handler);
     }
 
+    /// Resolve a request `(method, path)` to its handler and extracted path
+    /// params. Fully-static routes resolve in O(1) through `static_index`;
+    /// everything else (and any static route the index deliberately omits to
+    /// preserve precedence — see `add_route`) falls through to a linear scan that
+    /// returns the first registered match.
     pub fn match_route(
         &self,
         method: &str,
         path: &str,
     ) -> Option<(&Route, HashMap<String, String>)> {
+        // Normalize the method the same way `add_route` does (it stores
+        // `to_uppercase()`), so a lowercase/mixed-case caller hits both the index
+        // and the scan rather than silently missing. Requests off the hyper accept
+        // loop are already upper-case (the hot path), so only allocate when a
+        // direct caller actually passes a lower-case letter.
+        let method_upper: std::borrow::Cow<'_, str> =
+            if method.bytes().any(|b| b.is_ascii_lowercase()) {
+                std::borrow::Cow::Owned(method.to_uppercase())
+            } else {
+                std::borrow::Cow::Borrowed(method)
+            };
+        // Canonicalize the path (drops the query string + redundant slashes) the
+        // same way `add_route` builds the key and `RoutePattern::match_path`
+        // normalizes on the scan side, so e.g. `/ping?x=1` still hits the static
+        // `/ping` index entry.
+        let canon_path = canonical_path(path);
+        let key = format!("{} {}", method_upper, canon_path);
+        // Fast path: fully-static routes resolve in O(1) via `static_index`.
+        if let Some(&idx) = self.static_index.get(&key) {
+            // Static patterns never extract path params — return an empty map,
+            // matching `RoutePattern::match_path`'s behaviour for static patterns.
+            return Some((&self.routes[idx], HashMap::new()));
+        }
+        // Slow path: parametric/wildcard routes still go through the linear scan,
+        // preserving first-registered-wins semantics.
         for route in &self.routes {
-            if route.method == method {
+            if route.method == *method_upper {
                 if let Some(params) = route.pattern.match_path(path) {
                     return Some((route, params));
                 }

@@ -11,15 +11,18 @@ perry init my-project
 cd my-project
 ```
 
-This creates a `package.json` and a starter `src/index.ts`.
+This scaffolds `perry.toml`, `package.json`, a starter `src/main.ts`, `.gitignore`, and `tsconfig.json` (plus Perry type stubs under `.perry/types/`).
 
 ## package.json
+
+The generated `package.json` carries the npm-interop layer. The `perry.compilePackages` array is seeded empty — it is the sole config home for that setting (it is read only from `package.json`, never from `perry.toml`):
 
 ```json
 {
   "name": "my-project",
-  "version": "1.0.0",
-  "main": "src/index.ts",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/main.ts",
   "perry": {
     "compilePackages": []
   }
@@ -41,6 +44,26 @@ List npm packages to compile natively instead of routing through the JavaScript 
   }
 }
 ```
+
+> **Two-key opt-in.** Listing a package is not sufficient on its own. Compiling
+> third-party TypeScript into your binary is a privileged operation, so every
+> entry in `compilePackages` must *also* be matched by an entry in
+> `perry.allow.compilePackages` in the same `package.json` — otherwise the build
+> refuses. Patterns accept exact names, scope wildcards (`"@scope/*"`), or the
+> universal `"*"`:
+>
+> ```json
+> {
+>   "perry": {
+>     "compilePackages": ["@noble/curves", "@noble/hashes"],
+>     "allow": { "compilePackages": ["@noble/*"] }
+>   }
+> }
+> ```
+>
+> For one-off builds where editing `package.json` isn't an option, set
+> `PERRY_ALLOW_PERRY_FEATURES=1` to opt every name in (and `=0` to force the
+> refusal even when `package.json` opted in).
 
 When a package is listed here, Perry:
 1. Resolves the package in `node_modules/`

@@ -13,6 +13,14 @@ use perry_ffi::{
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
+/// Mirror of `perry_runtime::string::STRING_FLAG_HAS_LONE_SURROGATES` — the
+/// `StringHeader::flags` bit marking a WTF-8 string that holds lone surrogates
+/// (so it isn't well-formed UTF-8). Defined locally because this crate's
+/// library code links only `perry-ffi`, not `perry-runtime` (same local-mirror
+/// pattern as the `extern "C"` runtime symbols below); the value is part of the
+/// stable runtime ABI.
+const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
+
 // Runtime symbols that perry-ffi hasn't yet wrapped — these are
 // stable `extern "C"` exports from perry-runtime. Declaring them
 // locally is the same pattern perry-ext-{net,http,ws} use for the
@@ -87,6 +95,25 @@ pub struct FastifyContext {
     pub response_body: Option<Vec<u8>>,
     /// User data stashed by auth middleware — NaN-boxed bits.
     pub user_data: u64,
+    /// Cached `request.params` JS object, built on first access by
+    /// `js_fastify_req_params_object`. `0` means uncached; otherwise the
+    /// NaN-boxed object-pointer bits (`POINTER_TAG` top 16 = `0x7FFD`), so `0`
+    /// never collides with a real entry. `AtomicU64` (not `Cell`) because the
+    /// handle registry hands out shared `&FastifyContext` and the type must stay
+    /// `Send + Sync`. Each request gets a fresh context (reset to 0 in `new`), so
+    /// the cache is naturally request-scoped — no inter-request leak. The GC root
+    /// scanner visits this slot (`scan_fastify_roots`) so a copying GC between the
+    /// first build and a later `req.params` read keeps the object alive *and*
+    /// relocates the cached pointer.
+    pub params_object_cache: AtomicU64,
+    /// Cached `request.query` JS object. Same encoding and invariants as
+    /// `params_object_cache`.
+    pub query_object_cache: AtomicU64,
+    /// Cached `request.headers` JS object. Same encoding and invariants as
+    /// `params_object_cache`. Handlers commonly read several headers per request,
+    /// so caching the constructed object after the first read makes later reads an
+    /// atomic load.
+    pub headers_object_cache: AtomicU64,
 }
 
 impl FastifyContext {
@@ -116,6 +143,9 @@ impl FastifyContext {
             sent: false,
             response_body: None,
             user_data: TAG_UNDEFINED,
+            params_object_cache: AtomicU64::new(0),
+            query_object_cache: AtomicU64::new(0),
+            headers_object_cache: AtomicU64::new(0),
         }
     }
 
@@ -254,6 +284,11 @@ pub unsafe extern "C" fn js_fastify_req_params(ctx_handle: Handle) -> *mut Strin
 
 /// `request.params` returning a NaN-boxed object — built via
 /// perry-ffi's shape-aware allocator.
+///
+/// Caches the constructed object on the `FastifyContext` on first access, so a
+/// handler reading `req.params.a` then `req.params.b` builds the object once.
+/// The cache holds the NaN-boxed object bits; the GC root scanner visits the
+/// slot, so a copying GC between reads keeps it alive and relocates the pointer.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_params_object(ctx_handle: Handle) -> f64 {
     let undefined = f64::from_bits(TAG_UNDEFINED);
@@ -261,7 +296,20 @@ pub unsafe extern "C" fn js_fastify_req_params_object(ctx_handle: Handle) -> f64
         Some(c) => c,
         None => return undefined,
     };
-    build_string_map_object(&ctx.params).unwrap_or(undefined)
+    // Fast path: object already built earlier in this same request.
+    let cached = ctx.params_object_cache.load(Ordering::Acquire);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    match build_string_map_object(&ctx.params) {
+        // Release so a later Acquire load on this context sees the bits.
+        Some(obj) => {
+            ctx.params_object_cache
+                .store(obj.to_bits(), Ordering::Release);
+            obj
+        }
+        None => undefined,
+    }
 }
 
 /// `c.req.param('id')` — single param accessor.
@@ -291,7 +339,9 @@ pub unsafe extern "C" fn js_fastify_req_query(ctx_handle: Handle) -> *mut String
     std::ptr::null_mut()
 }
 
-/// `request.query` returning a NaN-boxed object.
+/// `request.query` returning a NaN-boxed object. Cached on the
+/// `FastifyContext` on first access — same mechanism as
+/// `js_fastify_req_params_object`.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_query_object(ctx_handle: Handle) -> f64 {
     let undefined = f64::from_bits(TAG_UNDEFINED);
@@ -299,8 +349,19 @@ pub unsafe extern "C" fn js_fastify_req_query_object(ctx_handle: Handle) -> f64 
         Some(c) => c,
         None => return undefined,
     };
+    let cached = ctx.query_object_cache.load(Ordering::Acquire);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
     let params = ctx.get_query_params();
-    build_string_map_object(&params).unwrap_or(undefined)
+    match build_string_map_object(&params) {
+        Some(obj) => {
+            ctx.query_object_cache
+                .store(obj.to_bits(), Ordering::Release);
+            obj
+        }
+        None => undefined,
+    }
 }
 
 /// `request.body` — raw body as a string.
@@ -331,11 +392,19 @@ pub unsafe extern "C" fn js_fastify_req_json(ctx_handle: Handle) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// `request.headers` — full headers as a NaN-boxed object.
+/// `request.headers` — full headers as a NaN-boxed object. Cached on the
+/// `FastifyContext` on first access — same mechanism as
+/// `js_fastify_req_params_object`.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_headers(ctx_handle: Handle) -> i64 {
     if let Some(ctx) = get_handle::<FastifyContext>(ctx_handle) {
+        let cached = ctx.headers_object_cache.load(Ordering::Acquire);
+        if cached != 0 {
+            return cached as i64;
+        }
         if let Some(obj_f64) = build_string_map_object(&ctx.headers) {
+            ctx.headers_object_cache
+                .store(obj_f64.to_bits(), Ordering::Release);
             return obj_f64.to_bits() as i64;
         }
     }
@@ -576,6 +645,35 @@ pub unsafe extern "C" fn js_fastify_ctx_redirect(ctx_handle: Handle, url: i64, s
 pub(crate) unsafe fn jsvalue_to_response_body(value: f64) -> (Vec<u8>, BodyKind) {
     let jsv = JsValue::from_bits(value.to_bits());
     if jsv.is_string() {
+        // Fast path: copy the StringHeader's bytes straight into the response
+        // Vec, skipping the `extract_jsvalue_string` round-trip
+        // (`String::from_utf8_lossy(..).to_string().into_bytes()` — one extra
+        // heap allocation plus a redundant UTF-8 validity scan). The body
+        // writer streams the bytes out unchanged, so the intermediate `String`
+        // buys nothing on the common text-response path. The pointer math
+        // mirrors `string_from_header`.
+        //
+        // Only well-formed UTF-8 is safe to copy verbatim. Perry strings are
+        // WTF-8 and may carry lone surrogates (flagged
+        // `STRING_FLAG_HAS_LONE_SURROGATES`); copying those raw would emit
+        // invalid UTF-8 in the response. For flagged strings fall through to
+        // the `extract_jsvalue_string` path, whose `from_utf8_lossy` substitutes
+        // U+FFFD — preserving the pre-fast-path output.
+        let ptr = js_get_string_pointer_unified(value);
+        if ptr != 0 {
+            let header = ptr as *const StringHeader;
+            let well_formed = (*header).flags & STRING_FLAG_HAS_LONE_SURROGATES == 0;
+            if well_formed {
+                let len = (*header).byte_len as usize;
+                let data_ptr = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+                let mut bytes = Vec::with_capacity(len);
+                bytes.extend_from_slice(std::slice::from_raw_parts(data_ptr, len));
+                return (bytes, BodyKind::TextOrJson);
+            }
+        }
+        // Fallback to the lossy `String` round-trip — taken for WTF-8 strings
+        // with lone surrogates, and defensively if the unified pointer accessor
+        // returns 0 (should not happen for an `is_string()` value).
         if let Some(s) = extract_jsvalue_string(value) {
             return (s.into_bytes(), BodyKind::TextOrJson);
         }

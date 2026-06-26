@@ -184,7 +184,7 @@ cd my-project
 |------|-------------|
 | `--name <NAME>` | Project name (defaults to directory name) |
 
-Creates `perry.toml`, `src/main.ts`, and `.gitignore`.
+Creates `perry.toml`, `package.json`, `src/main.ts`, `.gitignore`, and `tsconfig.json` (plus Perry type stubs under `.perry/types/`). The generated `package.json` carries the npm-interop layer, including an empty `perry.compilePackages` array — the sole config home for [compiling npm packages natively](../packages/porting.md).
 
 ## doctor
 

@@ -754,6 +754,7 @@ fn collect_used_new_fields_in_expr(
             body,
             headers,
             headers_dynamic,
+            signal,
         } => {
             collect_used_new_fields_in_expr(url, non_escaping_news, used);
             collect_used_new_fields_in_expr(method, non_escaping_news, used);
@@ -763,6 +764,9 @@ fn collect_used_new_fields_in_expr(
             }
             if let Some(hd) = headers_dynamic {
                 collect_used_new_fields_in_expr(hd, non_escaping_news, used);
+            }
+            if let Some(s) = signal {
+                collect_used_new_fields_in_expr(s, non_escaping_news, used);
             }
         }
         Expr::FetchGetWithAuth { url, auth_header } => {

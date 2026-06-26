@@ -125,6 +125,12 @@ fn fire_abort_listeners(signal: *mut ObjectHeader) {
     if signal.is_null() {
         return;
     }
+    // Wake any in-flight `fetch` bound to this signal so it rejects with an
+    // AbortError. Done here — before the JS-listener early return below — so the
+    // fetch is cancelled even when the signal carries no JS `abort` listener
+    // (the common `fetch(url, { signal })` case registers none). This replaces a
+    // per-fetch JS listener, so reused signals don't accumulate stale closures.
+    notify_fetch_abort(signal as i64);
     let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
     let bits = listeners_val.to_bits();
     if bits == TAG_UNDEFINED_AC || bits == TAG_FALSE_AC {
@@ -188,6 +194,37 @@ pub(crate) fn abort_signal_ptr_from_value(value: f64) -> Option<*mut ObjectHeade
 
 pub(crate) fn is_abort_signal_value(value: f64) -> bool {
     abort_signal_ptr_from_value(value).is_some()
+}
+
+/// Resolve a JS value to its `AbortSignal` object pointer, or null when it is
+/// not an AbortSignal. FFI accessor over `abort_signal_ptr_from_value` for
+/// cross-crate callers — perry-stdlib's fetch abort bridge uses it to learn the
+/// signal handle behind a `fetch(url, { signal })` option.
+#[no_mangle]
+pub extern "C" fn js_abort_signal_resolve_ptr(value: f64) -> *mut ObjectHeader {
+    abort_signal_ptr_from_value(value).unwrap_or(std::ptr::null_mut())
+}
+
+/// Notify any in-flight `fetch` request bound to this signal that it has
+/// aborted (so it rejects with an AbortError and drops the request).
+///
+/// Under `external-fetch-symbols` — a fetch-using build — this calls the linked
+/// stdlib hook directly, the same link invariant `call_fetch_with_options`
+/// relies on. A non-fetch build links no stdlib fetch, so there is nothing to
+/// notify. Routing through `fire_abort_listeners` (rather than a per-fetch JS
+/// listener) means reused signals never accumulate stale listener closures.
+fn notify_fetch_abort(signal_ptr: i64) {
+    #[cfg(feature = "external-fetch-symbols")]
+    {
+        unsafe extern "C" {
+            fn js_fetch_notify_signal_aborted(signal_ptr: i64);
+        }
+        unsafe { js_fetch_notify_signal_aborted(signal_ptr) };
+    }
+    #[cfg(not(feature = "external-fetch-symbols"))]
+    {
+        let _ = signal_ptr;
+    }
 }
 
 extern "C" fn abort_error_constructor_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
@@ -325,13 +362,53 @@ pub extern "C" fn js_abort_signal_remove_listener(
     }
 }
 
-/// `AbortSignal.timeout(ms)` — returns a signal that is initially not aborted.
-/// Perry does not spin up a real timer for this stub (tests only check the
-/// initial state), but the returned object has the full AbortSignal shape so
-/// subsequent `.aborted` / `.reason` / `.addEventListener` reads work.
+/// Build the `TimeoutError` DOMException that `AbortSignal.timeout(ms)` aborts
+/// with when its deadline elapses (Node names it `TimeoutError`, distinct from
+/// the `AbortError` used by `controller.abort()`).
+fn timeout_dom_exception_value() -> f64 {
+    let err = crate::event_target::js_dom_exception_new(
+        create_string_f64("The operation was aborted due to timeout"),
+        create_string_f64("TimeoutError"),
+    );
+    crate::value::js_nanbox_pointer(err as i64)
+}
+
+/// Callback-timer thunk: fires on the main thread (via `js_callback_timer_tick`)
+/// when an `AbortSignal.timeout(ms)` deadline elapses, aborting the captured
+/// signal with a `TimeoutError` and firing its `abort` listeners (which is how
+/// a pending `fetch` bound by the signal learns to reject — see
+/// `js_fetch_with_options`).
+extern "C" fn abort_signal_timeout_fire(closure: *const crate::closure::ClosureHeader) -> f64 {
+    let signal_bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    let signal =
+        crate::value::js_nanbox_get_pointer(f64::from_bits(signal_bits)) as *mut ObjectHeader;
+    if !signal.is_null() {
+        abort_signal_set_aborted(signal, timeout_dom_exception_value());
+    }
+    f64::from_bits(TAG_UNDEFINED_AC)
+}
+
+/// `AbortSignal.timeout(ms)` — a signal that auto-aborts after `ms`.
+///
+/// Schedules a callback timer (drained on the main thread by
+/// `js_callback_timer_tick`) that marks the signal aborted with a
+/// `TimeoutError` and fires its listeners. The timer is `unref`'d so a pending
+/// timeout signal does not by itself keep the event loop alive (Node behavior);
+/// it still fires while any other ref'd work (e.g. an in-flight `fetch`) keeps
+/// the loop running. Previously this returned a never-aborting stub, so
+/// `fetch(url, { signal: AbortSignal.timeout(ms) })` could hang forever on a
+/// slow/held response instead of timing out.
 #[no_mangle]
-pub extern "C" fn js_abort_signal_timeout(_ms: f64) -> *mut ObjectHeader {
-    alloc_abort_signal()
+pub extern "C" fn js_abort_signal_timeout(ms: f64) -> *mut ObjectHeader {
+    let signal = alloc_abort_signal();
+    let func = abort_signal_timeout_fire as *const u8;
+    crate::closure::js_register_closure_arity(func, 0);
+    let closure = crate::closure::js_closure_alloc(func, 1);
+    let signal_value = crate::value::js_nanbox_pointer(signal as i64);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, signal_value.to_bits() as i64);
+    let timer_id = crate::timer::js_set_timeout_callback(closure as i64, ms);
+    crate::timer::js_timer_unref(timer_id);
+    signal
 }
 
 /// Mark a signal as aborted with `reason` and fire its listeners. Idempotent:

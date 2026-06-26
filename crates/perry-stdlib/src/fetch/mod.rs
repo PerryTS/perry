@@ -15,6 +15,8 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 // Web Fetch `Headers` FFI — split out to keep this file under the 2,000-line
 // lint gate (#1649). The child module sees mod.rs's private items via its
 // `use super::*`.
+mod abort_bridge;
+pub use abort_bridge::*;
 mod headers;
 mod request_handle;
 pub use headers::*;
@@ -606,19 +608,26 @@ pub unsafe extern "C" fn js_fetch_with_options(
     body_ptr: *const StringHeader,
     headers_json_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
+    // Consume the pending `AbortSignal` (stashed by the fetch thunk / codegen)
+    // on the main thread BEFORE allocating the promise, so a GC during the
+    // allocation can't move the still-TLS-stashed signal before we read it.
+    let abort_state = abort_bridge::take_pending_signal_watch();
+
     let promise = perry_runtime::js_promise_new();
     let promise_ptr = promise as usize;
+
+    // An already-aborted signal rejects the request up front; otherwise keep the
+    // optional watch to race the request against.
+    let abort_watch = match abort_bridge::watch_or_reject(abort_state, promise_ptr) {
+        Some(watch) => watch,
+        None => return promise,
+    };
 
     // `fetch(Request)` form: callers (axios/gaxios / any WHATWG-fetch) build a
     // `Request` object and call `fetch(request, init)`; its handle id lands in
     // the `url_ptr` slot. Recover url/method/body/headers from the Request
     // registry so the request is dispatched (`init` members override).
-    let request_handle::FetchInputs {
-        url,
-        method,
-        body,
-        custom_headers,
-    } = match request_handle::resolve_fetch_inputs(
+    let inputs = match request_handle::resolve_fetch_inputs(
         string_from_header(url_ptr),
         string_from_header(method_ptr),
         string_from_header(body_ptr),
@@ -632,71 +641,9 @@ pub unsafe extern "C" fn js_fetch_with_options(
         }
     };
 
-    spawn(async move {
-        let client = HTTP_CLIENT.clone();
-        let mut request = match method.to_uppercase().as_str() {
-            "POST" => client.post(&url),
-            "PUT" => client.put(&url),
-            "DELETE" => client.delete(&url),
-            "PATCH" => client.patch(&url),
-            "HEAD" => client.head(&url),
-            _ => client.get(&url), // Default to GET
-        };
-
-        // Add custom headers
-        for (key, value) in &custom_headers {
-            request = request.header(key.as_str(), value.as_str());
-        }
-
-        // Add body if present
-        if let Some(b) = body {
-            request = request.body(b);
-        }
-
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let status_text = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-
-                let headers = headers_from_header_map(response.headers());
-
-                let body = response.bytes().await.unwrap_or_default().to_vec();
-
-                // Store response
-                let response_id = alloc_fetch_handle_id();
-
-                FETCH_RESPONSES.lock().unwrap().insert(
-                    response_id,
-                    FetchResponse {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        body_present: true,
-                        body_used: false,
-                        type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
-                        cached_headers_id: None,
-                        cached_body_stream_id: None,
-                    },
-                );
-
-                // Return response handle
-                let result_bits = handle_to_f64(response_id).to_bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
-            }
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                let err_bits = fetch_error_bits(&err_msg);
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
-        }
-    });
+    // Dispatch + abort handling live in `abort_bridge::run_request` (keeps this
+    // file under the line-size lint gate).
+    spawn(abort_bridge::run_request(promise_ptr, abort_watch, inputs));
 
     promise
 }

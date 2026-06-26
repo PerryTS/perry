@@ -80,10 +80,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             body,
             headers,
             headers_dynamic,
+            signal,
         } => {
             let url_box = lower_expr(ctx, url)?;
             let method_box = lower_expr(ctx, method)?;
             let body_box = lower_expr(ctx, body)?;
+            // Lower `init.signal` (if any) up front so it can be stashed for
+            // `js_fetch_with_options` right before the call below.
+            let signal_box = match signal {
+                Some(s) => Some(lower_expr(ctx, s)?),
+                None => None,
+            };
 
             // Obtain the headers as a NaN-boxed object value, then JSON-stringify
             // it below. Two cases:
@@ -141,6 +148,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let url_handle = unbox_to_i64(blk, &url_box);
             let method_handle = unbox_to_i64(blk, &method_box);
             let body_handle = unbox_to_i64(blk, &body_box);
+            // Stash the AbortSignal so `js_fetch_with_options` can cancel the
+            // request when it aborts (`controller.abort()` / `AbortSignal.timeout`).
+            if let Some(sig) = &signal_box {
+                blk.call_void("js_fetch_set_pending_signal", &[(DOUBLE, sig)]);
+            }
             let promise = blk.call(
                 I64,
                 "js_fetch_with_options",

@@ -4,8 +4,40 @@
 //! repository's 2,000-line lint gate.
 
 use super::*;
+use std::cell::Cell;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
+
+thread_local! {
+    /// The `signal` from the in-progress `fetch(url, { signal })` call, stashed
+    /// so the stdlib `js_fetch_with_options` (whose 4-arg ABI predates
+    /// AbortSignal support) can pick it up at entry without an ABI change.
+    static PENDING_FETCH_SIGNAL: Cell<f64> =
+        const { Cell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
+}
+
+/// Stash the `signal` for the fetch call about to be dispatched. Set on the main
+/// thread immediately before the fetch call and consumed at the start of
+/// `js_fetch_with_options` — JS is single-threaded between those two points, so
+/// there is no interleaving with another fetch. The runtime
+/// `global_this_fetch_thunk` calls this for the dynamic/aliased fetch path; the
+/// codegen `fetch(url, {static init})` fast path can emit it too.
+#[no_mangle]
+pub extern "C" fn js_fetch_set_pending_signal(signal: f64) {
+    PENDING_FETCH_SIGNAL.with(|c| c.set(signal));
+}
+
+/// Consume and clear the pending fetch signal, returning `undefined` when none
+/// was set for this call (so a signal never leaks into a later signal-less
+/// fetch on the same thread).
+#[no_mangle]
+pub extern "C" fn js_fetch_take_pending_signal() -> f64 {
+    PENDING_FETCH_SIGNAL.with(|c| {
+        let v = c.get();
+        c.set(f64::from_bits(crate::value::TAG_UNDEFINED));
+        v
+    })
+}
 
 #[cfg(not(feature = "external-fetch-symbols"))]
 const FETCH_REASON: &str =
@@ -617,6 +649,10 @@ pub(super) extern "C" fn global_this_fetch_thunk(
     let method_ptr = fetch_option_string_ptr(init, b"method");
     let body_ptr = fetch_option_string_ptr(init, b"body");
     let headers_json_ptr = fetch_headers_json_ptr(init);
+
+    // Hand the `init.signal` (if any) to `js_fetch_with_options` so an
+    // `AbortController` / `AbortSignal.timeout` can cancel this request.
+    js_fetch_set_pending_signal(fetch_option(init, b"signal"));
 
     let promise =
         unsafe { call_fetch_with_options(url_ptr, method_ptr, body_ptr, headers_json_ptr) };
