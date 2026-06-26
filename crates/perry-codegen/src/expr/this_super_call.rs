@@ -220,7 +220,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
                 return Ok(double_literal(0.0));
             };
-            let parent_class = match ctx.classes.get(&parent_name).copied() {
+            // #5437 (Next.js p-queue `PQueue`): when HIR captured a dynamic
+            // `extends_expr` for this class, the parent is a LEXICAL runtime
+            // value (an in-scope local / require result) — NOT the same-named
+            // module-global class that `ctx.classes.get(parent_name)` would
+            // wrongly return (minified turbopack chunks reuse single-letter
+            // class names across webpack factories). Force the `None` arm's
+            // dynamic-parent dispatch so `super()` invokes the real lexical
+            // parent value, mirroring the synthesized-ctor dynamic-parent path
+            // in `codegen/method.rs`. Without this, `PQueue extends t` resolved
+            // `t` to superstruct's `StructError` base and `super()` inlined its
+            // destructuring ctor on the undefined options arg → HTTP 500.
+            let static_parent_lookup = if current_class.extends_expr.is_some() {
+                None
+            } else {
+                ctx.classes.get(&parent_name).copied()
+            };
+            let parent_class = match static_parent_lookup {
                 Some(c) => c,
                 None => {
                     // #321 / #66 (#1787 follow-up): `class Sub extends <runtimeValueFn>`
