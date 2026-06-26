@@ -256,7 +256,16 @@ pub(super) const FASTIFY_ROWS: &[NativeModSig] = &[
         module: "fastify",
         has_receiver: true,
         method: "header",
-        class_filter: None,
+        // Receiver-scoped so `request.header(name)` (1-arg getter) and
+        // `reply.header(name, value)` (2-arg setter) don't collide: both
+        // rows previously had `class_filter: None`, so the arity-blind
+        // first-match-wins generic lookup routed BOTH at this request
+        // getter and `reply.header` silently no-op'd (`Location` / CSP
+        // headers set via the method form evaporated). Fastify handler
+        // params are registered as ("fastify","Request") / ("fastify",
+        // "Reply") by position (`pre_scan_fastify_handler_params`), so the
+        // matcher's exact-class first pass now disambiguates them.
+        class_filter: Some("Request"),
         runtime: "js_fastify_req_header",
         args: &[NA_JSV],
         ret: NR_STR,
@@ -314,7 +323,12 @@ pub(super) const FASTIFY_ROWS: &[NativeModSig] = &[
         module: "fastify",
         has_receiver: true,
         method: "header",
-        class_filter: None,
+        // Receiver-scoped (see the request `.header` getter row above):
+        // tagging this reply setter `Some("Reply")` lets the matcher's
+        // exact-class first pass pick it for `reply.header(name, value)`
+        // instead of the arity-blind generic pass falling through to the
+        // request getter (which silently dropped the set header).
+        class_filter: Some("Reply"),
         runtime: "js_fastify_reply_header",
         args: &[NA_JSV, NA_JSV],
         ret: NR_PTR,
