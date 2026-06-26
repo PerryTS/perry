@@ -1407,6 +1407,47 @@ pub fn lower_class_from_ast(
             };
             if native_parent.is_some() {
                 (None, Some(parent_name), native_parent, None)
+            } else if !ctx.class_renames.contains_key(&parent_name)
+                && ctx.locals.lookup(&parent_name).is_some()
+            {
+                // #5437 (Next.js p-queue `PQueue` inside a minified bundle): a
+                // class EXPRESSION whose parent Ident is an IN-SCOPE LOCAL
+                // (`const t = require("events"); … class extends t {…}`) must
+                // bind to that LEXICAL local — not to an unrelated module-global
+                // class that happens to share the (minified, single-letter)
+                // name. The static `lookup_class(parent_name)` path keys
+                // codegen's `super()` on a module-wide `HashMap<name, &Class>`;
+                // in a turbopack chunk dozens of distinct webpack-factory
+                // classes are all named `t`/`u`/`i`, so that map keeps ONE `t`
+                // (whichever registered last) and `super()` inlines the WRONG
+                // class's constructor. The bundle's p-queue `PQueue extends t`
+                // (eventemitter3) resolved `t` to superstruct's `StructError`
+                // base, so `new PQueue()` ran StructError's destructuring ctor
+                // on the (undefined) options arg → "Cannot convert undefined or
+                // null to object" → HTTP 500 on the dynamic page routes.
+                //
+                // When the parent name is bound by a local in THIS body's scope,
+                // route through the dynamic `extends_expr` path: lower the Ident
+                // as a runtime value (the lexically-correct local), register the
+                // parent edge dynamically, and let `super()` invoke the real
+                // parent value via `js_fetch_or_value_super` (which already
+                // tolerates native / closure / class-ref / builtin parents).
+                // Gated on `!class_renames.contains_key` so the #5437
+                // sibling-rename path above still wins when a scope-local class
+                // rename exists (that disambiguation is exact). Pure-Ident
+                // module-global heritage (no shadowing local) is unaffected —
+                // `ctx.locals.lookup` returns `None` for a class name.
+                // Do NOT set a static `extends` (parent_cid) here: the only
+                // candidate would be `lookup_class(parent_name)`, which is the
+                // wrong same-named module-global class we are deliberately
+                // avoiding (wiring it would mis-route inherited-method / vtable
+                // dispatch to that class's members). The dynamic `extends_expr`
+                // path registers the correct parent edge at runtime via
+                // `RegisterClassParentDynamic` + `function_class_id`.
+                match lower_expr(ctx, super_class) {
+                    Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
+                    Err(_) => (None, Some(parent_name), None, None),
+                }
             } else {
                 // #5437: resolve the parent through active scope-local class
                 // renames so a class EXPRESSION extending a disambiguated
