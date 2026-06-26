@@ -87,6 +87,20 @@ pub struct FastifyContext {
     pub response_body: Option<Vec<u8>>,
     /// User data stashed by auth middleware — NaN-boxed bits.
     pub user_data: u64,
+    /// Cached `request.params` JS object, built on first access by
+    /// `js_fastify_req_params_object`. `0` means uncached; otherwise the
+    /// NaN-boxed object-pointer bits (`POINTER_TAG` top 16 = `0x7FFD`), so `0`
+    /// never collides with a real entry. `AtomicU64` (not `Cell`) because the
+    /// handle registry hands out shared `&FastifyContext` and the type must stay
+    /// `Send + Sync`. Each request gets a fresh context (reset to 0 in `new`), so
+    /// the cache is naturally request-scoped — no inter-request leak. The GC root
+    /// scanner visits this slot (`scan_fastify_roots`) so a copying GC between the
+    /// first build and a later `req.params` read keeps the object alive *and*
+    /// relocates the cached pointer.
+    pub params_object_cache: AtomicU64,
+    /// Cached `request.query` JS object. Same encoding and invariants as
+    /// `params_object_cache`.
+    pub query_object_cache: AtomicU64,
 }
 
 impl FastifyContext {
@@ -116,6 +130,8 @@ impl FastifyContext {
             sent: false,
             response_body: None,
             user_data: TAG_UNDEFINED,
+            params_object_cache: AtomicU64::new(0),
+            query_object_cache: AtomicU64::new(0),
         }
     }
 
@@ -254,6 +270,11 @@ pub unsafe extern "C" fn js_fastify_req_params(ctx_handle: Handle) -> *mut Strin
 
 /// `request.params` returning a NaN-boxed object — built via
 /// perry-ffi's shape-aware allocator.
+///
+/// Caches the constructed object on the `FastifyContext` on first access, so a
+/// handler reading `req.params.a` then `req.params.b` builds the object once.
+/// The cache holds the NaN-boxed object bits; the GC root scanner visits the
+/// slot, so a copying GC between reads keeps it alive and relocates the pointer.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_params_object(ctx_handle: Handle) -> f64 {
     let undefined = f64::from_bits(TAG_UNDEFINED);
@@ -261,7 +282,20 @@ pub unsafe extern "C" fn js_fastify_req_params_object(ctx_handle: Handle) -> f64
         Some(c) => c,
         None => return undefined,
     };
-    build_string_map_object(&ctx.params).unwrap_or(undefined)
+    // Fast path: object already built earlier in this same request.
+    let cached = ctx.params_object_cache.load(Ordering::Acquire);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
+    match build_string_map_object(&ctx.params) {
+        // Release so a later Acquire load on this context sees the bits.
+        Some(obj) => {
+            ctx.params_object_cache
+                .store(obj.to_bits(), Ordering::Release);
+            obj
+        }
+        None => undefined,
+    }
 }
 
 /// `c.req.param('id')` — single param accessor.
@@ -291,7 +325,9 @@ pub unsafe extern "C" fn js_fastify_req_query(ctx_handle: Handle) -> *mut String
     std::ptr::null_mut()
 }
 
-/// `request.query` returning a NaN-boxed object.
+/// `request.query` returning a NaN-boxed object. Cached on the
+/// `FastifyContext` on first access — same mechanism as
+/// `js_fastify_req_params_object`.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_req_query_object(ctx_handle: Handle) -> f64 {
     let undefined = f64::from_bits(TAG_UNDEFINED);
@@ -299,8 +335,19 @@ pub unsafe extern "C" fn js_fastify_req_query_object(ctx_handle: Handle) -> f64 
         Some(c) => c,
         None => return undefined,
     };
+    let cached = ctx.query_object_cache.load(Ordering::Acquire);
+    if cached != 0 {
+        return f64::from_bits(cached);
+    }
     let params = ctx.get_query_params();
-    build_string_map_object(&params).unwrap_or(undefined)
+    match build_string_map_object(&params) {
+        Some(obj) => {
+            ctx.query_object_cache
+                .store(obj.to_bits(), Ordering::Release);
+            obj
+        }
+        None => undefined,
+    }
 }
 
 /// `request.body` — raw body as a string.
