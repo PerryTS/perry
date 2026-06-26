@@ -386,4 +386,130 @@ mod tests {
         app.set_error_handler(42);
         assert_eq!(app.error_handler, Some(42));
     }
+
+    #[test]
+    fn static_index_population_and_lookup() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/ping", 11);
+        app.add_route("POST", "/users", 22);
+        app.add_route("GET", "/users/:id", 33); // parametric — not indexed
+        app.add_route("GET", "/static/*", 44); // wildcard — not indexed
+
+        // Only the two fully-static routes are indexed.
+        assert!(app.static_index.contains_key("GET /ping"));
+        assert!(app.static_index.contains_key("POST /users"));
+        assert_eq!(app.static_index.len(), 2);
+
+        // Indexed lookup returns the correct handler and empty params.
+        let (route, params) = app.match_route("GET", "/ping").expect("static hit");
+        assert_eq!(route.handler, 11);
+        assert!(params.is_empty());
+
+        // A query string on the request must not break the static-index hit.
+        let (route, params) = app
+            .match_route("GET", "/ping?trace=1")
+            .expect("static hit with query string");
+        assert_eq!(route.handler, 11);
+        assert!(params.is_empty());
+
+        // Parametric routes still match via the linear-scan fallback, with params.
+        let (route, params) = app.match_route("GET", "/users/42").expect("parametric hit");
+        assert_eq!(route.handler, 33);
+        assert_eq!(params.get("id").map(String::as_str), Some("42"));
+
+        // Method mismatch must not short-circuit: only POST /users is registered,
+        // so GET /users falls through to None rather than hitting the POST entry.
+        assert!(app.match_route("GET", "/users").is_none());
+    }
+
+    #[test]
+    fn static_index_respects_prefix() {
+        let mut app = FastifyApp::with_prefix("/api".to_string());
+        app.add_route("GET", "/users", 7);
+        // The index key is the full prefixed path, not the bare registration path.
+        assert!(app.static_index.contains_key("GET /api/users"));
+        assert!(!app.static_index.contains_key("GET /users"));
+        let (route, _) = app
+            .match_route("GET", "/api/users")
+            .expect("prefixed static hit");
+        assert_eq!(route.handler, 7);
+    }
+
+    /// The index is consulted before the linear scan, so it must not let a later
+    /// static route jump ahead of an earlier parametric/wildcard route that also
+    /// matches — first-registered-wins has to survive.
+    #[test]
+    fn static_index_preserves_registration_precedence() {
+        // Parametric `/:slug` registered FIRST, colliding static `/static` second.
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/:slug", 1); // parametric, registered first
+        app.add_route("GET", "/static", 2); // static, collides with /:slug
+
+        // The shadowed static route is deliberately NOT indexed...
+        assert!(!app.static_index.contains_key("GET /static"));
+        // ...so the earlier parametric route still wins through the linear scan.
+        let (route, params) = app.match_route("GET", "/static").expect("hit");
+        assert_eq!(route.handler, 1);
+        assert_eq!(params.get("slug").map(String::as_str), Some("static"));
+
+        // Reverse order: static registered first IS indexed and wins.
+        let mut app2 = FastifyApp::new();
+        app2.add_route("GET", "/static", 2); // static first
+        app2.add_route("GET", "/:slug", 1); // parametric second
+        assert!(app2.static_index.contains_key("GET /static"));
+        assert_eq!(app2.match_route("GET", "/static").unwrap().0.handler, 2);
+
+        // Wildcard `/static/*` registered FIRST: the later static `/static/foo`
+        // must not bypass it via the index — the wildcard still wins and captures.
+        let mut app3 = FastifyApp::new();
+        app3.add_route("GET", "/static/*", 3); // wildcard, registered first
+        app3.add_route("GET", "/static/foo", 4); // static, shadowed by the wildcard
+        assert!(!app3.static_index.contains_key("GET /static/foo"));
+        let (route, params) = app3.match_route("GET", "/static/foo").expect("hit");
+        assert_eq!(route.handler, 3);
+        assert_eq!(params.get("*").map(String::as_str), Some("foo"));
+    }
+
+    /// Redundant slashes in a registered path must not push a static route off
+    /// the O(1) index: `RoutePattern` ignores empty segments, so the index key
+    /// has to normalize the same way (`/api//users` → `GET /api/users`).
+    #[test]
+    fn static_index_normalizes_redundant_slashes() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/api//users", 9);
+        // Indexed under the normalized key, not the raw double-slash path.
+        assert!(app.static_index.contains_key("GET /api/users"));
+        assert!(!app.static_index.contains_key("GET /api//users"));
+        // And a normal request resolves through the fast path.
+        assert_eq!(app.match_route("GET", "/api/users").unwrap().0.handler, 9);
+    }
+
+    /// Exact-duplicate static routes keep the first registration (matching the
+    /// linear scan's first-match behaviour) rather than flipping to last-wins.
+    #[test]
+    fn static_index_duplicate_routes_keep_first() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/dup", 100);
+        app.add_route("GET", "/dup", 200);
+        assert_eq!(app.static_index.get("GET /dup"), Some(&0));
+        assert_eq!(app.match_route("GET", "/dup").unwrap().0.handler, 100);
+    }
+
+    /// `add_route` stores the method upper-cased, so `match_route` must normalize
+    /// the lookup method too — a lowercase/mixed-case caller resolves through both
+    /// the static index and the linear-scan fallback.
+    #[test]
+    fn match_route_normalizes_method_case() {
+        let mut app = FastifyApp::new();
+        app.add_route("GET", "/ping", 11); // static -> index
+        app.add_route("GET", "/users/:id", 22); // parametric -> scan
+
+        // Static, indexed: lowercase + mixed-case both hit.
+        assert_eq!(app.match_route("get", "/ping").unwrap().0.handler, 11);
+        assert_eq!(app.match_route("GeT", "/ping").unwrap().0.handler, 11);
+        // Parametric, scanned: same normalization on the slow path.
+        let (route, params) = app.match_route("get", "/users/7").expect("hit");
+        assert_eq!(route.handler, 22);
+        assert_eq!(params.get("id").map(String::as_str), Some("7"));
+    }
 }
