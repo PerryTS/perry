@@ -1560,7 +1560,15 @@ pub extern "C" fn js_gc_collect() {
 fn manual_gc_collect_now() {
     let _scan = super::roots::ManualGcScanGuard::force_full_scan();
     crate::weakref::clear_pending_finalization_jobs();
-    gc_collect_inner_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
+    // An explicit `gc()` runs a FULL mark-sweep rather than the generational
+    // fast path. With gen-GC on (the default), `gc_collect_inner_with_trigger`
+    // dispatches a MINOR cycle, whose sweep skips dead-old-block reclamation
+    // (`reclaim_dead_old_blocks = false`) — so dead large/tenured objects (which
+    // are born in the old arena, >16 KB) survived an explicit `gc()` and RSS
+    // never dropped. A full cycle reclaims them, matching V8/Node `--expose-gc`
+    // semantics where `gc()` is a full collection. Automatic threshold-driven
+    // minors are unaffected.
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual))
         .emit_after_current();
     crate::weakref::queue_pending_finalization_callbacks_after_gc();
 }
