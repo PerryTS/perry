@@ -77,13 +77,21 @@ pub(crate) fn resolve_fetch_inputs(
         .map(String::into_bytes)
         .or_else(|| request_fields.as_ref().and_then(|rf| rf.body.clone()));
 
-    let custom_headers: HashMap<String, String> = match headers_json {
-        Some(j) => serde_json::from_str(&j).unwrap_or_default(),
-        None => request_fields
-            .as_ref()
-            .map(|rf| rf.headers.clone())
-            .unwrap_or_default(),
-    };
+    // Start from the `Request`'s own headers (the `fetch(Request)` form), then
+    // let any `init.headers` override per-key. WHATWG says init headers win, but
+    // an absent/empty init must NOT wipe the Request's headers — codegen always
+    // passes a headers JSON ("{}" when the init has none), so the old strict
+    // `match` (Some("{}") => empty) silently dropped every header axios sets on
+    // its `Request` (auth token, anthropic-version, …), causing 401s.
+    let mut custom_headers: HashMap<String, String> = request_fields
+        .as_ref()
+        .map(|rf| rf.headers.clone())
+        .unwrap_or_default();
+    if let Some(j) = headers_json {
+        if let Ok(init_headers) = serde_json::from_str::<HashMap<String, String>>(&j) {
+            custom_headers.extend(init_headers);
+        }
+    }
 
     Ok(FetchInputs {
         url,
