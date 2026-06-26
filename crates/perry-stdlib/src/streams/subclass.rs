@@ -393,3 +393,50 @@ pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
     }
     out
 }
+
+/// Fully drain a ReadableStream into bytes, DRIVING its (possibly async) `pull`
+/// callback each round — queue the pull, run microtasks + the stdlib pump so the
+/// pull (and its `enqueue()`/`close()`) executes, then collect chunks — until
+/// the stream closes or stalls. Unlike [`drain_readable_into_bytes`] (which only
+/// collects already-queued chunks), this produces data a lazy async pull yields
+/// on demand: exactly axios's `trackStream` download-progress wrapper consumed
+/// by `new Response(stream)`. Bounded to avoid spinning on a pull that awaits
+/// external async this synchronous drive cannot complete.
+pub fn fully_drain_readable_stream(stream_id: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for _ in 0..1_000_000 {
+        let (mt, st) = unsafe {
+            super::maybe_pull(stream_id);
+            let mt = perry_runtime::promise::js_promise_run_microtasks();
+            let st = crate::common::async_bridge::js_stdlib_process_pending();
+            (mt, st)
+        };
+        let (chunks, closed) = {
+            let mut g = READABLE_STREAMS.lock().unwrap();
+            match g.get_mut(&stream_id) {
+                Some(s) => {
+                    let drained = s.drain_chunks();
+                    (drained, s.state != ReadableState::Readable)
+                }
+                None => (Vec::new(), true),
+            }
+        };
+        let had_chunks = !chunks.is_empty();
+        for chunk in chunks {
+            unsafe {
+                if let Some(bytes) = read_bytes_from_chunk(chunk) {
+                    out.extend_from_slice(&bytes);
+                }
+            }
+        }
+        if closed {
+            break;
+        }
+        // Stop only when nothing advanced: no chunks AND no queued work ran.
+        // A pull that produced data or queued a continuation keeps us going.
+        if !had_chunks && mt == 0 && st == 0 {
+            break;
+        }
+    }
+    out
+}

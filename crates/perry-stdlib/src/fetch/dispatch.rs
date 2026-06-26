@@ -50,7 +50,11 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         let id = value as usize;
         // kind == 1 ⇒ live ReadableStream.
         if crate::streams::js_stream_handle_kind(id) == 1 {
-            let bytes = crate::streams::drain_readable_into_bytes(id);
+            // Drive the stream's (possibly async) pull while draining — a
+            // trackStream / async-pull body produces no already-queued chunks,
+            // so `drain_readable_into_bytes` returned empty and a `new
+            // Response(stream).text()` hung (axios download-progress wrapper).
+            let bytes = crate::streams::fully_drain_readable_stream(id);
             return unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) } as i64;
         }
     }

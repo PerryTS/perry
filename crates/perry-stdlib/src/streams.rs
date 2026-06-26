@@ -70,8 +70,9 @@ use self::pipe::js_readable_stream_pipe_to;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
 pub use self::subclass::{
-    drain_readable_into_bytes, js_readable_stream_subclass_init, js_stream_handle_is_registered,
-    js_stream_handle_kind, js_transform_stream_subclass_init, js_writable_stream_subclass_init,
+    drain_readable_into_bytes, fully_drain_readable_stream, js_readable_stream_subclass_init,
+    js_stream_handle_is_registered, js_stream_handle_kind, js_transform_stream_subclass_init,
+    js_writable_stream_subclass_init,
 };
 pub use self::transform::{
     js_stream_web_compression_stream_new, js_stream_web_decompression_stream_new,
@@ -679,7 +680,15 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
             if pull_returns_byte_chunk {
                 pull_deferred_byte_chunk(stream_id, cb);
             } else {
-                js_closure_call1(cb as *const ClosureHeader, stream_id as f64);
+                let pull_result = js_closure_call1(cb as *const ClosureHeader, stream_id as f64);
+                // An async (Promise-returning) `pull` defers its enqueue()/close()
+                // until its internal awaits settle. Drive it to settled here so
+                // those side effects land before the pull is marked complete and
+                // before any re-pull — otherwise a reader (or the response-body
+                // drain) sees no chunk. This is axios's `trackStream`
+                // download-progress wrapper: a custom ReadableStream whose async
+                // pull lazily reads the buffered upstream response body.
+                drive_stream_callback_promise(pull_result);
             }
             if let Some(s) = READABLE_STREAMS.lock().unwrap().get_mut(&stream_id) {
                 s.pulling = false;
@@ -687,6 +696,32 @@ extern "C" fn readable_pull_microtask(closure: *const ClosureHeader) -> f64 {
         }
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// Drive an async (Promise-returning) stream callback (e.g. an async `pull`) to
+/// settled, so its `enqueue()`/`close()` side effects run before the caller
+/// proceeds. Runs the microtask queue and the stdlib async pump (the callback
+/// may await a buffered-body read that resolves via either), bounded to avoid a
+/// busy spin on a Promise awaiting external async this synchronous drive can't
+/// complete. No-op for a synchronous pull (returns a non-Promise).
+unsafe fn drive_stream_callback_promise(value: f64) {
+    if perry_runtime::promise::js_value_is_promise(value) == 0 {
+        return;
+    }
+    let promise = js_nanbox_get_pointer(value) as *mut Promise;
+    if promise.is_null() {
+        return;
+    }
+    for _ in 0..100_000 {
+        if perry_runtime::promise::js_promise_state(promise) != 0 {
+            return;
+        }
+        let mt = perry_runtime::promise::js_promise_run_microtasks();
+        let st = crate::common::async_bridge::js_stdlib_process_pending();
+        if mt == 0 && st == 0 {
+            return;
+        }
+    }
 }
 
 pub(super) unsafe fn maybe_pull(stream_id: usize) {
