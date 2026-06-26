@@ -143,12 +143,33 @@ pub(crate) fn try_lower_static_dispatch(
             // then bundle the trailing args into an Array.
             let mut lowered: Vec<String> = Vec::with_capacity(args.len());
             if has_rest && is_synth_args {
-                let cap = (args.len() as u32).to_string();
-                let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                // Lower each call arg exactly ONCE (a value may have side
+                // effects), then reuse the SSA registers both for the leading
+                // real params and for the synthesized `arguments` object.
+                let mut vals: Vec<String> = Vec::with_capacity(args.len());
                 for a in args {
-                    let v = lower_expr(ctx, a)?;
+                    vals.push(lower_expr(ctx, a)?);
+                }
+                // #5703: the leading real params BEFORE the synth `arguments`
+                // slot (`static method(x, _ = 0) { … arguments … }` →
+                // params `[x, _, <arguments>]`) must receive their positional
+                // values, padded with `undefined` when under-supplied — exactly
+                // as the class-DECLARATION (StaticMethodCall) path does.
+                // Previously this branch pushed ONLY the arguments object, so a
+                // leading param like `x` received the (empty) arguments array
+                // instead of its argument / `undefined` (test262
+                // `params-dflt-meth-static-args-unmapped`).
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let fixed_count = declared.saturating_sub(1);
+                for i in 0..fixed_count {
+                    lowered.push(vals.get(i).cloned().unwrap_or_else(|| undef.clone()));
+                }
+                // The synthesized `arguments` object holds ALL passed args.
+                let cap = (vals.len() as u32).to_string();
+                let mut current = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+                for v in &vals {
                     let blk = ctx.block();
-                    current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, &v)]);
+                    current = blk.call(I64, "js_array_push_f64", &[(I64, &current), (DOUBLE, v)]);
                 }
                 current =
                     ctx.block()
@@ -159,6 +180,15 @@ pub(crate) fn try_lower_static_dispatch(
                 let fixed_count = declared.saturating_sub(1);
                 for a in args.iter().take(fixed_count) {
                     lowered.push(lower_expr(ctx, a)?);
+                }
+                // #5703 (mirrors #235 in the StaticMethodCall path): when the
+                // caller under-supplies the fixed leading params, pad the
+                // missing slots with `undefined` BEFORE the rest array, so the
+                // callee's default-param prologue / destructuring fires instead
+                // of reading an uninitialized (0.0) parameter register.
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                while lowered.len() < fixed_count {
+                    lowered.push(undef.clone());
                 }
                 let rest_count = args.len().saturating_sub(fixed_count);
                 let cap = (rest_count as u32).to_string();
@@ -173,6 +203,20 @@ pub(crate) fn try_lower_static_dispatch(
             } else {
                 for a in args {
                     lowered.push(lower_expr(ctx, a)?);
+                }
+                // #5703: a static method of a class EXPRESSION called with fewer
+                // args than declared (`C.m()` for `static m(a = 1)` or
+                // `static m([x, y] = […])`) reaches this fused get-static-method
+                // +call path rather than the `StaticMethodCall` path used by
+                // class DECLARATIONS. That path pads missing slots with
+                // `undefined` (#235); this one did not, so the callee read an
+                // uninitialized (0.0) register — its default-param prologue
+                // (`if (p === undefined) p = …`) and array destructuring
+                // (`GetIterator(p)` → "is not iterable") never fired. Pad here
+                // too so both paths behave identically.
+                let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                while lowered.len() < declared {
+                    lowered.push(undef.clone());
                 }
             }
             let prev_this =
