@@ -170,6 +170,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             .insert(binding.id.sym.as_ref().to_string());
                     }
                 }
+                // Record chained-assignment class self-aliases (`let Logger =
+                // Logger_1 = class …`) so the self-reference isn't captured (see
+                // `synthesize_class_captures`). Function / CJS-module body path.
+                crate::lower::record_chained_class_self_aliases(ctx, decl);
                 let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
                 // `var` is function-scoped: mark each defined local so
                 // `pop_block_scope` preserves it when leaving an inner block.

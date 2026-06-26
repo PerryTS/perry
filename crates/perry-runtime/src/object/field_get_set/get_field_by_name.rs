@@ -30,6 +30,73 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // A per-evaluation class object (`ClassExprFresh`, #1772/#1787) reaches
+    // here as a RAW heap pointer (a real ObjectHeader, so its top 16 address
+    // bits are 0 — distinguishing it from a `0x7FFE` class-ref value or any
+    // NaN-boxed value). Its static METHODS / static ACCESSORS live in the class
+    // registry keyed by the header class_id, never as own properties, so a read
+    // like `C.staticMethod` returned `undefined` (the class-ref form resolves
+    // these via the registry; this pointer-tagged class-object form did not).
+    // That is NestJS's `Logger.error` when the Logger takes the fresh path
+    // (captures `DEFAULT_LOGGER`), which the tslib `__decorate` chain then reads
+    // `.value` off → "reading 'value'". Resolve own fields first (own-property
+    // precedence), then fall back to the registry. The `(obj >> 48) == 0` guard
+    // ensures `is_class_object_ptr` only ever sees a real heap pointer (it
+    // back-reads a GcHeader), never a tagged value — which previously SIGSEGV'd.
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && (obj as usize) >= 0x10000
+        && crate::object::class_registry::is_class_object_ptr(obj as *const u8)
+    {
+        let own = get_field_by_name_object_tail(obj, key);
+        if !own.is_undefined() {
+            return own;
+        }
+        unsafe {
+            // Re-box the raw class-object pointer as a POINTER-tagged JS value
+            // so `js_class_method_bind` (which expects a value, like the
+            // class-ref path) binds the static method to the right receiver.
+            let class_value =
+                f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+            let class_id = super::super::js_object_get_class_id(obj);
+            if class_id != 0 {
+                let name_ptr =
+                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                    .unwrap_or("");
+                if !name.is_empty()
+                    && !super::super::class_registry::class_is_key_deleted(class_id, name)
+                {
+                    if super::super::class_registry::lookup_static_method_in_chain(
+                        class_id, name,
+                    )
+                    .is_some()
+                    {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(name_ptr, ptr, name_len);
+                            ptr
+                        };
+                        let result = js_class_method_bind(class_value, heap_name, name_len);
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                    if let Some(v) =
+                        super::super::class_registry::class_static_accessor_getter_value(
+                            class_id,
+                            name,
+                            class_value,
+                        )
+                    {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
+        }
+        return own;
+    }
     if let Some(addr) =
         crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
     {
