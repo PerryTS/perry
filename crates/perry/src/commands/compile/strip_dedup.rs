@@ -28,11 +28,22 @@ const RUST_ALLOCATOR_SYMBOL_PARTS: &[&str] = &[
     "__rdl_realloc",
     "__rdl_alloc_zeroed",
     "__rdl_alloc_error_handler",
-    // Panic / unwind runtime shims. On tier-3 targets (tvOS/watchOS) with no
-    // prebuilt std, perry-runtime and perry-stdlib are each built with
-    // -Zbuild-std, so both bundle std's single-definition panic runtime →
-    // `ld64.lld: duplicate symbol` for these. Localize them like the allocator
-    // shims so only one staticlib provides them.
+];
+
+// Panic / unwind runtime shims. On tier-3 Mach-O targets (tvOS/watchOS) with no
+// prebuilt std, perry-runtime and perry-stdlib are each built with -Zbuild-std,
+// so both bundle std's single-definition panic runtime → `ld64.lld: duplicate
+// symbol` for these; localizing them so only one staticlib provides them fixes
+// that on Mach-O.
+//
+// They are NOT localized on ELF (see `object_is_elf` guard in the well-known
+// localizer): `--localize-symbol rust_eh_personality` also matches the
+// compiler-emitted `DW.ref.rust_eh_personality` (substring), and localizing
+// that breaks its PC32 relocation → `relocation R_X86_64_PC32 against undefined
+// hidden symbol DW.ref.rust_eh_personality can not be used when making a PIE
+// object` at link time. ELF tier-1/2 builds take the panic runtime from the
+// prebuilt std (single definition), so there is no duplicate to dedup anyway.
+const RUST_PANIC_UNWIND_SYMBOL_PARTS: &[&str] = &[
     "__rust_drop_panic",
     "__rust_foreign_exception",
     "rust_begin_unwind",
@@ -41,11 +52,34 @@ const RUST_ALLOCATOR_SYMBOL_PARTS: &[&str] = &[
     "rust_panic",
 ];
 
+/// Panic/unwind personality shims (incl. the compiler-emitted
+/// `DW.ref.rust_eh_personality`, which substring-matches `rust_eh_personality`).
+/// These must not be `--localize-symbol`'d on ELF — it breaks PIE relocations.
+fn is_panic_unwind_symbol(symbol: &str) -> bool {
+    RUST_PANIC_UNWIND_SYMBOL_PARTS
+        .iter()
+        .any(|part| symbol.contains(part))
+}
+
 fn force_localize_symbol(symbol: &str) -> bool {
     FORCE_EXCLUDE_SYMBOLS.contains(&symbol)
         || RUST_ALLOCATOR_SYMBOL_PARTS
             .iter()
             .any(|part| symbol.contains(part))
+        || is_panic_unwind_symbol(symbol)
+}
+
+/// True if `path` is an ELF object file (first four bytes `0x7F 'E' 'L' 'F'`).
+/// Used to skip panic/unwind-symbol localization on ELF, where localizing
+/// `rust_eh_personality` / `DW.ref.rust_eh_personality` breaks PIE relocations
+/// (see [`RUST_PANIC_UNWIND_SYMBOL_PARTS`]).
+fn object_is_elf(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .map(|_| magic == [0x7f, b'E', b'L', b'F'])
+        .unwrap_or(false)
 }
 
 fn find_path_tool(name: &str) -> Option<PathBuf> {
@@ -718,7 +752,16 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
 
     for (member, symbols) in &forced_symbols_by_member {
         let member_path = extract_dir.join(member);
+        // On ELF, localizing the panic/unwind personality symbols (including the
+        // compiler-emitted `DW.ref.rust_eh_personality`) breaks PIE relocations
+        // → "undefined hidden symbol ... can not be used when making a PIE
+        // object". That dedup is only needed for tier-3 Mach-O (-Zbuild-std);
+        // skip it for ELF members and keep localizing the allocator shims.
+        let skip_panic_unwind = object_is_elf(&member_path);
         for symbol in symbols {
+            if skip_panic_unwind && is_panic_unwind_symbol(symbol) {
+                continue;
+            }
             let out = Command::new(&objcopy)
                 .arg("--localize-symbol")
                 .arg(symbol)
@@ -1362,7 +1405,30 @@ pub(super) fn strip_members_present_in_reference(
 
 #[cfg(test)]
 mod strip_dedup_tests {
-    use super::parse_nm_archive_output;
+    use super::{force_localize_symbol, is_panic_unwind_symbol, parse_nm_archive_output};
+
+    #[test]
+    fn panic_unwind_classification_matches_dwref() {
+        // The compiler-emitted `DW.ref.rust_eh_personality` substring-matches
+        // `rust_eh_personality`; both must be treated as panic/unwind so the
+        // well-known localizer skips them on ELF (PIE relocation breakage).
+        assert!(is_panic_unwind_symbol("rust_eh_personality"));
+        assert!(is_panic_unwind_symbol("DW.ref.rust_eh_personality"));
+        assert!(is_panic_unwind_symbol("rust_begin_unwind"));
+        assert!(is_panic_unwind_symbol("rust_panic"));
+        // Allocator shims and ordinary symbols are not panic/unwind.
+        assert!(!is_panic_unwind_symbol("__rust_alloc"));
+        assert!(!is_panic_unwind_symbol("__rdl_dealloc"));
+        assert!(!is_panic_unwind_symbol("js_fetch_with_options"));
+
+        // Candidate collection is unchanged: allocator shims and the
+        // panic/unwind group are both still force-localize candidates (the ELF
+        // skip happens per-object in the well-known localizer, not here).
+        assert!(force_localize_symbol("rust_eh_personality"));
+        assert!(force_localize_symbol("__rust_alloc"));
+        assert!(force_localize_symbol("js_stdlib_init_dispatch"));
+        assert!(!force_localize_symbol("js_some_regular_export"));
+    }
 
     #[test]
     fn parser_handles_bare_member_headers() {
