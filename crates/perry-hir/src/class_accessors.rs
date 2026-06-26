@@ -2,11 +2,17 @@
 pub struct ClassAccessorNames {
     pub getter_names: Vec<String>,
     pub setter_names: Vec<String>,
+    /// #5592: the class (or an ancestor) declares at least one accessor with a
+    /// COMPUTED key (`get [expr]()` / `set [expr](v)`). Its property name can't
+    /// be known statically, so callers that decide whether
+    /// `obj.prototype.<x> = v` should invoke a setter must treat this class as
+    /// "possibly has an accessor named <x>" for any `<x>`.
+    pub has_computed: bool,
 }
 
 impl ClassAccessorNames {
     pub fn is_empty(&self) -> bool {
-        self.getter_names.is_empty() && self.setter_names.is_empty()
+        self.getter_names.is_empty() && self.setter_names.is_empty() && !self.has_computed
     }
 
     pub fn contains_any(&self, name: &str) -> bool {
@@ -38,6 +44,10 @@ impl ClassAccessorNames {
         }
         for name in &other.setter_names {
             changed |= self.insert_setter(name.clone());
+        }
+        if other.has_computed && !self.has_computed {
+            self.has_computed = true;
+            changed = true;
         }
         changed
     }

@@ -633,7 +633,7 @@ fn lower_assignment_target(
                     method_name: &str,
                 ) -> bool {
                     ctx.lookup_class_accessor_names(class_name)
-                        .is_some_and(|names| names.contains_any(method_name))
+                        .is_some_and(|names| names.contains_any(method_name) || names.has_computed)
                 }
                 let resolved: Option<ProtoOwner> = match obj_unwrapped {
                     // (a) <ClassName>.prototype.<method>

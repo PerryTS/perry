@@ -1672,6 +1672,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         class_keys_init_data,
         class_ids,
         class_table,
+        &hir.class_display_names,
         &ctor_arity_overrides,
         closure_rest_params,
         closure_arities,

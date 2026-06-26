@@ -50,17 +50,44 @@ pub(crate) fn lower_class_expr(
         }
         other => other,
     };
-    let synthetic_name = ident_name.unwrap_or_else(|| {
-        if !anonymous_class_has_static_name_member(&class_expr.class) {
-            if let Some(name) = ctx.assignment_inferred_name.as_ref() {
-                if !name.is_empty() {
-                    return name.clone();
+    // When the HIR registration key we pick below diverges from the
+    // class's user-visible `.name`, record the real name here so codegen
+    // registers it instead of the synthetic key (#5592).
+    let mut display_override: Option<String> = None;
+    let synthetic_name = match ident_name {
+        Some(n) => n,
+        None => {
+            let inferred = if !anonymous_class_has_static_name_member(&class_expr.class) {
+                ctx.assignment_inferred_name
+                    .as_ref()
+                    .filter(|name| !name.is_empty())
+                    .cloned()
+            } else {
+                None
+            };
+            match inferred {
+                // First class expression to claim this inferred binding name —
+                // reuse it directly as the registration key (and thus `.name`).
+                Some(name) if ctx.lookup_class(&name).is_none() => name,
+                // #5592: a second anonymous class expression assigned to the
+                // SAME binding (`C = class {…}; C = class {…}`) infers the same
+                // name. Reusing the key would alias both onto one ClassId
+                // (`lower_class_from_ast` dedups by name via `lookup_class`),
+                // silently dropping the second body. Give it a fresh, unique
+                // registration key but keep its user-visible `.name` as the
+                // binding name.
+                Some(name) => {
+                    display_override = Some(name.clone());
+                    format!("{}__anon_dup_{}", name, ctx.fresh_class())
                 }
+                None => format!("__anon_class_{}", ctx.fresh_class()),
             }
         }
-        format!("__anon_class_{}", ctx.fresh_class())
-    });
+    };
     let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
+    if let Some(display) = display_override {
+        ctx.class_display_names.insert(class.id, display);
+    }
     // Mixin factories like `function WithA(B) { return class extends B {} }`
     // produce a class whose super is the function-parameter `B` — a
     // runtime value, not a statically-known class. The class-decl arm

@@ -816,6 +816,11 @@ pub fn lower_module_full(
         for (id, name) in ctx.closure_display_names.drain() {
             module.closure_display_names.insert(id, name);
         }
+        // #5592: flush class `.name` overrides for uniquified class-expression
+        // registration keys.
+        for (id, name) in ctx.class_display_names.drain() {
+            module.class_display_names.insert(id, name);
+        }
         // Flush generator param-prologue lengths (run param binding at call time).
         for (id, len) in ctx.gen_param_prologue_len.drain() {
             module.gen_param_prologue_len.insert(id, len);

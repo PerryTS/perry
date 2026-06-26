@@ -100,6 +100,15 @@ pub struct Module {
     /// Keyed by the closure/function's HIR FuncId; consumed by codegen
     /// when emitting `js_register_function_name` calls.
     pub closure_display_names: std::collections::HashMap<perry_types::FuncId, String>,
+    /// #5592: user-visible `.name` overrides for classes whose HIR
+    /// registration key differs from their JS name. The only producer
+    /// today is a second anonymous class expression assigned to a binding
+    /// already claimed by an earlier one (`C = class {}; C = class {}`):
+    /// both infer the name `"C"`, so the second is registered under a
+    /// uniquified key to get its own ClassId, and its true `.name` (`"C"`)
+    /// is recorded here. Keyed by ClassId; consumed by codegen when
+    /// emitting `js_register_class_name`.
+    pub class_display_names: std::collections::HashMap<crate::ClassId, String>,
     /// #4101: original source text for each user function, keyed by HIR
     /// FuncId. Populated at lowering by slicing the module source against the
     /// AST span of every function declaration / expression / arrow. Consumed
@@ -157,6 +166,7 @@ impl Module {
             init_kind: ModuleInitKind::Eager,
             async_step_closures: std::collections::HashSet::new(),
             closure_display_names: std::collections::HashMap::new(),
+            class_display_names: std::collections::HashMap::new(),
             closure_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
             gen_param_prologue_len: std::collections::HashMap::new(),

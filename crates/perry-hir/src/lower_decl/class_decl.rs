@@ -93,6 +93,15 @@ fn runtime_instance_accessor_names(members: &[ast::ClassMember]) -> crate::Class
                     ast::PropName::Ident(i) => i.sym.to_string(),
                     ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
                     ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
+                    // #5592: a computed accessor key (`get [expr]()` /
+                    // `set [expr](v)`) isn't statically known. Mark the class so
+                    // `obj.prototype.<x> = v` writes route through the generic
+                    // setter-invoking path rather than a name-keyed prototype
+                    // monkey-patch.
+                    ast::PropName::Computed(_) => {
+                        accessor_names.has_computed = true;
+                        continue;
+                    }
                     _ => continue,
                 };
                 match m.kind {

@@ -250,6 +250,11 @@ pub struct LoweringContext {
     /// (static property key); flushed into `Module.closure_display_names`
     /// alongside `pending_functions`.
     pub(crate) closure_display_names: HashMap<FuncId, String>,
+    /// #5592: class `.name` overrides keyed by ClassId. Populated when a
+    /// class expression's HIR registration key is uniquified away from its
+    /// JS name (two anonymous class expressions on the same binding); flushed
+    /// into `Module.class_display_names`. See that field's docs.
+    pub(crate) class_display_names: HashMap<ClassId, String>,
     /// Per-generator count of leading parameter-prologue statements (default
     /// guards + destructuring binding stmts) prepended to the body. Flushed
     /// into `Module.gen_param_prologue_len`; the generator transform uses it to
