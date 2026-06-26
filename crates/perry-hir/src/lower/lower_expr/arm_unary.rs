@@ -52,8 +52,20 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
             // #1454: global timer builtins and fetch are functions.
             // Timers still lower bare reads to ExternFuncRef; fetch
             // now resolves through globalThis for value identity.
-            // Fold both shapes to "function" (gc is excluded — it's
-            // undefined in Node without --expose-gc).
+            // Fold both shapes to "function".
+            //
+            // `gc` is included here. Unlike Node — where `gc` exists only
+            // under `--expose-gc`, so `typeof gc === "undefined"` otherwise —
+            // Perry's `gc()` is ALWAYS a real, callable builtin (a
+            // call-intrinsic routed to `js_gc_collect`). Previously `typeof
+            // gc` folded to a non-"function" value while `gc()` still worked,
+            // so the idiomatic capability guard
+            // `if (typeof gc === "function") gc()` (written precisely because
+            // Node hides `gc` without `--expose-gc`) was always false. An
+            // allocation-heavy program that gates collection on that guard
+            // then never collected and RSS grew unbounded. Since Perry's `gc`
+            // is genuinely available, `typeof gc` must be "function" so the
+            // guard runs the collector.
             let n = id.sym.as_ref();
             if matches!(
                 n,
@@ -72,6 +84,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                     | "structuredClone"
                     | "btoa"
                     | "atob"
+                    | "gc"
             ) && ctx.lookup_local(n).is_none()
             {
                 return Ok(Expr::String("function".to_string()));
