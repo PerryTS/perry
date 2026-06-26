@@ -36,7 +36,7 @@ pub use registry::{
     js_register_closure_strict_function, js_register_closure_synthetic_arguments,
     lookup_closure_arity, lookup_closure_length, lookup_closure_rest, lookup_closure_rest_full,
     real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
-    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC,
+    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
 };
 
 pub use dispatch::{

@@ -314,6 +314,45 @@ fn install_proto_symbol_self_method(
     }
 }
 
+/// Stamp `NO_THIS_REBIND_FLAG` onto the `next`/`return`/`throw` step-closure
+/// headers of a generator instance object. These closures capture the generator
+/// BODY's `this` lexically (the last capture slot, gated by CAPTURES_THIS_FLAG);
+/// the `yield*` delegation desugar calls `next.call(iter, v)`, whose
+/// `clone_closure_rebind_this` would otherwise overwrite that captured `this`
+/// with the iterator object. Marking the header per-closure (rather than via a
+/// global func_ptr table built at module-init) is robust under codegen-units and
+/// debug builds, and needs no public-struct change. Only closures that actually
+/// carry CAPTURES_THIS_FLAG are stamped — a generator whose body never reads
+/// `this` is left untouched.
+fn mark_generator_step_closures_no_rebind(obj: f64) {
+    use crate::closure::{CAPTURES_THIS_FLAG, NO_THIS_REBIND_FLAG};
+    for name in [
+        b"next".as_slice(),
+        b"return".as_slice(),
+        b"throw".as_slice(),
+    ] {
+        let v = crate::object::js_object_get_own_field_or_undef(obj, name.as_ptr(), name.len());
+        let vv = JSValue::from_bits(v.to_bits());
+        if !vv.is_pointer() {
+            continue;
+        }
+        let ptr = vv.as_pointer::<u8>() as usize;
+        if !crate::closure::is_closure_ptr(ptr) {
+            continue;
+        }
+        let header = ptr as *mut crate::closure::ClosureHeader;
+        unsafe {
+            let cc = (*header).capture_count;
+            // Only meaningful for closures that capture `this`; the rebind path
+            // is a no-op for the rest, but skip them anyway to keep the flag's
+            // invariant tight.
+            if cc & CAPTURES_THIS_FLAG != 0 {
+                (*header).capture_count = cc | NO_THIS_REBIND_FLAG;
+            }
+        }
+    }
+}
+
 /// #4141: link a freshly-built generator/async-generator instance object into
 /// the spec `[[Prototype]]` chain. Perry lowers `gen()` to a `{next,return,
 /// throw}` object literal; this interposes a fresh intermediate object (the
@@ -338,6 +377,9 @@ pub extern "C" fn js_generator_attach_prototype(obj: f64, is_async: i32) -> f64 
     if obj_ptr == 0 {
         return obj;
     }
+    // Pin each step closure's lexical generator-body `this` so `yield*`
+    // delegation (`next.call(iter, v)`) can't rebind it to the iterator object.
+    mark_generator_step_closures_no_rebind(obj);
     if is_async != 0 {
         super::super::async_generator_queue::wrap_async_generator_instance(
             obj_ptr as *mut ObjectHeader,
@@ -382,6 +424,10 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     if obj_ptr == 0 {
         return obj;
     }
+
+    // Pin the step closures' lexical generator-body `this` (see the fallback
+    // `js_generator_attach_prototype`); this is the closure-identity wiring path.
+    mark_generator_step_closures_no_rebind(obj);
 
     let closure = crate::closure::clean_closure_ptr(closure_ptr);
     if closure.is_null() || crate::closure::get_valid_func_ptr(closure).is_null() {

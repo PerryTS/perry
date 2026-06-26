@@ -825,7 +825,11 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         return closure_bits;
     }
     let ptr = (closure_bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if ptr < 0x10000 {
+    // Reject the `[0, 0x100000)` native-handle band BEFORE the header read:
+    // fetch/http/axios/fastify ids are NaN-boxed with POINTER_TAG but are not
+    // heap pointers, and dereferencing one would SIGSEGV (#4740). Matches the
+    // floor `rebind_explicit_this` uses before probing the closure pointer.
+    if ptr < 0x100000 {
         return closure_bits;
     }
     unsafe {
@@ -837,6 +841,16 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         let raw_count = (*header).capture_count;
         // No CAPTURES_THIS_FLAG → the closure body doesn't read `this`, no rebind needed.
         if raw_count & CAPTURES_THIS_FLAG == 0 {
+            return closure_bits;
+        }
+        // Generator state-machine step closures (`next`/`return`/`throw`) capture
+        // the generator BODY's `this` lexically — it is fixed at generator
+        // creation and must NOT be re-bound by `.call`/method dispatch. The
+        // `yield* gen` desugar calls `next.call(iter, v)`; rebinding here would
+        // clobber the captured body-`this` with the iterator object. The flag is
+        // stamped on the closure header (per-closure, no global table) by
+        // `js_generator_attach_prototype` when it wires the generator instance.
+        if raw_count & NO_THIS_REBIND_FLAG != 0 {
             return closure_bits;
         }
         let count = real_capture_count(raw_count) as usize;
