@@ -89,7 +89,16 @@ pub(crate) fn resolve_fetch_inputs(
         .unwrap_or_default();
     if let Some(j) = headers_json {
         if let Ok(init_headers) = serde_json::from_str::<HashMap<String, String>>(&j) {
-            custom_headers.extend(init_headers);
+            // `request_fields.headers` are stored canonically lowercased (the
+            // Headers object lowercases keys), but `serde_json` preserves the
+            // JSON's original casing. Lowercase the init keys before merging so
+            // an init `Authorization` actually overrides the Request's
+            // `authorization` instead of both surviving and being forwarded.
+            custom_headers.extend(
+                init_headers
+                    .into_iter()
+                    .map(|(k, v)| (k.to_ascii_lowercase(), v)),
+            );
         }
     }
 
@@ -99,4 +108,43 @@ pub(crate) fn resolve_fetch_inputs(
         body,
         custom_headers,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_fetch_inputs;
+
+    #[test]
+    fn init_headers_are_lowercased_so_they_override() {
+        // `url_from_header` set => the Request registry is not consulted, so
+        // this exercises only the `init.headers` merge path. The init keys must
+        // be lowercased so they collapse onto (and override) the canonical
+        // lowercase keys the Request's Headers object stores.
+        let inputs = resolve_fetch_inputs(
+            Some("https://example.com/".to_string()),
+            Some("GET".to_string()),
+            None,
+            Some(r#"{"Authorization":"Bearer tok","Content-Type":"application/json"}"#.to_string()),
+            0,
+        )
+        .expect("inputs resolve");
+
+        assert_eq!(
+            inputs
+                .custom_headers
+                .get("authorization")
+                .map(String::as_str),
+            Some("Bearer tok"),
+        );
+        assert_eq!(
+            inputs
+                .custom_headers
+                .get("content-type")
+                .map(String::as_str),
+            Some("application/json"),
+        );
+        // The original mixed-case keys must not survive as duplicates.
+        assert!(!inputs.custom_headers.contains_key("Authorization"));
+        assert!(!inputs.custom_headers.contains_key("Content-Type"));
+    }
 }
