@@ -546,39 +546,50 @@ mod tests {
     /// request and must drop that handle once the response is sent. Without the
     /// trailing `drop_handle`, every served request would leak one context — its
     /// headers map, body, params, and response state — into the global registry,
-    /// growing unbounded under sustained load until allocation fails. This pins
-    /// the register → drop → gone invariant: a change that removed the cleanup at
-    /// the tail of `process_request` would leave the handle live and fail here.
+    /// growing unbounded under sustained load until allocation fails.
+    ///
+    /// This drives an actual request *through* `process_request` rather than
+    /// calling `drop_handle` directly, so it pins the real dispatch invariant: a
+    /// change that removed the cleanup at the tail of `process_request` leaves
+    /// the handle live and fails here. The request matches no route, so the
+    /// dispatcher takes the no-handler path (`undefined` result →
+    /// `build_response_body` short-circuits to `{}` with no JS allocation),
+    /// while still exercising the full register → build response → drop
+    /// lifecycle. `process_request` returns the context handle it registered
+    /// (and must have freed) so the assertion targets that exact handle —
+    /// race-free under parallel test execution.
     #[test]
     fn context_handle_dropped_after_dispatch() {
-        let ctx = FastifyContext::new(
-            42,
-            "GET".to_string(),
-            "/health".to_string(),
-            HashMap::new(),
-            None,
-            HashMap::new(),
-        );
-        let ctx_handle = register_handle(ctx);
+        let app_handle = register_handle(FastifyApp::new());
+        let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
+        let pending = crate::server::FastifyPendingRequest {
+            method: "GET".to_string(),
+            path: "/health".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            params: HashMap::new(),
+            response_tx,
+        };
 
-        // Live immediately after registration.
+        // Drive the real dispatcher; it returns the context handle it
+        // registered and freed.
+        let ctx_handle = crate::server::process_request(app_handle, pending);
+
+        // The request actually flowed through: the no-route path still sends a
+        // `{}` response, so the oneshot has a value.
         assert!(
-            get_handle::<FastifyContext>(ctx_handle).is_some(),
-            "handle should be live after register_handle"
+            response_rx.try_recv().is_ok(),
+            "process_request should send a response even for an unmatched route"
         );
 
-        // The dispatcher drops the handle at the end of `process_request`.
-        let removed = drop_handle(ctx_handle);
-        assert!(
-            removed,
-            "drop_handle should report a live handle as removed"
-        );
-
-        // Gone from the registry — no per-request leak.
+        // The invariant: the context handle `process_request` created must be
+        // gone. A missing `drop_handle` at the tail would leave it live here.
         assert!(
             get_handle::<FastifyContext>(ctx_handle).is_none(),
-            "FastifyContext handle leaked: still present after drop_handle"
+            "FastifyContext handle leaked: still present after process_request"
         );
+
+        drop_handle(app_handle);
     }
 
     #[test]
