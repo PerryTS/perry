@@ -549,6 +549,14 @@ fn canonicalize_language_tag(tag: &str) -> Option<String> {
     }
 }
 
+/// `HasProperty(O, ToString(index))` — true when the integer-indexed property is
+/// present (own or inherited). Used to skip holes/absent indices in
+/// CanonicalizeLocaleList's array/array-like walk.
+fn js_has_index(obj: f64, index: u32) -> bool {
+    let key = string_value(&index.to_string());
+    crate::object::js_object_has_property(obj, key).to_bits() == crate::value::TAG_TRUE
+}
+
 /// CanonicalizeLocaleList element handler: a present element must be a String or
 /// an Object (an `Intl.Locale` or anything ToString-able), else `TypeError`; the
 /// resulting tag is canonicalized (`RangeError` if structurally invalid) and
@@ -563,7 +571,7 @@ fn push_locale_element(out: &mut Vec<String>, value: f64) {
         // undefined / null / boolean / number / Symbol element → TypeError.
         throw_type_error("locale must be a String or Object");
     };
-    let Some(canonical) = canonical_locale(&tag) else {
+    let Some(canonical) = canonicalize_language_tag(&tag) else {
         throw_invalid_language_tag(&tag);
     };
     if !out.iter().any(|existing| existing == &canonical) {
@@ -584,7 +592,7 @@ fn locales_from_value(locales: f64) -> Vec<String> {
     // A String argument is treated as a single-element list (not iterated by char).
     if js.is_any_string() {
         let tag = string_from_string_value(locales).unwrap_or_default();
-        let Some(canonical) = canonical_locale(&tag) else {
+        let Some(canonical) = canonicalize_language_tag(&tag) else {
             throw_invalid_language_tag(&tag);
         };
         return vec![canonical];
@@ -611,6 +619,11 @@ fn locales_from_value(locales: f64) -> Vec<String> {
         };
         let mut out = Vec::with_capacity(len as usize);
         for i in 0..len {
+            // Skip absent indices (`HasProperty` is false) — e.g.
+            // `{ length: 3, 0: "en" }` yields just `["en"]`, never `undefined`.
+            if !js_has_index(locales, i) {
+                continue;
+            }
             push_locale_element(&mut out, get_field(obj, &i.to_string()));
         }
         return out;
@@ -654,9 +667,14 @@ fn unicode_extension_keyword(locale: &str, key: &str) -> Option<String> {
     let lower = locale.to_ascii_lowercase();
     let key = key.to_ascii_lowercase();
     let mut iter = lower.split('-');
-    // Advance to the `u` singleton.
+    // Advance to the `u` singleton. A `x` singleton starts the private-use
+    // sequence (which must come last); a `u` inside it — e.g. `en-x-u-kn` — is
+    // private data, not a Unicode extension, so stop scanning there.
     let mut in_u = false;
-    while let Some(p) = iter.next() {
+    for p in iter.by_ref() {
+        if p == "x" {
+            return None;
+        }
         if p == "u" {
             in_u = true;
             break;
@@ -1260,27 +1278,34 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // (constructor-options-throwing-getters / resolvedOptions order.js).
             let options = coerce_options_reject_null(options);
             let usage = enum_option_strict(options, "usage", &["sort", "search"], "sort");
-            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
-            // `collation` is a free-form `type` string (RangeError if malformed);
-            // it has no CLDR effect here, so it resolves to "default".
-            if let Some(collation) = get_option_string_coerced(options, "collation") {
-                if !is_well_formed_numbering_system(&collation) {
+            let _ = enum_option_strict(
+                options,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            );
+            // `collation` is a `type` string: malformed, or the reserved `standard`
+            // /`search` values, are a RangeError (the latter are only valid as a
+            // `usage` selector, never an explicit collation). A valid value wins
+            // over any `-u-co-` keyword; absent ⇒ fall back to the extension.
+            let collation_opt = get_option_string_coerced(options, "collation").map(|v| {
+                if !is_well_formed_numbering_system(&v) || v == "standard" || v == "search" {
                     throw_range_error(&format!(
-                        "Value {collation} out of range for Intl options property collation"
+                        "Value {v} out of range for Intl options property collation"
                     ));
                 }
-            }
+                v
+            });
             let numeric_opt = get_bool_option(options, "numeric");
-            let case_first_opt =
-                get_option_string_coerced(options, "caseFirst").map(|v| {
-                    if ["upper", "lower", "false"].contains(&v.as_str()) {
-                        v
-                    } else {
-                        throw_range_error(&format!(
-                            "Value {v} out of range for Intl options property caseFirst"
-                        ))
-                    }
-                });
+            let case_first_opt = get_option_string_coerced(options, "caseFirst").map(|v| {
+                if ["upper", "lower", "false"].contains(&v.as_str()) {
+                    v
+                } else {
+                    throw_range_error(&format!(
+                        "Value {v} out of range for Intl options property caseFirst"
+                    ))
+                }
+            });
             let sensitivity = enum_option_strict(
                 options,
                 "sensitivity",
@@ -1291,20 +1316,21 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // ResolveLocale: when an option is absent, fall back to the matching
             // Unicode (`-u-`) extension keyword in the resolved locale — `kn`
             // (numeric, value-less ⇒ true) and `kf` (caseFirst).
-            let numeric = numeric_opt.unwrap_or_else(|| {
-                match unicode_extension_keyword(&locale, "kn") {
+            let numeric =
+                numeric_opt.unwrap_or_else(|| match unicode_extension_keyword(&locale, "kn") {
                     Some(v) => v != "false",
                     None => false,
-                }
-            });
+                });
             let case_first = case_first_opt.unwrap_or_else(|| {
                 unicode_extension_keyword(&locale, "kf")
                     .filter(|v| ["upper", "lower", "false"].contains(&v.as_str()))
                     .unwrap_or_else(|| "false".to_string())
             });
-            let collation = unicode_extension_keyword(&locale, "co")
-                .filter(|v| !v.is_empty() && v != "standard" && v != "search")
-                .unwrap_or_else(|| "default".to_string());
+            let collation = collation_opt.unwrap_or_else(|| {
+                unicode_extension_keyword(&locale, "co")
+                    .filter(|v| !v.is_empty() && v != "standard" && v != "search")
+                    .unwrap_or_else(|| "default".to_string())
+            });
             set_internal_field(obj, KEY_COL_USAGE, string_value(&usage));
             set_internal_field(obj, KEY_COL_SENSITIVITY, string_value(&sensitivity));
             set_internal_field(obj, KEY_COL_IGNORE_PUNCT, bool_value(ignore_punct));
@@ -1328,7 +1354,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, granularity (options-order.js / options-null.js).
             let options = coerce_options_reject_null(options);
-            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            let _ = enum_option_strict(
+                options,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            );
             let granularity =
                 normalize_granularity(get_option_string_coerced(options, "granularity"));
             set_internal_field(obj, KEY_GRANULARITY, string_value(&granularity));
@@ -1350,7 +1381,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // TypeError), then GetOption: localeMatcher, type, style
             // (options-getoptionsobject.js / options-order.js).
             let options = get_options_object(options);
-            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            let _ = enum_option_strict(
+                options,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            );
             let list_type = enum_option_strict(
                 options,
                 "type",
@@ -1383,7 +1419,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, numberingSystem, style, numeric (options-order.js).
             let options = coerce_options_reject_null(options);
-            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            let _ = enum_option_strict(
+                options,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            );
             if let Some(ns) = get_option_string_coerced(options, "numberingSystem") {
                 if !is_well_formed_numbering_system(&ns) {
                     throw_range_error(&format!(
@@ -1416,7 +1457,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // (minimumIntegerDigits, min/maxFractionDigits, min/maxSignificantDigits,
             // roundingIncrement, roundingMode, roundingPriority, trailingZeroDisplay).
             let options = get_options_object(options);
-            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            let _ = enum_option_strict(
+                options,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                "best fit",
+            );
             let pr_type = enum_option_strict(options, "type", &["cardinal", "ordinal"], "cardinal");
             set_internal_field(obj, KEY_TYPE, string_value(&pr_type));
             let notation = enum_option_strict(
@@ -1573,17 +1619,26 @@ extern "C" fn plural_rules_constructor_thunk(closure: *const ClosureHeader, rest
 }
 
 fn supported_locales_array(locales: f64, options: f64) -> f64 {
-    // SupportedLocales: when `options` is not undefined, `? ToObject(options)`
-    // (null → TypeError) then `? GetOption(options, "localeMatcher", …)` — so an
-    // invalid localeMatcher is a RangeError even though the matcher choice does
-    // not affect Perry's lookup result.
+    // `supportedLocalesOf(locales, options)`:
+    //   1. requestedLocales = ? CanonicalizeLocaleList(locales)   ← runs FIRST,
+    //      so a malformed locale errors before `options` is touched.
+    //   2. SupportedLocales(..., options): when `options` is not undefined,
+    //      `? ToObject(options)` (null → TypeError) then
+    //      `? GetOption(options, "localeMatcher", …)` — an invalid localeMatcher
+    //      is a RangeError even though the matcher choice does not affect Perry's
+    //      lookup result.
+    let requested = locales_from_value(locales);
     if !JSValue::from_bits(options.to_bits()).is_undefined() {
         let options = coerce_options_reject_null(options);
-        let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+        let _ = enum_option_strict(
+            options,
+            "localeMatcher",
+            &["lookup", "best fit"],
+            "best fit",
+        );
     }
     // BestAvailableLocale-filter the canonicalized request list: drop tags whose
     // primary language Perry can't service (e.g. `zxx`), keeping order + dedup.
-    let requested = locales_from_value(locales);
     let mut arr = js_array_alloc(0);
     for locale in requested {
         if is_available_locale(&locale) {

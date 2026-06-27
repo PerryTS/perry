@@ -301,8 +301,20 @@ pub(crate) fn rtf_parts(value: f64, unit: &str) -> Vec<(&'static str, String)> {
     parts
 }
 
+/// `ToNumber(value)` that rejects BigInt with a TypeError, matching the
+/// ECMA-262 abstract operation. `js_number_coerce` alone converts `1n` → `1`
+/// (for `Number(1n)`), but `Intl` `format`/`select*` go through ToNumber, so
+/// `format(1n, "day")` must throw. A Symbol still throws inside `js_number_coerce`,
+/// and an object's `valueOf` is honoured there.
+pub(crate) fn to_number_reject_bigint(value: f64) -> f64 {
+    if JSValue::from_bits(value.to_bits()).is_bigint() {
+        throw_type_error("Cannot convert a BigInt value to a number");
+    }
+    crate::builtins::js_number_coerce(value)
+}
+
 /// Shared steps of `format`/`formatToParts`: `value = ? ToNumber(value)` (a
-/// Symbol throws TypeError; an object's `valueOf` is honoured), then
+/// Symbol or BigInt throws TypeError; an object's `valueOf` is honoured), then
 /// `unit = ? ToString(unit)`, then the RangeError guards for a non-finite value
 /// or an unsanctioned unit. Returns the rendered parts together with the
 /// resolved singular `unit` (the `[[Unit]]` field formatToParts attaches).
@@ -310,10 +322,9 @@ pub(crate) fn rtf_instance_parts_and_unit(
     value: f64,
     unit_arg: f64,
 ) -> (Vec<(&'static str, String)>, &'static str) {
-    // Full ToNumber (not `JSValue::to_number`, which returns NaN for objects and
-    // doesn't reject Symbols): valueOf is invoked, and a Symbol value throws the
-    // expected TypeError *before* the finite-ness RangeError (format/value-symbol.js).
-    let number = crate::builtins::js_number_coerce(value);
+    // ToNumber: a Symbol/BigInt value throws TypeError *before* the finite-ness
+    // RangeError (format/value-symbol.js); an object's valueOf is invoked.
+    let number = to_number_reject_bigint(value);
     let unit_str = value_to_string(unit_arg);
     if !number.is_finite() {
         throw_range_error("Value need to be finite number for Intl.RelativeTimeFormat.format()");
@@ -513,8 +524,8 @@ pub(crate) fn plural_select_range(start: f64, end: f64) -> f64 {
     {
         throw_type_error("Intl.PluralRules.prototype.selectRange: start and end must be defined");
     }
-    let s = crate::builtins::js_number_coerce(start);
-    let e = crate::builtins::js_number_coerce(end);
+    let s = to_number_reject_bigint(start);
+    let e = to_number_reject_bigint(end);
     if s.is_nan() || e.is_nan() {
         throw_range_error("Invalid values for Intl.PluralRules.selectRange()");
     }
@@ -535,8 +546,7 @@ pub(crate) fn plural_rules_resolved_options_object(obj: *const ObjectHeader) -> 
         "type",
         string_value(if is_ordinal { "ordinal" } else { "cardinal" }),
     );
-    let notation =
-        get_string_field(obj, KEY_PR_NOTATION).unwrap_or_else(|| "standard".to_string());
+    let notation = get_string_field(obj, KEY_PR_NOTATION).unwrap_or_else(|| "standard".to_string());
     set_field(out, "notation", string_value(&notation));
     // `compactDisplay` surfaces only when notation is "compact".
     if notation == "compact" {
@@ -544,7 +554,8 @@ pub(crate) fn plural_rules_resolved_options_object(obj: *const ObjectHeader) -> 
             out,
             "compactDisplay",
             string_value(
-                &get_string_field(obj, KEY_PR_COMPACT_DISPLAY).unwrap_or_else(|| "short".to_string()),
+                &get_string_field(obj, KEY_PR_COMPACT_DISPLAY)
+                    .unwrap_or_else(|| "short".to_string()),
             ),
         );
     }

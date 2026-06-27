@@ -350,7 +350,9 @@ pub(crate) fn swedish_collation_key(s: &str) -> Vec<u32> {
 #[cfg(feature = "string-normalize")]
 fn collation_normalize(s: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
-    s.nfd().collect()
+    // NFC (composition), not NFD: it makes canonical equivalents equal while
+    // keeping precomposed `å/ä/ö` intact for the Swedish fast path below.
+    s.nfc().collect()
 }
 #[cfg(not(feature = "string-normalize"))]
 fn collation_normalize(s: &str) -> String {
@@ -401,20 +403,23 @@ fn strip_ignorable_punctuation(s: &str) -> String {
 }
 
 fn is_punctuation(c: char) -> bool {
-    // ASCII punctuation plus the common Unicode punctuation/symbol ranges that
-    // UCA marks variable; a pragmatic superset of what the parity tests exercise.
+    // ASCII punctuation plus an explicit set of Unicode punctuation code points,
+    // deliberately NOT whole Latin-1 ranges — those contain letters/numbers
+    // (`ª` U+00AA, `µ` U+00B5, `º` U+00BA, the `¹²³` superscripts, `¼½¾`
+    // fractions) that must not be stripped or distinct strings would compare
+    // equal. The General Punctuation block (U+2000–U+206F) and CJK punctuation
+    // (U+3000–U+303F) are all punctuation/spaces and are safe as ranges.
     c.is_ascii_punctuation()
         || matches!(c,
-            '\u{00A1}'..='\u{00BF}'
-            | '\u{2010}'..='\u{2027}'
-            | '\u{2030}'..='\u{205E}'
+            '\u{00A1}' | '\u{00A7}' | '\u{00AB}' | '\u{00B6}' | '\u{00B7}'
+            | '\u{00BB}' | '\u{00BF}'
+            | '\u{2000}'..='\u{206F}'
             | '\u{3000}'..='\u{303F}')
 }
 
 pub(crate) fn collator_compare_object(obj: *const ObjectHeader, left: f64, right: f64) -> f64 {
     let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
-    let ignore_punct =
-        get_field(obj, KEY_COL_IGNORE_PUNCT).to_bits() == crate::value::TAG_TRUE;
+    let ignore_punct = get_field(obj, KEY_COL_IGNORE_PUNCT).to_bits() == crate::value::TAG_TRUE;
     let (mut l, mut r) = (value_to_string(left), value_to_string(right));
     if ignore_punct {
         l = strip_ignorable_punctuation(&l);
