@@ -222,7 +222,11 @@ pub fn call(recv: f64, z: &ZonedDateTime, name: &str, args: &[f64]) -> f64 {
                 z.to_ixdtf_string(offset, time_zone, calendar, rounding),
             ))
         }
-        "toJSON" | "toLocaleString" => string(&z.to_string()),
+        "toJSON" => string(&z.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(z.calendar().identifier());
+            string(&super::options::zoned_date_time_locale_string(z))
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

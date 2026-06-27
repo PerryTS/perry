@@ -21,7 +21,10 @@ use temporal_rs::options::{
 use temporal_rs::parsers::Precision;
 use temporal_rs::partial::{PartialTime, PartialZonedDateTime};
 use temporal_rs::provider::TransitionDirection;
-use temporal_rs::{Calendar, MonthCode, PlainTime, TimeZone, TinyAsciiStr, UtcOffset};
+use temporal_rs::{
+    Calendar, MonthCode, PlainDate, PlainDateTime, PlainMonthDay, PlainTime, PlainYearMonth,
+    TimeZone, TinyAsciiStr, UtcOffset, ZonedDateTime,
+};
 
 // ---- low-level JS object field reads --------------------------------------
 
@@ -336,7 +339,9 @@ pub fn calendar_slot(v: f64) -> temporal_rs::Calendar {
     }
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_string() {
-        return ok_or_throw(read_string(v).parse::<Calendar>());
+        let s = read_string(v);
+        reject_bare_islamic(&s);
+        return ok_or_throw(s.parse::<Calendar>());
     }
     if let Some(tv) = super::temporal_value_ref(v) {
         return match tv {
@@ -360,11 +365,112 @@ pub fn calendar_slot(v: f64) -> temporal_rs::Calendar {
 /// value → its `[[Calendar]]`, anything else → TypeError).
 pub fn calendar_identifier(v: f64) -> temporal_rs::Calendar {
     if JSValue::from_bits(v.to_bits()).is_string() {
-        return ok_or_throw(temporal_rs::Calendar::try_from_utf8(
-            read_string(v).as_bytes(),
-        ));
+        let s = read_string(v);
+        reject_bare_islamic(&s);
+        return ok_or_throw(temporal_rs::Calendar::try_from_utf8(s.as_bytes()));
     }
     calendar_slot(v)
+}
+
+/// `islamic` (the bare Hijri identifier, with no `-civil` / `-tbla` /
+/// `-umalqura` variant) is *accepted* by `temporal_rs` — it falls back to the
+/// tabular-Friday epoch — but per the Intl-Era-monthcode proposal a bare
+/// `islamic` is recognized only by the `Intl.DateTimeFormat` constructor, never
+/// as a Temporal calendar identifier. Reject it with a `RangeError` so
+/// `Temporal.PlainDate.from({ calendar: "islamic", … })` and friends throw as
+/// the spec requires, instead of silently constructing a Hijri date.
+fn reject_bare_islamic(id: &str) {
+    if id.eq_ignore_ascii_case("islamic") {
+        range("unknown calendar: islamic is only supported by Intl.DateTimeFormat, not Temporal");
+    }
+}
+
+// ---- `Temporal.*.prototype.toLocaleString` ---------------------------------
+
+/// `Temporal.*.prototype.toLocaleString` calendar check. A Temporal value
+/// renders only when its calendar matches the formatter's: the ISO-8601
+/// calendar (always permitted) or the calendar the locale resolves to. With no
+/// explicit `calendar` option that resolved calendar is the locale default,
+/// which Perry's `Intl.DateTimeFormat` reports as `gregory`. Any other calendar
+/// is a `RangeError` (the test262 `toLocaleString/calendar-mismatch` cases).
+///
+/// Only the calendar-bearing types (`PlainDate`/`PlainDateTime`/`PlainYearMonth`
+/// /`PlainMonthDay`/`ZonedDateTime`) call this; `Instant`/`PlainTime` have no
+/// calendar slot.
+///
+/// NOTE: the `locales`/`options` arguments — which could name a *different*
+/// calendar to validate against — are dropped by the `Expr::DateToLocaleString`
+/// HIR lowering before the call reaches the runtime, so only the locale-default
+/// calendar is consulted here. Honoring an explicit `calendar`/`dateStyle`/
+/// `timeStyle` option (and the spec's option-conflict `TypeError`s) is a
+/// follow-up that depends on threading those arguments through that lowering.
+pub fn assert_locale_string_calendar(instance_calendar: &str) {
+    if instance_calendar != "iso8601" && instance_calendar != "gregory" {
+        range("calendar mismatch: the value's calendar differs from the locale calendar");
+    }
+}
+
+/// `H:MM:SS AM/PM`, the en-US default wall-clock rendering shared by the
+/// time-bearing `toLocaleString` formatters below.
+fn locale_time_12h(hour: u8, minute: u8, second: u8) -> String {
+    let (h12, suffix) = match hour {
+        0 => (12, "AM"),
+        1..=11 => (hour, "AM"),
+        12 => (12, "PM"),
+        _ => (hour - 12, "PM"),
+    };
+    format!("{h12}:{minute:02}:{second:02} {suffix}")
+}
+
+// The valid-path formatters render straight from the calendar-aware accessors.
+// Because the ISO-8601 calendar *is* the proleptic Gregorian calendar, those
+// accessors return identical numbers for an `iso8601` and a `gregory` instance
+// of the same date — and `assert_locale_string_calendar` has already rejected every
+// other calendar — so the output is calendar-agnostic, exactly as the
+// `calendar-mismatch` conformance tests require (an ISO and a Gregorian
+// instance must format identically).
+
+/// `M/D/YYYY` — `Temporal.PlainDate.prototype.toLocaleString` default form.
+pub fn plain_date_locale_string(d: &PlainDate) -> String {
+    format!("{}/{}/{}", d.month(), d.day(), d.year())
+}
+
+/// `M/D/YYYY, H:MM:SS AM/PM` — `Temporal.PlainDateTime` default form.
+pub fn plain_date_time_locale_string(dt: &PlainDateTime) -> String {
+    format!(
+        "{}/{}/{}, {}",
+        dt.month(),
+        dt.day(),
+        dt.year(),
+        locale_time_12h(dt.hour(), dt.minute(), dt.second())
+    )
+}
+
+/// `H:MM:SS AM/PM` — `Temporal.PlainTime` default form.
+pub fn plain_time_locale_string(t: &PlainTime) -> String {
+    locale_time_12h(t.hour(), t.minute(), t.second())
+}
+
+/// `M/YYYY` — `Temporal.PlainYearMonth` default form (no day component).
+pub fn plain_year_month_locale_string(ym: &PlainYearMonth) -> String {
+    format!("{}/{}", ym.month(), ym.year())
+}
+
+/// `M/D` — `Temporal.PlainMonthDay` default form (no year component).
+pub fn plain_month_day_locale_string(md: &PlainMonthDay) -> String {
+    format!("{}/{}", md.month_code().to_month_integer(), md.day())
+}
+
+/// `M/D/YYYY, H:MM:SS AM/PM` rendered in the instance's own time zone —
+/// `Temporal.ZonedDateTime` default form.
+pub fn zoned_date_time_locale_string(z: &ZonedDateTime) -> String {
+    format!(
+        "{}/{}/{}, {}",
+        z.month(),
+        z.day(),
+        z.year(),
+        locale_time_12h(z.hour(), z.minute(), z.second())
+    )
 }
 
 /// `GetOptionsObject`: an options argument must be `undefined` or an Object.

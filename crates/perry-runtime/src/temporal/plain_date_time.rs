@@ -181,7 +181,11 @@ pub fn call(recv: f64, dt: &PlainDateTime, name: &str, args: &[f64]) -> f64 {
             let (rounding, calendar) = super::options::pdt_to_string_options(raw_arg(args, 0));
             string(&ok_or_throw(dt.to_ixdtf_string(rounding, calendar)))
         }
-        "toJSON" | "toLocaleString" => string(&dt.to_string()),
+        "toJSON" => string(&dt.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(dt.calendar().identifier());
+            string(&super::options::plain_date_time_locale_string(dt))
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

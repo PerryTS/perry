@@ -155,7 +155,11 @@ pub fn call(recv: f64, ym: &PlainYearMonth, name: &str, args: &[f64]) -> f64 {
         "toString" => {
             string(&ym.to_ixdtf_string(super::options::display_calendar(raw_arg(args, 0))))
         }
-        "toJSON" | "toLocaleString" => string(&ym.to_string()),
+        "toJSON" => string(&ym.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(ym.calendar().identifier());
+            string(&super::options::plain_year_month_locale_string(ym))
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

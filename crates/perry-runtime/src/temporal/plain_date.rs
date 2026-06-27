@@ -223,7 +223,11 @@ pub fn call(recv: f64, d: &PlainDate, name: &str, args: &[f64]) -> f64 {
         "toString" => {
             string(&d.to_ixdtf_string(super::options::display_calendar(raw_arg(args, 0))))
         }
-        "toJSON" | "toLocaleString" => string(&d.to_string()),
+        "toJSON" => string(&d.to_string()),
+        "toLocaleString" => {
+            super::options::assert_locale_string_calendar(d.calendar().identifier());
+            string(&super::options::plain_date_locale_string(d))
+        }
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");

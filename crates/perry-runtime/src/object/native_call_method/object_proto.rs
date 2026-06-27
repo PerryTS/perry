@@ -84,6 +84,16 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
         let s = crate::date::js_date_to_locale_string(ts);
         return f64::from_bits(JSValue::string_ptr(s).bits());
     }
+    // #5580: a `Temporal.*` value formats via its own `toLocaleString` (a
+    // calendar-aware, type-specific rendering plus the spec's calendar-mismatch
+    // `RangeError`) rather than the `[object Object]` default. The HIR lowers
+    // `value.toLocaleString(...)` to the arg-less `Expr::DateToLocaleString`, so
+    // the locale/options arguments are not visible here; the no-argument form is
+    // dispatched through the Temporal method router.
+    #[cfg(feature = "temporal")]
+    if crate::temporal::is_temporal_value(receiver) {
+        return crate::temporal::dispatch::call_method(receiver, "toLocaleString", &[]);
+    }
     if !jsval.is_pointer() {
         return js_native_call_method(
             receiver,

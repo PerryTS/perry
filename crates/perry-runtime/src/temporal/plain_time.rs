@@ -190,10 +190,11 @@ pub fn call(recv: f64, t: &PlainTime, name: &str, args: &[f64]) -> f64 {
         "toString" => string(&ok_or_throw(t.to_ixdtf_string(
             super::options::to_string_rounding_options(raw_arg(args, 0)),
         ))),
-        "toJSON" | "toLocaleString" => string(
+        "toJSON" => string(
             &t.to_ixdtf_string(ToStringRoundingOptions::default())
                 .unwrap_or_default(),
         ),
+        "toLocaleString" => string(&super::options::plain_time_locale_string(t)),
         "valueOf" => dispatch::throw_value_of(TYPE_NAME),
         "with" => {
             let obj = super::options::require_fields_obj(raw_arg(args, 0), TYPE_NAME, "with");
