@@ -181,6 +181,32 @@ pub(crate) unsafe fn own_key_present(
     if key_count > 65536 {
         return false;
     }
+    // #5736: a wide object — e.g. a barrel `export *` namespace with thousands
+    // of re-exported bindings — made this an O(n) keys_array scan, so callers
+    // that re-check every own key in a loop (`Object.values` / `Object.entries`,
+    // which call `own_key_present` per key) ran O(n²). Probe the shared
+    // wide-object key→slot index first: a hit is O(1). A miss falls through to
+    // the linear scan below, so an absent key — or a present key whose index
+    // entry was dropped as stale — is still answered correctly. The index is an
+    // accelerator, never authoritative (it revalidates every hit against the
+    // live slot via `js_string_key_matches`), and is the same map the read-path
+    // getter maintains for these objects.
+    if key_count >= super::super::field_get_set::WIDE_KEY_INDEX_MIN_KEYS {
+        let key_bytes_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let key_len = (*key).byte_len as usize;
+        let key_bytes = std::slice::from_raw_parts(key_bytes_ptr, key_len);
+        if super::super::field_get_set::wide_key_index_lookup(
+            keys as usize,
+            key_bytes,
+            key,
+            keys,
+            key_count,
+        )
+        .is_some()
+        {
+            return true;
+        }
+    }
     for i in 0..key_count {
         let stored = crate::array::js_array_get(keys, i as u32);
         // #1781: SSO-aware match — `hasOwnProperty("id")` previously

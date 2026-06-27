@@ -759,6 +759,55 @@ fn wide_object_index_reads_and_descriptor_writes() {
     }
 }
 
+/// #5736: `own_key_present` on a wide object (≥257 keys — e.g. a barrel
+/// `export *` namespace) must use the O(1) wide-key index rather than an O(n)
+/// keys_array scan, so `Object.values`/`Object.entries` (which re-check every
+/// own key) don't degrade to O(n²). Correctness must be preserved: present keys
+/// resolve, absent keys don't, and `Object.values` yields every value.
+#[test]
+fn wide_object_own_key_present_uses_index_and_object_values_is_complete() {
+    unsafe {
+        let obj = js_object_alloc(0, 0);
+        let n = 600u32;
+        for i in 0..n {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(obj, key, i as f64);
+        }
+        // Every present key is found through the wide-index probe.
+        for i in [0u32, 1, 42, 256, 257, 300, 599] {
+            let name = format!("w{}", i);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            assert!(own_key_present(obj, key), "present key {name} must be found");
+        }
+        // Absent keys fall through the index miss to the linear scan → false.
+        for name in ["nope", "w600", "w-1", ""] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            assert!(
+                !own_key_present(obj, key),
+                "absent key {name:?} must not be found"
+            );
+        }
+        // `Object.values` must still enumerate every value exactly once.
+        let values = crate::object::js_object_values(obj as *const ObjectHeader);
+        assert_eq!(
+            crate::array::js_array_length(values),
+            n,
+            "Object.values must yield one value per key"
+        );
+        let mut sum = 0.0;
+        for i in 0..n {
+            let v = crate::array::js_array_get(values, i);
+            sum += f64::from_bits(v.bits());
+        }
+        // 0 + 1 + … + 599 = 599*600/2 = 179700
+        assert_eq!(
+            sum, 179_700.0,
+            "Object.values must yield exactly the set values"
+        );
+    }
+}
+
 /// `js_object_to_string` must NOT dereference a handle-band value (a Web Fetch
 /// `Headers`/`Request`/`Response`/`Blob` registry id, or any other small native
 /// handle) as a heap pointer. Such ids are NaN-boxed as `POINTER_TAG` values but
