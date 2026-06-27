@@ -269,8 +269,9 @@ const RTF_SINGULAR_UNITS: &[&str] = &[
 /// Normalize a RelativeTimeFormat unit argument (singular or plural) to its
 /// singular sanctioned form, or `None` if unrecognized (caller raises RangeError).
 pub(crate) fn rtf_singular_unit(unit: &str) -> Option<&'static str> {
-    let lower = unit.to_ascii_lowercase();
-    let candidate = lower.strip_suffix('s').unwrap_or(&lower);
+    // The sanctioned units are case-sensitive (ECMA-402 IsSanctionedSingularUnit):
+    // `"second"`/`"seconds"` are accepted, `"SECOND"` is not (format/unit-invalid.js).
+    let candidate = unit.strip_suffix('s').unwrap_or(unit);
     RTF_SINGULAR_UNITS.iter().copied().find(|u| *u == candidate)
 }
 
@@ -300,18 +301,50 @@ pub(crate) fn rtf_parts(value: f64, unit: &str) -> Vec<(&'static str, String)> {
     parts
 }
 
-pub(crate) fn rtf_instance_parts(value: f64, unit_arg: f64) -> Vec<(&'static str, String)> {
-    let number = JSValue::from_bits(value.to_bits()).to_number();
+/// Shared steps of `format`/`formatToParts`: `value = ? ToNumber(value)` (a
+/// Symbol throws TypeError; an object's `valueOf` is honoured), then
+/// `unit = ? ToString(unit)`, then the RangeError guards for a non-finite value
+/// or an unsanctioned unit. Returns the rendered parts together with the
+/// resolved singular `unit` (the `[[Unit]]` field formatToParts attaches).
+pub(crate) fn rtf_instance_parts_and_unit(
+    value: f64,
+    unit_arg: f64,
+) -> (Vec<(&'static str, String)>, &'static str) {
+    // Full ToNumber (not `JSValue::to_number`, which returns NaN for objects and
+    // doesn't reject Symbols): valueOf is invoked, and a Symbol value throws the
+    // expected TypeError *before* the finite-ness RangeError (format/value-symbol.js).
+    let number = crate::builtins::js_number_coerce(value);
+    let unit_str = value_to_string(unit_arg);
     if !number.is_finite() {
         throw_range_error("Value need to be finite number for Intl.RelativeTimeFormat.format()");
     }
-    let unit_str = value_to_string(unit_arg);
     let Some(unit) = rtf_singular_unit(&unit_str) else {
         throw_range_error(&format!(
             "Value {unit_str} out of range for Intl.RelativeTimeFormat.format() unit"
         ));
     };
-    rtf_parts(number, unit)
+    (rtf_parts(number, unit), unit)
+}
+
+pub(crate) fn rtf_instance_parts(value: f64, unit_arg: f64) -> Vec<(&'static str, String)> {
+    rtf_instance_parts_and_unit(value, unit_arg).0
+}
+
+/// Build the `formatToParts` array, attaching the `[[Unit]]` field to every part
+/// derived from the formatted number (i.e. every non-`"literal"` part) per
+/// FormatRelativeTimeToParts (formatToParts/result-type.js).
+fn rtf_parts_to_js_array(parts: &[(&'static str, String)], unit: &str) -> f64 {
+    let mut arr = js_array_alloc(parts.len() as u32);
+    for (ty, val) in parts {
+        let obj = js_object_alloc(0, 3);
+        set_field(obj, "type", string_value(ty));
+        set_field(obj, "value", string_value(val));
+        if *ty != "literal" {
+            set_field(obj, "unit", string_value(unit));
+        }
+        arr = js_array_push_f64(arr, js_nanbox_pointer(obj as i64));
+    }
+    js_nanbox_pointer(arr as i64)
 }
 
 pub(crate) extern "C" fn rtf_format_thunk(
@@ -348,7 +381,8 @@ pub(crate) extern "C" fn rtf_to_parts_thunk(
     unit: f64,
 ) -> f64 {
     let _obj = this_intl_object("formatToParts", KIND_RELATIVE_TIME);
-    parts_to_js_array(&rtf_instance_parts(value, unit))
+    let (parts, unit) = rtf_instance_parts_and_unit(value, unit);
+    rtf_parts_to_js_array(&parts, unit)
 }
 
 pub(crate) extern "C" fn rtf_bound_to_parts_thunk(
@@ -357,7 +391,8 @@ pub(crate) extern "C" fn rtf_bound_to_parts_thunk(
     unit: f64,
 ) -> f64 {
     let _obj = captured_intl_object(closure, "formatToParts", KIND_RELATIVE_TIME);
-    parts_to_js_array(&rtf_instance_parts(value, unit))
+    let (parts, unit) = rtf_instance_parts_and_unit(value, unit);
+    rtf_parts_to_js_array(&parts, unit)
 }
 
 pub(crate) fn rtf_resolved_options_object(obj: *const ObjectHeader) -> f64 {
@@ -469,8 +504,17 @@ pub(crate) extern "C" fn plural_rules_bound_select_range_thunk(
 }
 
 pub(crate) fn plural_select_range(start: f64, end: f64) -> f64 {
-    let s = JSValue::from_bits(start.to_bits()).to_number();
-    let e = JSValue::from_bits(end.to_bits()).to_number();
+    // PluralRules.prototype.selectRange(start, end): a `undefined` endpoint is a
+    // TypeError (step 3), evaluated *before* the `? ToNumber` coercions — and
+    // ToNumber itself throws TypeError for a Symbol (selectRange/
+    // undefined-arguments-throws.js, argument-tonumber-throws.js).
+    if JSValue::from_bits(start.to_bits()).is_undefined()
+        || JSValue::from_bits(end.to_bits()).is_undefined()
+    {
+        throw_type_error("Intl.PluralRules.prototype.selectRange: start and end must be defined");
+    }
+    let s = crate::builtins::js_number_coerce(start);
+    let e = crate::builtins::js_number_coerce(end);
     if s.is_nan() || e.is_nan() {
         throw_range_error("Invalid values for Intl.PluralRules.selectRange()");
     }
@@ -491,7 +535,19 @@ pub(crate) fn plural_rules_resolved_options_object(obj: *const ObjectHeader) -> 
         "type",
         string_value(if is_ordinal { "ordinal" } else { "cardinal" }),
     );
-    set_field(out, "notation", string_value("standard"));
+    let notation =
+        get_string_field(obj, KEY_PR_NOTATION).unwrap_or_else(|| "standard".to_string());
+    set_field(out, "notation", string_value(&notation));
+    // `compactDisplay` surfaces only when notation is "compact".
+    if notation == "compact" {
+        set_field(
+            out,
+            "compactDisplay",
+            string_value(
+                &get_string_field(obj, KEY_PR_COMPACT_DISPLAY).unwrap_or_else(|| "short".to_string()),
+            ),
+        );
+    }
     set_field(
         out,
         "minimumIntegerDigits",

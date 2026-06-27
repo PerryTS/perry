@@ -342,7 +342,25 @@ pub(crate) fn swedish_collation_key(s: &str) -> Vec<u32> {
         .collect()
 }
 
+/// Normalize to NFD so canonically-equivalent strings (e.g. `"ö"` precomposed
+/// vs. `"ö"` decomposed) collate equal — the ECMA-402 requirement that
+/// `Collator.compare` treats canonical equivalents as 0 (canonically-equivalent
+/// -strings.js). Without `string-normalize` this is an identity passthrough, so
+/// the precomposed/decomposed pair still compares unequal (best effort).
+#[cfg(feature = "string-normalize")]
+fn collation_normalize(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.nfd().collect()
+}
+#[cfg(not(feature = "string-normalize"))]
+fn collation_normalize(s: &str) -> String {
+    s.to_string()
+}
+
 pub(crate) fn compare_strings(locale: &str, left: &str, right: &str) -> f64 {
+    let left = collation_normalize(left);
+    let right = collation_normalize(right);
+    let (left, right) = (left.as_str(), right.as_str());
     let ordering = if locale == "sv" || locale.starts_with("sv-") {
         swedish_collation_key(left).cmp(&swedish_collation_key(right))
     } else {
@@ -373,9 +391,36 @@ pub(crate) extern "C" fn collator_bound_compare_thunk(
     collator_compare_object(obj, left, right)
 }
 
+/// Strip the code points a UCA `ignorePunctuation` collator treats as ignorable
+/// — whitespace and punctuation — so e.g. `compare("", " ")` and
+/// `compare("", "*")` are 0 (compare/ignorePunctuation.js).
+fn strip_ignorable_punctuation(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace() && !is_punctuation(*c))
+        .collect()
+}
+
+fn is_punctuation(c: char) -> bool {
+    // ASCII punctuation plus the common Unicode punctuation/symbol ranges that
+    // UCA marks variable; a pragmatic superset of what the parity tests exercise.
+    c.is_ascii_punctuation()
+        || matches!(c,
+            '\u{00A1}'..='\u{00BF}'
+            | '\u{2010}'..='\u{2027}'
+            | '\u{2030}'..='\u{205E}'
+            | '\u{3000}'..='\u{303F}')
+}
+
 pub(crate) fn collator_compare_object(obj: *const ObjectHeader, left: f64, right: f64) -> f64 {
     let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
-    compare_strings(&locale, &value_to_string(left), &value_to_string(right))
+    let ignore_punct =
+        get_field(obj, KEY_COL_IGNORE_PUNCT).to_bits() == crate::value::TAG_TRUE;
+    let (mut l, mut r) = (value_to_string(left), value_to_string(right));
+    if ignore_punct {
+        l = strip_ignorable_punctuation(&l);
+        r = strip_ignorable_punctuation(&r);
+    }
+    compare_strings(&locale, &l, &r)
 }
 
 pub(crate) extern "C" fn collator_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {
@@ -391,16 +436,49 @@ pub(crate) extern "C" fn collator_bound_resolved_options_thunk(
 }
 
 pub(crate) fn collator_resolved_options_object(obj: *const ObjectHeader) -> f64 {
-    let out = js_object_alloc(0, 6);
+    let out = js_object_alloc(0, 7);
+    // Property insertion order matches ECMA-402 (resolvedOptions/order.js):
+    // locale, usage, sensitivity, ignorePunctuation, collation, numeric, caseFirst.
     set_field(
         out,
         "locale",
         string_value(&get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string())),
     );
-    set_field(out, "usage", string_value("sort"));
-    set_field(out, "sensitivity", string_value("variant"));
-    set_field(out, "ignorePunctuation", bool_value(false));
-    set_field(out, "numeric", bool_value(false));
-    set_field(out, "caseFirst", string_value("false"));
+    set_field(
+        out,
+        "usage",
+        string_value(&get_string_field(obj, KEY_COL_USAGE).unwrap_or_else(|| "sort".to_string())),
+    );
+    set_field(
+        out,
+        "sensitivity",
+        string_value(
+            &get_string_field(obj, KEY_COL_SENSITIVITY).unwrap_or_else(|| "variant".to_string()),
+        ),
+    );
+    set_field(
+        out,
+        "ignorePunctuation",
+        bool_value(get_field(obj, KEY_COL_IGNORE_PUNCT).to_bits() == crate::value::TAG_TRUE),
+    );
+    set_field(
+        out,
+        "collation",
+        string_value(
+            &get_string_field(obj, KEY_COL_COLLATION).unwrap_or_else(|| "default".to_string()),
+        ),
+    );
+    set_field(
+        out,
+        "numeric",
+        bool_value(get_field(obj, KEY_COL_NUMERIC).to_bits() == crate::value::TAG_TRUE),
+    );
+    set_field(
+        out,
+        "caseFirst",
+        string_value(
+            &get_string_field(obj, KEY_COL_CASE_FIRST).unwrap_or_else(|| "false".to_string()),
+        ),
+    );
     js_nanbox_pointer(out as i64)
 }

@@ -154,6 +154,14 @@ const KEY_NF_TRAILING_ZERO: &str = "__intlNfTrailingZero";
 // `format` getter reads it from here so user mutation/deletion of the public
 // property can't corrupt what the accessor returns.
 const KEY_NF_BOUND_FORMAT: &str = "__intlNfBoundFormat";
+const KEY_COL_USAGE: &str = "__intlColUsage";
+const KEY_COL_SENSITIVITY: &str = "__intlColSensitivity";
+const KEY_COL_IGNORE_PUNCT: &str = "__intlColIgnorePunct";
+const KEY_COL_COLLATION: &str = "__intlColCollation";
+const KEY_COL_NUMERIC: &str = "__intlColNumeric";
+const KEY_COL_CASE_FIRST: &str = "__intlColCaseFirst";
+const KEY_PR_NOTATION: &str = "__intlPrNotation";
+const KEY_PR_COMPACT_DISPLAY: &str = "__intlPrCompactDisplay";
 
 fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -541,32 +549,93 @@ fn canonicalize_language_tag(tag: &str) -> Option<String> {
     }
 }
 
+/// CanonicalizeLocaleList element handler: a present element must be a String or
+/// an Object (an `Intl.Locale` or anything ToString-able), else `TypeError`; the
+/// resulting tag is canonicalized (`RangeError` if structurally invalid) and
+/// pushed if not already present.
+fn push_locale_element(out: &mut Vec<String>, value: f64) {
+    let jv = JSValue::from_bits(value.to_bits());
+    let tag = if jv.is_any_string() {
+        string_from_string_value(value).unwrap_or_default()
+    } else if object_ptr_from_value(value).is_some() {
+        value_to_string(value)
+    } else {
+        // undefined / null / boolean / number / Symbol element → TypeError.
+        throw_type_error("locale must be a String or Object");
+    };
+    let Some(canonical) = canonical_locale(&tag) else {
+        throw_invalid_language_tag(&tag);
+    };
+    if !out.iter().any(|existing| existing == &canonical) {
+        out.push(canonical);
+    }
+}
+
 fn locales_from_value(locales: f64) -> Vec<String> {
     let js = JSValue::from_bits(locales.to_bits());
-    if js.is_undefined() || js.is_null() {
+    // CanonicalizeLocaleList(undefined) is the empty list; `null` fails ToObject
+    // with a TypeError (everything else is a String or coerces via ToObject).
+    if js.is_undefined() {
         return Vec::new();
     }
-    if let Some(arr) = array_ptr_from_value(locales) {
-        let len = js_array_length(arr);
-        let mut out = Vec::with_capacity(len as usize);
-        for i in 0..len {
-            let value = js_array_get_f64(arr, i);
-            if let Some(tag) = string_from_string_value(value) {
-                let Some(canonical) = canonical_locale(&tag) else {
-                    throw_invalid_language_tag(&tag);
-                };
-                out.push(canonical);
-            }
-        }
-        return out;
+    if js.is_null() {
+        throw_type_error("Cannot convert undefined or null to object");
     }
-    if let Some(tag) = string_from_string_value(locales) {
+    // A String argument is treated as a single-element list (not iterated by char).
+    if js.is_any_string() {
+        let tag = string_from_string_value(locales).unwrap_or_default();
         let Some(canonical) = canonical_locale(&tag) else {
             throw_invalid_language_tag(&tag);
         };
         return vec![canonical];
     }
+    if let Some(arr) = array_ptr_from_value(locales) {
+        let len = js_array_length(arr);
+        let mut out = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            push_locale_element(&mut out, js_array_get_f64(arr, i));
+        }
+        return out;
+    }
+    // CanonicalizeLocaleList on a generic array-like Object: iterate `O[0..length]`
+    // (e.g. `{ 0: "DE", length: 1 }` → `["de"]`).
+    if let Some(obj) = object_ptr_from_value(locales) {
+        // `length = ? ToLength(? Get(O, "length"))`: a throwing `length` getter or
+        // ToNumber step (Symbol / abrupt valueOf/toString) propagates here.
+        let len_raw = get_field(obj, "length");
+        let len_num = crate::builtins::js_number_coerce(len_raw);
+        let len = if len_num.is_finite() && len_num > 0.0 {
+            len_num as u32
+        } else {
+            0
+        };
+        let mut out = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            push_locale_element(&mut out, get_field(obj, &i.to_string()));
+        }
+        return out;
+    }
+    // Other primitives (number/boolean/Symbol/BigInt): ToObject yields a wrapper
+    // with length 0 — an empty list, no throw.
     Vec::new()
+}
+
+/// BestAvailableLocale (lookup) — a requested canonical locale is "supported"
+/// when its primary language subtag is one Perry's deterministic formatters can
+/// service. Perry carries no CLDR locale database, so this is a curated set of
+/// common CLDR languages rather than a data lookup: it is enough to distinguish
+/// real languages (`en`, `de`, `zh`, …) from the "no linguistic content" tag
+/// `zxx` and other unsupported primaries that `supportedLocalesOf` must drop.
+fn is_available_locale(canonical: &str) -> bool {
+    let primary = canonical.split(['-', '_']).next().unwrap_or(canonical);
+    const AVAILABLE_LANGUAGES: &[&str] = &[
+        "af", "am", "ar", "az", "be", "bg", "bn", "bs", "ca", "cs", "cy", "da", "de", "el", "en",
+        "es", "et", "eu", "fa", "fi", "fil", "fr", "ga", "gl", "gu", "he", "hi", "hr", "hu", "hy",
+        "id", "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "ky", "lo", "lt", "lv", "mk", "ml",
+        "mn", "mr", "ms", "my", "nb", "ne", "nl", "no", "pa", "pl", "pt", "ro", "ru", "si", "sk",
+        "sl", "sq", "sr", "sv", "sw", "ta", "te", "th", "tr", "uk", "ur", "uz", "vi", "zh", "zu",
+    ];
+    AVAILABLE_LANGUAGES.contains(&primary)
 }
 
 fn locale_or_default(locales: f64) -> String {
@@ -574,6 +643,47 @@ fn locale_or_default(locales: f64) -> String {
         .into_iter()
         .next()
         .unwrap_or_else(|| "en-US".to_string())
+}
+
+/// Look up a Unicode (`-u-`) extension keyword's value in a BCP-47 tag. Returns
+/// `Some(value)` if the 2-letter `key` is present (the value is the `-`-joined
+/// run of type subtags after it, or `""` for a value-less boolean key like
+/// `-u-kn`), else `None`. Case-insensitive. Used to resolve `kn`/`kf`/`co` for
+/// Collator when the corresponding option is absent (numeric-and-caseFirst.js).
+fn unicode_extension_keyword(locale: &str, key: &str) -> Option<String> {
+    let lower = locale.to_ascii_lowercase();
+    let key = key.to_ascii_lowercase();
+    let mut iter = lower.split('-');
+    // Advance to the `u` singleton.
+    let mut in_u = false;
+    while let Some(p) = iter.next() {
+        if p == "u" {
+            in_u = true;
+            break;
+        }
+    }
+    if !in_u {
+        return None;
+    }
+    let mut found = false;
+    let mut value: Vec<&str> = Vec::new();
+    for p in iter {
+        if p.len() == 1 {
+            // Next singleton ends the `u` extension.
+            break;
+        }
+        if p.len() == 2 && p.chars().all(|c| c.is_ascii_alphanumeric()) {
+            if found {
+                break; // reached the next keyword
+            }
+            if p == key {
+                found = true;
+            }
+        } else if found {
+            value.push(p);
+        }
+    }
+    found.then(|| value.join("-"))
 }
 
 fn rest_arg(rest: f64, index: u32) -> f64 {
@@ -722,6 +832,74 @@ fn enum_option(options: f64, key: &str, allowed: &[&str], default: &str) -> Stri
             }
         }
     }
+}
+
+/// `GetOption(options, key, "string", ...)` with full `ToString` coercion: only
+/// `undefined` selects the default. `null`, numbers, booleans, etc. are coerced
+/// via `ToString` (so `null` → `"null"`, never the absent path), and a Symbol
+/// throws `TypeError` (ToString of a Symbol is a TypeError). This is the strict
+/// spec behavior; `get_option_string` instead treats `null` as absent, which the
+/// `options-*-invalid` value-validation tests reject.
+fn get_option_string_coerced(options: f64, key: &str) -> Option<String> {
+    let raw = get_option_value(options, key);
+    let jv = JSValue::from_bits(raw.to_bits());
+    if jv.is_undefined() {
+        None
+    } else if jv.is_any_string() {
+        string_from_string_value(raw)
+    } else if unsafe { crate::symbol::js_is_symbol(raw) } != 0 {
+        throw_type_error(&format!(
+            "Cannot convert a Symbol value to a string for Intl options property {key}"
+        ));
+    } else {
+        Some(value_to_string(raw))
+    }
+}
+
+/// `GetOption` with an enumerated value set, using strict `ToString` coercion
+/// (see [`get_option_string_coerced`]): an out-of-range value (including a
+/// `ToString`-coerced `null` / number) is a `RangeError`; absent → `default`.
+fn enum_option_strict(options: f64, key: &str, allowed: &[&str], default: &str) -> String {
+    match get_option_string_coerced(options, key) {
+        None => default.to_string(),
+        Some(value) => {
+            if allowed.contains(&value.as_str()) {
+                value
+            } else {
+                throw_range_error(&format!(
+                    "Value {value} out of range for Intl options property {key}"
+                ))
+            }
+        }
+    }
+}
+
+/// `GetOptionsObject(options)`: `undefined` yields an empty bag (reported as
+/// `undefined`, which the option readers treat as "every key absent"); an Object
+/// passes through unchanged; any other value (including `null`, primitives, and
+/// BigInt) throws `TypeError`. Used by the constructors whose spec step is
+/// `GetOptionsObject` (ListFormat, Segmenter, PluralRules, …).
+fn get_options_object(options: f64) -> f64 {
+    let jv = JSValue::from_bits(options.to_bits());
+    if jv.is_undefined() {
+        return options;
+    }
+    if object_ptr_from_value(options).is_some() {
+        return options;
+    }
+    throw_type_error("Cannot convert undefined or null to object");
+}
+
+/// `CoerceOptionsToObject(options)` partial: `undefined` stays an empty bag and
+/// `null` throws `TypeError` (`ToObject(null)`). Primitives are *not* boxed here
+/// — Perry reads option keys directly off Objects, so a primitive simply yields
+/// every-key-absent — but `null` must still reject. Used by the constructors
+/// whose spec step is `ToObject` (RelativeTimeFormat, Collator, …).
+fn coerce_options_reject_null(options: f64) -> f64 {
+    if JSValue::from_bits(options.to_bits()).is_null() {
+        throw_type_error("Cannot convert undefined or null to object");
+    }
+    options
 }
 
 /// GetBooleanOption(options, key): `undefined` → `None`, otherwise ToBoolean.
@@ -1076,6 +1254,63 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_COLLATOR => {
+            // InitializeCollator reads options via `? ToObject(options)` (null →
+            // TypeError) then GetOption in this exact order: usage, localeMatcher,
+            // collation, numeric, caseFirst, sensitivity, ignorePunctuation
+            // (constructor-options-throwing-getters / resolvedOptions order.js).
+            let options = coerce_options_reject_null(options);
+            let usage = enum_option_strict(options, "usage", &["sort", "search"], "sort");
+            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            // `collation` is a free-form `type` string (RangeError if malformed);
+            // it has no CLDR effect here, so it resolves to "default".
+            if let Some(collation) = get_option_string_coerced(options, "collation") {
+                if !is_well_formed_numbering_system(&collation) {
+                    throw_range_error(&format!(
+                        "Value {collation} out of range for Intl options property collation"
+                    ));
+                }
+            }
+            let numeric_opt = get_bool_option(options, "numeric");
+            let case_first_opt =
+                get_option_string_coerced(options, "caseFirst").map(|v| {
+                    if ["upper", "lower", "false"].contains(&v.as_str()) {
+                        v
+                    } else {
+                        throw_range_error(&format!(
+                            "Value {v} out of range for Intl options property caseFirst"
+                        ))
+                    }
+                });
+            let sensitivity = enum_option_strict(
+                options,
+                "sensitivity",
+                &["base", "accent", "case", "variant"],
+                "variant",
+            );
+            let ignore_punct = get_bool_option(options, "ignorePunctuation").unwrap_or(false);
+            // ResolveLocale: when an option is absent, fall back to the matching
+            // Unicode (`-u-`) extension keyword in the resolved locale — `kn`
+            // (numeric, value-less ⇒ true) and `kf` (caseFirst).
+            let numeric = numeric_opt.unwrap_or_else(|| {
+                match unicode_extension_keyword(&locale, "kn") {
+                    Some(v) => v != "false",
+                    None => false,
+                }
+            });
+            let case_first = case_first_opt.unwrap_or_else(|| {
+                unicode_extension_keyword(&locale, "kf")
+                    .filter(|v| ["upper", "lower", "false"].contains(&v.as_str()))
+                    .unwrap_or_else(|| "false".to_string())
+            });
+            let collation = unicode_extension_keyword(&locale, "co")
+                .filter(|v| !v.is_empty() && v != "standard" && v != "search")
+                .unwrap_or_else(|| "default".to_string());
+            set_internal_field(obj, KEY_COL_USAGE, string_value(&usage));
+            set_internal_field(obj, KEY_COL_SENSITIVITY, string_value(&sensitivity));
+            set_internal_field(obj, KEY_COL_IGNORE_PUNCT, bool_value(ignore_punct));
+            set_internal_field(obj, KEY_COL_COLLATION, string_value(&collation));
+            set_internal_field(obj, KEY_COL_NUMERIC, bool_value(numeric));
+            set_internal_field(obj, KEY_COL_CASE_FIRST, string_value(&case_first));
             install_bound_instance_function(
                 obj,
                 "compare",
@@ -1090,7 +1325,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_SEGMENTER => {
-            let granularity = normalize_granularity(get_option_string(options, "granularity"));
+            // `? ToObject(options)` (null → TypeError), then GetOption in order:
+            // localeMatcher, granularity (options-order.js / options-null.js).
+            let options = coerce_options_reject_null(options);
+            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            let granularity =
+                normalize_granularity(get_option_string_coerced(options, "granularity"));
             set_internal_field(obj, KEY_GRANULARITY, string_value(&granularity));
             install_bound_instance_function(
                 obj,
@@ -1106,13 +1346,18 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_LIST_FORMAT => {
-            let list_type = enum_option(
+            // `? GetOptionsObject(options)` (any non-Object, non-undefined →
+            // TypeError), then GetOption: localeMatcher, type, style
+            // (options-getoptionsobject.js / options-order.js).
+            let options = get_options_object(options);
+            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            let list_type = enum_option_strict(
                 options,
                 "type",
                 &["conjunction", "disjunction", "unit"],
                 "conjunction",
             );
-            let style = enum_option(options, "style", &["long", "short", "narrow"], "long");
+            let style = enum_option_strict(options, "style", &["long", "short", "narrow"], "long");
             set_internal_field(obj, KEY_TYPE, string_value(&list_type));
             set_internal_field(obj, KEY_LF_STYLE, string_value(&style));
             install_bound_instance_function(
@@ -1135,8 +1380,19 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_RELATIVE_TIME => {
-            let style = enum_option(options, "style", &["long", "short", "narrow"], "long");
-            let numeric = enum_option(options, "numeric", &["always", "auto"], "always");
+            // `? ToObject(options)` (null → TypeError), then GetOption in order:
+            // localeMatcher, numberingSystem, style, numeric (options-order.js).
+            let options = coerce_options_reject_null(options);
+            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            if let Some(ns) = get_option_string_coerced(options, "numberingSystem") {
+                if !is_well_formed_numbering_system(&ns) {
+                    throw_range_error(&format!(
+                        "Value {ns} out of range for Intl options property numberingSystem"
+                    ));
+                }
+            }
+            let style = enum_option_strict(options, "style", &["long", "short", "narrow"], "long");
+            let numeric = enum_option_strict(options, "numeric", &["always", "auto"], "always");
             set_internal_field(obj, KEY_RTF_STYLE, string_value(&style));
             set_internal_field(obj, KEY_NUMERIC, string_value(&numeric));
             install_bound_instance_function(obj, "format", rtf_bound_format_thunk as *const u8, 2);
@@ -1154,21 +1410,49 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
         }
         KIND_PLURAL_RULES => {
-            let pr_type = enum_option(options, "type", &["cardinal", "ordinal"], "cardinal");
+            // `? GetOptionsObject(options)`, then GetOption in the exact order
+            // constructor-option-read-order.js asserts: localeMatcher, type,
+            // notation, compactDisplay, then SetNumberFormatDigitOptions
+            // (minimumIntegerDigits, min/maxFractionDigits, min/maxSignificantDigits,
+            // roundingIncrement, roundingMode, roundingPriority, trailingZeroDisplay).
+            let options = get_options_object(options);
+            let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+            let pr_type = enum_option_strict(options, "type", &["cardinal", "ordinal"], "cardinal");
             set_internal_field(obj, KEY_TYPE, string_value(&pr_type));
+            let notation = enum_option_strict(
+                options,
+                "notation",
+                &["standard", "scientific", "engineering", "compact"],
+                "standard",
+            );
+            let compact_display =
+                enum_option_strict(options, "compactDisplay", &["short", "long"], "short");
+            set_internal_field(obj, KEY_PR_NOTATION, string_value(&notation));
+            if notation == "compact" {
+                set_internal_field(obj, KEY_PR_COMPACT_DISPLAY, string_value(&compact_display));
+            }
             let min_int = get_option_number(options, "minimumIntegerDigits").unwrap_or(1.0);
             set_internal_field(obj, KEY_PR_MIN_INT, min_int);
+            let min_frac_read = get_option_number(options, "minimumFractionDigits");
+            let max_frac_read = get_option_number(options, "maximumFractionDigits");
             let min_sig = get_option_number(options, "minimumSignificantDigits");
             let max_sig = get_option_number(options, "maximumSignificantDigits");
+            // Trailing SetNumberFormatDigitOptions reads — observed for read-order
+            // parity even though Perry's plural selection ignores their values.
+            let _ = get_option_value(options, "roundingIncrement");
+            let _ = get_option_value(options, "roundingMode");
+            let _ = get_option_value(options, "roundingPriority");
+            let _ = get_option_value(options, "trailingZeroDisplay");
             if min_sig.is_some() || max_sig.is_some() {
                 set_internal_field(obj, KEY_PR_USE_SIG, bool_value(true));
                 set_internal_field(obj, KEY_PR_MIN_SIG, min_sig.unwrap_or(1.0));
                 set_internal_field(obj, KEY_PR_MAX_SIG, max_sig.unwrap_or(21.0));
             } else {
                 set_internal_field(obj, KEY_PR_USE_SIG, bool_value(false));
-                let min_frac = get_option_number(options, "minimumFractionDigits").unwrap_or(0.0);
-                let max_frac = get_option_number(options, "maximumFractionDigits")
-                    .unwrap_or_else(|| min_frac.max(3.0));
+                // Reuse the values read above (in spec order) — re-reading would
+                // double-invoke the option getters and break read-order parity.
+                let min_frac = min_frac_read.unwrap_or(0.0);
+                let max_frac = max_frac_read.unwrap_or_else(|| min_frac.max(3.0));
                 set_internal_field(obj, KEY_PR_MIN_FRAC, min_frac);
                 set_internal_field(obj, KEY_PR_MAX_FRAC, max_frac);
             }
@@ -1288,17 +1572,29 @@ extern "C" fn plural_rules_constructor_thunk(closure: *const ClosureHeader, rest
     )
 }
 
-fn supported_locales_array(locales: f64) -> f64 {
-    let locales = locales_from_value(locales);
-    let mut arr = js_array_alloc(locales.len() as u32);
-    for locale in locales {
-        arr = js_array_push_f64(arr, string_value(&locale));
+fn supported_locales_array(locales: f64, options: f64) -> f64 {
+    // SupportedLocales: when `options` is not undefined, `? ToObject(options)`
+    // (null → TypeError) then `? GetOption(options, "localeMatcher", …)` — so an
+    // invalid localeMatcher is a RangeError even though the matcher choice does
+    // not affect Perry's lookup result.
+    if !JSValue::from_bits(options.to_bits()).is_undefined() {
+        let options = coerce_options_reject_null(options);
+        let _ = enum_option_strict(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+    }
+    // BestAvailableLocale-filter the canonicalized request list: drop tags whose
+    // primary language Perry can't service (e.g. `zxx`), keeping order + dedup.
+    let requested = locales_from_value(locales);
+    let mut arr = js_array_alloc(0);
+    for locale in requested {
+        if is_available_locale(&locale) {
+            arr = js_array_push_f64(arr, string_value(&locale));
+        }
     }
     js_nanbox_pointer(arr as i64)
 }
 
-extern "C" fn supported_locales_of_thunk(_closure: *const ClosureHeader, locales: f64) -> f64 {
-    supported_locales_array(locales)
+extern "C" fn supported_locales_of_thunk(_closure: *const ClosureHeader, rest: f64) -> f64 {
+    supported_locales_array(rest_arg(rest, 0), rest_arg(rest, 1))
 }
 
 fn install_function(
@@ -1432,13 +1728,16 @@ fn install_constructor(
         PropertyAttrs::new(false, false, false),
     );
 
+    // `supportedLocalesOf(locales, options)` — `.length` is 1, but it reads a
+    // second `options` argument, so register it rest-style (all args collected)
+    // and pull both positionally.
     let supported = install_function(
         ctor as *mut ObjectHeader,
         "supportedLocalesOf",
         supported_locales_of_thunk as *const u8,
+        0,
         1,
-        1,
-        false,
+        true,
     );
     crate::closure::closure_set_dynamic_prop(ctor as usize, "supportedLocalesOf", supported);
 
