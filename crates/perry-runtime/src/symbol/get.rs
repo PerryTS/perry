@@ -72,9 +72,11 @@ unsafe fn req_handle_symbol_fallback(obj_f64: f64, sym_f64: f64) -> Option<f64> 
     }
     let raw = (bits & POINTER_MASK) as usize;
     // Only heap-object wrappers carry a `_req` field; skip handle receivers.
-    if crate::value::addr_class::is_small_handle(raw)
-        || !crate::object::is_valid_obj_ptr(raw as *const u8)
-    {
+    // `is_valid_obj_ptr` already rejects small native handles (it validates the
+    // GcHeader) and accepts a genuine heap object even at a low address, so the
+    // extra `is_small_handle` pre-check would have wrongly rejected a real heap
+    // wrapper that happens to live in the low band.
+    if !crate::object::is_valid_obj_ptr(raw as *const u8) {
         return None;
     }
     let key = b"_req";
@@ -768,25 +770,47 @@ mod handle_meta_share_tests {
         super::constructors::js_symbol_for(key_f64)
     }
 
+    // The exact registered symbol Next.js uses; the undefined-write wipe guard
+    // is gated to THIS symbol, so the metadata tests must use it (not a
+    // test-suffixed variant) for the no-op behaviour to fire.
+    unsafe fn next_request_meta_symbol() -> f64 {
+        registered_symbol("NextInternalRequestMeta")
+    }
+
     // A small native handle id NaN-boxed as POINTER (e.g. an IncomingMessage).
     fn handle_value(id: u64) -> f64 {
         f64::from_bits(POINTER_TAG_BITS | id)
     }
 
+    // An IMMOVABLE metadata value: a plain NaN-boxed number. Unlike a heap
+    // object, a number is never a pointer, so the SYMBOL_PROPERTIES side-table
+    // scanner never rewrites it on a GC move — its bits are invariant across any
+    // collection. The #5437 fix logic (no-op on undefined, `_req` fallthrough)
+    // is value-agnostic, so a number tests it faithfully without depending on
+    // GC suppression to keep a heap `meta` from moving.
+    fn immovable_meta() -> f64 {
+        // A normal finite double whose bits are stable and unambiguous.
+        1234.5_f64
+    }
+
     #[test]
     fn wrapper_reads_share_underlying_handle_meta() {
         unsafe {
-            // Suppress GC for the test body: the side table is a GC root, so a
-            // moved `meta` is rewritten there while our local stays stale →
-            // spurious `got != meta` under parallel `cargo test`. (#5437)
+            // Compact the arena up front with a full GC so the few small
+            // allocations this test makes can't trip a mid-test block-alloc GC
+            // (which bypasses `gc_suppress`). `gc_suppress` is kept as belt-and-
+            // braces; the immovable number `meta` makes the assertion itself
+            // GC-invariant regardless.
+            crate::gc::js_gc_collect();
             crate::gc::gc_suppress();
-            let sym = registered_symbol("NextInternalRequestMeta@@test_share");
+            let sym = next_request_meta_symbol();
             // Pick a handle id well inside the small-handle band but unlikely to
             // collide with another test's side-table entry.
             let handle = handle_value(0x4321);
 
-            // The per-request metadata object lives on the handle.
-            let meta = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+            // The per-request metadata value lives on the handle. Use an
+            // immovable number so a GC can't invalidate the comparison.
+            let meta = immovable_meta();
             super::properties::js_object_set_symbol_property(handle, sym, meta);
 
             // A heap wrapper that aliases the handle via `_req` but never had
@@ -806,7 +830,7 @@ mod handle_meta_share_tests {
             assert_eq!(
                 got.to_bits(),
                 meta.to_bits(),
-                "wrapper symbol read should share the handle's meta object"
+                "wrapper symbol read should share the handle's meta value"
             );
         }
     }
@@ -814,10 +838,12 @@ mod handle_meta_share_tests {
     #[test]
     fn undefined_write_does_not_clobber_handle_meta() {
         unsafe {
+            // Immovable number `meta` → no heap object to move → assertion is
+            // GC-invariant; `gc_suppress` is defensive only.
             crate::gc::gc_suppress();
-            let sym = registered_symbol("NextInternalRequestMeta@@test_wipe");
+            let sym = next_request_meta_symbol();
             let handle = handle_value(0x5678);
-            let meta = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+            let meta = immovable_meta();
             super::properties::js_object_set_symbol_property(handle, sym, meta);
 
             // The `this._req[SYM] = this[SYM]` write-back where `this[SYM]` is
@@ -843,7 +869,7 @@ mod handle_meta_share_tests {
             let sym = registered_symbol("plainObjSym@@test_clear");
             let obj_ptr = crate::object::js_object_alloc(0, 0);
             let obj = crate::value::js_nanbox_pointer(obj_ptr as i64);
-            let v = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+            let v = immovable_meta();
             super::properties::js_object_set_symbol_property(obj, sym, v);
             let undef = f64::from_bits(TAG_UNDEFINED);
             super::properties::js_object_set_symbol_property(obj, sym, undef);
@@ -852,6 +878,39 @@ mod handle_meta_share_tests {
                 got.to_bits(),
                 TAG_UNDEFINED,
                 "heap-object symbol prop set to undefined must read undefined"
+            );
+        }
+    }
+
+    #[test]
+    fn undefined_write_clears_non_metadata_symbol_on_handle() {
+        unsafe {
+            // The wipe-guard is narrowed to `Symbol.for("NextInternalRequestMeta")`.
+            // Any OTHER symbol on a handle must clear normally with `undefined`.
+            crate::gc::gc_suppress();
+            let sym = registered_symbol("someOtherHandleSym@@test_clear");
+            // Distinct handle id so this doesn't alias the metadata tests.
+            let handle = handle_value(0x6789);
+            let v = immovable_meta();
+            super::properties::js_object_set_symbol_property(handle, sym, v);
+
+            // Sanity: the value is observable before the clear.
+            let before = js_object_get_symbol_property(handle, sym);
+            assert_eq!(
+                before.to_bits(),
+                v.to_bits(),
+                "non-metadata handle symbol should be set before clearing"
+            );
+
+            // Writing undefined to a NON-metadata symbol on a handle MUST clear it.
+            let undef = f64::from_bits(TAG_UNDEFINED);
+            super::properties::js_object_set_symbol_property(handle, sym, undef);
+            let got = js_object_get_symbol_property(handle, sym);
+            crate::gc::gc_unsuppress();
+            assert_eq!(
+                got.to_bits(),
+                TAG_UNDEFINED,
+                "a non-metadata symbol on a handle must be clearable with undefined"
             );
         }
     }

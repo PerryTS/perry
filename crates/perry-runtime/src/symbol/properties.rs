@@ -216,6 +216,34 @@ unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
     register_closure_name_if_absent(val_bits, &inferred);
 }
 
+/// Resolve (and cache) the registered `Symbol.for("NextInternalRequestMeta")`
+/// pointer used by Next.js to stash per-request metadata on the underlying
+/// IncomingMessage handle. Returns the symbol's stable `sym_key` (its leaked
+/// `SymbolHeader*`), or 0 if it can't be resolved. The undefined-write wipe
+/// guard below is narrowed to THIS symbol so ordinary handle symbol writes —
+/// including clearing a non-metadata symbol with `undefined` — behave normally.
+fn next_request_meta_sym_key() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // 0 = "not resolved yet", usize::MAX would be a sentinel we never need
+    // because the registered symbol pointer is always a real, non-zero address.
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    let cached = CACHED.load(Ordering::Relaxed);
+    if cached != 0 {
+        return cached;
+    }
+    const KEY: &[u8] = b"NextInternalRequestMeta";
+    let sym_key = unsafe {
+        let kh = js_string_from_bytes(KEY.as_ptr(), KEY.len() as u32);
+        let key_f64 = crate::value::js_nanbox_string(kh as i64);
+        let sym = super::constructors::js_symbol_for(key_f64);
+        sym_key_from_f64(sym)
+    };
+    if sym_key != 0 {
+        CACHED.store(sym_key, Ordering::Relaxed);
+    }
+    sym_key
+}
+
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
     if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
         if acc.set != 0 {
@@ -245,13 +273,22 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // invariant. Treat an `undefined` write onto a handle-band receiver that
     // already holds a non-undefined entry as a no-op: it never *adds*
     // information, and the by-reference object the handle still points at is
-    // exactly what Node would keep. Gated to handle-band receivers (id below
-    // HANDLE_BAND_MAX and not a real heap object) so ordinary heap-object
-    // symbol props — including legitimately setting a prop to `undefined` — are
-    // untouched.
+    // exactly what Node would keep.
+    //
+    // Gated narrowly so it only protects the Next request-metadata flow:
+    //   (1) the symbol is `Symbol.for("NextInternalRequestMeta")`,
+    //   (2) the receiver is a handle-band value (id below HANDLE_BAND_MAX and
+    //       not a real heap object),
+    //   (3) the write value is `undefined`, and
+    //   (4) a non-undefined entry already exists.
+    // Any OTHER symbol on a handle — including legitimately clearing it by
+    // writing `undefined` — falls through to the normal store path below.
     {
         let raw = (obj_f64.to_bits() & crate::value::POINTER_MASK) as usize;
-        if (obj_f64.to_bits() >> 48) == 0x7FFD
+        let meta_key = next_request_meta_sym_key();
+        if meta_key != 0
+            && sym_key == meta_key
+            && (obj_f64.to_bits() >> 48) == 0x7FFD
             && crate::value::addr_class::is_small_handle(raw)
             && !crate::object::is_valid_obj_ptr(raw as *const u8)
             && value_f64.to_bits() == TAG_UNDEFINED
