@@ -776,6 +776,10 @@ mod handle_meta_share_tests {
     #[test]
     fn wrapper_reads_share_underlying_handle_meta() {
         unsafe {
+            // Suppress GC for the test body: the side table is a GC root, so a
+            // moved `meta` is rewritten there while our local stays stale →
+            // spurious `got != meta` under parallel `cargo test`. (#5437)
+            crate::gc::gc_suppress();
             let sym = registered_symbol("NextInternalRequestMeta@@test_share");
             // Pick a handle id well inside the small-handle band but unlikely to
             // collide with another test's side-table entry.
@@ -796,6 +800,9 @@ mod handle_meta_share_tests {
             // Reading the symbol off the wrapper falls through to the handle's
             // shared meta — the exact Node-by-reference semantics.
             let got = js_object_get_symbol_property(wrapper, sym);
+            // Unsuppress before asserting so a panic can't leave GC suppressed
+            // for sibling tests on this thread.
+            crate::gc::gc_unsuppress();
             assert_eq!(
                 got.to_bits(),
                 meta.to_bits(),
@@ -807,6 +814,7 @@ mod handle_meta_share_tests {
     #[test]
     fn undefined_write_does_not_clobber_handle_meta() {
         unsafe {
+            crate::gc::gc_suppress();
             let sym = registered_symbol("NextInternalRequestMeta@@test_wipe");
             let handle = handle_value(0x5678);
             let meta = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
@@ -818,6 +826,7 @@ mod handle_meta_share_tests {
             super::properties::js_object_set_symbol_property(handle, sym, undef);
 
             let got = js_object_get_symbol_property(handle, sym);
+            crate::gc::gc_unsuppress();
             assert_eq!(
                 got.to_bits(),
                 meta.to_bits(),
