@@ -81,6 +81,17 @@ const d = JSON.stringify(obj);
 for (const s of [a, b, c, d]) {
   const parsed = JSON.parse(s);
   if (parsed.name !== "root") throw new Error("lost name in: " + s);
+  // A handle-band (Proxy) value is not introspectable during stringify, so the
+  // contract is that each serializes to `null` — assert it directly (not just
+  // "no crash / name survives"): a regression that dropped or mangled the
+  // field would otherwise pass silently.
+  if (parsed.child !== null) throw new Error("child not null in: " + s);
+  if (!Array.isArray(parsed.list) || parsed.list.length !== 3) {
+    throw new Error("list shape changed in: " + s);
+  }
+  if (parsed.list[0] !== null || parsed.list[1] !== 2 || parsed.list[2] !== null) {
+    throw new Error("list contents changed in: " + s);
+  }
 }
 console.log("ok");
 "#,
