@@ -539,6 +539,34 @@ pub unsafe extern "C" fn js_native_call_method_nullsafe(
     if v.is_undefined() || v.is_null() {
         return 0.0;
     }
+    // Property-read recovery (scoped to this nullsafe entrypoint, which codegen
+    // emits ONLY for the native-instance member-access fallback in
+    // `lower_call/native/native_instance_branch.rs`). A bare member READ
+    // `recv.<prop>` on a native-instance-classified receiver lowers to a 0-arg
+    // `NativeMethodCall` so FFI getters dispatch. When the receiver's RUNTIME
+    // type is actually a string — mis-tagged via a stale/aliased native-instance
+    // class, the same shape documented for the closure-captured array registered
+    // as `FormData` — "length" has no callable method and the dispatcher would
+    // throw `(string).length is not a function`, aborting e.g. an inlined
+    // string-width/wrap-ansi text-measurement loop (`H += chunk.length`).
+    //
+    // A string's `length` is a data property, never a method, so return its
+    // value (the read carries no args). This is gated to the nullsafe (member-
+    // read fallback) path on purpose: a genuine `("abc" as any).length()` call
+    // lowers to the plain `js_native_call_method` entrypoint, which still throws
+    // the spec-required TypeError. Native classes with a real FFI `length`
+    // getter (cheerio selections) are objects, not primitives, and dispatch
+    // through their own arm, so they are unaffected.
+    if args_len == 0 && method_name_len == 6 && !method_name_ptr.is_null() {
+        let name = std::slice::from_raw_parts(method_name_ptr as *const u8, 6);
+        if name == b"length" && v.is_any_string() {
+            let ptr =
+                crate::value::js_get_string_pointer_unified(object) as *const crate::StringHeader;
+            if !ptr.is_null() {
+                return (*ptr).utf16_len as f64;
+            }
+        }
+    }
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
@@ -1277,6 +1305,11 @@ pub unsafe extern "C" fn js_native_call_method(
                 return result;
             }
         }
+        // NOTE: a bare member READ `str.length` mis-lowered to a 0-arg method
+        // call is recovered in `js_native_call_method_nullsafe` (the entrypoint
+        // codegen emits for the native-instance member-read fallback), NOT here:
+        // this plain entrypoint serves genuine `("abc" as any).length()` calls,
+        // which must keep throwing the spec-required TypeError.
         crate::error::js_throw_type_error_not_a_function(
             kind.as_ptr(),
             kind.len(),
@@ -1435,6 +1468,45 @@ mod undefined_fallback_tests {
             result.to_bits(),
             0x7FF8_0000_0000_0001,
             "must not be the signaling-NaN sentinel that tripped for…of"
+        );
+    }
+}
+
+#[cfg(test)]
+mod primitive_dataprop_recovery_tests {
+    //! Regression: a bare `str.length` member READ can be mis-lowered to a 0-arg
+    //! `NativeMethodCall` when the HIR mis-classifies the receiver as a
+    //! native-instance type (stale/aliased class tag — e.g. wrap-ansi's
+    //! per-character `.length` inside an inlined string-width loop). Codegen
+    //! emits that fallback through `js_native_call_method_nullsafe`, where the
+    //! runtime receiver is really a string with no callable `length` method, so
+    //! this used to throw `(string).length is not a function` and abort the TUI
+    //! render. `length` on a string is a data property, so the nullsafe
+    //! (member-read fallback) entrypoint now returns its value (UTF-16 length).
+    //! The plain `js_native_call_method` entrypoint, which serves genuine
+    //! `("abc" as any).length()` calls, keeps throwing the spec TypeError.
+
+    fn string_value(bytes: &[u8]) -> f64 {
+        let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK))
+    }
+
+    #[test]
+    fn nullsafe_string_length_member_read_returns_length() {
+        let recv = string_value(b"hello\xC3\xA9"); // "helloé" → 6 UTF-16 code units
+        let method = b"length";
+        let result = unsafe {
+            super::js_native_call_method_nullsafe(
+                recv,
+                method.as_ptr() as *const i8,
+                method.len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(
+            result, 6.0,
+            "string.length member-read recovery must return UTF-16 length"
         );
     }
 }
