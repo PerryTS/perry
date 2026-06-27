@@ -375,7 +375,14 @@ pub(crate) fn round_to_significant(
     let combined: String = format!("{int_part}{frac_part}");
     let first_sig = combined.bytes().position(|d| d != b'0');
     let (mut int_out, mut frac_out) = match first_sig {
-        None => ("0".to_string(), String::new()),
+        // Zero has no significant digit to anchor on: render it as a single "0"
+        // padded to `min_sig` total displayed digits (minSig 3 → "0.00"). Return
+        // early — the trailing-zero normalization below assumes a nonzero value
+        // and would otherwise spin forever (significant_count is always 0 here).
+        None => {
+            let frac = "0".repeat(min_sig.max(1).saturating_sub(1) as usize);
+            return ("0".to_string(), frac);
+        }
         Some(fs) => {
             let msd_exp = int_part.len() as i32 - 1 - fs as i32;
             let frac_needed = max_sig as i32 - 1 - msd_exp;
