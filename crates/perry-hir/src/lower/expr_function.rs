@@ -1011,7 +1011,9 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // `js_global_get_or_throw_unresolved("X")` → `ReferenceError: X is not
     // defined` (Next.js RSCPathnameNormalizer). Scoped: restored after the body.
     let saved_forward_class_names = ctx.forward_class_names.clone();
+    let saved_forward_class_decl_depth = ctx.forward_class_decl_depth.clone();
     let saved_class_renames = ctx.class_renames.clone();
+    let fn_body_scope_depth = ctx.scope_depth;
     if let Some(ref block) = fn_expr.function.body {
         for stmt in &block.stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
@@ -1020,8 +1022,12 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                 // `Struct` = `class s`, which collided with other `class s` in
                 // the bundle and was dedup-skipped). See `class_renames`.
                 ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
-                ctx.forward_class_names
-                    .insert(class_decl.ident.sym.to_string());
+                let cname = class_decl.ident.sym.to_string();
+                ctx.forward_class_decl_depth
+                    .entry(cname.clone())
+                    .and_modify(|d| *d = (*d).min(fn_body_scope_depth))
+                    .or_insert(fn_body_scope_depth);
+                ctx.forward_class_names.insert(cname);
             }
         }
     }
@@ -1089,6 +1095,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
     ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
     ctx.forward_class_names = saved_forward_class_names;
+    ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
     ctx.class_renames = saved_class_renames;
 
     // Prepend destructuring statements to body

@@ -150,6 +150,7 @@ impl LoweringContext {
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
             forward_class_names: std::collections::HashSet::new(),
+            forward_class_decl_depth: std::collections::HashMap::new(),
             class_renames: std::collections::HashMap::new(),
             next_class_rename_id: 0,
             module_class_decl_names: std::collections::HashSet::new(),
@@ -796,6 +797,24 @@ impl LoweringContext {
 
     fn lookup_local_index(&self, name: &str) -> Option<usize> {
         self.locals.lookup_index(name)
+    }
+
+    /// The function-scope depth at which the nearest local binding of `name`
+    /// was declared, or `None` if there is no such binding. A binding's depth
+    /// is the number of `enter_scope` (function/closure-boundary) marks that
+    /// precede-or-equal its position in the locals stack — i.e. how deeply
+    /// nested the function it lives in is. Used to resolve a bare-ident
+    /// reference between a same-named `class` and a captured outer local by JS
+    /// nearest-binding rules: the binding at the GREATER depth (nearer the
+    /// reference) wins.
+    pub(crate) fn local_decl_scope_depth(&self, name: &str) -> Option<usize> {
+        let pos = self.lookup_local_index(name)?;
+        let depth = self
+            .scope_local_marks
+            .iter()
+            .filter(|&&mark| mark <= pos)
+            .count();
+        Some(depth)
     }
 
     /// #5216: drop the most-recently-bound local named `name` (if any), e.g. a

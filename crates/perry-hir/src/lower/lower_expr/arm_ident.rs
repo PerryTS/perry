@@ -36,7 +36,30 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     // name (a sibling param/var/let still wins).
     if ctx.forward_class_names.contains(&name) && ctx.lookup_local_in_current_scope(&name).is_none()
     {
-        return Ok(Expr::ClassRef(ctx.resolve_class_name(&name)));
+        // A `class <name>` in `forward_class_names` shadows a SAME-named local
+        // only when JS lexical scoping says the class binding is the nearest:
+        // i.e. there is no local of that name at all, OR the class was declared
+        // at a scope depth deeper than (nearer the reference than) the nearest
+        // enclosing local. The class binding lives in whatever function body
+        // declared it; a captured local declared in a NEARER scope (a deeper
+        // or sibling function whose local lingered in the inherited set) must
+        // win. Without this depth check, a `class <name>` in a SIBLING factory
+        // (its name still present in the inherited `forward_class_names`)
+        // wrongly shadowed a legitimate captured local — Next.js
+        // app-page-turbo's route-render closure read its captured params local
+        // `ej` as the `class ej` (= NextURL) reference, which then flowed into
+        // a WeakMap key and threw "Invalid value used as weak map key".
+        let class_wins = match (
+            ctx.local_decl_scope_depth(&name),
+            ctx.forward_class_decl_depth.get(&name).copied(),
+        ) {
+            (None, _) => true,       // no local: class wins (TimeoutError etc.)
+            (Some(_), None) => true, // depth unknown: keep prior behavior
+            (Some(local_depth), Some(class_depth)) => class_depth > local_depth,
+        };
+        if class_wins {
+            return Ok(Expr::ClassRef(ctx.resolve_class_name(&name)));
+        }
     }
     if let Some(id) = ctx.lookup_local(&name) {
         // A with-fallback implicit global may still be the HOLE

@@ -588,6 +588,18 @@ pub struct LoweringContext {
     /// call dispatched into `Object.create`. Scoped save/restore in
     /// `lower_fn_body_block_stmt`.
     pub(crate) forward_class_names: std::collections::HashSet<String>,
+    /// For each name in `forward_class_names`, the `scope_depth` at which the
+    /// `class <name>` declaration was registered. A bare-ident reference may
+    /// only resolve to the class (shadowing an outer-scope local of the same
+    /// name) when the class lexically encloses the reference — i.e. it was
+    /// declared at a scope depth no greater than the reference's. Without this,
+    /// a class in a SIBLING function factory (its name lingering in the
+    /// inherited `forward_class_names` set) wrongly shadowed a legitimate
+    /// captured local of the same name (Next.js app-page-turbo: a route-render
+    /// closure's captured params local `ej` resolved to the `class ej`
+    /// =`NextURL` reference, which then flowed into a WeakMap key and threw
+    /// "Invalid value used as weak map key").
+    pub(crate) forward_class_decl_depth: std::collections::HashMap<String, usize>,
     /// Scope-local class-name aliases disambiguating distinct same-named classes
     /// across nested function/factory scopes within ONE module (class refs are
     /// name-keyed: `Expr::New { class_name }` / `ClassRef(name)`). When a body
