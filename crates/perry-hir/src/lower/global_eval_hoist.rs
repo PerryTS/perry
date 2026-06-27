@@ -97,18 +97,34 @@ fn synth_void_assign_stmt(name: &str, init: Box<ast::Expr>) -> Option<ast::Stmt>
     Some(wrapper)
 }
 
-/// `void (<name> = <ident>);` — the empty-completion value-transfer that
-/// publishes a renamed hidden *top-level* function binding to its global name.
-fn synth_void_ident_assign_stmt(name: &str, ident: &str) -> Option<ast::Stmt> {
-    synth_void_assign_stmt(
-        name,
-        Box::new(ast::Expr::Ident(ast::Ident {
-            span: swc_common::DUMMY_SP,
-            ctxt: Default::default(),
-            sym: ident.into(),
-            optional: false,
-        })),
-    )
+/// CreateGlobalFunctionBinding for a renamed hidden *top-level* function:
+/// publish its value to the global name `<name>` with the spec's descriptor
+/// rules, emitted as a block so its completion value stays empty.
+///
+/// ```text
+/// { let __perry_d = Object.getOwnPropertyDescriptor(globalThis, "<name>");
+///   if (__perry_d === void 0 || __perry_d.configurable)
+///        Object.defineProperty(globalThis, "<name>",
+///                              { value: <hidden>, writable: true, enumerable: true, configurable: true });
+///   else Object.defineProperty(globalThis, "<name>", { value: <hidden> }); }
+/// ```
+///
+/// An absent or configurable binding is (re)defined as a writable, enumerable,
+/// configurable data property; a non-configurable one keeps its attributes and
+/// only takes the new value — which throws a `TypeError` when it is non-writable
+/// and the value differs (CanDeclareGlobalFunction is false), exactly matching
+/// `eval("function NaN(){}")` (test262 `*/non-definable-global-{function,
+/// generator}`) and the configurable-update case (`*/var-env-func-init-global-
+/// update-{,non-}configurable`). Depends on `globalThis`/`Object`; the caller
+/// bails the whole rewrite if the body rebinds either name.
+fn synth_create_global_fn_binding(name: &str, ident: &str) -> Option<ast::Stmt> {
+    parse_single_stmt(&format!(
+        "{{ let __perry_d = Object.getOwnPropertyDescriptor(globalThis, {name:?}); \
+         if (__perry_d === void 0 || __perry_d.configurable) \
+         {{ Object.defineProperty(globalThis, {name:?}, \
+            {{ value: {ident}, writable: true, enumerable: true, configurable: true }}); }} \
+         else {{ Object.defineProperty(globalThis, {name:?}, {{ value: {ident} }}); }} }}"
+    ))
 }
 
 /// `if (!({}).hasOwnProperty.call(globalThis, "<name>")) { globalThis["<name>"]
@@ -798,12 +814,13 @@ impl GlobalEvalHoist {
 /// the unmodified fold. Operates on a clone, so a mid-way bail never leaves a
 /// partially rewritten body.
 pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::Stmt>> {
-    // The create-if-absent prelude reads/writes the `globalThis` global; if the
-    // eval body rebinds that name at function scope (`var globalThis`, top-level
-    // `let`/`function globalThis`), the prelude — prepended into the same IIFE —
+    // The prelude / publishes read `globalThis` and `Object` (the
+    // create-if-absent slot and CreateGlobalFunctionBinding); if the eval body
+    // rebinds either name at function scope (`var globalThis`, top-level
+    // `let`/`function Object`, …), the prelude — prepended into the same IIFE —
     // would hit the shadow or its TDZ. Bail so the runtime fold preserves
     // semantics for that (pathological) case.
-    if binds_at_function_scope(stmts, "globalThis") {
+    if binds_at_function_scope(stmts, "globalThis") || binds_at_function_scope(stmts, "Object") {
         return None;
     }
     let mut hoist = GlobalEvalHoist {
@@ -839,11 +856,12 @@ pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::St
             result.push(synth_create_if_absent_stmt(name)?);
         }
     }
-    // Top-level functions are published with their value at instantiation, after
-    // the create-if-absent slots and before the body (the renamed function
-    // declarations hoist to the top of the IIFE arrow, so the value is ready).
+    // Top-level functions are published (CreateGlobalFunctionBinding) with their
+    // value at instantiation, after the create-if-absent slots and before the
+    // body — the renamed function declarations hoist to the top of the IIFE
+    // arrow, so the value is ready.
     for (orig, hidden) in &hoist.top_fn_publishes {
-        result.push(synth_void_ident_assign_stmt(orig, hidden)?);
+        result.push(synth_create_global_fn_binding(orig, hidden)?);
     }
     result.append(&mut body);
     Some(result)
@@ -1018,17 +1036,68 @@ mod global_eval_hoist_tests {
         out
     }
 
+    /// Whether any statement mentions an `Object.defineProperty(...)` call.
+    fn mentions_define_property(stmts: &[ast::Stmt]) -> bool {
+        fn ident_names(stmt: &ast::Stmt, out: &mut Vec<String>) {
+            fn expr(e: &ast::Expr, out: &mut Vec<String>) {
+                match e {
+                    ast::Expr::Ident(i) => out.push(i.sym.to_string()),
+                    ast::Expr::Member(m) => {
+                        expr(&m.obj, out);
+                        if let ast::MemberProp::Ident(i) = &m.prop {
+                            out.push(i.sym.to_string());
+                        }
+                    }
+                    ast::Expr::Call(c) => {
+                        if let ast::Callee::Expr(e) = &c.callee {
+                            expr(e, out);
+                        }
+                    }
+                    ast::Expr::Cond(c) => {
+                        expr(&c.test, out);
+                        expr(&c.cons, out);
+                        expr(&c.alt, out);
+                    }
+                    _ => {}
+                }
+            }
+            match stmt {
+                ast::Stmt::Block(b) => b.stmts.iter().for_each(|s| ident_names(s, out)),
+                ast::Stmt::If(i) => {
+                    ident_names(&i.cons, out);
+                    if let Some(a) = &i.alt {
+                        ident_names(a, out);
+                    }
+                }
+                ast::Stmt::Expr(e) => expr(&e.expr, out),
+                ast::Stmt::Decl(ast::Decl::Var(v)) => {
+                    for d in &v.decls {
+                        if let Some(init) = &d.init {
+                            expr(init, out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        for s in stmts {
+            ident_names(s, &mut names);
+        }
+        names.iter().any(|n| n == "defineProperty")
+    }
+
     #[test]
     fn top_level_function_is_published_to_the_global() {
         // A *top-level* function is CreateGlobalFunctionBinding: renamed to a
-        // hidden binding and published with its value at instantiation via a
-        // `void (f = <hidden>)` so the call keeps the empty completion value.
+        // hidden binding and published with its value at instantiation via an
+        // `Object.defineProperty(globalThis, …)` block (empty completion value).
         // (test262 language/eval-code/*/var-env-func-init-global-new.)
         let out = apply_global_eval_hoist(&parse_body("initial = f; function f() { return 234; }"))
             .expect("publishes the top-level function");
         assert!(
-            void_publish_targets(&out).iter().any(|t| t == "f"),
-            "expected a void-wrapped publish of `f`"
+            mentions_define_property(&out),
+            "expected an Object.defineProperty publish of `f`"
         );
         // The original name no longer appears as a function *declaration*.
         let fns = fn_decl_names(&out);
