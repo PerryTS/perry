@@ -824,7 +824,11 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
             if !format_fn.is_null() {
                 crate::object::set_bound_native_closure_name(format_fn, "");
-                set_internal_field(obj, KEY_NF_BOUND_FORMAT, js_nanbox_pointer(format_fn as i64));
+                set_internal_field(
+                    obj,
+                    KEY_NF_BOUND_FORMAT,
+                    js_nanbox_pointer(format_fn as i64),
+                );
             }
             install_bound_instance_function(
                 obj,
