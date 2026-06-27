@@ -98,7 +98,10 @@ console.log(C.m());
 console.log(C.m([1, 2]));
 "#,
     );
-    assert_eq!(stdout, "7\n3\n", "default array destructured when no arg supplied");
+    assert_eq!(
+        stdout, "7\n3\n",
+        "default array destructured when no arg supplied"
+    );
 }
 
 /// A leading non-default param BEFORE the synthesized `arguments` slot
@@ -127,8 +130,7 @@ C.method(7, 8, 9);
 "#,
     );
     assert_eq!(
-        stdout,
-        "x=undefined _=0\na0=undefined a1=undefined len=0\nx=7 _=8\na0=7 a1=8 len=3\n",
+        stdout, "x=undefined _=0\na0=undefined a1=undefined len=0\nx=7 _=8\na0=7 a1=8 len=3\n",
         "leading param + synth arguments must match node (byte-for-byte)"
     );
 }
@@ -149,7 +151,10 @@ console.log(C.pipe());
 console.log(C.pipe(1, 2, 3));
 "#,
     );
-    assert_eq!(stdout, "0\n3\n", "arguments-only static method counts all args");
+    assert_eq!(
+        stdout, "0\n3\n",
+        "arguments-only static method counts all args"
+    );
 }
 
 /// Static async-generator method of a class expression with an
@@ -174,5 +179,8 @@ var C = class {
 })();
 "#,
     );
-    assert_eq!(stdout, "10,20\n", "default applies inside a static async generator");
+    assert_eq!(
+        stdout, "10,20\n",
+        "default applies inside a static async generator"
+    );
 }
