@@ -795,15 +795,21 @@ fn wide_object_own_key_present_uses_index_and_object_values_is_complete() {
             n,
             "Object.values must yield one value per key"
         );
-        let mut sum = 0.0;
+        // Track each payload so a balanced duplicate/omission can't slip past a
+        // length+sum check: every value 0..n must appear exactly once.
+        let mut seen = vec![false; n as usize];
         for i in 0..n {
             let v = crate::array::js_array_get(values, i);
-            sum += f64::from_bits(v.bits());
+            let num = f64::from_bits(v.bits());
+            let idx = num as usize;
+            assert_eq!(num, idx as f64, "Object.values must yield integer payloads");
+            assert!((idx as u32) < n, "Object.values yielded out-of-range value {num}");
+            assert!(!seen[idx], "Object.values yielded duplicate value {idx}");
+            seen[idx] = true;
         }
-        // 0 + 1 + … + 599 = 599*600/2 = 179700
-        assert_eq!(
-            sum, 179_700.0,
-            "Object.values must yield exactly the set values"
+        assert!(
+            seen.into_iter().all(|hit| hit),
+            "Object.values missed at least one value"
         );
     }
 }
