@@ -54,6 +54,14 @@ crates/perry-hir/src/ir/expr.rs
 # for the ~30 locals — high-risk surgery on the compiler's hot path, deferred to
 # a focused follow-up. Tracked under #1435.
 crates/perry/src/commands/compile/run_pipeline.rs
+# node:vm surface: the Script / Module / SourceTextModule / SyntheticModule FFI
+# plus a self-contained manifest-expression mini-evaluator (`EvalEnv` + the
+# `eval_*` / `normalize_literal_to_json` interpreter). These share one `EvalEnv`,
+# a large `FIELD_*` field-key constant set, and ~40 private helpers, so a clean
+# split needs a dedicated decomposition (a shared `node_vm/common` module for
+# `EvalEnv`/`FIELD_*`/helpers + an `eval` sub-module) rather than a mechanical
+# file cut — deferred to a focused follow-up. Tracked under #1435.
+crates/perry-runtime/src/node_vm.rs
 EOF
 )
 

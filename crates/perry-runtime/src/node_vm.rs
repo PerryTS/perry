@@ -1314,8 +1314,17 @@ fn normalize_literal_to_json(expr: &str) -> Option<String> {
                 while i < bytes.len() {
                     let c = bytes[i];
                     if c == b'\\' && i + 1 < bytes.len() {
-                        out.push('\\');
-                        out.push(bytes[i + 1] as char);
+                        // `\'` is valid inside a JS single-quoted string but is
+                        // NOT a legal JSON escape, so it would make an otherwise
+                        // valid literal like `{name: 'can\'t'}` fail JSON
+                        // parsing. Emit a plain apostrophe; pass every
+                        // JSON-valid escape (\\, \", \n, …) through unchanged.
+                        if bytes[i + 1] == b'\'' {
+                            out.push('\'');
+                        } else {
+                            out.push('\\');
+                            out.push(bytes[i + 1] as char);
+                        }
                         i += 2;
                         continue;
                     }
