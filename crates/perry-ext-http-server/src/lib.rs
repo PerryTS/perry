@@ -53,6 +53,7 @@ use std::sync::Once;
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
 mod cluster_bind;
+mod dispatch_ext;
 // Unit-test binaries do not link the host stdlib/runtime archive that
 // provides the perry_ffi async bridge; without these the test link is at the
 // mercy of --gc-sections keeping/dropping the perry-ffi references pulled in
@@ -113,6 +114,13 @@ pub(crate) fn ensure_gc_scanner_registered() {
             js_register_aux_pump(crate::server::js_node_http_server_process_pending);
             js_register_aux_has_active(crate::server::js_node_http_server_has_active);
         }
+        // Wall 10 — register the handle property/method/property-set dispatch
+        // extensions so erased-receiver `req.url` / `res.end(...)` etc. route to
+        // our handles even when the linked perry-stdlib was built WITHOUT
+        // `external-http-server-pump` (the prebuilt `full` stdlib used by
+        // out-of-tree installs and `PERRY_NO_AUTO_OPTIMIZE=1`). See
+        // `dispatch_ext.rs`.
+        crate::dispatch_ext::ensure_dispatch_extensions_registered();
     });
 }
 

@@ -1105,6 +1105,25 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
                 .unwrap_or_else(HeapChildSlotIterator::empty)
         }
         GcLayoutSlotKind::ObjectFields => {
+            // Wall 18 follow-up: a `RegExpHeader` is allocated as
+            // `GC_TYPE_OBJECT` but is a NATIVE struct, NOT a shaped JS object.
+            // The generic ObjectHeader read takes `field_count` from offset 12,
+            // which for a `RegExpHeader` overlaps the high 32 bits of
+            // `pattern_ptr` (~900 on macOS's 0x3xx_… heap) → a bogus ~900-slot
+            // range that scans/rewrites ADJACENT heap during evacuation (heap
+            // corruption; `PERRY_GC_VERIFY_EVACUATION` reports it as a stale
+            // forwarded pointer "inside" the regex at an offset far past its
+            // size). This is a latent pre-existing bug — exposed deterministically
+            // once Wall 18 grew the header. Detect the regex via its
+            // self-identifying magic and scan EXACTLY its own fixed payload (every
+            // non-heap slot — `regex_ptr`/`fancy_ptr` off-heap, `magic`, the
+            // bool flags — is harmlessly skipped by `try_rewrite_value`, while the
+            // real heap fields `pattern_ptr`/`flags_ptr`/`last_index` are covered).
+            if crate::regex::regex_header_has_magic(user_ptr as *const crate::regex::RegExpHeader) {
+                let payload_slots = ((*header).size as usize).saturating_sub(GC_HEADER_SIZE) / 8;
+                let range = HeapSlotRange::new(user_ptr as *mut u64, payload_slots);
+                return HeapChildSlotIterator::new(header, None, range);
+            }
             let obj = user_ptr as *mut crate::object::ObjectHeader;
             let Some(range) = crate::object::gc_field_slot_range(obj) else {
                 return HeapChildSlotIterator::empty();

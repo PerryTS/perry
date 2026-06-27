@@ -237,6 +237,25 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             }
         }
     }
+    // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
+    // yields the hidden backing collection's entries (Map) / values (Set),
+    // returned as a real iterator object so the lazy `for…of` protocol can
+    // drive `.next()`. Matches the builtins' default iterator. Skipped when the
+    // subclass overrides `[Symbol.iterator]`, so we fall through to the generic
+    // symbol lookup below (which resolves the user's `@@iterator` method).
+    match crate::object::map_set_subclass::subclass_backing_for_default_iteration(val_f64) {
+        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+            return crate::value::js_nanbox_pointer(
+                crate::collection_iter_object::js_map_entries_iter_obj(m),
+            );
+        }
+        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+            return crate::value::js_nanbox_pointer(
+                crate::collection_iter_object::js_set_values_iter_obj(s),
+            );
+        }
+        None => {}
+    }
     // A primitive number / boolean / null / undefined is not iterable. Per
     // GetIterator this is a TypeError; bail before the `[Symbol.iterator]`
     // lookup, which would otherwise dereference a raw (non-NaN-boxed) double as

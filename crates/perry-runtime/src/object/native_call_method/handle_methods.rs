@@ -5,6 +5,56 @@ use super::proto_dispatch::*;
 use super::typed_array::*;
 use super::*;
 
+/// Wall 10 — resolve and invoke a method that a framework attached to a native
+/// registry handle via `Object.setPrototypeOf(handle, proto)` (Express's
+/// augmented `res.send` / `req.accepts` / …). The link was recorded in the
+/// `OBJECT_PROTOTYPES` side-table keyed by the handle id (see
+/// `js_object_set_prototype_of`). Walk it via `resolve_inherited_field`; if the
+/// resolved member is a callable closure, invoke it with `this` bound to the
+/// handle value (`object`) so the method's internal `this.end(...)` /
+/// `this.statusCode = …` route back to the native handle dispatch.
+///
+/// Returns `None` when no recorded prototype yields a callable for `method_name`
+/// — the caller then falls back to JS `undefined`, preserving prior behavior for
+/// genuinely-unknown handle methods.
+unsafe fn dispatch_handle_proto_method(
+    handle_id: usize,
+    object: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    // Only do the (locked) side-table walk when a prototype was actually
+    // recorded for this handle — the overwhelmingly common case (fastify /
+    // axios / ioredis handles with no user setPrototypeOf) skips it cheaply.
+    crate::object::prototype_chain::object_static_prototype(handle_id)?;
+    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    let resolved = crate::object::prototype_chain::resolve_inherited_field(
+        handle_id,
+        key as *const crate::StringHeader,
+    )?;
+    let resolved_bits = resolved.bits();
+    if (resolved_bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let closure_ptr = (resolved_bits & crate::value::POINTER_MASK) as usize;
+    if closure_ptr == 0 || !crate::closure::is_closure_ptr(closure_ptr) {
+        return None;
+    }
+    // An inherited prototype method may be a closure that BAKED `this` into a
+    // capture slot at definition time (object-literal methods are lowered with
+    // `captures_this`). Setting IMPLICIT_THIS alone can't override that slot, so
+    // rebind the closure's `this` to the handle receiver first —
+    // `clone_closure_rebind_this` is a no-op for closures that don't capture
+    // `this` and for non-closure values. Mirrors the class-prototype fallback.
+    let _ = closure_ptr;
+    let bound = crate::closure::clone_closure_rebind_this(resolved_bits, object);
+    let prev = crate::object::js_implicit_this_set(object);
+    let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
+    crate::object::js_implicit_this_set(prev);
+    Some(result)
+}
+
 pub(super) unsafe fn dispatch_handle(
     root_scope: &crate::gc::RuntimeHandleScope,
     object_handle: &crate::gc::RuntimeHandle,
@@ -29,18 +79,43 @@ pub(super) unsafe fn dispatch_handle(
         if crate::value::addr_class::is_small_handle(raw_ptr) {
             // This is a handle, not a real memory pointer - dispatch to stdlib
             if let Some(dispatch) = handle_method_dispatch() {
-                return Some(dispatch(
+                let r = dispatch(
                     raw_ptr as i64,
                     method_name.as_ptr(),
                     method_name.len(),
                     args_ptr,
                     args_len,
-                ));
+                );
+                // Wall 10 — when the native handle dispatch doesn't recognise the
+                // method (returns `undefined`), the call may target a method that
+                // a framework attached via `Object.setPrototypeOf(handle, proto)`
+                // (Express's `res.send` / `req.accepts`, …). Walk the recorded
+                // handle prototype; if it yields a callable, invoke it with
+                // `this` bound to the handle so the method's internal
+                // `this.end(...)` / `this.statusCode = …` route back to us.
+                if r.to_bits() == crate::value::TAG_UNDEFINED {
+                    if let Some(v) = dispatch_handle_proto_method(
+                        raw_ptr,
+                        object,
+                        method_name,
+                        args_ptr,
+                        args_len,
+                    ) {
+                        return Some(v);
+                    }
+                }
+                return Some(r);
             }
-            // No dispatcher registered, return JS `undefined`. Must be
-            // TAG_UNDEFINED (0x7FFC_..._0001); the bit pattern 0x7FF8_..._0001 a
-            // prior copy used is a signaling NaN (a JS number), which leaks out
-            // as a non-object and trips `js_iterator_result_validate`.
+            // No dispatcher registered: still try a setPrototypeOf'd method.
+            if let Some(v) =
+                dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
+            {
+                return Some(v);
+            }
+            // Return JS `undefined`. Must be TAG_UNDEFINED (0x7FFC_..._0001); the
+            // bit pattern 0x7FF8_..._0001 a prior copy used is a signaling NaN (a
+            // JS number), which leaks out as a non-object and trips
+            // `js_iterator_result_validate`.
             return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
         }
 

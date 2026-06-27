@@ -420,6 +420,25 @@ pub extern "C" fn js_node_http_im_destroyed(handle: i64) -> i32 {
         .unwrap_or(0)
 }
 
+/// `req.readable` — `true` while the request body stream can still be consumed:
+/// not yet fully received (`complete`), not destroyed, not aborted. Node's
+/// `Readable.readable` flips to `false` once the stream ends. `req.socket`
+/// aliases the request handle, so `on-finished`'s `isFinished()` consults
+/// `socket.readable` through this; returning `true` up front keeps express
+/// body-parser from treating an unread POST body as already finished.
+#[no_mangle]
+pub extern "C" fn js_node_http_im_readable(handle: i64) -> i32 {
+    get_handle::<IncomingMessage>(handle)
+        .map(|im| {
+            if !im.complete && !im.destroyed && !im.aborted {
+                1
+            } else {
+                0
+            }
+        })
+        .unwrap_or(0)
+}
+
 /// `req.rawBody` — the fully-collected request body as a `Buffer`.
 ///
 /// Perry's HTTP server buffers the entire request body before invoking the

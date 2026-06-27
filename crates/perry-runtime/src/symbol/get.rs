@@ -465,6 +465,34 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64) {
         return v;
     }
+    // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
+    // is inherited from Map/Set.prototype, so it is NOT an own symbol prop.
+    // Reading the property (e.g. `typeof obj[Symbol.iterator] === 'function'`,
+    // as `iterare`'s `isIterable` / `toIterator` do for NestJS's
+    // `ModulesContainer extends Map`) must still resolve to a callable.
+    // Return a bound method that, when invoked, produces the backing
+    // collection's default iterator (entries for Map, values for Set — see
+    // the `"Symbol.iterator"` arms in `collection_methods.rs`).
+    //
+    // This runs AFTER the class/prototype symbol walk and the explicit-prototype
+    // lookup above, so a user override — `class M extends Map {
+    // *[Symbol.iterator]() {} }` (registered as `@@iterator` and resolved at the
+    // class/proto walk) or `Object.setPrototypeOf(m, { [Symbol.iterator]: … })`
+    // — wins, and we only synthesize the built-in default when the normal lookup
+    // would have fallen through.
+    if sym_key != 0 {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            if sym_key == sym_key_from_f64(iter_f64)
+                && crate::object::map_set_subclass::subclass_backing_of(obj_f64).is_some()
+            {
+                let mname = b"Symbol.iterator";
+                return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
     if sym_key != 0 {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {

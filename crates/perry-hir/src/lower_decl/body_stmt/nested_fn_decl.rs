@@ -144,6 +144,7 @@ pub(super) fn lower_nested_fn_decl(
         let stmts = generate_param_destructuring_stmts(ctx, pat, *param_id)?;
         destructuring_stmts.extend(stmts);
     }
+    let destructuring_prologue_len = destructuring_stmts.len();
 
     ctx.current_strict = is_strict;
 
@@ -175,6 +176,17 @@ pub(super) fn lower_nested_fn_decl(
     // dropped `options = {}`). Defaults run before any destructuring, so
     // prepend after the destructuring block (ending up first in the body).
     let default_stmts = build_default_param_stmts(&params);
+    // Record the combined param-prologue length for generator function decls
+    // (`function* g([x] = d) {}`) so the generator transform runs param binding
+    // synchronously at call time (spec FunctionDeclarationInstantiation order).
+    // Mirrors `lower_fn_expr_anon`; without it generator bodies skip their
+    // default/destructuring param setup. See `Module.gen_param_prologue_len`.
+    if fn_decl.function.is_generator {
+        let prologue_len = default_stmts.len() + destructuring_prologue_len;
+        if prologue_len > 0 {
+            ctx.gen_param_prologue_len.insert(func_id, prologue_len);
+        }
+    }
     if !default_stmts.is_empty() {
         let mut new_body = default_stmts;
         new_body.append(&mut body);
@@ -260,7 +272,7 @@ pub(super) fn lower_nested_fn_decl(
         enclosing_class: None,
         is_arrow: false,
         is_async: fn_decl.function.is_async,
-        is_generator: false,
+        is_generator: fn_decl.function.is_generator,
         is_strict,
     };
     result.push(Stmt::Let {

@@ -20,7 +20,10 @@ use super::*;
 
 mod detect;
 mod for_await;
+pub(crate) mod gen_capture_scan;
 mod nested_fn_decl;
+
+use gen_capture_scan::nested_generator_references_outer_locals;
 
 use detect::{
     insert_iterator_return_before_abrupts, is_fs_dir_for_await_target, is_node_readable_expr,
@@ -425,18 +428,54 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
         }
         ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) => {
             // Inner function declarations are compiled as closures and assigned to local variables.
-            // EXCEPTION: nested **generator** declarations (`function*` /
-            // `async function*`) cannot be lowered as closures because the
-            // generator-state-machine transform in `perry-transform/src/
-            // generator.rs` only operates on top-level `Function`s in
-            // `hir.functions`. Closures with `yield` in their body would
-            // never run through the transform and would silently call the
-            // raw IR (returning 0). Hoist them to top-level via
-            // `lower_fn_decl` + `pending_functions` and register the local
-            // as a FuncRef so the for-of / Array.fromAsync iterator path
-            // detects them via `generator_func_names`.
+            // NESTED **generator** declarations (`function*` / `async
+            // function*`) need the generator-state-machine transform. Two routes:
+            //
+            //   (a) DEFAULT: hoist it to a top-level `Function` in
+            //       `hir.functions` (via `lower_fn_decl` + `pending_functions`)
+            //       and bind the local to a `FuncRef` so the for-of /
+            //       Array.fromAsync iterator path detects it via
+            //       `generator_func_names`. This is the historical path; it
+            //       works for generators that are NOT referenced before their
+            //       own declaration by a sibling (the `FuncRef` name binding is
+            //       registered while lowering this declaration, too late for an
+            //       earlier sibling's reference).
+            //
+            //   (b) The generator REFERENCES outer-scope free variables (e.g. a
+            //       `function* lexer()` nested in a CJS-wrap IIFE that reads
+            //       module-scope `SIMPLE_TOKENS`/`ID_START`) OR is referenced by
+            //       an EARLIER sibling in the same enclosing body (e.g.
+            //       path-to-regexp's `pathToRegexp` calls `flatten`, declared
+            //       below it, inside the CJS-wrap IIFE). The top-level `Function`
+            //       has no capture environment — free vars forward into the
+            //       step closures as nullish (`Cannot convert undefined or null
+            //       to object`), and an earlier sibling's forward reference falls
+            //       through to a `globalThis` read (`ReferenceError: <name> is
+            //       not defined`). Lower it as a generator `Expr::Closure`
+            //       instead (via `lower_nested_fn_decl`, which computes the real
+            //       `captures` and emits a hoisted `Stmt::Let { init: Closure }`
+            //       that the IIFE/fn-body hoisting moves ahead of executable
+            //       statements). The closure-aware generator transform
+            //       (`transform_generator_closures_in_stmts`) threads the
+            //       captures — including a boxed self-capture for recursion —
+            //       into the step closures. Register the name in
+            //       `generator_func_names` so iteration still detects it.
             if fn_decl.function.body.is_some() && fn_decl.function.is_generator {
                 let func_name = fn_decl.ident.sym.to_string();
+                let use_closure_path =
+                    nested_generator_references_outer_locals(ctx, &fn_decl.function, &func_name)
+                        || ctx.nested_generator_forward_referenced.contains(&func_name);
+                if use_closure_path {
+                    if ctx.lookup_local(&func_name).is_none() {
+                        ctx.define_local(func_name.clone(), Type::Any);
+                    }
+                    ctx.generator_func_names.insert(func_name.clone());
+                    if fn_decl.function.is_async {
+                        ctx.async_generator_func_names.insert(func_name.clone());
+                    }
+                    nested_fn_decl::lower_nested_fn_decl(ctx, fn_decl, &mut result)?;
+                    return Ok(result);
+                }
                 let func = lower_fn_decl(ctx, fn_decl)?;
                 let func_id = func.id;
                 ctx.register_func(func_name.clone(), func_id);

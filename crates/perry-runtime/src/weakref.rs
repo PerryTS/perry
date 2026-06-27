@@ -134,6 +134,21 @@ fn is_valid_weak_target(value: f64) -> bool {
         return true;
     }
 
+    // A class reference (e.g. an imported `class Foo {}` passed as a value, or a
+    // class prototype) is NaN-boxed as an INT32-tagged (`0x7FFE`) class-ref ID,
+    // not a heap pointer. In JS such a value is a function/object and therefore
+    // "CanBeHeldWeakly" (ES2023) — a valid WeakMap/WeakSet/WeakRef key. NestJS
+    // relies on this: `InitializeOnPreviewAllowlist.add(InternalCoreModule)` does
+    // `weakmap.set(InternalCoreModule, true)`, and module-token factories key a
+    // WeakMap by the module class. Cross-module class imports arrive as class-ref
+    // values (not closure pointers), so without this branch they were rejected
+    // with "Invalid value used as weak map key" only inside a full module graph.
+    if crate::object::class_ref_id(value).is_some()
+        || crate::object::class_prototype_ref_id(value).is_some()
+    {
+        return true;
+    }
+
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return false;

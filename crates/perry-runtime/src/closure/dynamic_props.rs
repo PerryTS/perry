@@ -836,6 +836,16 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
     }
     unsafe {
         let header = ptr as *const ClosureHeader;
+        // Arrow functions bind `this` lexically: their `this` capture slot holds
+        // the enclosing instance and must NEVER be overwritten with a call-time
+        // receiver (proxy handler, getter receiver, method-call object, …).
+        // They still carry CAPTURES_THIS_FLAG (the body reads `this`), so the
+        // flag check below does not exclude them — guard explicitly. Without this,
+        // an arrow used as a proxy trap / accessor would observe the rebind
+        // receiver and lose its captured instance's data fields (#wall11).
+        if crate::closure::closure_is_arrow(header) {
+            return closure_bits;
+        }
         let raw_count = (*header).capture_count;
         // No CAPTURES_THIS_FLAG → the closure body doesn't read `this`, no rebind needed.
         if raw_count & CAPTURES_THIS_FLAG == 0 {

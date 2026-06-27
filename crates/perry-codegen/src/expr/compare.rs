@@ -197,13 +197,44 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // — the correct answer when the unknown side isn't a
             // string at runtime.
             let both_strings_check = is_string_expr(ctx, left) && is_string_expr(ctx, right);
+            // The non-statically-string operand collides through this
+            // fast path when, at runtime, it is ALSO a non-string. Both
+            // operands then funnel through `js_get_string_pointer_unified`,
+            // which returns 0 for any non-string NaN-boxed value (numbers,
+            // class refs / InjectionTokens, plain objects, …). The
+            // subsequent `js_string_equals(0, 0)` returns 1 (its
+            // pointer-identity / both-null branches both report "equal"),
+            // so two *distinct* non-string values wrongly compare `===`.
+            //
+            // This is exactly the NestJS DI `token === name` bug:
+            // `name` is statically `string` (the destructured
+            // `dependencyContext.name`) but at runtime holds a class ref
+            // (e.g. `AppService`), and `token` is `any` holding a
+            // *different* class ref (`AppController`) — both coerce to 0
+            // and the inline `===` reports `true`, throwing
+            // `UnknownDependencies` and aborting the app.
+            //
+            // The static `string` type is therefore a lie here (like the
+            // #3576 number-vs-object case). When the OTHER operand is
+            // statically `Any` (its runtime value is unconstrained and may
+            // be a non-string), this fast path is unsound: route through
+            // `js_eq`, which content-compares real strings (SSO + heap) AND
+            // correctly distinguishes class refs / objects by identity.
+            let other_side_is_any = |other: &Expr| -> bool {
+                matches!(
+                    crate::type_analysis::static_type_of(ctx, other),
+                    Some(HirType::Any) | None
+                )
+            };
             let one_side_string = !both_strings_check
                 && ((is_string_expr(ctx, left)
                     && !is_numeric_expr(ctx, right)
-                    && !is_bool_expr(ctx, right))
+                    && !is_bool_expr(ctx, right)
+                    && !other_side_is_any(right))
                     || (is_string_expr(ctx, right)
                         && !is_numeric_expr(ctx, left)
-                        && !is_bool_expr(ctx, left)));
+                        && !is_bool_expr(ctx, left)
+                        && !other_side_is_any(left)));
             // Only STRICT eq/ne use this string-pointer fast path. Loose `==`/`!=`
             // must fall through to `js_loose_eq` below: when one side is a boxed
             // String/primitive *wrapper* (a POINTER_TAG object, not a STRING_TAG

@@ -4,6 +4,24 @@
 
 use super::*;
 
+/// Wall 10 — read a property a framework attached to a native registry handle
+/// via `Object.setPrototypeOf(handle, proto)` (Express's `res`/`req`). The link
+/// is keyed by the handle id in `OBJECT_PROTOTYPES`. Returns `None` (so the
+/// caller yields `undefined`) when no recorded prototype carries the key.
+/// Cheap when no prototype was recorded (the common handle case).
+fn handle_proto_inherited_field(
+    handle_id: usize,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    crate::object::prototype_chain::object_static_prototype(handle_id)?;
+    let v = crate::object::prototype_chain::resolve_inherited_field(handle_id, key)?;
+    if v.bits() == crate::value::TAG_UNDEFINED {
+        None
+    } else {
+        Some(v)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
@@ -27,6 +45,38 @@ pub extern "C" fn js_object_get_field_by_name(
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 let v = crate::proxy::js_proxy_get(boxed, key_f64);
                 return JSValue::from_bits(v.to_bits());
+            }
+        }
+    }
+    // `class X extends Map | Set` instance — `.size` reads the hidden backing
+    // collection's size. A subclass CAN still define an own `size` (class field
+    // or `Object.defineProperty`), so check own-property precedence first and
+    // only fall back to the backing size when no own key exists. Other backed
+    // reads (`.has`/`.get`/… as METHODS) route through `js_native_call_method`.
+    // Guarded by `is_above_handle_band` (like the class-object probe below) so a
+    // native handle id in [0x10000, 0x100000) never reaches `own_key_present`'s
+    // ObjectHeader deref; real subclass instances are ordinary heap objects
+    // above the band.
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+    {
+        unsafe {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            if std::slice::from_raw_parts(name_ptr, name_len) == b"size"
+                && !super::super::own_key_present(obj as *mut ObjectHeader, key)
+            {
+                let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+                match crate::object::map_set_subclass::subclass_backing_of(boxed) {
+                    Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+                        return JSValue::number(crate::map::js_map_size(m) as f64);
+                    }
+                    Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+                        return JSValue::number(crate::set::js_set_size(s) as f64);
+                    }
+                    None => {}
+                }
             }
         }
     }
@@ -349,7 +399,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                     if let Some(dispatch) = handle_property_dispatch() {
                         let bits = dispatch(raw as i64, key_ptr, key_len);
+                        // Wall 10 — fall back to a `setPrototypeOf(handle, proto)`
+                        // member (Express's augmented `res`/`req`) when the native
+                        // dispatch doesn't know the key. See
+                        // `handle_proto_inherited_field`.
+                        if bits.to_bits() == crate::value::TAG_UNDEFINED {
+                            if let Some(v) = handle_proto_inherited_field(raw, key) {
+                                return v;
+                            }
+                        }
                         return JSValue::from_bits(bits.to_bits());
+                    }
+                    if let Some(v) = handle_proto_inherited_field(raw, key) {
+                        return v;
                     }
                 }
             }

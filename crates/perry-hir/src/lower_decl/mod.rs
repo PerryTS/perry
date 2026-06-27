@@ -34,8 +34,9 @@ pub(crate) use block::{
     compute_prealloc_for_hoisted_closures, lower_block_stmt, lower_block_stmt_scoped,
     lower_fn_body_block_stmt, lower_stmts_using_aware, pre_register_forward_captured_lets,
 };
+pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
-pub(crate) use class_captures::synthesize_class_captures;
+pub(crate) use class_captures::{append_new_args_stmt, synthesize_class_captures};
 pub(crate) use class_computed::class_computed_member_registration_expr;
 pub(crate) use class_decl::{lower_class_decl, lower_class_from_ast};
 pub(crate) use class_members::{

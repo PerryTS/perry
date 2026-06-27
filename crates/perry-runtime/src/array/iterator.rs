@@ -42,6 +42,23 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         return js_nanbox_pointer(entries as i64);
     }
 
+    // `class X extends Map | Set` instance — iterate its hidden backing
+    // collection (`for (const [k,v] of mapSubclass)` / `for (const v of
+    // setSubclass)`). Map yields `[k, v]` pairs (=== `.entries()`), Set yields
+    // values, matching the builtins' default `[Symbol.iterator]`. Skipped when
+    // the subclass overrides `[Symbol.iterator]` so the override drives `for…of`.
+    match crate::object::map_set_subclass::subclass_backing_for_default_iteration(val_f64) {
+        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+            let arr = js_map_entries_for_for_of(m as i64);
+            return js_nanbox_pointer(arr as i64);
+        }
+        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+            let arr = js_set_to_array_for_for_of(s as i64);
+            return js_nanbox_pointer(arr as i64);
+        }
+        None => {}
+    }
+
     // Strings: iterate by code point. `is_any_string` covers both heap
     // STRING_TAG and inline SSO short strings. `js_get_string_pointer_unified`
     // returns a real `*const StringHeader` for either representation
@@ -672,6 +689,22 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     }
     if crate::map::is_registered_map(raw_ptr) {
         return crate::map::js_map_entries(raw_ptr as *const crate::map::MapHeader);
+    }
+    // `class X extends Map | Set` instance — spread (`[...container]`,
+    // `Array.from(container)`, `fn(...container)`) over the hidden backing
+    // collection's default iterator (Map → entries, Set → values), matching
+    // the builtins. The `is_registered_*` checks above only match a real
+    // Map/Set value, so a subclass instance (a plain object with a backing
+    // field) falls through to here. Skipped when the subclass overrides
+    // `[Symbol.iterator]` so the override drives the spread.
+    match crate::object::map_set_subclass::subclass_backing_for_default_iteration(value) {
+        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+            return crate::map::js_map_entries(m as *const crate::map::MapHeader);
+        }
+        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+            return crate::set::js_set_to_array(s as *const crate::set::SetHeader);
+        }
+        None => {}
     }
     if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
         return crate::typedarray::typed_array_to_array(

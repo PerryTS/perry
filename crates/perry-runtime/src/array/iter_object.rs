@@ -220,9 +220,75 @@ unsafe fn throw_if_typed_array_proto(arr: *const ArrayHeader, method: &str) {
     }
 }
 
+/// If `arr` (the already-unwrapped receiver pointer from the
+/// `Expr::Array{Values,Keys,Entries}` fold) is actually a Map/Set — registered
+/// directly OR a `class X extends Map|Set` instance carrying the hidden backing
+/// collection — return the matching COLLECTION iterator object instead of
+/// treating it as an array. The any-typed `.values()/.keys()/.entries()` fold
+/// (`array_only_methods.rs`, #597) routes every dynamic-receiver call through
+/// `js_array_*_iter_obj`; without this a Map/Set (or subclass) receiver was
+/// iterated as a (non-)array and yielded an EMPTY iterator — NestJS's
+/// `[...modulesContainer.values()]` (a `class ModulesContainer extends Map`)
+/// returned 0 entries, so the injector never instantiated controllers/providers
+/// and route handlers saw a field-less stub `this` (#wall14). `kind`: 0 =
+/// values, 1 = keys, 2 = entries.
+unsafe fn collection_iter_obj_for_receiver(arr: *const ArrayHeader, kind: u8) -> Option<i64> {
+    let raw = arr as usize;
+    if raw < 0x10000 {
+        return None;
+    }
+    if crate::map::is_registered_map(raw) {
+        let m = raw as *const crate::map::MapHeader;
+        return Some(match kind {
+            1 => crate::collection_iter_object::js_map_keys_iter_obj(m),
+            2 => crate::collection_iter_object::js_map_entries_iter_obj(m),
+            _ => crate::collection_iter_object::js_map_values_iter_obj(m),
+        });
+    }
+    if crate::set::is_registered_set(raw) {
+        let s = raw as *const crate::set::SetHeader;
+        return Some(match kind {
+            1 => crate::collection_iter_object::js_set_keys_iter_obj(s),
+            2 => crate::collection_iter_object::js_set_entries_iter_obj(s),
+            _ => crate::collection_iter_object::js_set_values_iter_obj(s),
+        });
+    }
+    // `class X extends Map|Set` instance — probe the hidden backing field via
+    // the reconstructed NaN-boxed pointer value.
+    let boxed = f64::from_bits(JSValue::pointer(arr as *const u8).bits());
+    match crate::object::map_set_subclass::subclass_backing_of(boxed) {
+        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => Some(match kind {
+            1 => crate::collection_iter_object::js_map_keys_iter_obj(
+                m as *const crate::map::MapHeader,
+            ),
+            2 => crate::collection_iter_object::js_map_entries_iter_obj(
+                m as *const crate::map::MapHeader,
+            ),
+            _ => crate::collection_iter_object::js_map_values_iter_obj(
+                m as *const crate::map::MapHeader,
+            ),
+        }),
+        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => Some(match kind {
+            1 => crate::collection_iter_object::js_set_keys_iter_obj(
+                s as *const crate::set::SetHeader,
+            ),
+            2 => crate::collection_iter_object::js_set_entries_iter_obj(
+                s as *const crate::set::SetHeader,
+            ),
+            _ => crate::collection_iter_object::js_set_values_iter_obj(
+                s as *const crate::set::SetHeader,
+            ),
+        }),
+        None => None,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        if let Some(it) = collection_iter_obj_for_receiver(arr, 0) {
+            return it;
+        }
         guard_coercible_this(arr, "values");
         throw_if_typed_array_proto(arr, "values");
         array_iter_obj_raw(typed_array_iter_arr(arr), KIND_VALUES)
@@ -232,6 +298,9 @@ pub extern "C" fn js_array_values_iter_obj(arr: *const ArrayHeader) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        if let Some(it) = collection_iter_obj_for_receiver(arr, 1) {
+            return it;
+        }
         guard_coercible_this(arr, "keys");
         throw_if_typed_array_proto(arr, "keys");
         array_iter_obj_raw(typed_array_iter_arr(arr), KIND_KEYS)
@@ -241,6 +310,9 @@ pub extern "C" fn js_array_keys_iter_obj(arr: *const ArrayHeader) -> i64 {
 #[no_mangle]
 pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
     unsafe {
+        if let Some(it) = collection_iter_obj_for_receiver(arr, 2) {
+            return it;
+        }
         guard_coercible_this(arr, "entries");
         throw_if_typed_array_proto(arr, "entries");
         array_iter_obj_raw(typed_array_iter_arr(arr), KIND_ENTRIES)

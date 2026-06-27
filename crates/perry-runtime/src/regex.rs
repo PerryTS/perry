@@ -119,7 +119,48 @@ pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
     if ptr.is_null() || (ptr as usize) < 0x1000 {
         return false;
     }
+    // Wall 18: check the header-resident magic FIRST so identity survives a
+    // duplicate-runtime thread-local split (see `RegExpHeader.magic`). A
+    // RegExp is a `gc_malloc(GC_TYPE_OBJECT)` allocation, so it always carries
+    // a preceding GcHeader; only read the magic field when the GC header says
+    // this is an object of sufficient size to actually contain it.
+    if regex_header_has_magic(ptr as *const RegExpHeader) {
+        return true;
+    }
     REGEX_POINTERS.with(|s| s.borrow().contains(&(ptr as usize)))
+}
+
+/// Bounds-checked read of `RegExpHeader.magic`. Confirms the preceding
+/// `GcHeader` exists, is a `GC_TYPE_OBJECT`, and the allocation is large enough
+/// to hold a full `RegExpHeader` before dereferencing the `magic` field.
+/// Returns true iff the field equals [`REGEXP_MAGIC`]. Immune to which linked
+/// `perry-runtime` copy's thread-locals are live.
+///
+/// SAFETY: this is called from `is_regex_pointer` / `is_registered_regex` with
+/// ARBITRARY payloads — including small-handle-band ids (`< 0x100000`), null,
+/// NaN-box tag remnants, and small-buffer slab addresses that carry NO
+/// `GcHeader`. Dereferencing `addr - GC_HEADER_SIZE` directly SIGSEGVs on those
+/// (regression caught by `object_to_string_rejects_handle_band_ids`). Route the
+/// header read through [`addr_class::try_read_gc_header`], which magnitude-
+/// classifies FIRST (rejecting the handle band + implausible heap addresses +
+/// slab addresses) and only then touches memory.
+#[inline]
+pub(crate) fn regex_header_has_magic(re: *const RegExpHeader) -> bool {
+    let addr = re as usize;
+    unsafe {
+        let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return false;
+        };
+        if gc.obj_type != crate::gc::GC_TYPE_OBJECT {
+            return false;
+        }
+        // `size` in the GcHeader covers the GcHeader + payload. Require enough
+        // payload to reach the `magic` field.
+        if (gc.size as usize) < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<RegExpHeader>() {
+            return false;
+        }
+        (*re).magic == REGEXP_MAGIC
+    }
 }
 
 #[cfg(feature = "regex-engine")]
@@ -249,7 +290,35 @@ pub struct RegExpHeader {
     /// raw NaN-boxed bits; `exec`/`test` apply `ToLength` on read to derive the
     /// match offset. Initialized to the number `0`.
     pub last_index: u64,
+    /// Wall 18 (nestjs / get-intrinsic): self-identifying sentinel.
+    ///
+    /// `is_valid_regex_ptr` / `is_regex_pointer` / `is_registered_regex` used to
+    /// rely SOLELY on the `REGEX_POINTERS` thread-local set. That breaks when a
+    /// statically-linked app pulls a second copy of `perry-runtime` (every
+    /// `perry-ext-*` archive bundles its own — the link emits duplicate-symbol
+    /// warnings): `js_regexp_new` inserts into copy-A's thread-local while the
+    /// `.source`/`.flags`/dynamic-`.replace` reader resolves to copy-B's
+    /// (empty) thread-local, so a perfectly valid regex reports `.source ===
+    /// "(?:)"`, `is_regex_pointer === false`, and `str.replace(re, fn)` (via a
+    /// `function-bind` bound `String.prototype.replace`) treats `re` as a plain
+    /// string pattern → never matches → get-intrinsic's `stringToPath` returns
+    /// `[]` → `intrinsic %% does not exist!` → express adapter load `exit(1)`.
+    ///
+    /// Storing the marker (and the fancy-regex Arc) ON the heap header makes
+    /// identity + fancy-fallback resolution independent of WHICH runtime copy's
+    /// thread-locals are live. Set to `REGEXP_MAGIC` by `js_regexp_new`.
+    pub magic: u64,
+    /// Leaked `Arc<fancy_regex::Regex>` (as a raw pointer) for patterns the
+    /// `regex` crate can't compile (lookahead/lookbehind/backrefs), or null.
+    /// Header-resident twin of the `FANCY_CACHE` thread-local so the fancy
+    /// fallback survives the duplicate-runtime split described above.
+    pub fancy_ptr: *const (),
 }
+
+/// Self-identifying sentinel stamped into every `RegExpHeader.magic` by
+/// `js_regexp_new`. ASCII `"PRYREGEX"` little-endian — distinctive enough that
+/// a random heap object is astronomically unlikely to collide.
+pub const REGEXP_MAGIC: u64 = 0x5845_4745_5259_5250;
 
 /// `ToLength(Get(R, "lastIndex"))` → a non-negative integer match offset. The
 /// stored value may be any JSValue (e.g. `re.lastIndex = { valueOf() {…} }`), so
@@ -291,6 +360,10 @@ pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
     if !is_valid_ptr(p) {
         return false;
     }
+    // Wall 18: header magic first (duplicate-runtime thread-local resilient).
+    if regex_header_has_magic(p) {
+        return true;
+    }
     REGEX_POINTERS.with(|s| s.borrow().contains(&(p as usize)))
 }
 
@@ -300,6 +373,10 @@ pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
 /// with no enumerable string keys). Registry-gated so a generic object
 /// is never mis-read as a RegExpHeader.
 pub fn is_registered_regex(addr: usize) -> bool {
+    // Wall 18: header magic first (duplicate-runtime thread-local resilient).
+    if regex_header_has_magic(addr as *const RegExpHeader) {
+        return true;
+    }
     REGEX_POINTERS.with(|s| s.borrow().contains(&addr))
 }
 
@@ -500,6 +577,25 @@ pub extern "C" fn js_regexp_new(
         (*ptr).unicode = unicode;
         (*ptr).has_indices = has_indices;
         (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
+        // Wall 18: self-identifying marker so identity checks survive a
+        // duplicate-runtime thread-local split.
+        (*ptr).magic = REGEXP_MAGIC;
+        // Header-resident fancy-regex fallback (lookahead/lookbehind/backrefs)
+        // so `.replace(re, fn)` etc. don't depend on the (possibly other-copy)
+        // FANCY_CACHE thread-local. `get_or_compile_regex` above already
+        // populated FANCY_CACHE on THIS thread when the std `regex` crate
+        // rejected the pattern; clone that Arc onto the header (leaked so the
+        // raw pointer stays valid for the header's lifetime — RegExp headers
+        // and their compiled programs live for the process today).
+        (*ptr).fancy_ptr = FANCY_CACHE.with(|fc| {
+            match fc
+                .borrow()
+                .get(&(pattern_str.to_string(), flags_str.to_string()))
+            {
+                Some(arc) => Arc::into_raw(arc.clone()) as *const (),
+                None => std::ptr::null(),
+            }
+        });
 
         // Record the pointer so that js_string_split can detect
         // `s.split(regex)` without a dedicated runtime decl.
@@ -692,6 +788,18 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
 #[cfg(feature = "regex-engine")]
 pub(crate) fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>> {
     unsafe {
+        // Wall 18: header-resident fancy Arc first (duplicate-runtime
+        // thread-local resilient). `fancy_ptr` is a leaked `Arc` raw pointer; to
+        // hand back an owned `Arc` clone WITHOUT consuming the header's
+        // reference, reconstruct, clone, then `mem::forget` the reconstructed
+        // one so the header's strong count is preserved.
+        if regex_header_has_magic(re) && !(*re).fancy_ptr.is_null() {
+            let raw = (*re).fancy_ptr as *const fancy_regex::Regex;
+            let arc = Arc::from_raw(raw);
+            let cloned = arc.clone();
+            std::mem::forget(arc);
+            return Some(cloned);
+        }
         let pat = string_as_str((*re).pattern_ptr);
         let flags_str = string_as_str((*re).flags_ptr);
         FANCY_CACHE.with(|fc| {

@@ -241,6 +241,91 @@ fn chain_roots_at_iterator_from(expr: &ast::Expr) -> bool {
 
 use super::super::{lower_expr, LoweringContext};
 
+/// Wall 17 (nestjs / iterare): is `expr` statically KNOWN to be an Array?
+///
+/// Used by the chained-call array-method fold to decide whether a
+/// `recv.<m>(...)` whose `recv` is itself a call (`inner.<im>(...)`) is a
+/// genuine array chain (`[1,2,3].map(f).map(g)`) or a USER iterator chain
+/// whose `.map`/`.filter` are user methods returning a class instance
+/// (iterare's `IteratorWithOperators`, RxJS-likes). The AST-only inner-method-
+/// name check (`map`/`filter` "produce arrays") was OPTIMISTIC and mis-folded
+/// `iterate(x).map(f).map(g)` into `Expr::ArrayMap`, so the outer `new
+/// IteratorWithOperators(...)` was constructed by `js_array_map` (returning an
+/// empty/garbage array, GC-typed ARRAY) → "neither Iterator nor Iterable".
+///
+/// We only return `true` when the chain provably ROOTS at an array: an array
+/// literal, an array-typed local, `Array.from/of(...)`, `Object.entries/keys/
+/// values(...)`, or recursively another array-rooted producer call. An unknown
+/// / `Any` / user-class root yields `false`, routing the outer method to the
+/// runtime's GC-type-checked dynamic dispatch — which correctly runs
+/// `js_array_map` for real arrays and the user method for class instances.
+fn chain_roots_at_array(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    match unwrap_transparent_expr(expr) {
+        // `[...]` literal.
+        ast::Expr::Array(_) => true,
+        // A local declared/inferred as `T[]` / tuple.
+        ast::Expr::Ident(ident) => matches!(
+            ctx.lookup_local_type(ident.sym.as_ref()),
+            Some(Type::Array(_)) | Some(Type::Tuple(_))
+        ),
+        // A producer call.
+        ast::Expr::Call(call) => call_roots_at_array(ctx, call),
+        _ => false,
+    }
+}
+
+/// `CallExpr` form of [`chain_roots_at_array`] (the inner-call arm hands us a
+/// `&CallExpr`, not an `&Expr`).
+fn call_roots_at_array(ctx: &LoweringContext, call: &ast::CallExpr) -> bool {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(m) = unwrap_transparent_expr(callee.as_ref()) else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &m.prop else {
+        return false;
+    };
+    let method = prop.sym.as_ref();
+    let recv = unwrap_transparent_expr(m.obj.as_ref());
+    // `Array.from(x)` / `Array.of(x)` always yield a fresh array.
+    if matches!(method, "from" | "of")
+        && matches!(recv, ast::Expr::Ident(i) if i.sym.as_ref() == "Array")
+    {
+        return true;
+    }
+    // `Object.entries/keys/values(x)` always yield a fresh array.
+    if matches!(method, "entries" | "keys" | "values")
+        && matches!(recv, ast::Expr::Ident(i) if i.sym.as_ref() == "Object")
+    {
+        return true;
+    }
+    // An array-producing prototype method roots at an array only if ITS OWN
+    // receiver provably roots at an array (recurse). `map` / `filter` /
+    // `flatMap` are intentionally included here ONLY when so rooted — that is
+    // what distinguishes `[1].map(f).map(g)` (root is a literal) from
+    // `iterate(x).map(f).map(g)` (root is a user call).
+    let array_producing = matches!(
+        method,
+        "map"
+            | "filter"
+            | "slice"
+            | "concat"
+            | "flat"
+            | "flatMap"
+            | "splice"
+            | "sort"
+            | "reverse"
+            | "fill"
+            | "copyWithin"
+            | "toReversed"
+            | "toSorted"
+            | "toSpliced"
+            | "with"
+    );
+    array_producing && chain_roots_at_array(ctx, m.obj.as_ref())
+}
+
 pub(super) fn try_array_only_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -478,46 +563,29 @@ pub(super) fn try_array_only_methods(
                         if !is_overlapping {
                             false
                         } else {
-                            // Look up the inner call's method name. If it's
-                            // one of the known array-producing builtins, the
-                            // chained fold IS safe — keep the ident-receiver
-                            // optimistic behaviour for `arr.filter(p).find(q)`
-                            // shapes.
-                            let inner_method: Option<&str> = match &inner_call.callee {
-                                ast::Callee::Expr(e) => match e.as_ref() {
-                                    ast::Expr::Member(m) => match &m.prop {
-                                        ast::MemberProp::Ident(i) => Some(i.sym.as_ref()),
-                                        _ => None,
-                                    },
-                                    _ => None,
-                                },
-                                _ => None,
-                            };
-                            let inner_returns_array = inner_method
-                                .map(|m| {
-                                    matches!(
-                                        m,
-                                        "map"
-                                            | "filter"
-                                            | "slice"
-                                            | "concat"
-                                            | "flat"
-                                            | "flatMap"
-                                            | "splice"
-                                            | "sort"
-                                            | "reverse"
-                                            | "fill"
-                                            | "copyWithin"
-                                            | "toReversed"
-                                            | "toSorted"
-                                            | "toSpliced"
-                                            | "with"
-                                    )
-                                })
-                                .unwrap_or(false);
-                            // recv_is_class = true means BAIL. Bail when the
-                            // inner call is NOT a known array-producing method.
-                            !inner_returns_array
+                            // Wall 17 (nestjs / iterare): the previous heuristic
+                            // looked ONLY at the inner call's METHOD NAME — if it
+                            // was `map`/`filter`/`slice`/… it optimistically
+                            // assumed an array chain and folded the outer call to
+                            // `Expr::ArrayMap`. But `map`/`filter`/`flatMap` are
+                            // ALSO common USER iterator methods: iterare's
+                            // `iterate(x).map(f).map(g)` returns an
+                            // `IteratorWithOperators`, not an array, so the fold
+                            // built the outer wrapper via `js_array_map` →
+                            // empty/garbage ARRAY-typed object → downstream
+                            // `Array.from(this)` saw "neither Iterator nor
+                            // Iterable" and `getNonTransientInstances` died in
+                            // `onModuleInit`.
+                            //
+                            // Fold to the array op ONLY when the inner chain
+                            // PROVABLY roots at an array (literal / array-typed
+                            // local / `Array.from`/`Object.entries` / a nested
+                            // array-producer over such a root). Otherwise BAIL
+                            // (recv_is_class = true) to the runtime's
+                            // GC-type-checked dynamic dispatch, which runs
+                            // `js_array_map` for real arrays and the user method
+                            // for class instances — correct for BOTH.
+                            !call_roots_at_array(ctx, inner_call)
                         }
                     }
                     _ => false,

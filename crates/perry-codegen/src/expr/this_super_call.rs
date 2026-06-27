@@ -172,6 +172,46 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Some(slot) => ctx.block().load(DOUBLE, &slot),
                 None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
+            // `class X extends Map | Set` with a spread super (`super(...args)`,
+            // e.g. NestJS's `ModulesContainer`'s `super(...arguments)`) — install
+            // the hidden collection backing from the (possibly spread) args
+            // array instead of dispatching the uncallable builtin ctor. The
+            // first array element (if any) is the iterable; `js_map_from_iterable`
+            // / `js_set_from_iterable` ignore extra elements. Mirrors the
+            // non-spread `Expr::SuperCall` Map/Set arm.
+            let map_set_kind = ctx
+                .classes
+                .get(&current_class_name)
+                .and_then(|c| c.extends_name.as_deref())
+                .and_then(|p| match p {
+                    "Map" => Some(0i32),
+                    "Set" => Some(1i32),
+                    _ => None,
+                });
+            if let Some(kind) = map_set_kind {
+                let blk = ctx.block();
+                let arr_box = nanbox_pointer_inline(blk, &arr);
+                let zero_idx = "0".to_string();
+                let first =
+                    ctx.block()
+                        .call(DOUBLE, "js_array_get_f64", &[(I64, &arr), (I32, &zero_idx)]);
+                let _ = arr_box;
+                ctx.block().call(
+                    DOUBLE,
+                    "js_map_set_subclass_init",
+                    &[
+                        (DOUBLE, &this_box),
+                        (I32, &kind.to_string()),
+                        (DOUBLE, &first),
+                    ],
+                );
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::SelfOnly,
+                )?;
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             if let Some(&child_cid) = ctx.class_ids.get(&current_class_name) {
                 let cid_str = child_cid.to_string();
                 let blk = ctx.block();
@@ -499,6 +539,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
                         return Ok(result);
+                    }
+                    // `class X extends Map` / `extends Set` — `super(iterable?)`
+                    // allocates a real Map/Set backing store, stashes it on
+                    // `this` under a hidden field, and installs the collection
+                    // method surface (`has`/`get`/`set`/`delete`/`clear`/
+                    // `forEach`/`keys`/`values`/`entries`/`size`/`Symbol.iterator`)
+                    // so a source-compiled subclass (e.g. NestJS's
+                    // `ModulesContainer extends Map`) actually behaves as a Map.
+                    // Perry models the instance as a plain object (not a real
+                    // exotic Map), so without this `super()` was a no-op and
+                    // `m.has(...)` threw "has is not a function".
+                    let map_set_kind = match parent_name.as_str() {
+                        "Map" => Some(0i32),
+                        "Set" => Some(1i32),
+                        _ => None,
+                    };
+                    if let Some(kind) = map_set_kind {
+                        let iterable = if let Some(first) = super_args.first() {
+                            lower_expr(ctx, first)?
+                        } else {
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                        };
+                        for a in super_args.iter().skip(1) {
+                            let _ = lower_expr(ctx, a)?;
+                        }
+                        let this_box = match ctx.this_stack.last().cloned() {
+                            Some(slot) => ctx.block().load(DOUBLE, &slot),
+                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                        };
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_map_set_subclass_init",
+                            &[
+                                (DOUBLE, &this_box),
+                                (I32, &kind.to_string()),
+                                (DOUBLE, &iterable),
+                            ],
+                        );
+                        let current_class_name =
+                            ctx.class_stack.last().cloned().unwrap_or_default();
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     // #5137: `class X extends EventEmitter` (node:events) —
                     // `super()` installs the bare EventEmitter listener/emit

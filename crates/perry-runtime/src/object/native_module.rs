@@ -1188,6 +1188,50 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Wall 10 — `name in instance` for a class instance: true when `name` is a
+/// prototype METHOD, GETTER, or SETTER anywhere in the instance's class chain.
+/// Class instance methods/accessors live in `CLASS_VTABLE_REGISTRY` (the
+/// instance carries no recorded `[[Prototype]]` object with a `keys_array`), so
+/// the ordinary own-key + recorded-prototype walk in `js_object_has_property`
+/// misses them — making `'method' in instance` wrongly `false`. NestJS's app
+/// Proxy gates routing on `'listen' in receiver`; the false result misrouted
+/// `app.listen`, so the server never bound. Walk the class parent chain here.
+pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
+    if class_id == 0 {
+        return false;
+    }
+    let registry = match CLASS_VTABLE_REGISTRY.read() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    let Some(reg) = registry.as_ref() else {
+        return false;
+    };
+    let mut cid = class_id;
+    let mut depth = 0u32;
+    while cid != 0 && depth < 32 {
+        if let Some(vtable) = reg.get(&cid) {
+            // Honor `delete C.prototype.m`: a deleted key must report `false`
+            // from `'m' in new C()`, matching the descriptor/static lookup paths.
+            if !super::class_registry::class_is_key_deleted(cid, name)
+                && (vtable.methods.contains_key(name)
+                    || vtable.getters.contains_key(name)
+                    || vtable.setters.contains_key(name))
+            {
+                return true;
+            }
+        }
+        match super::class_registry::get_parent_class_id(cid) {
+            Some(p) if p != 0 && p != cid => {
+                cid = p;
+                depth += 1;
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
 pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -> f64 {
     if let Some(bits) = CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let cache = cache.borrow();

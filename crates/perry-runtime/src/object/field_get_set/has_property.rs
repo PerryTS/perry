@@ -491,6 +491,17 @@ unsafe fn ordinary_has_property(
             None => break,
         }
     }
+    // Wall 10 — a class instance's prototype METHODS / GETTERS / SETTERS live in
+    // `CLASS_VTABLE_REGISTRY`, not as a recorded `[[Prototype]]` object with a
+    // `keys_array`, so the own-key + recorded-prototype walk above misses them.
+    // Check the class chain so `'method' in instance` is `true` (e.g. NestJS's
+    // app Proxy gating on `'listen' in receiver`).
+    if let Some(name) = key_name {
+        let class_id = unsafe { (*obj_ptr).class_id };
+        if class_id != 0 && super::super::native_module::class_instance_has_member(class_id, name) {
+            return true;
+        }
+    }
     // Inherited `Object.prototype` properties (`toString`, `hasOwnProperty`, …,
     // plus any user-assigned `Object.prototype` members).
     ordinary_object_prototype_property_value(last_valid, key).is_some()

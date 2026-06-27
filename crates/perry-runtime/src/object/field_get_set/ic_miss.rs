@@ -257,7 +257,23 @@ pub extern "C" fn js_object_get_field_ic_miss(
             unsafe {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
-                return dispatch(obj as i64, key_ptr, key_len);
+                let bits = dispatch(obj as i64, key_ptr, key_len);
+                // Wall 10 — fall back to a `setPrototypeOf(handle, proto)` member
+                // (Express's augmented `res`/`req`) when the native dispatch
+                // doesn't know the key. Mirrors `js_object_get_field_by_name`.
+                if bits.to_bits() == crate::value::TAG_UNDEFINED {
+                    if let Some(v) = crate::object::prototype_chain::object_static_prototype(
+                        obj as usize,
+                    )
+                    .and(
+                        crate::object::prototype_chain::resolve_inherited_field(obj as usize, key),
+                    ) {
+                        if v.bits() != crate::value::TAG_UNDEFINED {
+                            return f64::from_bits(v.bits());
+                        }
+                    }
+                }
+                return bits;
             }
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);

@@ -517,6 +517,16 @@ pub struct LoweringContext {
     /// the for-of generator-call path so it can wrap `__iter.next()` in
     /// `await` (async generators always return `Promise<{value, done}>`).
     pub(crate) async_generator_func_names: HashSet<String>,
+    /// Names of nested `function*` declarations that are referenced by an
+    /// EARLIER sibling statement in the same enclosing function/IIFE body
+    /// (forward reference). Such a generator cannot use the top-level-Function
+    /// hoist path — its `FuncRef` name binding is only registered while lowering
+    /// its own declaration, too late for the earlier reference, which would fall
+    /// through to a `globalThis` read (`ReferenceError: <name> is not defined`).
+    /// Populated by the Phase-1 pre-pass in `lower_fn_body_block_stmt` /
+    /// `lower_fn_expr_anon`; consumed in `lower_body_stmt`'s FnDecl arm to route
+    /// the generator through the closure path instead.
+    pub(crate) nested_generator_forward_referenced: HashSet<String>,
     /// Classes that define `*[Symbol.iterator]()`. Maps class name →
     /// `FuncId` of the synthesized top-level generator function that
     /// takes `this` as its first parameter. Consumed by `for...of` to

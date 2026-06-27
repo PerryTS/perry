@@ -904,6 +904,14 @@ pub fn lower_fn_body_block_stmt(
     // repopulates it for this body below.
     let saved_annexb_block_fn_var_ids = std::mem::take(&mut ctx.annexb_block_fn_var_ids);
     let saved_annexb_block_fn_names_all = std::mem::take(&mut ctx.annexb_block_fn_names_all);
+    // Nested `function*` declarations forward-referenced by an earlier sibling
+    // in THIS body must use the closure-lowering path (see `lower_body_stmt`'s
+    // FnDecl arm). Scope the set to this body and restore on every exit.
+    let saved_nested_gen_fwd = std::mem::take(&mut ctx.nested_generator_forward_referenced);
+    ctx.nested_generator_forward_referenced =
+        crate::lower_decl::forward_referenced_nested_generators(&block.stmts)
+            .into_iter()
+            .collect();
     // Boundary between outer-scope locals (+ this function's params, defined by
     // the caller before entry) and locals defined while lowering THIS body.
     // Used by the Phase 1.6 forward `let`/`const` pre-registration so a const
@@ -1012,6 +1020,7 @@ pub fn lower_fn_body_block_stmt(
             ctx.forward_class_decl_depth = saved_forward_class_decl_depth;
             ctx.class_renames = saved_class_renames;
             ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
+            ctx.nested_generator_forward_referenced = saved_nested_gen_fwd;
             ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
             return Err(err);
         }
@@ -1093,6 +1102,7 @@ pub fn lower_fn_body_block_stmt(
         ctx.current_strict = parent_strict;
         ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
         ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
+        ctx.nested_generator_forward_referenced = saved_nested_gen_fwd;
         let mut result = var_slot_lets;
         result.extend(body);
         return Ok(result);
@@ -1150,6 +1160,7 @@ pub fn lower_fn_body_block_stmt(
     ctx.current_strict = parent_strict;
     ctx.annexb_block_fn_var_ids = saved_annexb_block_fn_var_ids;
     ctx.annexb_block_fn_names_all = saved_annexb_block_fn_names_all;
+    ctx.nested_generator_forward_referenced = saved_nested_gen_fwd;
     Ok(result)
 }
 
