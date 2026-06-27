@@ -26,7 +26,12 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     // lookup. Reading it here keeps the GetOption sequence that
     // constructor-option-read-order.js asserts (localeMatcher before
     // numberingSystem) and propagates a throwing localeMatcher getter.
-    let _ = get_string_option_enum(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+    let _ = get_string_option_enum(
+        options,
+        "localeMatcher",
+        &["lookup", "best fit"],
+        "best fit",
+    );
 
     // numberingSystem: option (validated, lower-cased) overrides the locale
     // `-u-nu-` keyword; default "latn".

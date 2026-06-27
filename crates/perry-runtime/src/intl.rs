@@ -63,11 +63,11 @@ pub(crate) use number_format::{
     number_format_bound_format_thunk, number_format_bound_resolved_options_thunk,
     number_format_bound_to_parts_thunk, number_format_format_getter_thunk,
     number_format_format_object, number_format_resolved_options_object,
-    number_format_resolved_options_thunk,
-    number_format_to_parts_thunk, number_instance_parts, number_parts_from_resolved,
-    parts_to_js_array, push_grouped_integer, push_sign, push_style_suffix, round_integer_to_place,
-    round_mode_code, round_to_fraction, round_to_significant, rounding_up, set_round_ctx,
-    significant_count, strip_leading_zeros, this_intl_object, trim_fraction, NfResolved,
+    number_format_resolved_options_thunk, number_format_to_parts_thunk, number_instance_parts,
+    number_parts_from_resolved, parts_to_js_array, push_grouped_integer, push_sign,
+    push_style_suffix, round_integer_to_place, round_mode_code, round_to_fraction,
+    round_to_significant, rounding_up, set_round_ctx, significant_count, strip_leading_zeros,
+    this_intl_object, trim_fraction, NfResolved,
 };
 pub(crate) use number_format_options::{
     configure_number_format, is_well_formed_currency_code, is_well_formed_unit_identifier,
@@ -149,6 +149,11 @@ const KEY_NF_ROUNDING_INCREMENT: &str = "__intlNfRoundingIncrement";
 const KEY_NF_ROUNDING_MODE: &str = "__intlNfRoundingMode";
 const KEY_NF_ROUNDING_PRIORITY: &str = "__intlNfRoundingPriority";
 const KEY_NF_TRAILING_ZERO: &str = "__intlNfTrailingZero";
+// Hidden [[BoundFormat]] slot. The bound format function is also installed as an
+// own `format` property for the native dispatch fast path, but the prototype
+// `format` getter reads it from here so user mutation/deletion of the public
+// property can't corrupt what the accessor returns.
+const KEY_NF_BOUND_FORMAT: &str = "__intlNfBoundFormat";
 
 fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -805,9 +810,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
         KIND_NUMBER => {
             configure_number_format(obj, &locale, options);
             // The bound format function is the [[BoundFormat]] slot: ECMA-402
-            // gives it an empty `name` ("") and length 1. It stays an own
-            // property so `nf.format(x)` dispatches without the prototype
-            // accessor; the `format` getter on the prototype returns it.
+            // gives it an empty `name` ("") and length 1. It is installed as an
+            // own `format` property so `nf.format(x)` dispatches without the
+            // prototype accessor (native objects resolve methods from own
+            // props), and is also stashed in the hidden KEY_NF_BOUND_FORMAT slot
+            // that the prototype `format` getter reads — so mutating or deleting
+            // the public property can't corrupt what the accessor returns.
             let format_fn = install_bound_instance_function(
                 obj,
                 "format",
@@ -816,6 +824,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
             if !format_fn.is_null() {
                 crate::object::set_bound_native_closure_name(format_fn, "");
+                set_internal_field(obj, KEY_NF_BOUND_FORMAT, js_nanbox_pointer(format_fn as i64));
             }
             install_bound_instance_function(
                 obj,
