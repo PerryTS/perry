@@ -137,7 +137,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         // NaN-box tag before any deref). Own per-evaluation static FIELDS fall
         // through to the ordinary own-property path (checked here via
         // `own_key_present` so a field shadows a same-named template method).
-        if super::class_registry::is_class_object_value(obj_value) {
+        // Skip Symbol keys here: `metadata_key_to_string` / `js_string_coerce`
+        // would stringify a Symbol and wrongly return a string-named static
+        // method descriptor instead of letting it reach the symbol descriptor
+        // path below.
+        if super::class_registry::is_class_object_value(obj_value)
+            && crate::symbol::js_is_symbol(key_value) == 0
+        {
             if let Some(method_name) = metadata_key_to_string(key_value) {
                 let obj = extract_obj_ptr(obj_value);
                 let key_str = crate::builtins::js_string_coerce(key_value);
@@ -151,11 +157,8 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         )
                     {
                         let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
-                        let value = super::js_class_method_bind(
-                            obj_value,
-                            leaked.as_ptr(),
-                            leaked.len(),
-                        );
+                        let value =
+                            super::js_class_method_bind(obj_value, leaked.as_ptr(), leaked.len());
                         return build_data_descriptor(value, true, false, true);
                     }
                 }

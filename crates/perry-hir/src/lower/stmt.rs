@@ -79,7 +79,10 @@ fn emit_class_expression_value_binding(
 /// counted as an outer-scope capture — keeping the class on the shared-template
 /// `ClassRef` path instead of the static-method-dropping `ClassExprFresh` path.
 /// The class's own bind/inner name is already covered by `name` in that pass.
-pub(crate) fn record_chained_class_self_aliases(ctx: &mut LoweringContext, decl: &ast::VarDeclarator) {
+pub(crate) fn record_chained_class_self_aliases(
+    ctx: &mut LoweringContext,
+    decl: &ast::VarDeclarator,
+) {
     let (ast::Pat::Ident(ident), Some(init)) = (&decl.name, &decl.init) else {
         return;
     };
@@ -118,7 +121,9 @@ pub(crate) fn record_chained_class_self_aliases(ctx: &mut LoweringContext, decl:
         .map(|i| i.sym.to_string())
         .unwrap_or_else(|| bind_name.clone());
     for t in chained_targets {
-        ctx.class_expr_aliases.entry(t).or_insert(class_name.clone());
+        ctx.class_expr_aliases
+            .entry(t)
+            .or_insert(class_name.clone());
     }
 }
 

@@ -45,7 +45,11 @@ pub extern "C" fn js_object_get_field_by_name(
     // back-reads a GcHeader), never a tagged value — which previously SIGSEGV'd.
     if !key.is_null()
         && ((obj as u64) >> 48) == 0
-        && (obj as usize) >= 0x10000
+        // Must be ABOVE the whole small-handle band (>= 0x100000), not just
+        // >= 0x10000: native handle ids in [0x10000, 0x100000) (fetch/http/…)
+        // would otherwise reach `is_class_object_ptr`, which back-reads a
+        // GcHeader and SIGSEGVs on the non-heap handle id.
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
         && crate::object::class_registry::is_class_object_ptr(obj as *const u8)
     {
         let own = get_field_by_name_object_tail(obj, key);
@@ -56,22 +60,18 @@ pub extern "C" fn js_object_get_field_by_name(
             // Re-box the raw class-object pointer as a POINTER-tagged JS value
             // so `js_class_method_bind` (which expects a value, like the
             // class-ref path) binds the static method to the right receiver.
-            let class_value =
-                f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+            let class_value = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
             let class_id = super::super::js_object_get_class_id(obj);
             if class_id != 0 {
-                let name_ptr =
-                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let name_len = (*key).byte_len as usize;
                 let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
                     .unwrap_or("");
                 if !name.is_empty()
                     && !super::super::class_registry::class_is_key_deleted(class_id, name)
                 {
-                    if super::super::class_registry::lookup_static_method_in_chain(
-                        class_id, name,
-                    )
-                    .is_some()
+                    if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
+                        .is_some()
                     {
                         let heap_name = {
                             let layout =

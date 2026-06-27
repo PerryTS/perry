@@ -57,8 +57,13 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     // class name.)
     if let Some(cur) = ctx.current_class.clone() {
         if let Some(target) = ctx.class_expr_aliases.get(&name) {
-            if *target == cur {
-                return Ok(Expr::ClassRef(ctx.resolve_class_name(target)));
+            // Compare the RESOLVED target name: a collision-renamed class
+            // expression makes `current_class` the resolved name while the
+            // recorded `target` is still the source name, so a raw `*target ==
+            // cur` would miss. Resolving is identity when no rename happened.
+            let resolved = ctx.resolve_class_name(target);
+            if resolved == cur {
+                return Ok(Expr::ClassRef(resolved));
             }
         }
     }
