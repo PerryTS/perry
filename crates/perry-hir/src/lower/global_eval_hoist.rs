@@ -74,6 +74,43 @@ fn synth_ident_assign_stmt(name: &str, ident: &str) -> Option<ast::Stmt> {
     )
 }
 
+/// `void (<name> = <init>);` — like [`synth_assign_stmt`] but wrapped in `void`
+/// so the resulting expression statement keeps the *empty* completion value of
+/// the `var` / `function` declaration it replaces (a bare `x = init` statement
+/// would otherwise make the eval call yield `init`, e.g. breaking
+/// `(0,eval)("var x = 1")` which must return `undefined`). The wrapper is built
+/// by swapping the operand of a parsed `void 0;` to dodge version-sensitive SWC
+/// `UnaryExpr` construction.
+fn synth_void_assign_stmt(name: &str, init: Box<ast::Expr>) -> Option<ast::Stmt> {
+    let inner = synth_assign_stmt(name, init)?;
+    let ast::Stmt::Expr(inner_es) = inner else {
+        return None;
+    };
+    let mut wrapper = parse_single_stmt("void 0;")?;
+    let ast::Stmt::Expr(es) = &mut wrapper else {
+        return None;
+    };
+    let ast::Expr::Unary(u) = es.expr.as_mut() else {
+        return None;
+    };
+    u.arg = inner_es.expr;
+    Some(wrapper)
+}
+
+/// `void (<name> = <ident>);` — the empty-completion value-transfer that
+/// publishes a renamed hidden *top-level* function binding to its global name.
+fn synth_void_ident_assign_stmt(name: &str, ident: &str) -> Option<ast::Stmt> {
+    synth_void_assign_stmt(
+        name,
+        Box::new(ast::Expr::Ident(ast::Ident {
+            span: swc_common::DUMMY_SP,
+            ctxt: Default::default(),
+            sym: ident.into(),
+            optional: false,
+        })),
+    )
+}
+
 /// `if (!({}).hasOwnProperty.call(globalThis, "<name>")) { globalThis["<name>"]
 /// = void 0; }` — the "create the global binding, initialized to `undefined`, if
 /// it does not already exist" step. Guarded so a pre-existing global binding is
@@ -469,6 +506,17 @@ struct GlobalEvalHoist {
     /// function declarations — initialized to `undefined` at instantiation,
     /// assigned when the declaration is reached).
     prelude_names: Vec<String>,
+    /// Top-level `var` names — CreateGlobalVarBinding: a create-if-absent
+    /// prelude slot (initialized to `undefined`, not reinitialized if the global
+    /// already exists), with each `var x = init` rewritten in place to a
+    /// `void (x = init)` global publish (the `void` keeps the statement's empty
+    /// completion value). (test262 `language/eval-code/*/var-env-var-*`.)
+    var_prelude_names: Vec<String>,
+    /// Top-level `function` declarations — CreateGlobalFunctionBinding: the
+    /// function value is present at instantiation, so each is renamed to a hidden
+    /// binding and published with a `void (f = <hidden>)` at the top of the body
+    /// (recorded as `(orig, hidden)`). (test262 `*/var-env-func-*`.)
+    top_fn_publishes: Vec<(String, String)>,
     /// Enclosing lexical (`let`/`const`/`class`/`catch`/`for`-head) names — a
     /// nested function whose name collides with one is an early-error skip
     /// (B.3.3.3) and must not be hoisted. Maintained as a scope stack by
@@ -535,14 +583,25 @@ impl GlobalEvalHoist {
             match &mut stmt {
                 ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) if fn_decl.function.body.is_some() => {
                     let orig = fn_decl.ident.sym.to_string();
-                    // Only a *nested* (block / `if` / `switch`-case) function
-                    // declaration gets the B.3.3.3 legacy hoist. A top-level
-                    // function and any `var` are left to the completion IIFE,
-                    // which already models their EvalDeclarationInstantiation
-                    // semantics (empty completion value, CanDeclareGlobal* /
-                    // non-definable-name checks). A nested function colliding
-                    // with an enclosing lexical name is an early-error skip.
-                    if top_level || self.lexical.contains(&orig) {
+                    // A function colliding with an enclosing lexical name is an
+                    // early-error skip (B.3.3.3) — leave it in the IIFE.
+                    if self.lexical.contains(&orig) {
+                        out.push(stmt);
+                        continue;
+                    }
+                    // A *top-level* function is CreateGlobalFunctionBinding: its
+                    // value is present at instantiation. Rename it to a hidden
+                    // binding and publish `void (orig = hidden)` at the top of the
+                    // body (assembled in `apply_global_eval_hoist`); its own `orig`
+                    // self-references need no rename — with no local `orig` left,
+                    // they resolve to the published global. (test262
+                    // `*/var-env-func-*`.) A *nested* (block / `if` / `switch`-
+                    // case) function instead gets the B.3.3.3 legacy hoist below
+                    // (`undefined` at instantiation, value published when reached).
+                    if top_level {
+                        let hidden = self.fresh_hidden();
+                        fn_decl.ident.sym = hidden.as_str().into();
+                        self.top_fn_publishes.push((orig, hidden));
                         out.push(stmt);
                         continue;
                     }
@@ -584,9 +643,44 @@ impl GlobalEvalHoist {
                     out.push(assign);
                     self.prelude_names.push(orig);
                 }
+                // A top-level `var` is CreateGlobalVarBinding: pre-create each
+                // name (`undefined`, not reinitialized if it already exists) via
+                // the prelude and rewrite `var x = init` to a `void (x = init)`
+                // global publish (the `void` keeps the VariableStatement's empty
+                // completion value). A non-simple declarator (destructuring) the
+                // rewrite can't model bails the whole fold. (test262
+                // `*/var-env-var-*`.) A *nested* `var` and all `let`/`const` stay
+                // put — the IIFE models the eval's own variable / lexical env.
+                ast::Stmt::Decl(ast::Decl::Var(var_decl))
+                    if top_level && var_decl.kind == ast::VarDeclKind::Var =>
+                {
+                    let mut publishes: Vec<ast::Stmt> = Vec::new();
+                    for d in &var_decl.decls {
+                        let ast::Pat::Ident(binding) = &d.name else {
+                            self.ok = false;
+                            break;
+                        };
+                        let name = binding.id.sym.to_string();
+                        self.var_prelude_names.push(name.clone());
+                        if let Some(init) = &d.init {
+                            match synth_void_assign_stmt(&name, init.clone()) {
+                                Some(s) => publishes.push(s),
+                                None => {
+                                    self.ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if self.ok {
+                        out.extend(publishes);
+                    } else {
+                        out.push(stmt);
+                    }
+                }
                 // A `class` would leak to module scope when lowered in the IIFE;
-                // `var` / `let` / `const` stay put — the IIFE already models the
-                // eval's own variable / lexical environment for them.
+                // `let` / `const` stay put — the IIFE already models the eval's
+                // own lexical environment for them.
                 ast::Stmt::Decl(ast::Decl::Class(_)) => {
                     self.ok = false;
                     out.push(stmt);
@@ -715,6 +809,8 @@ pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::St
     let mut hoist = GlobalEvalHoist {
         counter: 0,
         prelude_names: Vec::new(),
+        var_prelude_names: Vec::new(),
+        top_fn_publishes: Vec::new(),
         // `rewrite_list` adds each block scope's lexical bindings as it descends,
         // starting from the eval body's own top level.
         lexical: std::collections::HashSet::new(),
@@ -722,17 +818,32 @@ pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::St
     };
     let mut body = stmts.to_vec();
     hoist.rewrite_list(&mut body, true);
-    if !hoist.ok || hoist.prelude_names.is_empty() {
-        // Bailed, or no nested function to hoist (declaration-free / top-level
-        // declarations only) — the caller keeps the unmodified fold.
+    let nothing_to_hoist = hoist.prelude_names.is_empty()
+        && hoist.var_prelude_names.is_empty()
+        && hoist.top_fn_publishes.is_empty();
+    if !hoist.ok || nothing_to_hoist {
+        // Bailed, or no var-scoped declaration to publish (declaration-free, or
+        // only `let`/`const`) — the caller keeps the unmodified fold.
         return None;
     }
     let mut result: Vec<ast::Stmt> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for name in &hoist.prelude_names {
+    // Create-if-absent slots (`undefined`) for nested block functions and
+    // top-level `var`s — neither reinitializes an already-present global binding.
+    for name in hoist
+        .prelude_names
+        .iter()
+        .chain(hoist.var_prelude_names.iter())
+    {
         if seen.insert(name.clone()) {
             result.push(synth_create_if_absent_stmt(name)?);
         }
+    }
+    // Top-level functions are published with their value at instantiation, after
+    // the create-if-absent slots and before the body (the renamed function
+    // declarations hoist to the top of the IIFE arrow, so the value is ready).
+    for (orig, hidden) in &hoist.top_fn_publishes {
+        result.push(synth_void_ident_assign_stmt(orig, hidden)?);
     }
     result.append(&mut body);
     Some(result)
@@ -886,14 +997,92 @@ mod global_eval_hoist_tests {
         );
     }
 
+    /// Names assigned by a top-level `void (name = …)` publish statement.
+    fn void_publish_targets(stmts: &[ast::Stmt]) -> Vec<String> {
+        let mut out = Vec::new();
+        for s in stmts {
+            if let ast::Stmt::Expr(es) = s {
+                if let ast::Expr::Unary(u) = es.expr.as_ref() {
+                    if matches!(u.op, ast::UnaryOp::Void) {
+                        if let ast::Expr::Assign(a) = u.arg.as_ref() {
+                            if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(b)) =
+                                &a.left
+                            {
+                                out.push(b.id.sym.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     #[test]
-    fn top_level_function_is_left_to_the_iife() {
-        // A *top-level* function declaration is var-scoped; its
-        // EvalDeclarationInstantiation (completion value, CanDeclareGlobal*
-        // checks) is handled by the completion IIFE, not this legacy-block
-        // hoist — so a body with only a top-level function declines.
-        let body = parse_body("function f() {}");
-        assert!(apply_global_eval_hoist(&body).is_none());
+    fn top_level_function_is_published_to_the_global() {
+        // A *top-level* function is CreateGlobalFunctionBinding: renamed to a
+        // hidden binding and published with its value at instantiation via a
+        // `void (f = <hidden>)` so the call keeps the empty completion value.
+        // (test262 language/eval-code/*/var-env-func-init-global-new.)
+        let out = apply_global_eval_hoist(&parse_body("initial = f; function f() { return 234; }"))
+            .expect("publishes the top-level function");
+        assert!(
+            void_publish_targets(&out).iter().any(|t| t == "f"),
+            "expected a void-wrapped publish of `f`"
+        );
+        // The original name no longer appears as a function *declaration*.
+        let fns = fn_decl_names(&out);
+        assert!(
+            !fns.iter().any(|n| n == "f"),
+            "`f` should be renamed: {fns:?}"
+        );
+        assert!(
+            fns.iter().any(|n| n.starts_with("__perry_ev_fn_")),
+            "renamed fn decl, got {fns:?}"
+        );
+    }
+
+    #[test]
+    fn top_level_var_is_published_to_the_global() {
+        // A *top-level* `var` is CreateGlobalVarBinding: a create-if-absent slot
+        // (`if (...) { globalThis[x] = void 0 }`) plus a `void (x = init)` publish.
+        let out = apply_global_eval_hoist(&parse_body("initial = x; var x = 9;"))
+            .expect("publishes the top-level var");
+        assert!(
+            matches!(out.first(), Some(ast::Stmt::If(_))),
+            "create-if-absent prelude"
+        );
+        assert!(
+            void_publish_targets(&out).iter().any(|t| t == "x"),
+            "expected a void-wrapped publish of `x`"
+        );
+        // No `var` declaration may remain (it was rewritten to the publish).
+        assert!(
+            !out.iter()
+                .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Var(_)))),
+            "`var x` should be rewritten away"
+        );
+    }
+
+    #[test]
+    fn bare_top_level_var_creates_slot_only() {
+        // `var x;` (no initializer) only needs the create-if-absent slot — no
+        // publish assignment, and no surviving `var` declaration.
+        let out = apply_global_eval_hoist(&parse_body("initial = x; var x;"))
+            .expect("creates the global slot");
+        assert!(
+            matches!(out.first(), Some(ast::Stmt::If(_))),
+            "create-if-absent prelude"
+        );
+        assert!(
+            void_publish_targets(&out).is_empty(),
+            "no publish for a bare var"
+        );
+        assert!(
+            !out.iter()
+                .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Var(_)))),
+            "`var x` should be rewritten away"
+        );
     }
 
     #[test]

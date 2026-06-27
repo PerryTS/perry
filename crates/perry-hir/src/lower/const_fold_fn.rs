@@ -778,16 +778,31 @@ pub(crate) fn try_indirect_eval_general(
         let eval_strict = crate::lower_decl::body_has_use_strict(&body_stmts);
         return build_eval_completion_iife(ctx, body_stmts, eval_strict, span);
     }
-    // Annex B.3.3.3: a sloppy global (indirect) eval whose body declares
-    // `var`/`function` bindings hoists them into the global variable
-    // environment. Rewrite those to global assignments and fold; the rewrite
-    // bails (→ defer to the runtime thunk) on a `class` declaration — which
-    // Perry would otherwise register at module scope, leaking it past the eval
-    // (test262 language/eval-code/indirect/lex-env-distinct-cls expects it to
-    // stay invisible).
-    if module_top_global && !crate::lower_decl::body_has_use_strict(&body_stmts) {
-        if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
-            return build_eval_completion_iife(ctx, hoisted, false, span);
+    if module_top_global {
+        let eval_strict = crate::lower_decl::body_has_use_strict(&body_stmts);
+        // Annex B.3.3.3: a *sloppy* global (indirect) eval whose body declares
+        // `var`/`function` bindings hoists them into the global variable
+        // environment. Rewrite those to global assignments and fold; the rewrite
+        // bails (→ falls through below) on a `class` declaration — which Perry
+        // would otherwise register at module scope, leaking it past the eval
+        // (test262 language/eval-code/indirect/lex-env-distinct-cls expects it to
+        // stay invisible). Strict eval keeps its own variable environment, which
+        // the completion IIFE already models, so it skips the hoist.
+        if !eval_strict {
+            if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+                return build_eval_completion_iife(ctx, hoisted, false, span);
+            }
+        }
+        // No nested function to hoist (top-level declarations only, or a strict
+        // body). Still fold the body to the completion IIFE so it runs for its
+        // side effects and yields its ECMAScript completion value — the runtime
+        // eval thunk otherwise returns `undefined` *without executing the body*,
+        // dropping both. Guarded by `eval_body_iife_foldable`, which keeps a
+        // class-declaring body on the runtime thunk (the class would leak to
+        // module scope when lowered in the IIFE). (test262 language/eval-code/
+        // indirect/cptn-nrml-* with declarations, var-env-var-* completion.)
+        if eval_body_iife_foldable(&body_stmts) {
+            return build_eval_completion_iife(ctx, body_stmts, eval_strict, span);
         }
     }
     let _ = span;
@@ -844,6 +859,60 @@ fn stmt_declares_binding(stmt: &ast::Stmt) -> bool {
         // Statements that cannot introduce a binding. Listed explicitly (no
         // `_` catch-all) so a future `ast::Stmt` variant that *can* nest a
         // declaration is a compile error here rather than a silent miss.
+        Stmt::Expr(_)
+        | Stmt::Empty(_)
+        | Stmt::Debugger(_)
+        | Stmt::Return(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Throw(_) => false,
+    }
+}
+
+/// Can a declaration-bearing (indirect) eval body be folded to the completion
+/// IIFE — executing it for its side effects and completion value — without an
+/// observably wrong result? The one disqualifier is a *class declaration*: Perry
+/// registers class names at module scope when lowering them inside the IIFE,
+/// which would leak the class past the eval (real global eval discards the
+/// eval's own lexical environment, so the class is invisible afterward — test262
+/// `language/eval-code/indirect/lex-env-distinct-cls`). `var`/`function` only
+/// fail to *publish* to the global var environment (trapped as arrow-locals),
+/// which is no worse than the runtime thunk not executing the body at all; and
+/// `let`/`const` correctly stay arrow-local (matching the eval's fresh, discarded
+/// lexical environment). Scans recursively, mirroring [`stmt_declares_binding`].
+fn eval_body_iife_foldable(stmts: &[ast::Stmt]) -> bool {
+    !stmts.iter().any(stmt_has_class_decl)
+}
+
+fn stmt_has_class_decl(stmt: &ast::Stmt) -> bool {
+    use ast::Stmt;
+    match stmt {
+        Stmt::Decl(ast::Decl::Class(_)) => true,
+        Stmt::Decl(_) => false,
+        Stmt::Block(b) => b.stmts.iter().any(stmt_has_class_decl),
+        Stmt::Labeled(l) => stmt_has_class_decl(&l.body),
+        Stmt::If(i) => {
+            stmt_has_class_decl(&i.cons) || i.alt.as_deref().is_some_and(stmt_has_class_decl)
+        }
+        Stmt::For(f) => stmt_has_class_decl(&f.body),
+        Stmt::ForIn(f) => stmt_has_class_decl(&f.body),
+        Stmt::ForOf(f) => stmt_has_class_decl(&f.body),
+        Stmt::While(w) => stmt_has_class_decl(&w.body),
+        Stmt::DoWhile(d) => stmt_has_class_decl(&d.body),
+        Stmt::With(w) => stmt_has_class_decl(&w.body),
+        Stmt::Try(t) => {
+            t.block.stmts.iter().any(stmt_has_class_decl)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.stmts.iter().any(stmt_has_class_decl))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.stmts.iter().any(stmt_has_class_decl))
+        }
+        Stmt::Switch(s) => s
+            .cases
+            .iter()
+            .any(|c| c.cons.iter().any(stmt_has_class_decl)),
         Stmt::Expr(_)
         | Stmt::Empty(_)
         | Stmt::Debugger(_)
@@ -1592,4 +1661,64 @@ fn build_eval_completion_iife(
         type_args: vec![],
         byte_offset: 0,
     }))
+}
+
+#[cfg(test)]
+mod foldable_tests {
+    use super::eval_body_iife_foldable;
+    use swc_ecma_ast as ast;
+
+    fn parse(src: &str) -> Vec<ast::Stmt> {
+        perry_parser::parse_typescript(src, "<eval body>.cjs")
+            .expect("parses")
+            .body
+            .into_iter()
+            .filter_map(|item| match item {
+                ast::ModuleItem::Stmt(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn declaration_bearing_non_class_bodies_are_foldable() {
+        // The bodies that regressed to `undefined` because they declare a
+        // binding (so the declaration-free fast path skipped them) yet have no
+        // nested function to hoist — now fold to the completion IIFE.
+        for src in [
+            "var a = 1; 42",
+            "initial = x; var x = 9;",
+            "let y = 2; y + 1",
+            "const z = 3; ({})",
+            "{ var nested; } 7",
+            "for (var i = 0; i < 1; i++) {} 5",
+            "'use strict'; var s = 1; s",
+        ] {
+            assert!(
+                eval_body_iife_foldable(&parse(src)),
+                "expected foldable: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn class_declaring_bodies_are_not_foldable() {
+        // A class declaration (top-level or nested) would leak to module scope
+        // when lowered in the IIFE, so it stays on the runtime thunk.
+        for src in [
+            "class C {}",
+            "{ class C {} }",
+            "if (true) { class C {} }",
+            "switch (1) { case 1: class C {} }",
+            "try { class C {} } catch (e) {}",
+        ] {
+            assert!(
+                !eval_body_iife_foldable(&parse(src)),
+                "expected NOT foldable: {src:?}"
+            );
+        }
+        // A class *expression* binds through `var`/`let` (no module-scope
+        // registration) and stays foldable.
+        assert!(eval_body_iife_foldable(&parse("var x = class {}; x")));
+    }
 }
