@@ -778,6 +778,11 @@ mod handle_meta_share_tests {
     }
 
     // A small native handle id NaN-boxed as POINTER (e.g. an IncomingMessage).
+    // MUST stay below 0x1000: `is_valid_obj_ptr` uses HEAP_MIN=0x1000 on Linux
+    // (0x200_0000_0000 on macOS), so an id >= 0x1000 is misclassified as a valid
+    // heap object ON LINUX — which breaks the handle-band gate and fails these
+    // tests in CI (they pass on macOS, where the id is far below HEAP_MIN). Real
+    // native handles are tiny, so a sub-0x1000 id faithfully models them.
     fn handle_value(id: u64) -> f64 {
         f64::from_bits(POINTER_TAG_BITS | id)
     }
@@ -806,7 +811,7 @@ mod handle_meta_share_tests {
             let sym = next_request_meta_symbol();
             // Pick a handle id well inside the small-handle band but unlikely to
             // collide with another test's side-table entry.
-            let handle = handle_value(0x4321);
+            let handle = handle_value(0x321);
 
             // The per-request metadata value lives on the handle. Use an
             // immovable number so a GC can't invalidate the comparison.
@@ -842,7 +847,7 @@ mod handle_meta_share_tests {
             // GC-invariant; `gc_suppress` is defensive only.
             crate::gc::gc_suppress();
             let sym = next_request_meta_symbol();
-            let handle = handle_value(0x5678);
+            let handle = handle_value(0x654);
             let meta = immovable_meta();
             super::properties::js_object_set_symbol_property(handle, sym, meta);
 
@@ -890,7 +895,7 @@ mod handle_meta_share_tests {
             crate::gc::gc_suppress();
             let sym = registered_symbol("someOtherHandleSym@@test_clear");
             // Distinct handle id so this doesn't alias the metadata tests.
-            let handle = handle_value(0x6789);
+            let handle = handle_value(0x789);
             let v = immovable_meta();
             super::properties::js_object_set_symbol_property(handle, sym, v);
 
