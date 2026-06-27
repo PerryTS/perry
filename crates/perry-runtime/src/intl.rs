@@ -260,16 +260,47 @@ fn get_option_value(options: f64, key: &str) -> f64 {
     get_field(obj, key)
 }
 
-fn get_option_string(options: f64, key: &str) -> Option<String> {
-    let value = get_option_value(options, key);
+/// Coerce an already-fetched option value to its GetOption string form. ECMA-402
+/// GetOption treats ONLY `undefined` as "absent → fallback"; every other value —
+/// `null` included — is coerced with ToString and then checked against the
+/// allow-list, so `{ localeMatcher: null }` must surface as the string "null"
+/// (which no enum accepts) and raise a RangeError, not be silently ignored.
+/// Kept separate from the property read so callers that must observe the option
+/// getter exactly once (the GetOption call-order tests) can reuse the value.
+fn coerce_option_string(value: f64) -> Option<String> {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_undefined() || js.is_null() {
+    if js.is_undefined() {
         None
+    } else if js.is_null() {
+        Some("null".to_string())
     } else if js.is_any_string() {
         string_from_string_value(value)
     } else {
         Some(value_to_string(value))
     }
+}
+
+fn get_option_string(options: f64, key: &str) -> Option<String> {
+    coerce_option_string(get_option_value(options, key))
+}
+
+/// As `get_option_string`, but for the Unicode locale-extension keys (`calendar`,
+/// `numberingSystem`) whose value is validated for *well-formedness* rather than
+/// against a closed enum. ECMA-402 coerces `null` to the string `"null"` — a
+/// well-formed `type` subtag that names no supported calendar / numbering system,
+/// so ResolveLocale drops it and `resolvedOptions` reports the locale default
+/// (`gregory` / `latn`). Perry models no per-locale extension negotiation and
+/// otherwise echoes the requested value verbatim, so it mirrors that observable
+/// outcome by treating `null` as "absent" (leaving the field at its default)
+/// rather than reporting a literal `"null"`. A non-null unsupported value is
+/// still echoed, matching Perry's existing behaviour. The option getter is read
+/// exactly once so the GetOption call-order is preserved.
+fn get_locale_extension_option(options: f64, key: &str) -> Option<String> {
+    let value = get_option_value(options, key);
+    if JSValue::from_bits(value.to_bits()).is_null() {
+        return None;
+    }
+    coerce_option_string(value)
 }
 
 fn get_option_number(options: f64, key: &str) -> Option<f64> {
@@ -838,7 +869,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             );
             // `calendar` must match the Unicode locale `type` nonterminal; store
             // the canonicalized ID so `resolvedOptions().calendar` reflects it.
-            if let Some(calendar) = get_option_string(options, "calendar") {
+            if let Some(calendar) = get_locale_extension_option(options, "calendar") {
                 match canonicalize_calendar_id(&calendar) {
                     Some(canonical) => {
                         set_internal_field(obj, KEY_CALENDAR, string_value(&canonical))
@@ -849,7 +880,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 }
             }
             // `numberingSystem` must be a well-formed `type` nonterminal.
-            if let Some(ns) = get_option_string(options, "numberingSystem") {
+            if let Some(ns) = get_locale_extension_option(options, "numberingSystem") {
                 if !is_well_formed_numbering_system(&ns) {
                     throw_range_error(&format!(
                         "Value {ns} out of range for Intl options property numberingSystem"
