@@ -321,7 +321,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     let imports = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .map(|(spec, local)| {
+        .filter_map(|(spec, local)| {
+            // `reflect-metadata` is a Perry built-in (global `Reflect` polyfill),
+            // not a compiled module — its require shim now returns a fresh `{}`
+            // directly (see `require_cases`), so don't synthesize a hoisted
+            // `import _req_N from 'reflect-metadata'` whose binding nothing
+            // resolves (it read back unbound → `ReferenceError: _req_N is not
+            // defined` inside the IIFE closure).
+            if spec == "reflect-metadata" {
+                return None;
+            }
             // #4904: Node's underscore-prefixed internal http modules are
             // require-only re-exports of the public `http` surface
             // (`require('_http_agent').Agent` etc.). Bind the hoisted import
@@ -332,7 +341,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 | "_http_server" => "http",
                 other => other,
             };
-            format!("import {} from '{}';", local, import_spec)
+            Some(format!("import {} from '{}';", local, import_spec))
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -355,6 +364,18 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .iter()
         .zip(import_local_names.iter())
         .map(|(spec, local)| {
+            // `require('reflect-metadata')` is satisfied by Perry's built-in
+            // `Reflect.*metadata` polyfill — there is no compiled module to
+            // import, so the synthesized `import _req_N from 'reflect-metadata'`
+            // binds nothing and the nested require shim's `return _req_N` reads
+            // an unresolved name (`ReferenceError: _req_N is not defined`) when
+            // it runs inside the IIFE closure (NestJS `@nestjs/common/index.js`,
+            // every reflect-metadata-importing CJS barrel). The result is always
+            // discarded (the effect is the global `Reflect` polyfill), so return
+            // a fresh empty object directly and skip the dangling binding.
+            if spec == "reflect-metadata" {
+                return format!("        if (specifier === '{spec}') return {{}};");
+            }
             if require_site_in_try(source, spec) {
                 format!(
                     "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \

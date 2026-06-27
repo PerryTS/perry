@@ -737,12 +737,44 @@ pub fn try_lower_native_method_str_dispatch(
                 // missing method as a non-callable property read and throw.
                 | "__perry_using_check__"
         );
+        // A `class X extends Map | Set` instance's collection methods
+        // (`has`/`get`/`set`/`delete`/`clear`/`forEach`/`keys`/`values`/
+        // `entries` and the Set composition methods) are NOT class methods —
+        // they live on the hidden runtime backing installed by
+        // `js_map_set_subclass_init`. The static class-dispatch tower would read
+        // them as a non-callable property and throw "value is not a function",
+        // so route them through `js_native_call_method` (whose `dispatch_map_set`
+        // redirects onto the backing collection). Mirrors the
+        // `is_well_known_proto_method` carve-out.
+        let is_collection_subclass_method = class_name_opt
+            .as_deref()
+            .is_some_and(|n| class_extends_builtin_collection(ctx, n))
+            && matches!(
+                property.as_str(),
+                "has" | "get"
+                    | "set"
+                    | "add"
+                    | "delete"
+                    | "clear"
+                    | "forEach"
+                    | "keys"
+                    | "values"
+                    | "entries"
+                    | "union"
+                    | "intersection"
+                    | "difference"
+                    | "symmetricDifference"
+                    | "isSubsetOf"
+                    | "isSupersetOf"
+                    | "isDisjointFrom"
+            );
         let skip_native = matches!(object.as_ref(), Expr::GlobalGet(_))
             || matches!(object.as_ref(), Expr::NativeModuleRef(_))
             || (class_name_opt.is_some()
                 && !is_buffer_class
                 && !class_unknown_to_codegen
-                && !is_well_known_proto_method);
+                && !is_well_known_proto_method
+                && !is_collection_subclass_method);
         if !skip_native {
             // Issue #92 fast path: intrinsify Buffer numeric reads
             // (`buf.readInt32BE(off)` etc.) when the receiver is a tracked
@@ -853,6 +885,35 @@ fn is_message_port_closure_method(object: &Expr, property: &str) -> bool {
 /// call (those miss because the name lives in CLASS_STATIC_ACCESSORS, not
 /// CLASS_STATIC_METHODS). Returns `None` when `prop` is not a static accessor on
 /// the chain. Refs test262 language/arguments-object cls-*-static-* getter calls.
+/// True when `cls_name` (or any class on its `extends` chain) directly extends
+/// the builtin `Map` or `Set` constructor — i.e. a source-compiled
+/// `class X extends Map {}`. Such instances get a hidden Map/Set backing at
+/// `super()` (`js_map_set_subclass_init`) and their collection methods dispatch
+/// through the runtime, not the class vtable.
+pub fn class_extends_builtin_collection(ctx: &FnCtx<'_>, cls_name: &str) -> bool {
+    let mut cur = Some(cls_name.to_string());
+    let mut depth = 0usize;
+    while let Some(c) = cur {
+        if depth > 32 {
+            break;
+        }
+        let Some(ci) = ctx.classes.get(&c) else {
+            // The chain reached a name codegen doesn't track — it may be the
+            // builtin `Map`/`Set` heritage itself.
+            return matches!(c.as_str(), "Map" | "Set" | "WeakMap" | "WeakSet");
+        };
+        if matches!(
+            ci.extends_name.as_deref(),
+            Some("Map") | Some("Set") | Some("WeakMap") | Some("WeakSet")
+        ) {
+            return true;
+        }
+        cur = ci.extends_name.clone();
+        depth += 1;
+    }
+    false
+}
+
 pub fn try_lower_class_static_accessor_call(
     ctx: &mut FnCtx<'_>,
     cls_name: &str,

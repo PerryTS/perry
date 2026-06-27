@@ -21,6 +21,31 @@ pub(super) unsafe fn dispatch_map_set(
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
     let _ = (root_scope, object_handle, &refreshed_args, raw_bits, jsval);
     let _ = (method_name_ptr, method_name_len);
+    // `class X extends Map | Set` instance — redirect the method onto the
+    // hidden backing collection so `has`/`get`/`set`/`delete`/`clear`/`size`/
+    // `forEach`/`keys`/`values`/`entries` (and the Set composition methods)
+    // dispatch as if called on a real Map/Set.
+    if let Some(backing) = super::super::map_set_subclass::subclass_backing_of(object) {
+        let backing_value = match backing {
+            super::super::map_set_subclass::CollectionBacking::Map(m) => {
+                f64::from_bits(JSValue::pointer(m as *const u8).bits())
+            }
+            super::super::map_set_subclass::CollectionBacking::Set(s) => {
+                f64::from_bits(JSValue::pointer(s as *const u8).bits())
+            }
+        };
+        return dispatch_map_set(
+            root_scope,
+            object_handle,
+            arg_handles,
+            backing_value,
+            method_name,
+            method_name_ptr,
+            method_name_len,
+            args_ptr,
+            args_len,
+        );
+    }
     // Check Map/Set registries for raw or NaN-boxed pointers.
     // Maps/Sets are allocated with plain alloc (no GcHeader), so they can't be
     // dispatched through the ObjectHeader path below.
@@ -64,7 +89,11 @@ pub(super) unsafe fn dispatch_map_set(
                     "size" => crate::map::js_map_size(map) as f64,
                     // #2856: value-level iterator methods return real iterator
                     // OBJECTS (not arrays), dispatched via class id.
-                    "entries" => f64::from_bits(
+                    // `class X extends Map` default iterator (`[Symbol.iterator]`)
+                    // is `entries()` — matches the builtin Map. Reached when a
+                    // bound `obj[Symbol.iterator]` (from `js_class_method_bind`)
+                    // is invoked, e.g. by `iterare`'s `toIterator(modulesContainer)`.
+                    "entries" | "Symbol.iterator" | "@@iterator" => f64::from_bits(
                         JSValue::pointer(
                             crate::collection_iter_object::js_map_entries_iter_obj(map) as *mut u8,
                         )
@@ -122,7 +151,9 @@ pub(super) unsafe fn dispatch_map_set(
                     // through to `undefined` (only add/has/delete/clear/size
                     // were handled). Return real iterator objects; `entries`
                     // yields `[v, v]` pairs.
-                    "values" | "keys" => f64::from_bits(
+                    // `class X extends Set` default iterator (`[Symbol.iterator]`)
+                    // is `values()` — matches the builtin Set.
+                    "values" | "keys" | "Symbol.iterator" | "@@iterator" => f64::from_bits(
                         JSValue::pointer(
                             crate::collection_iter_object::js_set_values_iter_obj(set) as *mut u8,
                         )

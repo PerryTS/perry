@@ -70,6 +70,58 @@ fn emit_class_expression_value_binding(
     });
 }
 
+/// For a `let X = T1 = … = class [Y] {…}` declaration, record the chained
+/// assignment targets (`T1`, …) as class self-aliases of the class's lowering
+/// name in `ctx.class_expr_aliases`, BEFORE the init is lowered. This does NOT
+/// `register_class` the names (which would trip `lower_class_expr`'s
+/// collision-rename), it only feeds `synthesize_class_captures`'s self-alias
+/// exclusion so a method-body reference to `T1` (e.g. tsc's `Logger_1`) is not
+/// counted as an outer-scope capture — keeping the class on the shared-template
+/// `ClassRef` path instead of the static-method-dropping `ClassExprFresh` path.
+/// The class's own bind/inner name is already covered by `name` in that pass.
+pub(crate) fn record_chained_class_self_aliases(ctx: &mut LoweringContext, decl: &ast::VarDeclarator) {
+    let (ast::Pat::Ident(ident), Some(init)) = (&decl.name, &decl.init) else {
+        return;
+    };
+    let bind_name = ident.id.sym.to_string();
+    let mut chained_targets: Vec<String> = Vec::new();
+    let mut e = init.as_ref();
+    let inner_class = loop {
+        match e {
+            ast::Expr::Paren(p) => e = &p.expr,
+            ast::Expr::TsAs(a) => e = &a.expr,
+            ast::Expr::TsNonNull(n) => e = &n.expr,
+            ast::Expr::TsTypeAssertion(a) => e = &a.expr,
+            ast::Expr::Assign(assign) if assign.op == ast::AssignOp::Assign => {
+                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(target)) =
+                    &assign.left
+                {
+                    chained_targets.push(target.id.sym.to_string());
+                    e = &assign.right;
+                } else {
+                    return;
+                }
+            }
+            ast::Expr::Class(c) => break c,
+            _ => return,
+        }
+    };
+    if chained_targets.is_empty() {
+        return;
+    }
+    // The class lowers under its inner expression name if present, else the
+    // binding name (matching `lower_class_expr`'s `ident_name`/synthetic-name
+    // choice for the common non-colliding case).
+    let class_name = inner_class
+        .ident
+        .as_ref()
+        .map(|i| i.sym.to_string())
+        .unwrap_or_else(|| bind_name.clone());
+    for t in chained_targets {
+        ctx.class_expr_aliases.entry(t).or_insert(class_name.clone());
+    }
+}
+
 /// Recursively walk a destructuring pattern collecting every leaf identifier
 /// (and pre-defining each as a local). Used by the for-of binding pre-pass so
 /// the loop body can reference variables introduced by *nested* patterns like
@@ -818,6 +870,12 @@ pub(crate) fn lower_stmt(
                                 }
                             }
                         }
+                        // Record chained-assignment class self-aliases (`let
+                        // Logger = Logger_1 = class …`) so the self-reference
+                        // isn't captured (see `synthesize_class_captures`). This
+                        // top-level path is reached for any `let X = T = class`
+                        // not handled by the direct `class` fast path above.
+                        record_chained_class_self_aliases(ctx, decl);
                         let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
                         // `var` is function-scoped: mark defined locals so
                         // `pop_block_scope` preserves them when leaving an inner block.

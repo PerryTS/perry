@@ -38,6 +38,30 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     {
         return Ok(Expr::ClassRef(ctx.resolve_class_name(&name)));
     }
+    // Chained-assignment class self-alias referenced from inside one of the
+    // class's own method/getter/setter bodies. tsc's decorator-capture form
+    // `let Logger = Logger_1 = class Logger { get x(){ …Logger_1… } static
+    // error(){ …Logger_1… } }` declares `Logger_1` as a real outer-scope local
+    // and binds the class to it. Inside a STATIC method the outer local is not
+    // in scope (the method compiles to a standalone function), and inside an
+    // instance method resolving to a `LocalGet` capture forces the whole class
+    // onto the per-evaluation `ClassExprFresh` path (which drops static methods
+    // and SIGSEGVs `new`). The alias value IS the class everywhere after
+    // evaluation, so resolve it to the constructor `ClassRef` directly — exactly
+    // as JS spec resolves the inner class binding. `record_chained_class_self_
+    // aliases` populates `class_expr_aliases[alias] = <class lowering name>`
+    // before the body is lowered; gate on currently lowering that same class so
+    // an unrelated outer reference to the name is untouched. (`class_expr_
+    // aliases` is NOT a `register_class`, so this does not trip
+    // `lower_class_expr`'s collision-rename — `current_class` stays the real
+    // class name.)
+    if let Some(cur) = ctx.current_class.clone() {
+        if let Some(target) = ctx.class_expr_aliases.get(&name) {
+            if *target == cur {
+                return Ok(Expr::ClassRef(ctx.resolve_class_name(target)));
+            }
+        }
+    }
     if let Some(id) = ctx.lookup_local(&name) {
         // A with-fallback implicit global may still be the HOLE
         // sentinel (the with-env took the write) — reading it then

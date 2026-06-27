@@ -211,6 +211,35 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         }
     };
 
+    // Wall 10 — `Object.setPrototypeOf(handle, proto)` on a native registry
+    // handle (a POINTER-tagged small-handle id, e.g. a node:http
+    // `ServerResponse` / `IncomingMessage`). Express attaches its augmented
+    // `res.send` / `res.json` / `res.status` (and `req.fresh` / `req.accepts` /
+    // …) onto the per-request native objects via
+    // `Object.setPrototypeOf(res, app.response)`. The heap-object recording
+    // path below rejects the handle (`is_valid_obj_ptr` is false for a small
+    // id), so without this the prototype was silently dropped and every
+    // express response method no-op'd (the Wall-10 express/NestJS blocker).
+    // Record the link in the SAME `OBJECT_PROTOTYPES` side-table keyed by the
+    // handle id; the small-handle method/property dispatch fallbacks then walk
+    // it via `resolve_inherited_field`, binding `this` to the handle so the
+    // express method's internal `this.end(...)` / `this.statusCode = …` route
+    // back to the native handle. Gated on a non-zero handle id in the small
+    // band; a plain heap object (top16 0, addr above the band) still takes the
+    // canonical path below.
+    {
+        let top = obj_bits >> 48;
+        let handle_id = if top == 0x7FFD {
+            (obj_bits & 0x0000_FFFF_FFFF_FFFF) as usize
+        } else {
+            0
+        };
+        if crate::value::addr_class::is_small_handle(handle_id) {
+            super::super::prototype_chain::object_set_static_prototype(handle_id, proto_bits);
+            return obj_value;
+        }
+    }
+
     // #36 / #321: when the target is a closure (a plain function value) and the
     // proto is an object, record the (closure → proto) link in the closure
     // static-prototype side-table. effect's `Context.Tag(id)` returns a

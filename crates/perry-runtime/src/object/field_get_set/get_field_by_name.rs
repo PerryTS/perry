@@ -4,6 +4,24 @@
 
 use super::*;
 
+/// Wall 10 — read a property a framework attached to a native registry handle
+/// via `Object.setPrototypeOf(handle, proto)` (Express's `res`/`req`). The link
+/// is keyed by the handle id in `OBJECT_PROTOTYPES`. Returns `None` (so the
+/// caller yields `undefined`) when no recorded prototype carries the key.
+/// Cheap when no prototype was recorded (the common handle case).
+fn handle_proto_inherited_field(
+    handle_id: usize,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    crate::object::prototype_chain::object_static_prototype(handle_id)?;
+    let v = crate::object::prototype_chain::resolve_inherited_field(handle_id, key)?;
+    if v.bits() == crate::value::TAG_UNDEFINED {
+        None
+    } else {
+        Some(v)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
@@ -29,6 +47,100 @@ pub extern "C" fn js_object_get_field_by_name(
                 return JSValue::from_bits(v.to_bits());
             }
         }
+    }
+    // `class X extends Map | Set` instance — `.size` reads the hidden backing
+    // collection's size (a Map/Set subclass never carries an own `size`
+    // property, so this can't shadow user state). Other backed reads
+    // (`.has`/`.get`/… as METHODS) route through `js_native_call_method`.
+    if !key.is_null() && ((obj as u64) >> 48) == 0 && (obj as usize) >= 0x10000 {
+        unsafe {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            if std::slice::from_raw_parts(name_ptr, name_len) == b"size" {
+                let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+                match crate::object::map_set_subclass::subclass_backing_of(boxed) {
+                    Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+                        return JSValue::number(crate::map::js_map_size(m) as f64);
+                    }
+                    Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+                        return JSValue::number(crate::set::js_set_size(s) as f64);
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+    // A per-evaluation class object (`ClassExprFresh`, #1772/#1787) reaches
+    // here as a RAW heap pointer (a real ObjectHeader, so its top 16 address
+    // bits are 0 — distinguishing it from a `0x7FFE` class-ref value or any
+    // NaN-boxed value). Its static METHODS / static ACCESSORS live in the class
+    // registry keyed by the header class_id, never as own properties, so a read
+    // like `C.staticMethod` returned `undefined` (the class-ref form resolves
+    // these via the registry; this pointer-tagged class-object form did not).
+    // That is NestJS's `Logger.error` when the Logger takes the fresh path
+    // (captures `DEFAULT_LOGGER`), which the tslib `__decorate` chain then reads
+    // `.value` off → "reading 'value'". Resolve own fields first (own-property
+    // precedence), then fall back to the registry. The `(obj >> 48) == 0` guard
+    // ensures `is_class_object_ptr` only ever sees a real heap pointer (it
+    // back-reads a GcHeader), never a tagged value — which previously SIGSEGV'd.
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && (obj as usize) >= 0x10000
+        && crate::object::class_registry::is_class_object_ptr(obj as *const u8)
+    {
+        unsafe {
+            // Only resolve a registry-backed static METHOD / static ACCESSOR
+            // here, and ONLY when the object does NOT already carry the key as
+            // an own property (so a per-evaluation static field shadows a
+            // template method, preserving own-property precedence). On a match
+            // return it; otherwise FALL THROUGH to the normal resolution path
+            // below (which handles own fields, class-ref/prototype semantics,
+            // and everything else). Returning the bare own-field-tail result
+            // early here was wrong: it skipped the intervening builtin-prototype
+            // / class-ref handling and broke reads like
+            // `Object.prototype.hasOwnProperty` on objects that happen to be
+            // class-typed.
+            let class_id = super::super::js_object_get_class_id(obj);
+            if class_id != 0 {
+                let name_ptr =
+                    (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let name_len = (*key).byte_len as usize;
+                let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                    .unwrap_or("");
+                if !name.is_empty()
+                    && !super::super::class_registry::class_is_key_deleted(class_id, name)
+                    && !super::super::own_key_present(obj as *mut ObjectHeader, key)
+                {
+                    let class_value =
+                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                    if super::super::class_registry::lookup_static_method_in_chain(
+                        class_id, name,
+                    )
+                    .is_some()
+                    {
+                        let heap_name = {
+                            let layout =
+                                std::alloc::Layout::from_size_align(name_len.max(1), 1).unwrap();
+                            let ptr = std::alloc::alloc(layout);
+                            std::ptr::copy_nonoverlapping(name_ptr, ptr, name_len);
+                            ptr
+                        };
+                        let result = js_class_method_bind(class_value, heap_name, name_len);
+                        return JSValue::from_bits(result.to_bits());
+                    }
+                    if let Some(v) =
+                        super::super::class_registry::class_static_accessor_getter_value(
+                            class_id,
+                            name,
+                            class_value,
+                        )
+                    {
+                        return JSValue::from_bits(v.to_bits());
+                    }
+                }
+            }
+        }
+        // fall through to normal resolution
     }
     if let Some(addr) =
         crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
@@ -282,7 +394,19 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                     if let Some(dispatch) = handle_property_dispatch() {
                         let bits = dispatch(raw as i64, key_ptr, key_len);
+                        // Wall 10 — fall back to a `setPrototypeOf(handle, proto)`
+                        // member (Express's augmented `res`/`req`) when the native
+                        // dispatch doesn't know the key. See
+                        // `handle_proto_inherited_field`.
+                        if bits.to_bits() == crate::value::TAG_UNDEFINED {
+                            if let Some(v) = handle_proto_inherited_field(raw, key) {
+                                return v;
+                            }
+                        }
                         return JSValue::from_bits(bits.to_bits());
+                    }
+                    if let Some(v) = handle_proto_inherited_field(raw, key) {
+                        return v;
                     }
                 }
             }

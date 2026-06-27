@@ -64,7 +64,7 @@ extern "C" {
 }
 
 mod controls;
-mod dispatch;
+pub(crate) mod dispatch;
 mod pump;
 mod session;
 

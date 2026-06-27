@@ -46,6 +46,7 @@ mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
+pub(crate) mod map_set_subclass;
 pub(crate) mod iterator_prototypes;
 mod namespace_create;
 mod native_call_method;

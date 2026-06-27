@@ -371,6 +371,28 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
+    // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
+    // is inherited from Map/Set.prototype, so it is NOT an own symbol prop.
+    // Reading the property (e.g. `typeof obj[Symbol.iterator] === 'function'`,
+    // as `iterare`'s `isIterable` / `toIterator` do for NestJS's
+    // `ModulesContainer extends Map`) must still resolve to a callable.
+    // Return a bound method that, when invoked, produces the backing
+    // collection's default iterator (entries for Map, values for Set — see
+    // the `"Symbol.iterator"` arms in `collection_methods.rs`).
+    {
+        let iter_wk = well_known_symbol("iterator");
+        if !iter_wk.is_null() {
+            let iter_f64 =
+                f64::from_bits(crate::value::JSValue::pointer(iter_wk as *const u8).bits());
+            let is_iter = sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64);
+            if is_iter
+                && crate::object::map_set_subclass::subclass_backing_of(obj_f64).is_some()
+            {
+                let mname = b"Symbol.iterator";
+                return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
+            }
+        }
+    }
     let sym_key = sym_key_from_f64(sym_f64);
     if sym_key != 0 {
         let jsval = crate::value::JSValue::from_bits(bits);

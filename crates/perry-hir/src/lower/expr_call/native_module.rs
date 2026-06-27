@@ -1097,21 +1097,34 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            // Check for Symbol static methods: Symbol.for / Symbol.keyFor
+            // Check for Symbol static methods: Symbol.for / Symbol.keyFor.
+            // Accept BOTH the dot form (`Symbol.for(...)`) and the
+            // computed-string form (`Symbol['for'](...)`) — the latter is what
+            // the userland `buffer` package writes (`Symbol['for']('nodejs.util.
+            // inspect.custom')`). Previously only `MemberProp::Ident` matched, so
+            // `Symbol['for'](...)` fell through to generic dispatch, which dropped
+            // the `Symbol` receiver and lowered the callee as `globalThis.for`
+            // (undefined) → `TypeError: value is not a function` at buffer's
+            // module eval (the safer-buffer/iconv-lite/body-parser/express chain).
             if obj_name == "Symbol" {
-                if let ast::MemberProp::Ident(method_ident) = &member.prop {
-                    let method_name = method_ident.sym.as_ref();
-                    match method_name {
-                        "for" => {
-                            let key = args.into_iter().next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::SymbolFor(Box::new(key))));
-                        }
-                        "keyFor" => {
-                            let sym = args.into_iter().next().unwrap_or(Expr::Undefined);
-                            return Ok(Ok(Expr::SymbolKeyFor(Box::new(sym))));
-                        }
-                        _ => {} // Fall through to generic handling
+                let method_name: Option<&str> = match &member.prop {
+                    ast::MemberProp::Ident(method_ident) => Some(method_ident.sym.as_ref()),
+                    ast::MemberProp::Computed(c) => match c.expr.as_ref() {
+                        ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str(),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match method_name {
+                    Some("for") => {
+                        let key = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::SymbolFor(Box::new(key))));
                     }
+                    Some("keyFor") => {
+                        let sym = args.into_iter().next().unwrap_or(Expr::Undefined);
+                        return Ok(Ok(Expr::SymbolKeyFor(Box::new(sym))));
+                    }
+                    _ => {} // Fall through to generic handling
                 }
             }
 
@@ -1533,6 +1546,26 @@ pub(super) fn try_native_module_methods(
                     // This is a call on a native module (e.g., mysql.createConnection)
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                         let method_name = method_ident.sym.to_string();
+                        // A destructured/named DATA member of a native module
+                        // (`const { METHODS } = require('node:http')` →
+                        // `imported_method = Some("METHODS")`) holds a real
+                        // Array/Object value. An Array/Object prototype method on it
+                        // (`METHODS.map(...)`, `STATUS_CODES.hasOwnProperty(...)`) is
+                        // a call on that VALUE — NOT a `module.method` native call.
+                        // Bail to generic dynamic dispatch so it runs on the member's
+                        // resolved value (express's `router` does
+                        // `METHODS.map((m) => m.toLowerCase())`). Without this the
+                        // call lowered to `NativeMethodCall { module: "http", method:
+                        // "map" }`, which returned undefined / a deferred throw.
+                        if imported_method.is_some()
+                            && (super::super::array_fold::is_known_array_prototype_method(
+                                &method_name,
+                            ) || super::super::array_fold::is_known_object_prototype_method(
+                                &method_name,
+                            ))
+                        {
+                            return Ok(Err(args));
+                        }
                         if module_name == "worker_threads" && method_name == "workerData" {
                             return Ok(Err(args));
                         }
@@ -1634,6 +1667,23 @@ pub(super) fn try_native_module_methods(
                             && !super::super::array_fold::is_known_string_prototype_method(
                                 &method_name,
                             )
+                            // A destructured/named DATA member of a native module
+                            // (`const { METHODS } = require('node:http')`,
+                            // registered with `imported_method = Some("METHODS")`)
+                            // holds a real Array/Object value, not a callable
+                            // namespace. An Array/Object prototype method on it
+                            // (`METHODS.map(...)`, `STATUS_CODES.hasOwnProperty(...)`)
+                            // is a call on that VALUE — gating it as
+                            // `http.map`/`http.hasOwnProperty` (#463) compiled it to
+                            // a deferred "not implemented" throw, breaking express's
+                            // `router` (`METHODS.map((m) => m.toLowerCase())`). Fall
+                            // through to dynamic dispatch on the real member value.
+                            && !(imported_method.is_some()
+                                && (super::super::array_fold::is_known_array_prototype_method(
+                                    &method_name,
+                                ) || super::super::array_fold::is_known_object_prototype_method(
+                                    &method_name,
+                                )))
                         {
                             // #925: this is the gate that fires
                             // for `crypto.hmacSha256(data, key)`.

@@ -426,6 +426,42 @@ pub unsafe extern "C" fn js_native_call_method_apply(
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
+/// Apply form of `obj[key](...args)` — the spread-call sibling of
+/// `js_native_call_method_value`. `key` is a *runtime value* (computed member
+/// access, e.g. `receiver[prop](...args)`) and `args_array_handle` is a JS
+/// array holding every regular + spread arg already concatenated by codegen.
+///
+/// Without this, a CallSpread whose callee is a computed member (`IndexGet`)
+/// fell through to the plain closure-spread path (`js_closure_call_apply_with_spread`)
+/// which dropped `this`, so the invoked method saw `this` = a field-less
+/// prototype stub instead of `obj` (NestJS `receiver[prop](...args)` inside its
+/// exception-zone proxy — the instance's data fields and inherited methods all
+/// read as `undefined`). Materialise the array to a temp buffer and forward to
+/// `js_native_call_method_value`, which resolves the method by key and binds
+/// `this = obj`.
+#[no_mangle]
+pub unsafe extern "C" fn js_native_call_method_value_apply(
+    object: f64,
+    key: f64,
+    args_array_handle: i64,
+) -> f64 {
+    let arr = args_array_handle as *const crate::array::ArrayHeader;
+    let len = if arr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr) as usize
+    };
+    let buf: Vec<f64> = (0..len)
+        .map(|i| crate::array::js_array_get_f64(arr, i as u32))
+        .collect();
+    let (args_ptr, args_len) = if buf.is_empty() {
+        (std::ptr::null::<f64>(), 0_usize)
+    } else {
+        (buf.as_ptr(), buf.len())
+    };
+    js_native_call_method_value(object, key, args_ptr, args_len)
+}
+
 #[inline]
 fn root_string_arg_handle<'scope>(
     scope: &'scope crate::gc::RuntimeHandleScope,

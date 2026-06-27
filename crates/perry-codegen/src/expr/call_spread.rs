@@ -305,6 +305,61 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // Computed-member method call with spread: `recv[key](...args)`.
+            // The literal `recv.method(...args)` shape is handled by the
+            // PropertyGet arm above; the computed sibling lowers to a
+            // `Call`/`CallSpread` with an `IndexGet` callee. Without this arm it
+            // fell through to the closure-callee path below, which lowers
+            // `recv[key]` to a bare method VALUE and calls it with no `this` —
+            // so the method observed `this` = a field-less prototype stub
+            // (missing instance data fields AND inherited methods). This is the
+            // spread counterpart of the non-spread `js_native_call_method_{str_key,
+            // value}` routing in `lower_call/early_branches.rs`. Bundle every
+            // regular + spread arg into one array, then dispatch through
+            // `js_native_call_method_value_apply`, which resolves the method by
+            // the runtime key and binds `this = recv`. Skip a numeric index on a
+            // non-class receiver (`arr[i](...)` array-element call), mirroring
+            // the non-spread path, so element-call semantics are unchanged.
+            if let Expr::IndexGet { object, index } = callee.as_ref() {
+                let object_is_class_ref = matches!(object.as_ref(), Expr::ClassRef(_))
+                    || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
+                if !(crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref) {
+                    let recv_box = lower_expr(ctx, object)?;
+                    let key_box = lower_expr(ctx, index)?;
+                    let mut acc_handle = ctx.block().call(I64, "js_array_alloc", &[(I32, "0")]);
+                    for a in args {
+                        match a {
+                            CallArg::Expr(e) => {
+                                let v = lower_expr(ctx, e)?;
+                                acc_handle = ctx.block().call(
+                                    I64,
+                                    "js_array_push_f64",
+                                    &[(I64, &acc_handle), (DOUBLE, &v)],
+                                );
+                            }
+                            CallArg::Spread(e) => {
+                                let part_box = lower_expr(ctx, e)?;
+                                let part_handle = ctx.block().call(
+                                    I64,
+                                    "js_array_like_to_array",
+                                    &[(DOUBLE, &part_box)],
+                                );
+                                acc_handle = ctx.block().call(
+                                    I64,
+                                    "js_array_concat",
+                                    &[(I64, &acc_handle), (I64, &part_handle)],
+                                );
+                            }
+                        }
+                    }
+                    return Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_native_call_method_value_apply",
+                        &[(DOUBLE, &recv_box), (DOUBLE, &key_box), (I64, &acc_handle)],
+                    ));
+                }
+            }
+
             // Closure callee path: `cb(reg0, reg1, ..., ...spread)` where
             // `cb` is a closure value (not a known FuncRef). We lower the
             // callee to its NaN-boxed value, marshal regular args into a

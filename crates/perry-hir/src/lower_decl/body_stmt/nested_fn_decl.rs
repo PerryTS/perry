@@ -260,7 +260,7 @@ pub(super) fn lower_nested_fn_decl(
         enclosing_class: None,
         is_arrow: false,
         is_async: fn_decl.function.is_async,
-        is_generator: false,
+        is_generator: fn_decl.function.is_generator,
         is_strict,
     };
     result.push(Stmt::Let {
