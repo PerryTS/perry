@@ -511,6 +511,27 @@ thread_local! {
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
     pub(super) static GC_LAST_OLD_RECLAIM_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// Re-entrancy guard for the #5476 direct old-gen reclaim driven from
+    /// `gc_check_trigger`: the full collection must not recursively trigger
+    /// another reclaim if a hook it runs allocates.
+    pub(super) static GC_OLD_RECLAIM_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// RAII guard that marks a #5476 direct old-gen reclaim in progress so a nested
+/// `gc_check_trigger` can't re-enter it. See `GC_OLD_RECLAIM_IN_PROGRESS`.
+struct OldReclaimReentryGuard;
+
+impl OldReclaimReentryGuard {
+    fn enter() -> Self {
+        GC_OLD_RECLAIM_IN_PROGRESS.with(|p| p.set(true));
+        Self
+    }
+}
+
+impl Drop for OldReclaimReentryGuard {
+    fn drop(&mut self) {
+        GC_OLD_RECLAIM_IN_PROGRESS.with(|p| p.set(false));
+    }
 }
 
 pub(super) const GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES: usize = 48 * 1024 * 1024;
@@ -1009,6 +1030,40 @@ pub fn gc_check_trigger() {
     if defer_gc_request(DeferredGcRequest::CheckTrigger) {
         return;
     }
+
+    // #5476: a workload that churns *large* temporaries (>16 KB, born directly
+    // in the old arena) grows the old generation without ever exercising the
+    // nursery. Old-gen reclaim pressure schedules a budgeted full cycle that
+    // *would* return the dead old blocks to the OS — but the budgeted stepper is
+    // blocked whenever synchronous-only root scanners are registered (the common
+    // case in a compiled program), and even when it runs it only advances through
+    // bounded mutator-assist steps that a compute-only loop never drives to
+    // completion (no event-loop safepoint ever runs). Either way no collection
+    // completes and RSS climbs unbounded. When old-gen reclaim pressure is what's
+    // due — a rare event, gated by the ~32 MB growth / 48 MB absolute baseline, so
+    // this never fires on the common nursery-churn path — run a direct full
+    // mark-sweep to completion here, the same non-budgeted collection an explicit
+    // `gc()` performs. The conservative native-stack scan (`force_full_scan`)
+    // keeps it safe: anything still referenced from the stack/registers at this
+    // allocation point (e.g. the temporary currently being built) is retained;
+    // only genuinely unreachable old blocks are returned.
+    if !gc_budgeted_cycle_active()
+        && matches!(
+            gc_budgeted_due_trigger(),
+            Some(BudgetedGcTrigger::OldReclaim)
+        )
+        && !GC_OLD_RECLAIM_IN_PROGRESS.with(Cell::get)
+    {
+        let _reentry = OldReclaimReentryGuard::enter();
+        GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+        let _scan = super::roots::ManualGcScanGuard::force_full_scan();
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
+            GcTriggerKind::OldGenBytes,
+        ))
+        .emit_after_current();
+        return;
+    }
+
     if !gc_budgeted_cycle_active() && gc_budgeted_due_trigger().is_none() {
         return;
     }
