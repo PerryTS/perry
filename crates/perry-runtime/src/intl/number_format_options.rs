@@ -21,6 +21,13 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         throw_type_error("Cannot convert undefined or null to object");
     }
 
+    // localeMatcher is the first option read (ResolveLocale step) and is
+    // validated, but the resolved value doesn't affect our deterministic locale
+    // lookup. Reading it here keeps the GetOption sequence that
+    // constructor-option-read-order.js asserts (localeMatcher before
+    // numberingSystem) and propagates a throwing localeMatcher getter.
+    let _ = get_string_option_enum(options, "localeMatcher", &["lookup", "best fit"], "best fit");
+
     // numberingSystem: option (validated, lower-cased) overrides the locale
     // `-u-nu-` keyword; default "latn".
     let numbering = match get_option_string(options, "numberingSystem") {
@@ -105,21 +112,54 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     );
     set_internal_field(obj, KEY_NF_NOTATION, string_value(&notation));
 
-    // SetNumberFormatDigitOptions.
+    // SetNumberFormatDigitOptions — the GetOption reads run in the exact
+    // ECMA-402 order asserted by constructor-option-read-order.js:
+    // minimumIntegerDigits, minimumFractionDigits, maximumFractionDigits,
+    // minimumSignificantDigits, maximumSignificantDigits, roundingIncrement,
+    // roundingMode, roundingPriority, trailingZeroDisplay.
     let min_int =
         get_int_option_in_range(options, "minimumIntegerDigits", 1.0, 21.0).unwrap_or(1.0);
-    set_internal_field(obj, KEY_NF_MIN_INT, min_int);
-
     let min_frac_opt = get_int_option_in_range(options, "minimumFractionDigits", 0.0, 100.0);
     let max_frac_opt = get_int_option_in_range(options, "maximumFractionDigits", 0.0, 100.0);
     let min_sig_opt = get_int_option_in_range(options, "minimumSignificantDigits", 1.0, 21.0);
     let max_sig_opt = get_int_option_in_range(options, "maximumSignificantDigits", 1.0, 21.0);
+
+    // roundingIncrement is read before roundingMode/roundingPriority and is
+    // ToNumber-coerced (so `{ valueOf }` objects work) then checked against the
+    // sanctioned increment set — a [1, 5000] range alone would wrongly admit
+    // values like 3 or 5000.1.
+    let rounding_increment = read_rounding_increment(options);
+
+    let rounding_mode = get_string_option_enum(
+        options,
+        "roundingMode",
+        &[
+            "ceil",
+            "floor",
+            "expand",
+            "trunc",
+            "halfCeil",
+            "halfFloor",
+            "halfExpand",
+            "halfTrunc",
+            "halfEven",
+        ],
+        "halfExpand",
+    );
     let mut rounding_priority = get_string_option_enum(
         options,
         "roundingPriority",
         &["auto", "morePrecision", "lessPrecision"],
         "auto",
     );
+    let trailing_zero = get_string_option_enum(
+        options,
+        "trailingZeroDisplay",
+        &["auto", "stripIfInteger"],
+        "auto",
+    );
+
+    set_internal_field(obj, KEY_NF_MIN_INT, min_int);
 
     let (default_min_frac, default_max_frac) = match style.as_str() {
         "currency" => {
@@ -140,6 +180,23 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         .map(|m| m as u32)
         .unwrap_or_else(|| (min_frac).max(default_max_frac))
         .max(min_frac);
+
+    // A roundingIncrement other than 1 constrains the rounding type to fraction
+    // digits with a fixed fraction width (ECMA-402 SetNumberFormatDigitOptions):
+    // significant digits or a non-auto roundingPriority is a TypeError, and the
+    // resolved maximum/minimum fraction digits must be equal.
+    if rounding_increment != 1.0 {
+        if has_sd || rounding_priority != "auto" {
+            throw_type_error(
+                "roundingIncrement is only valid with the default fraction-digit rounding type",
+            );
+        }
+        if max_frac != min_frac {
+            throw_range_error(
+                "With roundingIncrement, maximumFractionDigits must equal minimumFractionDigits",
+            );
+        }
+    }
 
     set_internal_field(obj, KEY_NF_MIN_SIG, min_sig as f64);
     set_internal_field(obj, KEY_NF_MAX_SIG, max_sig as f64);
@@ -172,38 +229,12 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     }
     set_internal_field(obj, KEY_NF_USE_SIG, string_value(digit_mode));
 
-    set_internal_field(
-        obj,
-        KEY_NF_ROUNDING_INCREMENT,
-        get_int_option_in_range(options, "roundingIncrement", 1.0, 5000.0).unwrap_or(1.0),
-    );
-    let rounding_mode = get_string_option_enum(
-        options,
-        "roundingMode",
-        &[
-            "ceil",
-            "floor",
-            "expand",
-            "trunc",
-            "halfCeil",
-            "halfFloor",
-            "halfExpand",
-            "halfTrunc",
-            "halfEven",
-        ],
-        "halfExpand",
-    );
+    set_internal_field(obj, KEY_NF_ROUNDING_INCREMENT, rounding_increment);
     set_internal_field(obj, KEY_NF_ROUNDING_MODE, string_value(&rounding_mode));
     set_internal_field(
         obj,
         KEY_NF_ROUNDING_PRIORITY,
         string_value(&rounding_priority),
-    );
-    let trailing_zero = get_string_option_enum(
-        options,
-        "trailingZeroDisplay",
-        &["auto", "stripIfInteger"],
-        "auto",
     );
     set_internal_field(obj, KEY_NF_TRAILING_ZERO, string_value(&trailing_zero));
 
@@ -227,6 +258,28 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         "auto",
     );
     set_internal_field(obj, KEY_NF_SIGN_DISPLAY, string_value(&sign_display));
+}
+
+/// GetNumberOption(options, "roundingIncrement", 1, 5000, 1) followed by the
+/// sanctioned-increment membership check (ECMA-402 SetNumberFormatDigitOptions).
+/// The value is ToNumber-coerced (so `{ valueOf }` and string options work) but
+/// NOT floored: `5000.1` is in range yet absent from the set, so it must throw.
+fn read_rounding_increment(options: f64) -> f64 {
+    const VALID: &[f64] = &[
+        1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0, 1000.0, 2000.0, 2500.0,
+        5000.0,
+    ];
+    let value = get_option_value(options, "roundingIncrement");
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        return 1.0;
+    }
+    let n = crate::builtins::js_number_coerce(value);
+    if n.is_nan() || n < 1.0 || n > 5000.0 || !VALID.contains(&n) {
+        throw_range_error(&format!(
+            "Value {n} out of range for Intl.NumberFormat options property roundingIncrement"
+        ));
+    }
+    n
 }
 
 /// A currency code is well-formed when it is exactly three ASCII letters

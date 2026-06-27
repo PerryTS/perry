@@ -61,8 +61,9 @@ pub(crate) use number_format::{
     decimal_msd_exponent, format_number_instance, grouping_enabled, increment_decimal,
     intl_object_from_value, nf_coerce_number, nf_load, nf_resolved_default,
     number_format_bound_format_thunk, number_format_bound_resolved_options_thunk,
-    number_format_bound_to_parts_thunk, number_format_format_object, number_format_format_thunk,
-    number_format_resolved_options_object, number_format_resolved_options_thunk,
+    number_format_bound_to_parts_thunk, number_format_format_getter_thunk,
+    number_format_format_object, number_format_resolved_options_object,
+    number_format_resolved_options_thunk,
     number_format_to_parts_thunk, number_instance_parts, number_parts_from_resolved,
     parts_to_js_array, push_grouped_integer, push_sign, push_style_suffix, round_integer_to_place,
     round_mode_code, round_to_fraction, round_to_significant, rounding_up, set_round_ctx,
@@ -306,25 +307,31 @@ fn get_string_option_enum(options: f64, key: &str, allowed: &[&str], default: &s
 fn get_use_grouping_option(options: f64, default: &str) -> String {
     let value = get_option_value(options, "useGrouping");
     let js = JSValue::from_bits(value.to_bits());
+    // GetStringOrBooleanOption(options, "useGrouping",
+    //   «"min2","auto","always"», "always", false, fallback):
+    // 2. undefined → fallback.
     if js.is_undefined() {
         return default.to_string();
     }
-    if js.is_bool() {
-        return if js.as_bool() { "always" } else { "false" }.to_string();
+    // 3. The boolean `true` → trueValue ("always").
+    if js.is_bool() && js.as_bool() {
+        return "always".to_string();
     }
-    // Strings (and other coercibles) follow the WellFormedUnicodeString path.
+    // 4. Any value whose ToBoolean is false (false, 0, null, "") → falseValue,
+    //    stored as the sentinel "false" (resolvedOptions surfaces it as `false`).
+    if crate::value::js_is_truthy(value) == 0 {
+        return "false".to_string();
+    }
+    // 5-8. ToString the (truthy) value. The strings "true"/"false" map back to
+    //    the fallback; only the sanctioned grouping strings are otherwise valid.
     let s = if js.is_any_string() {
         string_from_string_value(value).unwrap_or_default()
-    } else if js.is_null() {
-        // `null` coerces to the string "null" → not in the allow-list → RangeError.
-        "null".to_string()
     } else {
         value_to_string(value)
     };
     match s.as_str() {
+        "true" | "false" => default.to_string(),
         "min2" | "auto" | "always" => s,
-        "true" => "always".to_string(),
-        "false" => "false".to_string(),
         other => throw_range_error(&format!(
             "Value {other} out of range for Intl.NumberFormat options property useGrouping"
         )),
@@ -797,12 +804,19 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
     match kind {
         KIND_NUMBER => {
             configure_number_format(obj, &locale, options);
-            install_bound_instance_function(
+            // The bound format function is the [[BoundFormat]] slot: ECMA-402
+            // gives it an empty `name` ("") and length 1. It stays an own
+            // property so `nf.format(x)` dispatches without the prototype
+            // accessor; the `format` getter on the prototype returns it.
+            let format_fn = install_bound_instance_function(
                 obj,
                 "format",
                 number_format_bound_format_thunk as *const u8,
                 1,
             );
+            if !format_fn.is_null() {
+                crate::object::set_bound_native_closure_name(format_fn, "");
+            }
             install_bound_instance_function(
                 obj,
                 "formatToParts",
@@ -1150,10 +1164,10 @@ fn install_bound_instance_function(
     name: &str,
     func_ptr: *const u8,
     arity: u32,
-) {
+) -> *mut ClosureHeader {
     let closure = crate::closure::js_closure_alloc(func_ptr, 1);
     if closure.is_null() {
-        return;
+        return closure;
     }
     crate::closure::js_register_closure_arity(func_ptr, arity);
     crate::closure::js_closure_set_capture_f64(closure, 0, js_nanbox_pointer(obj as i64));
@@ -1171,6 +1185,7 @@ fn install_bound_instance_function(
     );
     set_field(obj, name, js_nanbox_pointer(closure as i64));
     set_builtin_attrs(obj, name, PropertyAttrs::new(true, false, true));
+    closure
 }
 
 extern "C" fn number_format_constructor_thunk(closure: *const ClosureHeader, rest: f64) -> f64 {
@@ -1306,6 +1321,7 @@ fn install_constructor(
     ctor_ptr: *const u8,
     ctor_length: u32,
     methods: &[(&str, *const u8, u32)],
+    getters: &[(&str, *const u8)],
 ) {
     let ctor = crate::closure::js_closure_alloc(ctor_ptr, 0);
     if ctor.is_null() {
@@ -1326,11 +1342,42 @@ fn install_constructor(
     );
 
     let ctor_value = js_nanbox_pointer(ctor as i64);
-    let proto = js_object_alloc(0, 4);
+    // Generous inline capacity so installing methods plus an accessor getter and
+    // the toStringTag symbol never bumps `field_count` past the physical slot
+    // count (which would expose an overflow slot — keys_array.rs #4099).
+    let proto = js_object_alloc(0, 16);
     set_field(proto, "constructor", ctor_value);
     set_builtin_attrs(proto, "constructor", PropertyAttrs::new(true, false, true));
     for (method, ptr, arity) in methods.iter().copied() {
         install_function(proto, method, ptr, arity, arity, false);
+    }
+    // Accessor properties (e.g. `get Intl.NumberFormat.prototype.format`): a
+    // getter-only descriptor on the prototype so reflection
+    // (`Object.getOwnPropertyDescriptor(proto, key).get`) sees a function whose
+    // name is `"get <key>"` and length 0. Instances still carry an own bound
+    // method for the hot dispatch path (native objects resolve from own props).
+    for (getter_name, ptr) in getters.iter().copied() {
+        let closure = crate::closure::js_closure_alloc(ptr, 0);
+        if closure.is_null() {
+            continue;
+        }
+        crate::closure::js_register_closure_arity(ptr, 0);
+        crate::object::set_bound_native_closure_name(closure, &format!("get {getter_name}"));
+        crate::object::set_builtin_closure_length(closure as usize, 0);
+        crate::object::set_builtin_property_attrs(
+            closure as usize,
+            "name".to_string(),
+            PropertyAttrs::new(false, false, true),
+        );
+        crate::object::set_builtin_property_attrs(
+            closure as usize,
+            "length".to_string(),
+            PropertyAttrs::new(false, false, true),
+        );
+        let getter_bits = js_nanbox_pointer(closure as i64).to_bits();
+        unsafe {
+            crate::object::install_builtin_getter(proto, getter_name, getter_bits);
+        }
     }
     set_proto_to_string_tag(proto, &format!("Intl.{name}"));
     let proto_value = js_nanbox_pointer(proto as i64);
@@ -1384,7 +1431,6 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         number_format_constructor_thunk as *const u8,
         0,
         &[
-            ("format", number_format_format_thunk as *const u8, 1),
             (
                 "formatToParts",
                 number_format_to_parts_thunk as *const u8,
@@ -1396,6 +1442,8 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        // `format` is an accessor (getter) per ECMA-402, not a plain method.
+        &[("format", number_format_format_getter_thunk as *const u8)],
     );
     install_constructor(
         ns_obj,
@@ -1421,6 +1469,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
     install_constructor(
         ns_obj,
@@ -1435,6 +1484,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
     install_constructor(
         ns_obj,
@@ -1449,6 +1499,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
     install_constructor(
         ns_obj,
@@ -1464,6 +1515,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
     install_constructor(
         ns_obj,
@@ -1479,6 +1531,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
     install_constructor(
         ns_obj,
@@ -1498,6 +1551,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
     install_constructor(
         ns_obj,
@@ -1517,6 +1571,7 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
     install_constructor(
         ns_obj,
@@ -1531,5 +1586,6 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
                 0,
             ),
         ],
+        &[],
     );
 }
