@@ -172,6 +172,18 @@ fn microsecond_budget_step_remains_bounded_on_multi_slice_heap() {
     assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
 }
 
+/// Allocate one unreachable old-arena object and return only its size. Kept
+/// `#[inline(never)]` so the raw `dead_old` pointer lives and dies entirely
+/// within this frame — it never lands on the caller's stack where a conservative
+/// scan could pin it. (The GC test guard already pins `Auto` scan mode, which
+/// skips the native-stack scan, but isolating the pointer makes the reclaim
+/// assertion robust regardless of scan mode.)
+#[inline(never)]
+fn allocate_unreachable_old_for_reclaim() -> u64 {
+    let dead_old = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING);
+    unsafe { (*header_from_user_ptr(dead_old as *const u8)).size as u64 }
+}
+
 /// #5476: a compute-only workload that churns large temporaries never runs a
 /// host GC step, so the old-gen reclaim cycle must complete from the allocator
 /// hook (`gc_check_trigger`) alone. A single call — what every allocation does —
@@ -185,8 +197,7 @@ fn check_trigger_drives_old_reclaim_to_completion_without_host_stepping() {
 
     let live = young_leaf();
     js_shadow_slot_set(0, ptr_bits(live));
-    let dead_old = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING);
-    let dead_old_size = unsafe { (*header_from_user_ptr(dead_old as *const u8)).size as u64 };
+    let dead_old_size = allocate_unreachable_old_for_reclaim();
     let freed_before = GC_STATS.with(|stats| stats.borrow().total_freed_bytes);
     let collections_before = gc_collection_count();
 
