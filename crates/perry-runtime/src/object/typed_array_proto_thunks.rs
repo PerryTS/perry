@@ -184,7 +184,7 @@ unsafe fn ta_receiver_or_throw(method: &str) -> TypedArrayProtoReceiver {
     throw_not_typed_array(method)
 }
 
-fn is_typed_array_buffer(addr: usize) -> bool {
+pub(super) fn is_typed_array_buffer(addr: usize) -> bool {
     crate::buffer::is_registered_buffer(addr)
         && !crate::buffer::is_any_array_buffer(addr)
         && !crate::buffer::is_data_view(addr)
@@ -519,7 +519,11 @@ fn validate_comparator(args: &[f64]) -> *const crate::closure::ClosureHeader {
     }
 }
 
-unsafe fn dispatch_uint8_buffer_method(addr: usize, method: &str, args: &[f64]) -> Option<f64> {
+pub(super) unsafe fn dispatch_uint8_buffer_method(
+    addr: usize,
+    method: &str,
+    args: &[f64],
+) -> Option<f64> {
     let len = uint8_len(addr);
     let receiver = pointer_value(addr);
     let mut args_ptr = std::ptr::null();

@@ -59,6 +59,13 @@ struct ExceptionState {
     /// `js_throw` / issue #1830). Indexed by try-depth, in lockstep with
     /// `jump_buffers`.
     shadow_savepoints: [ShadowSavepoint; MAX_TRY_DEPTH],
+    /// `js_native_call_method` recursion depth captured when each `try` was
+    /// pushed. A throw `longjmp`s past the in-flight method frames, skipping
+    /// their `CallMethodDepthGuard` `Drop`s; the unwind path restores this so
+    /// the counter doesn't leak (see `js_throw` / `crate::object`'s
+    /// `call_method_depth_*`). Indexed by try-depth, in lockstep with
+    /// `jump_buffers`.
+    call_method_depths: [u32; MAX_TRY_DEPTH],
     try_depth: usize,
     current_exception: f64,
     has_exception: bool,
@@ -70,6 +77,7 @@ impl ExceptionState {
         ExceptionState {
             jump_buffers: [JmpBuf::new(); MAX_TRY_DEPTH],
             shadow_savepoints: [ShadowSavepoint::EMPTY; MAX_TRY_DEPTH],
+            call_method_depths: [0; MAX_TRY_DEPTH],
             try_depth: 0,
             current_exception: 0.0,
             has_exception: false,
@@ -101,6 +109,10 @@ pub extern "C" fn js_try_push() -> *mut i32 {
         // can push any callee frames, so the unwind path can restore to
         // exactly this point and drop the frames `longjmp` orphans (#1830).
         (*s).shadow_savepoints[depth] = shadow_stack_savepoint();
+        // Capture the method-dispatch recursion depth too, so a throw caught by
+        // this `try` can restore it — `longjmp` skips the `CallMethodDepthGuard`
+        // `Drop`s of the method frames it unwinds (#5591).
+        (*s).call_method_depths[depth] = crate::object::call_method_depth_savepoint();
         (*s).try_depth += 1;
         (*s).jump_buffers[depth].as_mut_ptr()
     })
@@ -169,6 +181,12 @@ pub extern "C" fn js_throw(value: f64) -> ! {
         // already-unwound stack frames (#1830). Restore to the depth captured
         // when this `try` was pushed.
         shadow_stack_restore((*s).shadow_savepoints[depth]);
+        // Restore the method-dispatch recursion depth captured when this `try`
+        // was pushed. The frames we are about to `longjmp` past never run their
+        // `CallMethodDepthGuard` `Drop`s, so without this the counter leaks one
+        // per caught throw and eventually wedges every method call into the
+        // depth-guard fallback (#5591).
+        crate::object::call_method_depth_restore((*s).call_method_depths[depth]);
         (*s).jump_buffers[depth].as_mut_ptr()
     });
     unsafe { longjmp(jb_ptr, 1) }

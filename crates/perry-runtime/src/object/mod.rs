@@ -477,6 +477,25 @@ impl Drop for CallMethodDepthGuard {
     }
 }
 
+/// Snapshot the current `js_native_call_method` recursion depth. Exception
+/// handling (`js_try_push`) records this at each `try` so the unwind path can
+/// restore it: a `js_throw` `longjmp`s past the in-flight method frames and
+/// skips their `CallMethodDepthGuard` `Drop`s, so without an explicit restore
+/// the counter leaks one per caught throw and — after `MAX_CALL_METHOD_DEPTH`
+/// throw/catch cycles — wedges every subsequent method call into the
+/// stack-overflow fallback (returning the empty null-object instead of
+/// dispatching). See `crate::exception::{js_try_push, js_throw}`.
+pub(crate) fn call_method_depth_savepoint() -> u32 {
+    CALL_METHOD_DEPTH.with(|d| d.get())
+}
+
+/// Restore the `js_native_call_method` recursion depth captured by
+/// [`call_method_depth_savepoint`]. Called on the `longjmp` unwind path so the
+/// frames the throw skips don't leak their depth increments (see above).
+pub(crate) fn call_method_depth_restore(depth: u32) {
+    CALL_METHOD_DEPTH.with(|d| d.set(depth));
+}
+
 /// Static "null object" used as a safe return value when the depth guard triggers.
 /// Instead of returning undefined (which callers may dereference as a null pointer),
 /// we return a pointer to this valid-but-empty object so downstream code doesn't crash.
