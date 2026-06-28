@@ -174,6 +174,32 @@ pub(crate) unsafe fn body_addr_buffer_bytes(addr: usize) -> Option<Vec<u8>> {
     None
 }
 
+/// Extract a fetch *request* body as raw bytes for the send paths
+/// (`js_fetch_with_options`, `js_fetch_post`). The `body_ptr` codegen hands us is
+/// the body value unboxed to its raw heap address (`unbox_to_i64`), so it can be
+/// either a binary body — a Buffer / Uint8Array / typed array / ArrayBuffer, data
+/// at offset 8 — or a `StringHeader` (a string body, data at offset 20). Probe
+/// the buffer / typed-array registry first so a binary body round-trips
+/// byte-for-byte; only fall back to the `string_from_header` read when the
+/// address isn't a registered binary body.
+///
+/// Reading a binary body straight through `string_from_header` took the byte
+/// length off the right field but the data off the StringHeader data offset (20)
+/// instead of the buffer data offset (8), shifting every binary payload left by
+/// 12 bytes — `fetch(url, { body: Buffer.from("0123456789ABCDEF") })` arrived as
+/// `"CDEF" + zero-fill` (#5757). This is the `fetch(url, init)` twin of
+/// #5435/#5483, which fixed the Response body and the `Request` constructor but
+/// left the fetch send path reading the body as a string.
+pub(crate) unsafe fn fetch_request_body_bytes(body_ptr: *const StringHeader) -> Option<Vec<u8>> {
+    if body_ptr.is_null() || (body_ptr as usize) < 0x1000 {
+        return None;
+    }
+    if let Some(bytes) = body_addr_buffer_bytes(body_ptr as usize) {
+        return Some(bytes);
+    }
+    super::string_from_header(body_ptr).map(String::into_bytes)
+}
+
 lazy_static::lazy_static! {
     static ref FORM_DATA_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
         Mutex::new(HashMap::new());

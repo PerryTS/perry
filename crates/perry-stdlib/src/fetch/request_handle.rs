@@ -51,7 +51,7 @@ fn request_fields_from_handle(maybe_handle: usize) -> Option<RequestFetchFields>
 pub(crate) fn resolve_fetch_inputs(
     url_from_header: Option<String>,
     method_from_header: Option<String>,
-    body_from_header: Option<String>,
+    body_bytes: Option<Vec<u8>>,
     headers_json: Option<String>,
     url_handle: usize,
 ) -> Result<FetchInputs, u64> {
@@ -73,9 +73,10 @@ pub(crate) fn resolve_fetch_inputs(
         .or_else(|| request_fields.as_ref().map(|rf| rf.method.clone()))
         .unwrap_or_else(|| "GET".to_string());
 
-    let body = body_from_header
-        .map(String::into_bytes)
-        .or_else(|| request_fields.as_ref().and_then(|rf| rf.body.clone()));
+    // `body_bytes` is already raw bytes (binary bodies preserved byte-for-byte by
+    // the caller's buffer/typed-array probe; string bodies read as their UTF-8
+    // bytes), so use it as-is and only fall back to the Request's own body.
+    let body = body_bytes.or_else(|| request_fields.as_ref().and_then(|rf| rf.body.clone()));
 
     // Start from the `Request`'s own headers (the `fetch(Request)` form), then
     // let any `init.headers` override per-key. WHATWG says init headers win, but

@@ -539,7 +539,11 @@ pub unsafe extern "C" fn js_fetch_post(
         }
     };
 
-    let body = string_from_header(body_ptr).unwrap_or_default();
+    // Probe the buffer/typed-array registry before falling back to a string read
+    // so a binary body (Buffer / Uint8Array / typed array / ArrayBuffer) is sent
+    // byte-for-byte instead of being shifted left 12 bytes by the StringHeader
+    // data offset (#5757). `reqwest::Body` accepts `Vec<u8>` directly.
+    let body = fetch_request_body_bytes(body_ptr).unwrap_or_default();
     let content_type =
         string_from_header(content_type_ptr).unwrap_or_else(|| "application/json".to_string());
 
@@ -630,7 +634,10 @@ pub unsafe extern "C" fn js_fetch_with_options(
     let inputs = match request_handle::resolve_fetch_inputs(
         string_from_header(url_ptr),
         string_from_header(method_ptr),
-        string_from_header(body_ptr),
+        // Read the body as raw bytes (binary bodies probe the buffer/typed-array
+        // registry first) so a Buffer/Uint8Array body isn't corrupted by a lossy
+        // StringHeader read (#5757).
+        fetch_request_body_bytes(body_ptr),
         string_from_header(headers_json_ptr),
         url_ptr as usize,
     ) {
