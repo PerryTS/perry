@@ -6,6 +6,11 @@
 //!   * `import { readEmbedded } from "perry"` — bytes as a `Buffer`
 //!   * `node:fs` (`readFileSync` / `existsSync`) via the `$perryfs/<path>` path
 //! plus `isStandaloneExecutable` (always `true` in a compiled binary).
+//!
+//! Asset embedding is host-only (Unix-like): it compiles a `cc` object that
+//! MSVC `link.exe` can't consume, so the feature errors on a Windows host and
+//! this end-to-end test is skipped there.
+#![cfg(not(windows))]
 
 use std::path::PathBuf;
 use std::process::Command;

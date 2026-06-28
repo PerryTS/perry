@@ -453,18 +453,29 @@ fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> Stri
         "features",
         args.features.as_deref().unwrap_or(""),
     );
-    // #5731 — fold the resolved embedded-asset set *and contents* into the key.
-    // `{args:?}` covers `--embed` patterns but not `perry.embed` /
-    // `[compile] embed` config nor the file bytes, so without this an edit to an
-    // embedded file (with no pattern change) would reuse a stale cached binary.
+    // #5731 — fold the resolved embedded-asset set into the key. `{args:?}`
+    // covers `--embed` patterns but not `perry.embed` / `[compile] embed`
+    // config nor the files' state, so without this an edit to an embedded file
+    // (with no pattern change) would reuse a stale cached binary. Key on each
+    // asset's name + size + mtime rather than re-reading and hashing the full
+    // contents here — the bytes are already streamed into the binary at embed
+    // time, and size+mtime is the conventional, cheap freshness signal (a fresh
+    // checkout bumps mtime → safe rebuild; the only miss is a content change
+    // that preserves both size and mtime, which real edits don't do).
     if let Ok(assets) = super::embed::resolve_embedded_assets(&args.embed, project_root) {
         for (name, path) in &assets {
             hash_field(&mut hasher, "embed-name", name);
-            if let Ok(bytes) = fs::read(path) {
-                hasher.update(b"embed-data");
-                hasher.update([0]);
-                hasher.update(&bytes);
-                hasher.update([0xff]);
+            if let Ok(meta) = fs::metadata(path) {
+                hash_field(&mut hasher, "embed-size", &meta.len().to_string());
+                if let Ok(mtime) = meta.modified() {
+                    if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
+                        hash_field(
+                            &mut hasher,
+                            "embed-mtime",
+                            &format!("{}.{:09}", dur.as_secs(), dur.subsec_nanos()),
+                        );
+                    }
+                }
             }
         }
     }

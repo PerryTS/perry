@@ -80,6 +80,17 @@ const html = readFileSync("$perryfs/dist/index.html", "utf8");
 that array methods dispatch on its result. `readEmbedded(path)` and `node:fs`
 accept either the `$perryfs/<path>` virtual path or the embed-relative key.
 
+> **Note**
+> `node:fs` consults the embedded registry *before* disk, and a bare
+> embed-relative key matches too — so `readFileSync("dist/index.html")` returns
+> the **embedded** bytes even if a `dist/index.html` exists on disk next to the
+> binary. Read a real on-disk file by absolute path, and use the explicit
+> `$perryfs/<path>` form when you specifically mean the embedded copy.
+>
+> Embedding currently requires a Unix-like host toolchain (macOS/Linux); on a
+> Windows host `--embed` errors out. Cross-target / Windows embedding is a
+> tracked follow-up.
+
 ## Debug Flags
 
 | Flag | Description |

@@ -217,15 +217,19 @@ pub fn is_standalone_executable_value() -> f64 {
     f64::from_bits(TAG_TRUE)
 }
 
-/// Throw a catchable `Error` for a `readEmbedded` miss. The native call's
-/// return ABI (NR_PTR) NaN-boxes the raw pointer, so a null return would surface
-/// as a bogus object rather than `null` — throwing keeps the `readEmbedded():
-/// Buffer` contract honest and matches Node's `fs` "not found" semantics.
-fn throw_embed_not_found(path: &str) -> ! {
-    let message = format!("No embedded asset found for path: {path}");
+/// Throw a catchable `Error` from `readEmbedded`. The native call's return ABI
+/// (NR_PTR) NaN-boxes the raw pointer, so a null/garbage return would surface as
+/// a bogus object rather than a thrown error — throwing keeps the
+/// `readEmbedded(): Buffer` contract honest.
+fn throw_embed_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = crate::error::js_error_new_with_message(msg);
     crate::exception::js_throw(js_nanbox_pointer(err as i64))
+}
+
+/// Throw for a `readEmbedded` miss — matches Node's `fs` "not found" semantics.
+fn throw_embed_not_found(path: &str) -> ! {
+    throw_embed_error(&format!("No embedded asset found for path: {path}"))
 }
 
 /// `import { readEmbedded } from "perry"`. Reads an embedded asset by virtual
@@ -240,6 +244,14 @@ pub extern "C" fn js_perry_read_embedded(path_value: f64) -> *mut crate::buffer:
     let Some(bytes) = lookup(&path) else {
         throw_embed_not_found(&path);
     };
+    // `js_buffer_alloc` takes an i32 length; an asset ≥2 GiB would wrap to a
+    // negative/garbage size. Reject it explicitly rather than corrupt memory.
+    if bytes.len() > i32::MAX as usize {
+        throw_embed_error(&format!(
+            "Embedded asset too large to read into a Buffer ({} bytes): {path}",
+            bytes.len()
+        ));
+    }
     unsafe {
         let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
         if !buf.is_null() {
