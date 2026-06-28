@@ -219,6 +219,9 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
     if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
         return true;
     }
+    if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        return true;
+    }
     // Live indices beyond the dense backing store are stored in the sparse
     // named-property map, which the raw element loop never reads.
     unsafe { (*arr).length > (*arr).capacity }

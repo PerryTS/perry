@@ -734,6 +734,7 @@ pub extern "C" fn js_array_join(
         }
 
         let elements_ptr = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        let exotic = crate::array::array_iteration_is_exotic(arr);
 
         // Get separator string
         let sep_str = if separator.is_null() {
@@ -750,26 +751,22 @@ pub extern "C" fn js_array_join(
             if i > 0 {
                 result.push_str(sep_str);
             }
-            let element_bits = (*elements_ptr.add(i)).to_bits();
+            let element_bits = if exotic {
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    // absent slot (own or inherited) → empty string per spec
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32).to_bits()
+            } else {
+                let bits = (*elements_ptr.add(i)).to_bits();
+                // Issue #907: `Array(n)` initializes slots to TAG_HOLE; per
+                // ES2015 §22.1.3.13 holes stringify to the empty string.
+                if bits == crate::value::TAG_HOLE {
+                    continue;
+                }
+                bits
+            };
             let jsvalue = JSValue::from_bits(element_bits);
-
-            // Issue #907: `Array(n)` initializes slots to TAG_HOLE
-            // (see `js_array_alloc_with_length`). Per ES2015 §22.1.3.13
-            // (Array.prototype.join), holes go through Get which returns
-            // undefined → the spec's ToString step turns them into the
-            // empty string. Without this check the catch-all below
-            // emitted "[object Object]", so `Array(3).join("0")` returned
-            // `"[object Object]0[object Object]0[object Object]"` instead
-            // of `"00"`. dayjs's `m(t,e,n)` pad utility builds the UTC
-            // offset string via `Array(e+1-r.length).join(n)` and the
-            // result silently corrupted `b.z(this)` (the format `i`
-            // capture), which downstream triggered
-            // `TypeError: (number).replace is not a function` once the
-            // catch-all fallthrough reached `i.replace(":","")`.
-            if element_bits == crate::value::TAG_HOLE {
-                // hole → empty string per spec
-                continue;
-            }
 
             // Convert element to string based on its type
             if jsvalue.is_string() {
