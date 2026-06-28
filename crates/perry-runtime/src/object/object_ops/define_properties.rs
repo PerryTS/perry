@@ -199,20 +199,43 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // OrdinarySetPrototypeOf step 7: detect prototype cycles.
     // Walk the prototype chain of the proposed new prototype; if any ancestor
     // equals the target object, setting the prototype would form a cycle.
+    // Use Floyd's tortoise-and-hare so a pre-existing multi-node cycle in the
+    // chain (A→B→A) terminates instead of looping forever. The `tortoise`
+    // advances one step; the `hare` advances two. If they meet, the chain is
+    // cyclic and contains a loop (so it will never reach null), meaning we also
+    // can't form a fresh cycle by setting obj's proto to `proto`.
     if !proto_is_null {
         const TAG_NULL_U64: u64 = 0x7FFC_0000_0000_0002;
-        let mut p_bits = proto_bits;
+        let advance = |bits: u64| -> u64 {
+            let val = f64::from_bits(bits);
+            let next = js_object_get_prototype_of(val);
+            let nb = next.to_bits();
+            if nb == TAG_NULL_U64 {
+                TAG_NULL_U64
+            } else {
+                nb
+            }
+        };
+        let mut tortoise = proto_bits;
+        let mut hare = proto_bits;
         loop {
-            if p_bits == obj_bits {
+            // Check current tortoise position first (catches `proto == obj`
+            // on the very first iteration without an extra advance).
+            if tortoise == obj_bits {
                 throw_object_type_error(b"Cyclic __proto__ value");
             }
-            let p_val = f64::from_bits(p_bits);
-            let next = js_object_get_prototype_of(p_val);
-            let next_bits = next.to_bits();
-            if next_bits == TAG_NULL_U64 || next_bits == p_bits {
+            if tortoise == TAG_NULL_U64 {
                 break;
             }
-            p_bits = next_bits;
+            // Advance tortoise one step, hare two steps.
+            tortoise = advance(tortoise);
+            hare = advance(advance(hare));
+            // If they meet, the existing chain already has a cycle — the walk
+            // will never reach null, so we also can never form a new one by
+            // setting obj's proto. Just break; the set is safe.
+            if hare == tortoise {
+                break;
+            }
         }
     }
 

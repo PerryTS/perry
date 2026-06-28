@@ -94,7 +94,10 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     if crate::temporal::is_temporal_value(receiver) {
         return crate::temporal::dispatch::call_method(receiver, "toLocaleString", &[]);
     }
-    if !jsval.is_pointer() {
+    // Symbols are POINTER-tagged, so `!jsval.is_pointer()` would be false for
+    // them — check before the pointer guard so the branch is reachable.
+    let is_symbol = unsafe { crate::symbol::js_is_symbol(receiver) } != 0;
+    if !jsval.is_pointer() || is_symbol {
         // Spec 20.1.3.6 Object.prototype.toLocaleString: step 1 is "Let O be
         // the this value" (NOT ToObject), step 2 is "Return ? Invoke(O,
         // 'toString')". Invoke resolves the method on the primitive's prototype
@@ -108,7 +111,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
             b"BigInt"
         } else if jsval.is_any_string() {
             b"String"
-        } else if unsafe { crate::symbol::js_is_symbol(receiver) } != 0 {
+        } else if is_symbol {
             b"Symbol"
         } else {
             b""

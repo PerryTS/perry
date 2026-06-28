@@ -266,9 +266,12 @@ fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
         // Value: prefer a side-table override written by defineProperty, then
         // fall back to the built-in computed value so Object.keys / entries
         // returns the right thing even when defineProperty only changed attrs.
-        let val = crate::closure::closure_get_dynamic_prop(ptr, builtin_key);
-        let value = if val.to_bits() != crate::value::TAG_UNDEFINED {
-            f64::from_bits(val.to_bits())
+        // Use `closure_has_own_dynamic_prop` to distinguish "has an explicit
+        // dynamic value (possibly undefined)" from "no override" — using
+        // `closure_get_dynamic_prop` as a sentinel conflates both cases and
+        // also invokes getters, which is wrong for the keys-only path.
+        let value = if crate::closure::closure_has_own_dynamic_prop(ptr, builtin_key) {
+            f64::from_bits(crate::closure::closure_get_dynamic_prop(ptr, builtin_key).to_bits())
         } else if *builtin_key == "length" {
             let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
             let len = unsafe {
