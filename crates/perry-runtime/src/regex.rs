@@ -586,12 +586,29 @@ pub extern "C" fn js_regexp_new(
                 pattern_str
             ));
         }
-        let translated = js_regex_to_rust(pattern_str);
-        if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
-            throw_regexp_syntax_error(&format!(
-                "Invalid regular expression: /{}/: invalid pattern",
-                pattern_str
-            ));
+        // The expensive part of validation is compiling the pattern with both
+        // engines just to confirm it is well-formed. That is REDUNDANT once
+        // this exact (pattern, flags) is in REGEX_CACHE: `get_or_compile_regex`
+        // compiled it on an earlier call, and a cached pattern is by definition
+        // compilable, so the "both engines fail" branch below can never fire
+        // for it. Skipping the recompile on a cache hit is what turns
+        // string-width's per-measurement `emojiRegex()` — which returns a fresh
+        // `/…/g` literal each call — from recompiling the 12807-char emoji
+        // automaton EVERY time (observed: 99% CPU for minutes during ink's
+        // flexbox `calculateLayout`) into a single cache lookup. The cheap
+        // JS-syntax checks above still run on every call.
+        let in_cache = REGEX_CACHE.with(|c| {
+            c.borrow()
+                .contains_key(&(pattern_str.to_string(), flags_str.to_string()))
+        });
+        if !in_cache {
+            let translated = js_regex_to_rust(pattern_str);
+            if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err() {
+                throw_regexp_syntax_error(&format!(
+                    "Invalid regular expression: /{}/: invalid pattern",
+                    pattern_str
+                ));
+            }
         }
     }
 
