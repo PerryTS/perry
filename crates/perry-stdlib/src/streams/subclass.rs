@@ -366,28 +366,77 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// Read every queued chunk into a Vec<u8>, draining the stream. Used by
-/// `new Response(stream)` / `new Request(url, { body: stream })` — we
-/// drain the buffered chunks at construction time so the resulting
-/// Response.body bytes match what a real serializer would produce.
+/// Drain a ReadableStream's body to bytes, DRIVING its `pull` source. Used by
+/// `new Response(stream)` / `new Request(url, { body: stream })` to materialize
+/// the body at construction time.
+///
+/// The previous implementation snapshotted only the chunks already queued at
+/// the synchronous call instant and force-closed the stream. That worked for a
+/// body whose data was enqueued in `start(controller)` (already queued), but
+/// any data produced by a `pull(controller)` callback — sync OR async — was
+/// silently dropped: `maybe_pull` defers the pull to a microtask that hadn't
+/// run yet, and an async pull defers its `enqueue` further (past `await`). The
+/// canonical victim is axios's `trackStream`, which wraps `response.body` in a
+/// new stream whose async `pull` does `await reader.read()`; `new Response(...)`
+/// then read an empty body and the request never settled.
+///
+/// Instead we loop: collect queued chunks, then ask for the next one
+/// (`maybe_pull`) and run the microtask queue so the (possibly async) pull's
+/// `enqueue`/`close` land, until the stream reaches a terminal state. An idle
+/// counter bounds the loop: a still-open stream that produces nothing through
+/// the microtask runner (a genuinely live source awaiting external I/O) can't
+/// be drained synchronously here and falls back to whatever has arrived. This
+/// mirrors the `await_maybe_promise` pump already used for `node:stream`
+/// consumers (streams.rs).
 #[doc(hidden)]
 pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
     let mut out = Vec::new();
-    let chunks: Vec<u64> = {
-        let mut g = READABLE_STREAMS.lock().unwrap();
-        match g.get_mut(&stream_id) {
-            Some(s) => {
-                let drained = s.drain_chunks();
-                s.state = ReadableState::Closed;
-                drained
+    let mut idle = 0u32;
+    // Absolute cap mirrors `await_maybe_promise` — a backstop against a stream
+    // whose pull re-arms forever without ever closing.
+    for _ in 0..1_000_000 {
+        let (chunks, terminal) = {
+            let mut g = READABLE_STREAMS.lock().unwrap();
+            match g.get_mut(&stream_id) {
+                Some(s) => {
+                    let drained = s.drain_chunks();
+                    let terminal =
+                        matches!(s.state, ReadableState::Closed | ReadableState::Errored);
+                    (drained, terminal)
+                }
+                None => break,
             }
-            None => return out,
+        };
+        let mut got_chunk = false;
+        for chunk in chunks {
+            unsafe {
+                if let Some(bytes) = read_bytes_from_chunk(chunk) {
+                    out.extend_from_slice(&bytes);
+                    got_chunk = true;
+                }
+            }
         }
-    };
-    for chunk in chunks {
+        if terminal {
+            break;
+        }
+        // Request the next chunk and let the (possibly async) pull run.
+        // `maybe_pull_force` ignores the highWaterMark/read-request gate so a
+        // `highWaterMark: 0` stream (which has no parked reader here) is still
+        // driven to completion instead of draining empty (CodeRabbit #5776).
         unsafe {
-            if let Some(bytes) = read_bytes_from_chunk(chunk) {
-                out.extend_from_slice(&bytes);
+            maybe_pull_force(stream_id);
+        }
+        perry_runtime::promise::js_promise_run_microtasks();
+        if got_chunk {
+            idle = 0;
+        } else {
+            // No new chunk this round. Give the pull a few microtask turns to
+            // produce one (an async pull's enqueue lands a turn after its
+            // `await`); if it stays empty and unclosed, treat it as a live
+            // source we can't drain here and stop.
+            idle += 1;
+            if idle >= 16 {
+                break;
             }
         }
     }
