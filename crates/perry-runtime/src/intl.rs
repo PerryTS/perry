@@ -119,6 +119,7 @@ const KEY_SECOND: &str = "__intlDtSecond";
 const KEY_FRACTIONAL: &str = "__intlDtFractional";
 const KEY_TIME_ZONE_NAME: &str = "__intlDtTimeZoneName";
 const KEY_TIME_STYLE: &str = "__intlDtTimeStyle";
+const KEY_DT_IS_DEFAULT: &str = "__intlDtIsDefault";
 const KEY_GRANULARITY: &str = "__intlGranularity";
 const KEY_TYPE: &str = "__intlType";
 const KEY_LF_STYLE: &str = "__intlListStyle";
@@ -1264,6 +1265,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 set_internal_field(obj, KEY_YEAR, string_value("numeric"));
                 set_internal_field(obj, KEY_MONTH, string_value("numeric"));
                 set_internal_field(obj, KEY_DAY, string_value("numeric"));
+                set_internal_field(obj, KEY_DT_IS_DEFAULT, bool_value(true));
             }
             install_bound_instance_function(
                 obj,

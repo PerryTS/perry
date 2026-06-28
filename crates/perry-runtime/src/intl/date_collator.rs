@@ -66,6 +66,9 @@ pub(crate) extern "C" fn date_time_format_format_thunk(
     value: f64,
 ) -> f64 {
     let obj = this_intl_object("format", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(value) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
     let ms = date_arg_to_clipped_ms(value);
     string_value(&format_ms_with_dtf_obj(obj, ms))
 }
@@ -75,6 +78,9 @@ pub(crate) extern "C" fn date_time_format_bound_format_thunk(
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "format", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(value) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
     let ms = date_arg_to_clipped_ms(value);
     string_value(&format_ms_with_dtf_obj(obj, ms))
 }
@@ -91,6 +97,9 @@ pub(crate) extern "C" fn date_time_format_to_parts_thunk(
     value: f64,
 ) -> f64 {
     let obj = this_intl_object("formatToParts", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(value) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
     date_time_format_to_parts_value(obj, value)
 }
 
@@ -99,6 +108,9 @@ pub(crate) extern "C" fn date_time_format_bound_to_parts_thunk(
     value: f64,
 ) -> f64 {
     let obj = captured_intl_object(closure, "formatToParts", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(value) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
     date_time_format_to_parts_value(obj, value)
 }
 
@@ -175,6 +187,91 @@ pub(crate) fn date_range_parts_from_ms(ms: f64) -> Vec<(&'static str, String)> {
         ("literal", "/".to_string()),
         ("year", year.to_string()),
     ]
+}
+
+/// ECMA-402 §11.1.3: field-presence bitmask for the DTF object's *primary*
+/// date/time components. Only fields that directly indicate a date or time
+/// dimension contribute; supplementary fields (`era`, `timeZoneName`) do not
+/// participate in the no-overlap check.
+///
+///   bit 0 (0x01) — year dimension  (year, dateStyle)
+///   bit 1 (0x02) — month dimension (month, dateStyle)
+///   bit 2 (0x04) — day dimension   (day, weekday, dateStyle)
+///   bit 3 (0x08) — time dimension  (hour, minute, second, fractional, timeStyle)
+fn dtf_primary_mask(obj: *const ObjectHeader) -> u8 {
+    const BIT_YEAR: u8 = 0x01;
+    const BIT_MONTH: u8 = 0x02;
+    const BIT_DAY: u8 = 0x04;
+    const BIT_TIME: u8 = 0x08;
+    let mut mask = 0u8;
+    if get_string_field(obj, KEY_DATE_STYLE).is_some() {
+        mask |= BIT_YEAR | BIT_MONTH | BIT_DAY;
+    }
+    if get_string_field(obj, KEY_TIME_STYLE).is_some() {
+        mask |= BIT_TIME;
+    }
+    if get_string_field(obj, KEY_YEAR).is_some() {
+        mask |= BIT_YEAR;
+    }
+    if get_string_field(obj, KEY_MONTH).is_some() {
+        mask |= BIT_MONTH;
+    }
+    if get_string_field(obj, KEY_DAY).is_some() {
+        mask |= BIT_DAY;
+    }
+    if get_string_field(obj, KEY_WEEKDAY).is_some() {
+        mask |= BIT_DAY;
+    }
+    if get_string_field(obj, KEY_HOUR).is_some()
+        || get_string_field(obj, KEY_MINUTE).is_some()
+        || get_string_field(obj, KEY_SECOND).is_some()
+        || get_number_field(obj, KEY_FRACTIONAL).is_some()
+    {
+        mask |= BIT_TIME;
+    }
+    mask
+}
+
+/// Field-presence bitmask for a Temporal type's data model (same bit layout as
+/// `dtf_primary_mask`). Used to check whether the DTF's requested fields overlap
+/// with the fields the Temporal value actually carries.
+fn temporal_primary_mask(kind: crate::temporal::TemporalKind) -> u8 {
+    use crate::temporal::TemporalKind::*;
+    const BIT_YEAR: u8 = 0x01;
+    const BIT_MONTH: u8 = 0x02;
+    const BIT_DAY: u8 = 0x04;
+    const BIT_TIME: u8 = 0x08;
+    match kind {
+        PlainDate => BIT_YEAR | BIT_MONTH | BIT_DAY,
+        PlainTime => BIT_TIME,
+        PlainDateTime => BIT_YEAR | BIT_MONTH | BIT_DAY | BIT_TIME,
+        PlainYearMonth => BIT_YEAR | BIT_MONTH,
+        PlainMonthDay => BIT_MONTH | BIT_DAY,
+        Instant | ZonedDateTime => BIT_YEAR | BIT_MONTH | BIT_DAY | BIT_TIME,
+        Duration => 0,
+    }
+}
+
+/// ECMA-402 §11.5.5 / HandleDateTimeValue: throw a TypeError when the DTF's
+/// explicit options have no field in common with the Temporal type's data model.
+/// DTFs created with *no* options (defaults applied) skip the check — the spec
+/// only applies to explicitly-constructed option sets.
+fn validate_temporal_dtf_overlap(kind: crate::temporal::TemporalKind, obj: *const ObjectHeader) {
+    let is_default = get_field(obj, KEY_DT_IS_DEFAULT).to_bits() == crate::value::TAG_TRUE;
+    if is_default {
+        return;
+    }
+    let dtf_mask = dtf_primary_mask(obj);
+    if dtf_mask == 0 {
+        return;
+    }
+    let type_mask = temporal_primary_mask(kind);
+    if dtf_mask & type_mask == 0 {
+        throw_type_error(
+            "Intl.DateTimeFormat: the requested options have no overlap \
+             with the Temporal type's data model",
+        );
+    }
 }
 
 // ---- Locale-aware date/time formatting (DTF and Temporal.toLocaleString) ---
@@ -679,16 +776,19 @@ fn range_type_tag(value: f64) -> u8 {
     }
 }
 
-pub(crate) fn date_time_format_range_value(method: &str, start: f64, end: f64) -> f64 {
+pub(crate) fn date_time_format_range_value(
+    obj: *const ObjectHeader,
+    method: &str,
+    start: f64,
+    end: f64,
+) -> f64 {
     let (x, y) = date_time_range_clip(method, start, end);
-    if x == y {
-        string_value(&date_short_utc_from_ms(x))
+    let sx = format_ms_with_dtf_obj(obj, x);
+    let sy = format_ms_with_dtf_obj(obj, y);
+    if sx == sy {
+        string_value(&sx)
     } else {
-        string_value(&format!(
-            "{} \u{2013} {}",
-            date_short_utc_from_ms(x),
-            date_short_utc_from_ms(y)
-        ))
+        string_value(&format!("{sx} \u{2013} {sy}"))
     }
 }
 
@@ -707,12 +807,19 @@ pub(crate) fn range_parts_to_js_array(parts: &[(&'static str, String, &'static s
     js_nanbox_pointer(arr as i64)
 }
 
-pub(crate) fn date_time_format_range_parts_value(method: &str, start: f64, end: f64) -> f64 {
+pub(crate) fn date_time_format_range_parts_value(
+    obj: *const ObjectHeader,
+    method: &str,
+    start: f64,
+    end: f64,
+) -> f64 {
     let (x, y) = date_time_range_clip(method, start, end);
+    let sx = format_ms_with_dtf_obj(obj, x);
+    let sy = format_ms_with_dtf_obj(obj, y);
     let tag = |parts: Vec<(&'static str, String)>, source: &'static str| {
         parts.into_iter().map(move |(t, v)| (t, v, source))
     };
-    if x == y {
+    if sx == sy {
         let shared: Vec<_> = tag(date_range_parts_from_ms(x), "shared").collect();
         return range_parts_to_js_array(&shared);
     }
@@ -728,8 +835,11 @@ pub(crate) extern "C" fn date_time_format_range_thunk(
     start: f64,
     end: f64,
 ) -> f64 {
-    let _obj = this_intl_object("formatRange", KIND_DATE_TIME);
-    date_time_format_range_value("formatRange", start, end)
+    let obj = this_intl_object("formatRange", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(start) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
+    date_time_format_range_value(obj, "formatRange", start, end)
 }
 
 pub(crate) extern "C" fn date_time_format_bound_range_thunk(
@@ -737,8 +847,11 @@ pub(crate) extern "C" fn date_time_format_bound_range_thunk(
     start: f64,
     end: f64,
 ) -> f64 {
-    let _obj = captured_intl_object(closure, "formatRange", KIND_DATE_TIME);
-    date_time_format_range_value("formatRange", start, end)
+    let obj = captured_intl_object(closure, "formatRange", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(start) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
+    date_time_format_range_value(obj, "formatRange", start, end)
 }
 
 pub(crate) extern "C" fn date_time_format_range_to_parts_thunk(
@@ -746,8 +859,11 @@ pub(crate) extern "C" fn date_time_format_range_to_parts_thunk(
     start: f64,
     end: f64,
 ) -> f64 {
-    let _obj = this_intl_object("formatRangeToParts", KIND_DATE_TIME);
-    date_time_format_range_parts_value("formatRangeToParts", start, end)
+    let obj = this_intl_object("formatRangeToParts", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(start) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
+    date_time_format_range_parts_value(obj, "formatRangeToParts", start, end)
 }
 
 pub(crate) extern "C" fn date_time_format_bound_range_to_parts_thunk(
@@ -755,8 +871,11 @@ pub(crate) extern "C" fn date_time_format_bound_range_to_parts_thunk(
     start: f64,
     end: f64,
 ) -> f64 {
-    let _obj = captured_intl_object(closure, "formatRangeToParts", KIND_DATE_TIME);
-    date_time_format_range_parts_value("formatRangeToParts", start, end)
+    let obj = captured_intl_object(closure, "formatRangeToParts", KIND_DATE_TIME);
+    if let Some(kind) = crate::temporal::temporal_kind(start) {
+        validate_temporal_dtf_overlap(kind, obj);
+    }
+    date_time_format_range_parts_value(obj, "formatRangeToParts", start, end)
 }
 
 pub(crate) extern "C" fn date_time_format_resolved_options_thunk(
