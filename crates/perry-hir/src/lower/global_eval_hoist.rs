@@ -1022,9 +1022,7 @@ fn collect_nested_fn_decl_names_inner(
 
 #[cfg(test)]
 mod global_eval_hoist_tests {
-    use super::{
-        apply_function_eval_hoist, apply_global_eval_hoist, collect_nested_fn_decl_names,
-    };
+    use super::{apply_function_eval_hoist, apply_global_eval_hoist, collect_nested_fn_decl_names};
     use swc_ecma_ast as ast;
 
     fn bound_set(names: &[&str]) -> std::collections::HashSet<String> {
@@ -1405,7 +1403,10 @@ mod global_eval_hoist_tests {
             fns.iter().any(|n| n.starts_with("__perry_ev_fn_")),
             "renamed fn decl, got {fns:?}"
         );
-        assert!(!fns.iter().any(|n| n == "f"), "no `f` decl remains: {fns:?}");
+        assert!(
+            !fns.iter().any(|n| n == "f"),
+            "no `f` decl remains: {fns:?}"
+        );
         assert!(
             assign_targets(&out).iter().any(|t| t == "f"),
             "publishes f = <hidden>"
@@ -1452,6 +1453,9 @@ mod global_eval_hoist_tests {
         for n in ["a", "b", "c", "d", "g"] {
             assert!(names.contains(n), "missing nested {n}: {names:?}");
         }
-        assert!(!names.contains("top"), "top-level must be excluded: {names:?}");
+        assert!(
+            !names.contains("top"),
+            "top-level must be excluded: {names:?}"
+        );
     }
 }

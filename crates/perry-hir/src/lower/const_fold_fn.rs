@@ -1597,11 +1597,10 @@ fn try_const_fold_eval(
     // the enclosing scope, so a brand-new binding keeps the IIFE's (correct)
     // fresh slot rather than leaking a sloppy global.
     if !eval_strict && !eval_is_module_top_global(ctx) && ctx.with_env_stack.is_empty() {
-        let bound: std::collections::HashSet<String> =
-            collect_nested_fn_decl_names(&body_stmts)
-                .into_iter()
-                .filter(|n| ctx.locals.lookup(n).is_some())
-                .collect();
+        let bound: std::collections::HashSet<String> = collect_nested_fn_decl_names(&body_stmts)
+            .into_iter()
+            .filter(|n| ctx.locals.lookup(n).is_some())
+            .collect();
         if let Some(hoisted) = apply_function_eval_hoist(&body_stmts, bound) {
             return build_eval_completion_iife(ctx, hoisted, eval_strict, span);
         }
