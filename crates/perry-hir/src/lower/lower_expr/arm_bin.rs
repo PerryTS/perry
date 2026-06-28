@@ -163,8 +163,26 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         return Ok(Expr::InstanceOf { expr, ty, ty_expr });
     }
 
-    let left = Box::new(lower_expr(ctx, &bin.left)?);
-    let right = Box::new(lower_expr(ctx, &bin.right)?);
+    // `lowering_call_callee` flags the IMMEDIATE callee member so a direct
+    // `JSON.parse(x)` / `Date.now()` takes the intrinsic fast path (and the
+    // member-tail reroute-undo collapses the receiver to bare `GlobalGet(0)`).
+    // A binary/logical expression in callee position — `(K || JSON.parse)(x)`,
+    // `(a ?? B.method)(x)`, `(a && f)(x)` — is ITSELF the callee; its operands
+    // are values, never the immediate callee member. The flag must not leak
+    // into them: left set, the reroute-undo (#4596/#4627) would collapse a
+    // nested builtin-namespace member (`JSON.parse`) to the value-less
+    // intrinsic form `PropertyGet { GlobalGet(0), <method> }`, which has no
+    // value materialization (the namespace name is gone) and lowers to
+    // `undefined` — so the short-circuit result throws "value is not a
+    // function" when called. A nested *call* operand (`(f() + 1)`) re-sets the
+    // flag for its own callee, so direct intrinsic calls are unaffected.
+    let prev_call_callee = ctx.lowering_call_callee;
+    ctx.lowering_call_callee = false;
+    let left = lower_expr(ctx, &bin.left);
+    let right = lower_expr(ctx, &bin.right);
+    ctx.lowering_call_callee = prev_call_callee;
+    let left = Box::new(left?);
+    let right = Box::new(right?);
 
     match bin.op {
         // Arithmetic

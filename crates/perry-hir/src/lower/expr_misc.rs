@@ -31,13 +31,24 @@ use crate::lower_patterns::unescape_template;
 use super::{lower_expr, LoweringContext};
 
 pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Result<Expr> {
-    let condition = Box::new(lower_expr(ctx, &cond.test)?);
-    let then_expr = Box::new(lower_expr(ctx, &cond.cons)?);
-    let else_expr = Box::new(lower_expr(ctx, &cond.alt)?);
+    // A conditional in callee position — `(c ? a : JSON.parse)(x)` — is itself
+    // the callee; its branches are values, not the immediate callee member, so
+    // `lowering_call_callee` must not leak into them. Left set, the member-tail
+    // reroute-undo collapses a builtin-namespace member in a branch
+    // (`JSON.parse`) to the value-less intrinsic form, which lowers to
+    // `undefined` → the result throws "value is not a function" when called.
+    // See `arm_bin.rs` for the full rationale; a nested *call* branch re-sets
+    // the flag for its own callee, so direct intrinsic calls are unaffected.
+    let prev_call_callee = ctx.lowering_call_callee;
+    ctx.lowering_call_callee = false;
+    let condition = lower_expr(ctx, &cond.test);
+    let then_expr = lower_expr(ctx, &cond.cons);
+    let else_expr = lower_expr(ctx, &cond.alt);
+    ctx.lowering_call_callee = prev_call_callee;
     Ok(Expr::Conditional {
-        condition,
-        then_expr,
-        else_expr,
+        condition: Box::new(condition?),
+        then_expr: Box::new(then_expr?),
+        else_expr: Box::new(else_expr?),
     })
 }
 
@@ -260,10 +271,16 @@ pub(super) fn lower_seq(ctx: &mut LoweringContext, seq: &ast::SeqExpr) -> Result
     // the last value. e.g., `(a++, b++, c)` evaluates a++, then b++,
     // then returns c. All sub-exprs run for side effects (the for-loop
     // update slot uses this when chaining `it3--, i++`).
-    let mut exprs = Vec::new();
-    for expr in &seq.exprs {
-        exprs.push(lower_expr(ctx, expr)?);
-    }
+    // A comma sequence in callee position — `(a, JSON.parse)(x)` — is itself
+    // the callee; its elements are values, not the immediate callee member, so
+    // `lowering_call_callee` must not leak into them (else a builtin-namespace
+    // member collapses to the value-less intrinsic form → `undefined` → "value
+    // is not a function" when called). See `arm_bin.rs` for the full rationale.
+    let prev_call_callee = ctx.lowering_call_callee;
+    ctx.lowering_call_callee = false;
+    let lowered: Result<Vec<Expr>> = seq.exprs.iter().map(|e| lower_expr(ctx, e)).collect();
+    ctx.lowering_call_callee = prev_call_callee;
+    let mut exprs = lowered?;
     if exprs.len() == 1 {
         Ok(exprs.pop().unwrap())
     } else {
