@@ -298,6 +298,30 @@ pub(crate) fn round_to_increment(
     (strip_leading_zeros(int_str), frac_str)
 }
 
+/// Fraction-rounding step shared by every notation path. Honors
+/// `roundingIncrement` when set (which ECMA-402 only permits alongside fixed
+/// `minFrac == maxFrac` fraction-digit rounding, so no trailing-zero trimming is
+/// needed); otherwise rounds to `maxFrac` places and trims down to `minFrac`.
+/// With `roundingIncrement == 1` this is byte-identical to a bare
+/// `round_to_fraction` + `trim_fraction`.
+pub(crate) fn round_fraction_or_increment(
+    int_part: &str,
+    frac_part: &str,
+    r: &NfResolved,
+) -> (String, String) {
+    if r.rounding_increment != 1.0 {
+        round_to_increment(
+            int_part,
+            frac_part,
+            r.max_frac as usize,
+            r.rounding_increment as u128,
+        )
+    } else {
+        let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
+        (i, trim_fraction(&f, r.min_frac as usize))
+    }
+}
+
 /// Round the decimal value `int_part.frac_part` to exactly `frac_digits`
 /// fractional places under the active rounding mode, operating on the digit
 /// strings so the result is independent of the binary float's representation
@@ -725,17 +749,13 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
             } else {
                 (sig_digits, "")
             };
+            // The fraction path rounds the mantissa to `maxFrac` places (honoring
+            // roundingIncrement); significant rounding already normalizes its own
+            // trailing zeros.
             let (mut i_out, f_out) = if r.use_sig {
                 round_to_significant(m_int, m_frac, r.min_sig, r.max_sig)
             } else {
-                round_to_fraction(m_int, m_frac, r.max_frac as usize)
-            };
-            // Significant rounding already normalizes trailing zeros; only the
-            // fraction path trims down to the minimum fraction count.
-            let f_out = if r.use_sig {
-                f_out
-            } else {
-                trim_fraction(&f_out, r.min_frac as usize)
+                round_fraction_or_increment(m_int, m_frac, r)
             };
             while (i_out.len() as u32) < r.min_int {
                 i_out.insert(0, '0');
@@ -803,18 +823,8 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
         _ => {
             let (mut i_out, f_out) = if r.use_sig {
                 round_to_significant(int_part, frac_part, r.min_sig, r.max_sig)
-            } else if r.rounding_increment != 1.0 {
-                // roundingIncrement fixes minFrac == maxFrac, so the fraction is
-                // already exactly `max_frac` wide — no trailing-zero trimming.
-                round_to_increment(
-                    int_part,
-                    frac_part,
-                    r.max_frac as usize,
-                    r.rounding_increment as u128,
-                )
             } else {
-                let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
-                (i, trim_fraction(&f, r.min_frac as usize))
+                round_fraction_or_increment(int_part, frac_part, r)
             };
             while (i_out.len() as u32) < r.min_int {
                 i_out.insert(0, '0');
@@ -862,8 +872,7 @@ pub(crate) fn compact_round(int_part: &str, frac_part: &str, r: &NfResolved) -> 
     } else if r.use_sig {
         round_to_significant(int_part, frac_part, r.min_sig, r.max_sig)
     } else {
-        let (i, f) = round_to_fraction(int_part, frac_part, r.max_frac as usize);
-        (i, trim_fraction(&f, r.min_frac as usize))
+        round_fraction_or_increment(int_part, frac_part, r)
     }
 }
 
@@ -889,12 +898,31 @@ pub(crate) fn push_style_suffix(
 /// `number_instance_parts`.
 pub(crate) fn currency_instance_parts(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> {
     let locale = &r.locale;
-    let digits = format_number_parts(
-        value,
-        locale,
-        Some(r.currency.as_deref().map_or(2, currency_fraction_digits) as usize),
-        None,
-    );
+    let frac_digits = r.currency.as_deref().map_or(2, currency_fraction_digits) as usize;
+    // The native float renderer below doesn't honor roundingIncrement; when set,
+    // snap the magnitude onto the increment grid first (digit-string rounding,
+    // respecting roundingMode) so the renderer formats an already-gridded value.
+    let value = if r.rounding_increment != 1.0 && value.is_finite() {
+        let negative = value < 0.0 || (value == 0.0 && value.is_sign_negative());
+        set_round_ctx(&r.rounding_mode, negative);
+        let abs = value.abs();
+        let shortest = format!("{abs}");
+        let (ip, fp) = shortest.split_once('.').unwrap_or((&shortest, ""));
+        let (i, f) = round_to_increment(ip, fp, frac_digits, r.rounding_increment as u128);
+        let mag: f64 = if f.is_empty() {
+            i.parse().unwrap_or(abs)
+        } else {
+            format!("{i}.{f}").parse().unwrap_or(abs)
+        };
+        if negative {
+            -mag
+        } else {
+            mag
+        }
+    } else {
+        value
+    };
+    let digits = format_number_parts(value, locale, Some(frac_digits), None);
     let mut numeric: Vec<(&'static str, String)> = Vec::new();
     split_numeric_parts(&digits, locale, &mut numeric);
     let mut parts: Vec<(&'static str, String)> = Vec::new();
