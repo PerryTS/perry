@@ -271,7 +271,21 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 return f64::from_bits(parent_bits);
             }
         }
-        return f64::from_bits(TAG_NULL);
+        // Root of the class hierarchy. In JS `Object.getPrototypeOf` of a base
+        // class *constructor* is `Function.prototype`, and of a base class's
+        // `.prototype` object is `Object.prototype` — NOT null. class-transformer
+        // walks `Object.getPrototypeOf(target.prototype.constructor)` and then
+        // dereferences `.prototype` on the result; the old `null` made that
+        // `null.prototype` throw, blocking class-transformer/class-validator on
+        // any flat (no-`extends`) DTO. (#420 followup)
+        if super::super::class_prototype_ref_id(obj_value).is_some() {
+            let proto = crate::object::builtin_prototype_value("Object");
+            if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                return proto;
+            }
+            return f64::from_bits(TAG_NULL);
+        }
+        return function_prototype_or_null();
     }
     // Heap-pointer receiver — return the input value itself. For
     // class-id-tagged instances, `.constructor` then returns the class
