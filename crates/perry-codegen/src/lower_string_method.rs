@@ -1006,7 +1006,12 @@ pub(crate) fn lower_string_method(
                 &[(DOUBLE, &other_box), (I32, &method_id)],
             );
             let result_i32 = if let Some(pos_d) = pos_d {
-                let pos_i32 = blk.fptosi(DOUBLE, &pos_d, I32);
+                // ToIntegerOrInfinity(position): route through the runtime
+                // coercion (not a raw `fptosi` on the NaN-boxed value) so a
+                // boolean/numeric-string/`{valueOf}` coerces per spec and a
+                // Symbol position throws a TypeError (matches the dynamic
+                // dispatch path and the `includes` arm below).
+                let pos_i32 = blk.call(I32, "js_string_index_to_i32", &[(DOUBLE, &pos_d)]);
                 let runtime_fn = if property == "startsWith" {
                     "js_string_starts_with_at"
                 } else {

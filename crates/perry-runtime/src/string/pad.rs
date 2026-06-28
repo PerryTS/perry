@@ -21,6 +21,9 @@ pub extern "C" fn js_string_pad_fill(value: f64) -> *mut StringHeader {
     if jv.is_undefined() {
         return std::ptr::null_mut();
     }
+    // ToString(fillString): a Symbol fill throws a TypeError (§7.1.17), it does
+    // NOT stringify to "Symbol(...)" the way the lenient `String()` path would.
+    crate::builtins::reject_symbol_to_string(value);
     crate::builtins::js_string_coerce(value)
 }
 

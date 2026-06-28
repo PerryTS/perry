@@ -46,8 +46,9 @@ pub extern "C" fn js_string_raw(call_site: f64, substitutions: f64) -> *mut Stri
     let mut result = String::new();
     let mut i: u64 = 0;
     loop {
-        // ToString(raw[i])
+        // ToString(raw[i]) — a Symbol segment throws a TypeError (§7.1.17).
         let seg = crate::object::js_object_get_index_polymorphic(raw_handle, i as f64);
+        crate::builtins::reject_symbol_to_string(seg);
         let seg_ptr = crate::value::js_jsvalue_to_string(seg);
         if is_valid_string_ptr(seg_ptr) {
             result.push_str(string_as_str(seg_ptr));
@@ -61,6 +62,8 @@ pub extern "C" fn js_string_raw(call_site: f64, substitutions: f64) -> *mut Stri
         let sub = crate::object::js_object_get_index_polymorphic(subs_handle, i as f64);
         let sub_jsval = crate::value::JSValue::from_bits(sub.to_bits());
         if !sub_jsval.is_undefined() {
+            // ToString(substitution) — a Symbol throws a TypeError (§7.1.17).
+            crate::builtins::reject_symbol_to_string(sub);
             let sub_ptr = crate::value::js_jsvalue_to_string(sub);
             if is_valid_string_ptr(sub_ptr) {
                 result.push_str(string_as_str(sub_ptr));

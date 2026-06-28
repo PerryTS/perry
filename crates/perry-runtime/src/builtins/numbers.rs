@@ -611,6 +611,21 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
     js_string_from_bytes(result.as_ptr(), result.len() as u32)
 }
 
+/// Spec `ToString` (ECMA-262 §7.1.17) rejects a Symbol with a `TypeError`.
+/// The lenient `js_string_coerce` / `js_jsvalue_to_string` paths instead
+/// produce a `"Symbol(desc)"` descriptive string — correct for `String(sym)`,
+/// `console.log`, etc., but NOT for the abstract ToString operation invoked by
+/// string built-ins on their arguments (`"".padEnd(1, sym)`,
+/// `"".startsWith(sym)`, `String.raw({raw:[sym]})`, `"".normalize(sym)`). Those
+/// call sites invoke this guard *before* coercing so a Symbol argument throws as
+/// the spec requires.
+#[inline]
+pub fn reject_symbol_to_string(value: f64) {
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a string");
+    }
+}
+
 /// isNaN(value) -> boolean
 /// Returns true if value is NaN.
 #[no_mangle]
