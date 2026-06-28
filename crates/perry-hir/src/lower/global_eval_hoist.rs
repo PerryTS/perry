@@ -74,39 +74,61 @@ fn synth_ident_assign_stmt(name: &str, ident: &str) -> Option<ast::Stmt> {
     )
 }
 
-/// `void (<name> = <init>);` — like [`synth_assign_stmt`] but wrapped in `void`
-/// so the resulting expression statement keeps the *empty* completion value of
-/// the `var` / `function` declaration it replaces (a bare `x = init` statement
-/// would otherwise make the eval call yield `init`, e.g. breaking
-/// `(0,eval)("var x = 1")` which must return `undefined`). The wrapper is built
-/// by swapping the operand of a parsed `void 0;` to dodge version-sensitive SWC
-/// `UnaryExpr` construction.
-fn synth_void_assign_stmt(name: &str, init: Box<ast::Expr>) -> Option<ast::Stmt> {
+/// `{ let __perry_eval_void = (<name> = <init>); }` — like [`synth_assign_stmt`]
+/// but wrapped as a *completion-inert* lexical declaration so it keeps the
+/// *empty* completion value of the `var` declaration it replaces. A
+/// VariableStatement's completion is empty (§14.3.2): `(0,eval)("var x = 1")`
+/// must yield `undefined`, and — crucially — `eval("9; var x = 1")` must yield
+/// `9` (the empty `var` completion falls through to the prior statement). A bare
+/// `x = init` expression statement would yield `init`; a `void (x = init)`
+/// statement is still an expression statement, so the completion tracker rewrote
+/// it to `__perry_cv = void(x = init)` = `undefined`, which *clobbered* a
+/// preceding value (`eval("9; var x = 1")` wrongly became `undefined`). Wrapping
+/// the publish as a `let` declaration inside its own block makes it a
+/// declaration — which the completion tracker leaves untouched (like the
+/// original `var`) — while the inner assignment still publishes to the (global)
+/// variable environment. Each call gets a fresh block scope, so repeated
+/// `__perry_eval_void` bindings never collide. The throwaway is `let` (not
+/// `var`) so it stays lexically scoped to the completion IIFE and is never
+/// re-hoisted to the global environment. (test262
+/// `language/statements/variable/cptn-value`, #5735.)
+fn synth_inert_assign_stmt(name: &str, init: Box<ast::Expr>) -> Option<ast::Stmt> {
     let inner = synth_assign_stmt(name, init)?;
     let ast::Stmt::Expr(inner_es) = inner else {
         return None;
     };
-    let mut wrapper = parse_single_stmt("void 0;")?;
-    let ast::Stmt::Expr(es) = &mut wrapper else {
+    let mut block = parse_single_stmt("{ let __perry_eval_void = 0; }")?;
+    let ast::Stmt::Block(b) = &mut block else {
         return None;
     };
-    let ast::Expr::Unary(u) = es.expr.as_mut() else {
+    let Some(ast::Stmt::Decl(ast::Decl::Var(var))) = b.stmts.first_mut() else {
         return None;
     };
-    u.arg = inner_es.expr;
-    Some(wrapper)
+    let decl = var.decls.first_mut()?;
+    decl.init = Some(inner_es.expr);
+    Some(block)
 }
 
 /// CreateGlobalFunctionBinding for a renamed hidden *top-level* function:
 /// publish its value to the global name `<name>` with the spec's descriptor
-/// rules, emitted as a block so its completion value stays empty.
+/// rules. This is declaration-instantiation machinery, not a statement of the
+/// eval source, so it must contribute an *empty* completion value: the
+/// `Object.defineProperty(...)` calls are `void`-wrapped because `defineProperty`
+/// returns the target object (`globalThis`) — without the wrapper the completion
+/// tracker rewrites the call to `__perry_cv = Object.defineProperty(...)` and a
+/// declaration-only eval body (`eval("function f() {}")`) yields `globalThis`
+/// instead of `undefined` (test262 `language/statements/*/cptn-decl`). Same
+/// empty-completion reasoning as [`synth_inert_assign_stmt`] for the `var`
+/// publish (this block is *prepended* before the body, so `void`-wrapping its
+/// stores to `undefined` suffices — a later user statement overwrites it, and a
+/// declaration-only body correctly ends at `undefined`).
 ///
 /// ```text
 /// { let __perry_d = Object.getOwnPropertyDescriptor(globalThis, "<name>");
 ///   if (__perry_d === void 0 || __perry_d.configurable)
-///        Object.defineProperty(globalThis, "<name>",
+///        void Object.defineProperty(globalThis, "<name>",
 ///                              { value: <hidden>, writable: true, enumerable: true, configurable: true });
-///   else Object.defineProperty(globalThis, "<name>", { value: <hidden> }); }
+///   else void Object.defineProperty(globalThis, "<name>", { value: <hidden> }); }
 /// ```
 ///
 /// An absent or configurable binding is (re)defined as a writable, enumerable,
@@ -121,9 +143,9 @@ fn synth_create_global_fn_binding(name: &str, ident: &str) -> Option<ast::Stmt> 
     parse_single_stmt(&format!(
         "{{ let __perry_d = Object.getOwnPropertyDescriptor(globalThis, {name:?}); \
          if (__perry_d === void 0 || __perry_d.configurable) \
-         {{ Object.defineProperty(globalThis, {name:?}, \
+         {{ void Object.defineProperty(globalThis, {name:?}, \
             {{ value: {ident}, writable: true, enumerable: true, configurable: true }}); }} \
-         else {{ Object.defineProperty(globalThis, {name:?}, {{ value: {ident} }}); }} }}"
+         else {{ void Object.defineProperty(globalThis, {name:?}, {{ value: {ident} }}); }} }}"
     ))
 }
 
@@ -725,7 +747,7 @@ impl GlobalEvalHoist {
                         let name = binding.id.sym.to_string();
                         self.var_prelude_names.push(name.clone());
                         if let Some(init) = &d.init {
-                            match synth_void_assign_stmt(&name, init.clone()) {
+                            match synth_inert_assign_stmt(&name, init.clone()) {
                                 Some(s) => publishes.push(s),
                                 None => {
                                     self.ok = false;
@@ -1172,19 +1194,25 @@ mod global_eval_hoist_tests {
         );
     }
 
-    /// Names assigned by a top-level `void (name = …)` publish statement.
-    fn void_publish_targets(stmts: &[ast::Stmt]) -> Vec<String> {
+    /// Names assigned by a top-level completion-inert `var` publish —
+    /// `{ let __perry_eval_void = (name = …); }`. The assignment publishes to the
+    /// (global) variable environment while the enclosing lexical declaration
+    /// keeps the `var` statement's empty completion value.
+    fn inert_publish_targets(stmts: &[ast::Stmt]) -> Vec<String> {
         let mut out = Vec::new();
         for s in stmts {
-            if let ast::Stmt::Expr(es) = s {
-                if let ast::Expr::Unary(u) = es.expr.as_ref() {
-                    if matches!(u.op, ast::UnaryOp::Void) {
-                        if let ast::Expr::Assign(a) = u.arg.as_ref() {
-                            if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(b)) =
-                                &a.left
-                            {
-                                out.push(b.id.sym.to_string());
-                            }
+            let ast::Stmt::Block(b) = s else { continue };
+            for inner in &b.stmts {
+                let ast::Stmt::Decl(ast::Decl::Var(v)) = inner else {
+                    continue;
+                };
+                for d in &v.decls {
+                    let Some(init) = &d.init else { continue };
+                    if let ast::Expr::Assign(a) = init.as_ref() {
+                        if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(bind)) =
+                            &a.left
+                        {
+                            out.push(bind.id.sym.to_string());
                         }
                     }
                 }
@@ -1215,6 +1243,9 @@ mod global_eval_hoist_tests {
                         expr(&c.cons, out);
                         expr(&c.alt, out);
                     }
+                    // The function publish wraps each `Object.defineProperty(...)`
+                    // call in `void (...)` to keep an empty completion value.
+                    ast::Expr::Unary(u) => expr(&u.arg, out),
                     _ => {}
                 }
             }
@@ -1271,7 +1302,9 @@ mod global_eval_hoist_tests {
     #[test]
     fn top_level_var_is_published_to_the_global() {
         // A *top-level* `var` is CreateGlobalVarBinding: a create-if-absent slot
-        // (`if (...) { globalThis[x] = void 0 }`) plus a `void (x = init)` publish.
+        // (`if (...) { globalThis[x] = void 0 }`) plus a completion-inert
+        // `{ let __perry_eval_void = (x = init); }` publish (the lexical
+        // declaration keeps the VariableStatement's empty completion value).
         let out = apply_global_eval_hoist(&parse_body("initial = x; var x = 9;"))
             .expect("publishes the top-level var");
         assert!(
@@ -1279,10 +1312,11 @@ mod global_eval_hoist_tests {
             "create-if-absent prelude"
         );
         assert!(
-            void_publish_targets(&out).iter().any(|t| t == "x"),
-            "expected a void-wrapped publish of `x`"
+            inert_publish_targets(&out).iter().any(|t| t == "x"),
+            "expected an inert publish of `x`"
         );
-        // No `var` declaration may remain (it was rewritten to the publish).
+        // No top-level `var` declaration may remain (it was rewritten to the
+        // publish block).
         assert!(
             !out.iter()
                 .any(|s| matches!(s, ast::Stmt::Decl(ast::Decl::Var(_)))),
@@ -1301,7 +1335,7 @@ mod global_eval_hoist_tests {
             "create-if-absent prelude"
         );
         assert!(
-            void_publish_targets(&out).is_empty(),
+            inert_publish_targets(&out).is_empty(),
             "no publish for a bare var"
         );
         assert!(

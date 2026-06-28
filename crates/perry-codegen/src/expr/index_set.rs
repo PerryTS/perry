@@ -165,6 +165,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(val_double);
             }
             if is_width_tracked_typed_array_receiver(ctx, object) {
+                // A non-numeric index (a Symbol, or a string property name) is
+                // never an integer-indexed element. The width-tracked native
+                // store coerces the index with `fptosi`, which truncates a
+                // NaN-boxed Symbol to 0 and clobbers element 0 instead of
+                // storing the symbol property (test262 TypedArray symbol-key
+                // internals, #5735). Route such keys through the runtime
+                // dispatcher, which triages symbol / string / numeric keys —
+                // mirroring the symmetric IndexGet guard (index_get.rs). A
+                // literal / loop-counter index stays `is_numeric_expr`, so every
+                // proven element fast path below is preserved.
+                if !is_numeric_expr(ctx, index) {
+                    let arr_box = lower_expr(ctx, object)?;
+                    let idx_double = lower_expr(ctx, index)?;
+                    let val_double = lower_expr(ctx, value)?;
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                    let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                    return Ok(blk.call(
+                        DOUBLE,
+                        "js_typed_array_index_set_dynamic",
+                        &[
+                            (I64, &arr_i64),
+                            (DOUBLE, &idx_double),
+                            (DOUBLE, &val_double),
+                        ],
+                    ));
+                }
                 if let Some(store) = lower_typed_array_store(ctx, object, index, value)? {
                     if ctx.discard_expr_value {
                         return Ok(double_literal(0.0));

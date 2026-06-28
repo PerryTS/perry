@@ -583,6 +583,17 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
     let Some(owner) = typed_array_addr_from_value(f64::from_bits(owner_bits as u64)) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    // A Symbol key is never an integer-indexed element — read it from the symbol
+    // side table, exactly as the ordinary `obj[sym]` path does. Without this a
+    // symbol coerces to a numeric index (NaN → undefined) and a previously
+    // stored `ta[sym]` reads back `undefined` (test262 TypedArray symbol-key
+    // internals, #5735).
+    if crate::symbol::js_is_symbol(key) != 0 {
+        return crate::symbol::js_object_get_symbol_property(
+            crate::value::js_nanbox_pointer(owner as i64),
+            key,
+        );
+    }
     let jsval = crate::value::JSValue::from_bits(key.to_bits());
     if jsval.is_string() || jsval.is_short_string() {
         let key_ptr =
@@ -621,6 +632,19 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
         let Some(owner) = typed_array_addr_from_value(f64::from_bits(ta as u64)) else {
             return value;
         };
+        // A Symbol key is never an integer-indexed element — store it in the
+        // symbol side table, exactly as the ordinary `obj[sym] = v` path does.
+        // Without this the symbol is silently dropped (and, on the codegen
+        // width-tracked store path, `fptosi` coerces it to index 0 and clobbers
+        // element 0) — test262 TypedArray symbol-key internals, #5735.
+        if crate::symbol::js_is_symbol(key) != 0 {
+            crate::symbol::js_object_set_symbol_property(
+                crate::value::js_nanbox_pointer(owner as i64),
+                key,
+                value,
+            );
+            return value;
+        }
         let jsval = crate::value::JSValue::from_bits(key.to_bits());
         if jsval.is_string() || jsval.is_short_string() {
             let key_ptr = crate::value::js_get_string_pointer_unified(key)

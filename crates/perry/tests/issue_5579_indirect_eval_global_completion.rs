@@ -182,3 +182,81 @@ fn indirect_eval_nested_does_not_capture_locals() {
         "indirect eval must not capture the enclosing function's `local`\n{out}"
     );
 }
+
+/// Regression (#5735, cluster 2): the completion value of a statement list whose
+/// last evaluated statement is a *declaration* must fall through to the prior
+/// statement — a declaration produces an *empty* completion (test262
+/// `language/statements/{function,async-function,generators,variable}/cptn-*`,
+/// `language/statementList/eval-fn-block`).
+///
+/// In global-script mode a top-level `function` declaration inside the eval body
+/// is published to the global environment via CreateGlobalFunctionBinding, whose
+/// `Object.defineProperty(globalThis, …)` call *returns `globalThis`*. The
+/// completion tracker rewrote that publish into `__perry_cv = Object.define…`,
+/// so a declaration-only body (`eval("function f() {}")`) wrongly yielded the
+/// global object instead of `undefined`. The publish is now `void`-wrapped (it
+/// is declaration-instantiation machinery, not a statement of the source), so it
+/// keeps an empty completion. A preceding value statement still shows through
+/// (`eval("1; function f() {}")` === 1).
+const CPTN_DECL: &str = r#"
+console.log("fn:", eval("function f() {}"));                 // -> undefined
+console.log("fn1:", eval("1; function f1() {}"));            // -> 1
+console.log("gen:", eval("function* g() {}"));               // -> undefined
+console.log("gen1:", eval("1; function* g1() {}"));          // -> 1
+console.log("async:", eval("async function af() {}"));       // -> undefined
+console.log("var:", eval("var v1;"));                        // -> undefined
+console.log("varinit:", eval("var v2 = 2;"));                // -> undefined
+console.log("var7:", eval("7; var v8;"));                    // -> 7
+console.log("var9:", eval("9; var v10 = 10;"));              // -> 9 (init falls through)
+console.log("var11:", eval("11; var v12 = 12, v13;"));       // -> 11
+console.log("var14:", eval("14; var v15, v16 = 16;"));       // -> 14
+console.log("fnblock:", eval("function fn() {}{}"));         // -> undefined
+console.log("DONE");
+"#;
+
+#[test]
+fn eval_declaration_completion_is_empty_global_script() {
+    let (ok, out) = compile_and_run(CPTN_DECL, /* global_script */ true);
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(
+        out.contains("fn: undefined"),
+        "`function f(){{}}` -> undefined\n{out}"
+    );
+    assert!(out.contains("fn1: 1"), "`1; function f1(){{}}` -> 1\n{out}");
+    assert!(
+        out.contains("gen: undefined"),
+        "`function* g(){{}}` -> undefined\n{out}"
+    );
+    assert!(
+        out.contains("gen1: 1"),
+        "`1; function* g1(){{}}` -> 1\n{out}"
+    );
+    assert!(
+        out.contains("async: undefined"),
+        "`async function af(){{}}` -> undefined\n{out}"
+    );
+    assert!(
+        out.contains("var: undefined"),
+        "`var v1;` -> undefined\n{out}"
+    );
+    assert!(
+        out.contains("varinit: undefined"),
+        "`var v2 = 2;` -> undefined\n{out}"
+    );
+    assert!(out.contains("var7: 7"), "`7; var v8;` -> 7\n{out}");
+    // The empty completion of a `var` declaration (even with an initializer)
+    // falls through to the preceding statement's value, not `undefined`.
+    assert!(out.contains("var9: 9"), "`9; var v10 = 10;` -> 9\n{out}");
+    assert!(
+        out.contains("var11: 11"),
+        "`11; var v12 = 12, v13;` -> 11\n{out}"
+    );
+    assert!(
+        out.contains("var14: 14"),
+        "`14; var v15, v16 = 16;` -> 14\n{out}"
+    );
+    assert!(
+        out.contains("fnblock: undefined"),
+        "`function fn(){{}}{{}}` -> undefined\n{out}"
+    );
+}
