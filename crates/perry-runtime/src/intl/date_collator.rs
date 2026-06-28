@@ -24,6 +24,15 @@ use unicode_segmentation::UnicodeSegmentation;
 /// directly from the cell rather than going through ToNumber (which would throw).
 fn date_arg_to_clipped_ms(value: f64) -> f64 {
     if let Some(tv) = crate::temporal::temporal_value_ref(value) {
+        // ECMA-402 HandleDateTimeValue rejects `Temporal.ZonedDateTime` outright
+        // with a TypeError (it carries a time zone the formatter can't honor; the
+        // spec steers callers to `Temporal.ZonedDateTime.prototype.toLocaleString`).
+        if tv.kind() == crate::temporal::TemporalKind::ZonedDateTime {
+            throw_type_error(
+                "Intl.DateTimeFormat: Temporal.ZonedDateTime is not supported; \
+                 use Temporal.ZonedDateTime.prototype.toLocaleString instead",
+            );
+        }
         return match crate::temporal::temporal_to_epoch_ms(tv) {
             Some(ms) => ms,
             None => {
@@ -81,18 +90,62 @@ pub(crate) extern "C" fn date_time_format_to_parts_thunk(
     _closure: *const ClosureHeader,
     value: f64,
 ) -> f64 {
-    let _obj = this_intl_object("formatToParts", KIND_DATE_TIME);
-    let ms = date_arg_to_clipped_ms(value);
-    parts_to_js_array(&date_range_parts_from_ms(ms))
+    let obj = this_intl_object("formatToParts", KIND_DATE_TIME);
+    date_time_format_to_parts_value(obj, value)
 }
 
 pub(crate) extern "C" fn date_time_format_bound_to_parts_thunk(
     closure: *const ClosureHeader,
     value: f64,
 ) -> f64 {
-    let _obj = captured_intl_object(closure, "formatToParts", KIND_DATE_TIME);
+    let obj = captured_intl_object(closure, "formatToParts", KIND_DATE_TIME);
+    date_time_format_to_parts_value(obj, value)
+}
+
+fn date_time_format_to_parts_value(obj: *const ObjectHeader, value: f64) -> f64 {
     let ms = date_arg_to_clipped_ms(value);
-    parts_to_js_array(&date_range_parts_from_ms(ms))
+    let mut parts = date_range_parts_from_ms(ms);
+    append_time_zone_name_part(&mut parts, obj, value);
+    parts_to_js_array(&parts)
+}
+
+/// Append a `timeZoneName` part when the `timeZoneName` option is set and the
+/// value being formatted denotes a real instant (a `Date` or numeric
+/// timestamp). A Temporal *plain* value (PlainDate/PlainTime/PlainDateTime/…)
+/// carries no time zone, so it must NOT print one — see
+/// `temporal-*-formatting-timezonename.js`. Perry ships no CLDR zone-name data,
+/// so the rendered label is best-effort (the in-scope tests observe only the
+/// part's presence and string-ness, all with the UTC default zone).
+fn append_time_zone_name_part(
+    parts: &mut Vec<(&'static str, String)>,
+    obj: *const ObjectHeader,
+    value: f64,
+) {
+    if crate::temporal::is_temporal_value(value) {
+        return;
+    }
+    if let Some(style) = get_string_field(obj, KEY_TIME_ZONE_NAME) {
+        let tz = get_string_field(obj, KEY_TIME_ZONE).unwrap_or_else(|| "UTC".to_string());
+        parts.push(("literal", ", ".to_string()));
+        parts.push(("timeZoneName", time_zone_name_display(&tz, &style)));
+    }
+}
+
+/// Best-effort display label for a `timeZoneName` part. Perry has no CLDR
+/// zone-name database, so this covers the UTC default and an offset zone with a
+/// plausible `GMT`/offset string; named IANA zones fall back to `GMT`.
+fn time_zone_name_display(time_zone: &str, style: &str) -> String {
+    if time_zone == "UTC" {
+        return match style {
+            "long" | "longGeneric" | "shortGeneric" => "Coordinated Universal Time".to_string(),
+            "shortOffset" | "longOffset" => "GMT".to_string(),
+            _ => "UTC".to_string(),
+        };
+    }
+    if matches!(time_zone.as_bytes().first(), Some(b'+') | Some(b'-')) {
+        return format!("GMT{time_zone}");
+    }
+    "GMT".to_string()
 }
 
 /// `M/D/YYYY` short form rendered directly from an integer-millisecond
@@ -586,21 +639,36 @@ pub(crate) fn date_time_range_clip(method: &str, start: f64, end: f64) -> (f64, 
             "Intl.DateTimeFormat.prototype.{method} called with undefined startDate or endDate"
         ));
     }
-    let x = crate::builtins::js_number_coerce(start);
-    let y = crate::builtins::js_number_coerce(end);
-    // TimeClip (ECMA-262): a non-finite endpoint, or one whose magnitude exceeds
-    // the maximum representable time (±8.64e15 ms), is NaN → RangeError.
-    // Otherwise truncate toward zero to integer milliseconds, so sub-millisecond
-    // equivalents collapse to the same formatted date.
-    const TIME_CLIP_LIMIT_MS: f64 = 8.64e15;
-    if !x.is_finite()
-        || !y.is_finite()
-        || x.abs() > TIME_CLIP_LIMIT_MS
-        || y.abs() > TIME_CLIP_LIMIT_MS
-    {
-        throw_range_error("Invalid time value");
+    // PartitionDateTimeRangePattern: the two endpoints must denote the *same*
+    // kind of value — two Dates/numbers, or two Temporal values of the same
+    // brand. Mixing brands (e.g. a `PlainDate` with a `PlainTime`, or a `Date`
+    // with any Temporal value) is a TypeError. (`ZonedDateTime`/`Duration` are
+    // additionally rejected by `date_arg_to_clipped_ms`, covering same-brand
+    // pairs of those unsupported kinds.)
+    if range_type_tag(start) != range_type_tag(end) {
+        throw_type_error(&format!(
+            "Intl.DateTimeFormat.prototype.{method} called with values of different types"
+        ));
     }
-    (x.trunc(), y.trunc())
+    // Each endpoint coerces through the same Temporal-aware path as the
+    // single-value `format`/`formatToParts`: a plain Temporal value decodes to
+    // its epoch instant (no `ToNumber`, so no "Cannot convert a Temporal value
+    // to a number" TypeError), a `Date`/number is `ToNumber`'d and TimeClip'd
+    // (RangeError if out of range), and an unsupported Temporal kind throws.
+    let x = date_arg_to_clipped_ms(start);
+    let y = date_arg_to_clipped_ms(end);
+    (x, y)
+}
+
+/// Brand discriminator for a `formatRange` endpoint: the `TemporalKind` (0–7)
+/// for a Temporal value, or a distinct sentinel for any non-Temporal value
+/// (`Date` / number). Two endpoints with different tags denote different kinds
+/// of value and may not be range-formatted together.
+fn range_type_tag(value: f64) -> u8 {
+    match crate::temporal::temporal_kind(value) {
+        Some(k) => k as u8,
+        None => 0xFF,
+    }
 }
 
 pub(crate) fn date_time_format_range_value(method: &str, start: f64, end: f64) -> f64 {
