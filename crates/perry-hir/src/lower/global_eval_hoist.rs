@@ -514,8 +514,35 @@ fn collect_pattern_names(pat: &ast::Pat, out: &mut std::collections::HashSet<Str
     }
 }
 
+/// Which variable environment a sloppy eval body's var-scoped declarations
+/// bind into — the two Annex B.3.3.3 cases Perry models by rewriting the body
+/// before the completion-IIFE fold.
+enum HoistMode {
+    /// Sloppy *global* eval (module-top / global script): `var`/`function`
+    /// declarations bind in the global variable environment. Both top-level and
+    /// block/`if`/`switch`-nested declarations are published (with a
+    /// create-if-absent `globalThis` prelude); a `class` aborts the rewrite.
+    Global,
+    /// Sloppy direct eval *inside a function*: only a block/`if`/`switch`-nested
+    /// function declaration whose name already binds in the enclosing function
+    /// variable environment (a parameter or outer `var`) is republished to it —
+    /// the completion IIFE otherwise traps it as an arrow-local that wrongly
+    /// shadows the pre-existing binding (test262 annexB `.../func-*-eval-func-
+    /// no-skip-param`). No `globalThis` prelude is emitted, and top-level
+    /// declarations / `var`s / a `class` are left exactly as the unmodified fold
+    /// produced them — their EvalDeclarationInstantiation is already modeled.
+    Function {
+        bound: std::collections::HashSet<String>,
+    },
+}
+
 /// In-progress state for the global-eval var-scoped rewrite.
 struct GlobalEvalHoist {
+    /// Which variable environment the var-scoped declarations bind into.
+    mode: HoistMode,
+    /// Function-scope mode: set when at least one nested function was
+    /// republished, so the caller keeps the rewrite (vs. an untouched body).
+    hoisted_any: bool,
     /// Unique-suffix counter for renamed hidden function bindings.
     counter: usize,
     /// Names needing a create-if-absent prelude (block/`if`/`switch`-nested
@@ -605,22 +632,34 @@ impl GlobalEvalHoist {
                         out.push(stmt);
                         continue;
                     }
-                    // A *top-level* function is CreateGlobalFunctionBinding: its
-                    // value is present at instantiation. Rename it to a hidden
-                    // binding and publish `void (orig = hidden)` at the top of the
-                    // body (assembled in `apply_global_eval_hoist`); its own `orig`
-                    // self-references need no rename — with no local `orig` left,
-                    // they resolve to the published global. (test262
-                    // `*/var-env-func-*`.) A *nested* (block / `if` / `switch`-
-                    // case) function instead gets the B.3.3.3 legacy hoist below
-                    // (`undefined` at instantiation, value published when reached).
-                    if top_level {
+                    // Function-scope mode only republishes a *nested* function
+                    // whose name already binds in the enclosing function variable
+                    // environment; a top-level function, or any nested function
+                    // whose name is new, is left exactly as the unmodified fold
+                    // produced it (the IIFE already models its binding).
+                    if let HoistMode::Function { bound } = &self.mode {
+                        if top_level || !bound.contains(&orig) {
+                            out.push(stmt);
+                            continue;
+                        }
+                    } else if top_level {
+                        // Global mode — a *top-level* function is
+                        // CreateGlobalFunctionBinding: its value is present at
+                        // instantiation. Rename it to a hidden binding and publish
+                        // `void (orig = hidden)` at the top of the body (assembled
+                        // in `apply_global_eval_hoist`); its own `orig` self-
+                        // references need no rename — with no local `orig` left,
+                        // they resolve to the published global. (test262
+                        // `*/var-env-func-*`.)
                         let hidden = self.fresh_hidden();
                         fn_decl.ident.sym = hidden.as_str().into();
                         self.top_fn_publishes.push((orig, hidden));
                         out.push(stmt);
                         continue;
                     }
+                    // A *nested* (block / `if` / `switch`-case) function gets the
+                    // B.3.3.3 legacy hoist below (`undefined` at instantiation in
+                    // global mode, value published when reached in both modes).
                     // Rename the declaration to a fresh hidden name so the value-
                     // transfer assignment `orig = hidden` resolves `orig` to the
                     // *enclosing* (global) variable environment rather than this
@@ -653,11 +692,16 @@ impl GlobalEvalHoist {
                         out.push(stmt);
                         continue;
                     };
-                    // Legacy block hoisting: `undefined` at instantiation
-                    // (prelude), the function value published when reached.
+                    // Legacy block hoisting: the function value published when
+                    // reached. Global mode also pre-creates the binding as
+                    // `undefined` at instantiation (prelude); function-scope mode
+                    // reuses the pre-existing enclosing binding, so no prelude.
                     out.push(stmt);
                     out.push(assign);
-                    self.prelude_names.push(orig);
+                    match &self.mode {
+                        HoistMode::Global => self.prelude_names.push(orig),
+                        HoistMode::Function { .. } => self.hoisted_any = true,
+                    }
                 }
                 // A top-level `var` is CreateGlobalVarBinding: pre-create each
                 // name (`undefined`, not reinitialized if it already exists) via
@@ -668,7 +712,9 @@ impl GlobalEvalHoist {
                 // `*/var-env-var-*`.) A *nested* `var` and all `let`/`const` stay
                 // put — the IIFE models the eval's own variable / lexical env.
                 ast::Stmt::Decl(ast::Decl::Var(var_decl))
-                    if top_level && var_decl.kind == ast::VarDeclKind::Var =>
+                    if top_level
+                        && var_decl.kind == ast::VarDeclKind::Var
+                        && matches!(self.mode, HoistMode::Global) =>
                 {
                     let mut publishes: Vec<ast::Stmt> = Vec::new();
                     for d in &var_decl.decls {
@@ -698,7 +744,12 @@ impl GlobalEvalHoist {
                 // `let` / `const` stay put — the IIFE already models the eval's
                 // own lexical environment for them.
                 ast::Stmt::Decl(ast::Decl::Class(_)) => {
-                    self.ok = false;
+                    // Global mode bails (a `class` lowered in the IIFE would leak
+                    // to module scope). Function-scope mode never rewrites a
+                    // `class`, so it just leaves it in place.
+                    if matches!(self.mode, HoistMode::Global) {
+                        self.ok = false;
+                    }
                     out.push(stmt);
                 }
                 ast::Stmt::Decl(_) => out.push(stmt),
@@ -824,6 +875,8 @@ pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::St
         return None;
     }
     let mut hoist = GlobalEvalHoist {
+        mode: HoistMode::Global,
+        hoisted_any: false,
         counter: 0,
         prelude_names: Vec::new(),
         var_prelude_names: Vec::new(),
@@ -867,10 +920,116 @@ pub(super) fn apply_global_eval_hoist(stmts: &[ast::Stmt]) -> Option<Vec<ast::St
     Some(result)
 }
 
+/// Rewrite a sloppy direct-eval body running *inside a function* (Annex B.3.3.3,
+/// function variable environment) so each block/`if`/`switch`-nested function
+/// declaration whose name is in `bound` — i.e. already binds in the enclosing
+/// function (a parameter or outer `var`) — is republished to that binding rather
+/// than trapped as an arrow-local of the completion IIFE. The declaration is
+/// renamed to a hidden binding (its self-references too) and a bare `name =
+/// hidden` assignment is emitted where it is reached, so the pre-existing value
+/// is read before and the function value after (test262 annexB
+/// `.../func-*-eval-func-no-skip-param`). Top-level declarations, `var`s, and a
+/// `class` are left untouched — the IIFE already models them, and a name *not*
+/// already bound in the enclosing scope must keep the IIFE's fresh binding (no
+/// bare assignment, which would otherwise leak a sloppy global). Returns
+/// `Some(stmts)` only when at least one nested function was republished.
+pub(super) fn apply_function_eval_hoist(
+    stmts: &[ast::Stmt],
+    bound: std::collections::HashSet<String>,
+) -> Option<Vec<ast::Stmt>> {
+    if bound.is_empty() {
+        return None;
+    }
+    let mut hoist = GlobalEvalHoist {
+        mode: HoistMode::Function { bound },
+        hoisted_any: false,
+        counter: 0,
+        prelude_names: Vec::new(),
+        var_prelude_names: Vec::new(),
+        top_fn_publishes: Vec::new(),
+        lexical: std::collections::HashSet::new(),
+        ok: true,
+    };
+    let mut body = stmts.to_vec();
+    hoist.rewrite_list(&mut body, true);
+    if !hoist.ok || !hoist.hoisted_any {
+        // Bailed on an unmodelable construct, or nothing was republished — the
+        // caller keeps the unmodified fold.
+        return None;
+    }
+    Some(body)
+}
+
+/// Collect the names of *nested* (block / `if` / `switch`-case / loop / `try` /
+/// labeled) function declarations in an eval body. The caller intersects these
+/// with the enclosing function's bindings to drive [`apply_function_eval_hoist`].
+/// Top-level function declarations are excluded — their EvalDeclarationInstantiation
+/// is already modeled by the completion IIFE.
+pub(super) fn collect_nested_fn_decl_names(
+    stmts: &[ast::Stmt],
+) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    collect_nested_fn_decl_names_inner(stmts, true, &mut out);
+    out
+}
+
+fn collect_nested_fn_decl_names_inner(
+    stmts: &[ast::Stmt],
+    top_level: bool,
+    out: &mut std::collections::HashSet<String>,
+) {
+    let single = |s: &ast::Stmt, out: &mut std::collections::HashSet<String>| {
+        collect_nested_fn_decl_names_inner(std::slice::from_ref(s), false, out);
+    };
+    for stmt in stmts {
+        match stmt {
+            ast::Stmt::Decl(ast::Decl::Fn(f)) if f.function.body.is_some() => {
+                if !top_level {
+                    out.insert(f.ident.sym.to_string());
+                }
+            }
+            ast::Stmt::Block(b) => collect_nested_fn_decl_names_inner(&b.stmts, false, out),
+            ast::Stmt::If(i) => {
+                single(&i.cons, out);
+                if let Some(alt) = &i.alt {
+                    single(alt, out);
+                }
+            }
+            ast::Stmt::Switch(s) => {
+                for case in &s.cases {
+                    collect_nested_fn_decl_names_inner(&case.cons, false, out);
+                }
+            }
+            ast::Stmt::Labeled(l) => single(&l.body, out),
+            ast::Stmt::Try(t) => {
+                collect_nested_fn_decl_names_inner(&t.block.stmts, false, out);
+                if let Some(h) = &t.handler {
+                    collect_nested_fn_decl_names_inner(&h.body.stmts, false, out);
+                }
+                if let Some(f) = &t.finalizer {
+                    collect_nested_fn_decl_names_inner(&f.stmts, false, out);
+                }
+            }
+            ast::Stmt::While(w) => single(&w.body, out),
+            ast::Stmt::DoWhile(d) => single(&d.body, out),
+            ast::Stmt::For(f) => single(&f.body, out),
+            ast::Stmt::ForIn(f) => single(&f.body, out),
+            ast::Stmt::ForOf(f) => single(&f.body, out),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod global_eval_hoist_tests {
-    use super::apply_global_eval_hoist;
+    use super::{
+        apply_function_eval_hoist, apply_global_eval_hoist, collect_nested_fn_decl_names,
+    };
     use swc_ecma_ast as ast;
+
+    fn bound_set(names: &[&str]) -> std::collections::HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
 
     fn parse_body(src: &str) -> Vec<ast::Stmt> {
         let module = perry_parser::parse_typescript(src, "<test>.cjs").expect("parse");
@@ -1225,5 +1384,74 @@ mod global_eval_hoist_tests {
         // the caller defers to the runtime path.
         let body = parse_body("var x = 1; class C {}");
         assert!(apply_global_eval_hoist(&body).is_none());
+    }
+
+    #[test]
+    fn function_scope_bound_nested_function_is_republished() {
+        // Annex B.3.3.3 (direct eval inside a function): a block function whose
+        // name already binds in the enclosing function (`f`, in `bound`) is
+        // renamed and republished to that binding with a bare assignment — no
+        // `globalThis` create-if-absent prelude, so the pre-existing value is
+        // read before the declaration and the function value after (test262
+        // `.../func-block-decl-eval-func-no-skip-param`).
+        let body = parse_body("init = f;{ function f() {} }after = f;");
+        let out = apply_function_eval_hoist(&body, bound_set(&["f"])).expect("republishes f");
+        assert!(
+            !out.iter().any(|s| matches!(s, ast::Stmt::If(_))),
+            "no globalThis prelude"
+        );
+        let fns = fn_decl_names(&out);
+        assert!(
+            fns.iter().any(|n| n.starts_with("__perry_ev_fn_")),
+            "renamed fn decl, got {fns:?}"
+        );
+        assert!(!fns.iter().any(|n| n == "f"), "no `f` decl remains: {fns:?}");
+        assert!(
+            assign_targets(&out).iter().any(|t| t == "f"),
+            "publishes f = <hidden>"
+        );
+    }
+
+    #[test]
+    fn function_scope_unbound_nested_function_is_left_untouched() {
+        // A nested function whose name is NOT bound in the enclosing scope keeps
+        // the completion IIFE's fresh binding — republishing via a bare
+        // assignment would leak a sloppy global (test262 `.../func-init`).
+        let body = parse_body("init = f;{ function f() {} }after = f;");
+        assert!(apply_function_eval_hoist(&body, bound_set(&[])).is_none());
+    }
+
+    #[test]
+    fn function_scope_top_level_function_is_left_untouched() {
+        // Function-scope mode never republishes a *top-level* eval function — the
+        // completion IIFE already models its enclosing-function binding.
+        let body = parse_body("function f() {}");
+        assert!(apply_function_eval_hoist(&body, bound_set(&["f"])).is_none());
+    }
+
+    #[test]
+    fn function_scope_lexical_conflict_is_skipped() {
+        // An enclosing eval-body `let f` makes the inner `function f` an
+        // early-error skip (B.3.3.3) even though `f` is in `bound` — nothing is
+        // republished.
+        let body = parse_body("{ let f = 1; { function f() {} } }");
+        assert!(apply_function_eval_hoist(&body, bound_set(&["f"])).is_none());
+    }
+
+    #[test]
+    fn nested_fn_decl_names_collects_only_nested() {
+        // Top-level function declarations are excluded; block / `if` / `switch` /
+        // `try` nested ones are collected.
+        let names = collect_nested_fn_decl_names(&parse_body(
+            "function top() {}\
+             { function a() {} }\
+             if (x) function b() {}\
+             switch (y) { case 1: function c() {} }\
+             try { function d() {} } catch (e) { function g() {} }",
+        ));
+        for n in ["a", "b", "c", "d", "g"] {
+            assert!(names.contains(n), "missing nested {n}: {names:?}");
+        }
+        assert!(!names.contains("top"), "top-level must be excluded: {names:?}");
     }
 }

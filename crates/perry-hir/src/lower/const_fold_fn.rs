@@ -29,7 +29,9 @@ use crate::eval_classifier::{const_string_of, eval_diag_enabled, EvalSurface};
 use crate::ir::Expr;
 
 use super::expr_function::lower_fn_expr;
-use super::global_eval_hoist::apply_global_eval_hoist;
+use super::global_eval_hoist::{
+    apply_function_eval_hoist, apply_global_eval_hoist, collect_nested_fn_decl_names,
+};
 use super::lower_expr::lower_expr;
 use super::LoweringContext;
 
@@ -1579,6 +1581,28 @@ fn try_const_fold_eval(
     // eval keeps its own variable environment (the IIFE already models that).
     if !eval_strict && eval_is_module_top_global(ctx) {
         if let Some(hoisted) = apply_global_eval_hoist(&body_stmts) {
+            return build_eval_completion_iife(ctx, hoisted, eval_strict, span);
+        }
+    }
+
+    // Annex B.3.3.3 (direct eval *inside a function*): a sloppy direct eval
+    // routes its body's var-scoped declarations into the enclosing function's
+    // variable environment. The completion IIFE already creates a fresh
+    // function-scope binding for a block function whose name is new — but when
+    // that name already binds in the enclosing function (a parameter or outer
+    // `var`), the IIFE's fresh binding wrongly shadows it, so the body reads
+    // `undefined` instead of the pre-existing value (test262 annexB
+    // `.../func-*-eval-func-no-skip-param`). Republish those nested functions to
+    // the enclosing binding. Limited to nested function names actually bound in
+    // the enclosing scope, so a brand-new binding keeps the IIFE's (correct)
+    // fresh slot rather than leaking a sloppy global.
+    if !eval_strict && !eval_is_module_top_global(ctx) && ctx.with_env_stack.is_empty() {
+        let bound: std::collections::HashSet<String> =
+            collect_nested_fn_decl_names(&body_stmts)
+                .into_iter()
+                .filter(|n| ctx.locals.lookup(n).is_some())
+                .collect();
+        if let Some(hoisted) = apply_function_eval_hoist(&body_stmts, bound) {
             return build_eval_completion_iife(ctx, hoisted, eval_strict, span);
         }
     }
