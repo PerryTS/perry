@@ -18,6 +18,7 @@ use crate::async_context::{
     capture_context, enter_context, restore_context, scan_snapshot_roots_mut, AsyncContextSnapshot,
 };
 
+pub mod assimilate;
 pub mod async_step;
 pub mod combinators;
 pub mod microtasks;

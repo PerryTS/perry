@@ -58,7 +58,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // steady state is untouched; only real thenables (drizzle's `QueryPromise`,
     // object literals with `then`) defer by one microtask — which the await
     // loop drains, leaving the resolved value identical.
-    super::combinators::promise_resolve_assimilating(promise, value);
+    super::assimilate::promise_resolve_assimilating(promise, value);
     promise
 }
 
