@@ -1720,19 +1720,13 @@ fn number_range_endpoints(method: &str, start: f64, end: f64) -> (f64, f64) {
     (x, y)
 }
 
-/// Two endpoints are "mathematically equal" for range-collapse purposes when
-/// they are the same Number — including `+0`/`-0`, which compare equal — so the
-/// range renders as a single value rather than the approximate (`~`) form.
-fn range_endpoints_equal(x: f64, y: f64) -> bool {
-    x == y
-}
-
 /// `Intl.NumberFormat.prototype.formatRange` — a best-effort
 /// PartitionNumberRangePattern: render both endpoints with the instance's
-/// formatter, collapse to a single value when the endpoints are mathematically
-/// equal, mark the result approximate (`~`) when distinct endpoints round to the
-/// same string, and otherwise join the two renderings with an en dash. The exact
-/// ICU field-collapsing / locale range pattern is not reproduced.
+/// formatter, mark the result approximate (`~`) whenever the two endpoints
+/// produce the same string — including mathematically equal endpoints such as
+/// `formatRange(3, 3)`, which ECMA-402 still renders approximately — and
+/// otherwise join the two renderings with an en dash. The exact ICU
+/// field-collapsing / locale range pattern is not reproduced.
 pub(crate) fn number_format_range_value(
     obj: *const ObjectHeader,
     method: &str,
@@ -1745,9 +1739,6 @@ pub(crate) fn number_format_range_value(
         .iter()
         .map(|(_, v)| v.as_str())
         .collect();
-    if range_endpoints_equal(x, y) {
-        return string_value(&sx);
-    }
     let sy: String = number_parts_from_resolved(&r, y)
         .iter()
         .map(|(_, v)| v.as_str())
@@ -1761,8 +1752,9 @@ pub(crate) fn number_format_range_value(
 
 /// `Intl.NumberFormat.prototype.formatRangeToParts` — the parts shape of
 /// [`number_format_range_value`]. Each segment carries a `source`
-/// (`"startRange"`/`"endRange"`/`"shared"`); a collapsed range tags every
-/// segment `"shared"`, and the approximate form prepends an `approximatelySign`.
+/// (`"startRange"`/`"endRange"`/`"shared"`); the approximate form (endpoints
+/// that render identically, equal inputs included) prepends an
+/// `approximatelySign` and tags every segment `"shared"`.
 pub(crate) fn number_format_range_parts_value(
     obj: *const ObjectHeader,
     method: &str,
@@ -1775,10 +1767,6 @@ pub(crate) fn number_format_range_parts_value(
         parts.into_iter().map(move |(t, v)| (t, v, source))
     };
     let x_parts = number_parts_from_resolved(&r, x);
-    if range_endpoints_equal(x, y) {
-        let shared: Vec<_> = tag(x_parts, "shared").collect();
-        return super::date_collator::range_parts_to_js_array(&shared);
-    }
     let y_parts = number_parts_from_resolved(&r, y);
     let sx: String = x_parts.iter().map(|(_, v)| v.as_str()).collect();
     let sy: String = y_parts.iter().map(|(_, v)| v.as_str()).collect();
