@@ -290,7 +290,11 @@ pub extern "C" fn js_array_slice(
                     }
                     crate::array::array_spec_get(arr, src_idx as u32)
                 } else {
-                    ptr::read(src_elements.add(src_idx))
+                    let v = ptr::read(src_elements.add(src_idx));
+                    if v.to_bits() == crate::value::TAG_HOLE {
+                        continue; // hole → no property created in result
+                    }
+                    v
                 };
                 crate::array::species::species_result_set(result_box, i, v);
             }
